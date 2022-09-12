@@ -1,0 +1,17 @@
+{
+  "name": "blog",
+  "version": "1.0.0",
+  "description": "个人博客",
+  "license": "MIT",
+  "scripts": {
+    "docs:build": "vuepress build note",
+    "docs:clean-dev": "vuepress dev note --clean-cache",
+    "dev": "vuepress dev note"
+  },
+  "devDependencies": {
+    "@vuepress/client": "2.0.0-beta.51",
+    "vue": "^3.2.27",
+    "vuepress": "2.0.0-beta.51",
+    "vuepress-theme-hope": "2.0.0-beta.97"
+  }
+}
