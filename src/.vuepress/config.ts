@@ -1,5 +1,5 @@
 import { defineUserConfig } from "vuepress";
-import theme from "./theme/theme";
+import theme from "./theme.js";
 
 export default defineUserConfig({
   lang: "zh-CN",
@@ -9,7 +9,4 @@ export default defineUserConfig({
   base: "/",
 
   theme,
-  public:'../public',
-  cache:'../.vuepress/.cache',
-  dest:'../.vuepress/dist'
 });

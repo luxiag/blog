@@ -4,9 +4,9 @@
   "description": "个人博客",
   "license": "MIT",
   "scripts": {
-    "docs:build": "vuepress build note",
-    "docs:clean-dev": "vuepress dev note --clean-cache",
-    "dev": "vuepress dev note --config config/vuepress.config.ts"
+    "docs:build": "vuepress build src",
+    "docs:clean-dev": "vuepress dev src --clean-cache",
+    "docs:dev": "vuepress dev src"
   },
   "devDependencies": {
     "@vuepress/client": "2.0.0-beta.51",
