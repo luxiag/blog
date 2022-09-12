@@ -6,7 +6,7 @@
   "scripts": {
     "docs:build": "vuepress build note",
     "docs:clean-dev": "vuepress dev note --clean-cache",
-    "dev": "vuepress dev note"
+    "dev": "vuepress dev note --config config/vuepress.config.ts"
   },
   "devDependencies": {
     "@vuepress/client": "2.0.0-beta.51",
