@@ -1,6 +1,8 @@
 import { defineUserConfig } from 'vuepress'
 import { seoPlugin } from "vuepress-plugin-seo2";
 import { mdEnhancePlugin } from "vuepress-plugin-md-enhance";
+import { photoSwipePlugin } from "vuepress-plugin-photo-swipe";
+// import { commentPlugin } from "vuepress-plugin-comment2";
 
 import theme from './theme'
 
@@ -22,7 +24,7 @@ export default defineUserConfig({
             author: 'luxiag'
         }),
         mdEnhancePlugin({
-            
+
             // 启用流程图
             flowchart: true,
             // 启用 mermaid
@@ -45,6 +47,13 @@ export default defineUserConfig({
             imageSize: true,
             // 启用导入支持
             include: true,
+        }),
+        // commentPlugin({
+        //     // 插件选项
+
+        //   }),
+        photoSwipePlugin({
+            // your options
         }),
     ]
 })

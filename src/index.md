@@ -1,5 +1,6 @@
 ---
 sidebarDepth: 5
+collapsable: true
 ---
 
 # 测试1

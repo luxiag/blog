@@ -7,6 +7,7 @@ import clientConfig5 from 'C:/items/blog/node_modules/@vuepress/plugin-theme-dat
 import clientConfig6 from 'C:/items/blog/node_modules/@vuepress/theme-default/lib/client/config.js'
 import clientConfig7 from 'C:/items/blog/src/.vuepress/.temp/sass-palette/load-hope.js'
 import clientConfig8 from 'C:/items/blog/src/.vuepress/.temp/md-enhance/config.js'
+import clientConfig9 from 'C:/items/blog/node_modules/vuepress-plugin-photo-swipe/lib/client/config.js'
 
 export const clientConfigs = [
   clientConfig0,
@@ -18,4 +19,5 @@ export const clientConfigs = [
   clientConfig6,
   clientConfig7,
   clientConfig8,
+  clientConfig9,
 ]
