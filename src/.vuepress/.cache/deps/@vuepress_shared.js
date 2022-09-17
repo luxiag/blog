@@ -3,6 +3,7 @@ import {
   isFunction,
   isString
 } from "./chunk-XYQ66V4O.js";
+import "./chunk-RSJERJUL.js";
 
 // node_modules/@vuepress/shared/dist/index.js
 var resolveHeadIdentifier = ([

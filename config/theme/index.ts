@@ -8,5 +8,7 @@ export default defaultTheme({
         }
     ],
     sidebarDepth:5,
+    sidebar:"auto"
+ 
  
 })

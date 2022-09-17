@@ -1,29 +1,41 @@
 {
-  "hash": "62731c1e",
-  "browserHash": "4e046d01",
+  "hash": "55c762ee",
+  "browserHash": "c71d3f0a",
   "optimized": {
+    "flowchart.js/src/flowchart.parse.js": {
+      "src": "../../../../node_modules/flowchart.js/src/flowchart.parse.js",
+      "file": "flowchart__js_src_flowchart__parse__js.js",
+      "fileHash": "0028b04b",
+      "needsInterop": true
+    },
+    "mermaid": {
+      "src": "../../../../node_modules/mermaid/dist/mermaid.esm.min.mjs",
+      "file": "mermaid.js",
+      "fileHash": "690df582",
+      "needsInterop": false
+    },
     "@vue/devtools-api": {
       "src": "../../../../node_modules/@vue/devtools-api/lib/esm/index.js",
       "file": "@vue_devtools-api.js",
-      "fileHash": "5a10cd22",
+      "fileHash": "79f01759",
       "needsInterop": false
     },
     "@vuepress/shared": {
       "src": "../../../../node_modules/@vuepress/shared/dist/index.js",
       "file": "@vuepress_shared.js",
-      "fileHash": "d55dd676",
+      "fileHash": "43230acc",
       "needsInterop": false
     },
     "vue": {
       "src": "../../../../node_modules/vue/dist/vue.runtime.esm-bundler.js",
       "file": "vue.js",
-      "fileHash": "ccf6fc0a",
+      "fileHash": "d145e4ea",
       "needsInterop": false
     },
     "vue-router": {
       "src": "../../../../node_modules/vue-router/dist/vue-router.esm-bundler.js",
       "file": "vue-router.js",
-      "fileHash": "596db2d8",
+      "fileHash": "f5347c32",
       "needsInterop": false
     }
   },
@@ -36,6 +48,9 @@
     },
     "chunk-XYQ66V4O": {
       "file": "chunk-XYQ66V4O.js"
+    },
+    "chunk-RSJERJUL": {
+      "file": "chunk-RSJERJUL.js"
     }
   }
 }
