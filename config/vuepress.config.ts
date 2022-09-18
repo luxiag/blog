@@ -2,14 +2,17 @@ import { defineUserConfig } from 'vuepress'
 import { seoPlugin } from "vuepress-plugin-seo2";
 import { mdEnhancePlugin } from "vuepress-plugin-md-enhance";
 import { photoSwipePlugin } from "vuepress-plugin-photo-swipe";
+import { backToTopPlugin } from '@vuepress/plugin-back-to-top'
+import { nprogressPlugin } from '@vuepress/plugin-nprogress'
+import { blogPlugin } from "vuepress-plugin-blog2";
 // import { commentPlugin } from "vuepress-plugin-comment2";
 
 import theme from './theme'
 
 export default defineUserConfig({
     lang: 'zh-CN',
-    title: '你好， VuePress ！',
-    description: '这是我的第一个 VuePress 站点',
+    title: '',
+    description: '',
     theme,
     markdown: {
         headers: {
@@ -55,5 +58,10 @@ export default defineUserConfig({
         photoSwipePlugin({
             // your options
         }),
+        backToTopPlugin(),
+        nprogressPlugin(),
+        blogPlugin({
+            //插件选项
+          }),
     ]
 })

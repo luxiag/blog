@@ -1,4 +1,4 @@
-import { defaultTheme } from 'vuepress'
+import { defaultTheme } from '../theme-default/lib/node'
 
 export default defaultTheme({
     navbar:[
@@ -8,7 +8,10 @@ export default defaultTheme({
         }
     ],
     sidebarDepth:5,
-    sidebar:"auto"
+    sidebar:"auto",
+    lastUpdated:false,
+    lastUpdatedText:'',
+    contributors:false
  
  
 })

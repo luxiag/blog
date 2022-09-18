@@ -1,13 +1,13 @@
 import clientConfig0 from 'C:/items/blog/node_modules/@vuepress/plugin-active-header-links/lib/client/config.js'
-import clientConfig1 from 'C:/items/blog/node_modules/@vuepress/plugin-back-to-top/lib/client/config.js'
-import clientConfig2 from 'C:/items/blog/node_modules/@vuepress/plugin-external-link-icon/lib/client/config.js'
-import clientConfig3 from 'C:/items/blog/node_modules/@vuepress/plugin-medium-zoom/lib/client/config.js'
-import clientConfig4 from 'C:/items/blog/node_modules/@vuepress/plugin-nprogress/lib/client/config.js'
-import clientConfig5 from 'C:/items/blog/node_modules/@vuepress/plugin-theme-data/lib/client/config.js'
-import clientConfig6 from 'C:/items/blog/node_modules/@vuepress/theme-default/lib/client/config.js'
-import clientConfig7 from 'C:/items/blog/src/.vuepress/.temp/sass-palette/load-hope.js'
-import clientConfig8 from 'C:/items/blog/src/.vuepress/.temp/md-enhance/config.js'
-import clientConfig9 from 'C:/items/blog/node_modules/vuepress-plugin-photo-swipe/lib/client/config.js'
+import clientConfig1 from 'C:/items/blog/node_modules/@vuepress/plugin-external-link-icon/lib/client/config.js'
+import clientConfig2 from 'C:/items/blog/node_modules/@vuepress/plugin-medium-zoom/lib/client/config.js'
+import clientConfig3 from 'C:/items/blog/node_modules/@vuepress/plugin-theme-data/lib/client/config.js'
+import clientConfig4 from 'C:/items/blog/config/theme-default/lib/client/config.js'
+import clientConfig5 from 'C:/items/blog/src/.vuepress/.temp/sass-palette/load-hope.js'
+import clientConfig6 from 'C:/items/blog/src/.vuepress/.temp/md-enhance/config.js'
+import clientConfig7 from 'C:/items/blog/node_modules/vuepress-plugin-photo-swipe/lib/client/config.js'
+import clientConfig8 from 'C:/items/blog/node_modules/@vuepress/plugin-back-to-top/lib/client/config.js'
+import clientConfig9 from 'C:/items/blog/node_modules/@vuepress/plugin-nprogress/lib/client/config.js'
 
 export const clientConfigs = [
   clientConfig0,
