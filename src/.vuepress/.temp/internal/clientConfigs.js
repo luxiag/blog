@@ -8,6 +8,7 @@ import clientConfig6 from 'C:/items/blog/src/.vuepress/.temp/md-enhance/config.j
 import clientConfig7 from 'C:/items/blog/node_modules/vuepress-plugin-photo-swipe/lib/client/config.js'
 import clientConfig8 from 'C:/items/blog/node_modules/@vuepress/plugin-back-to-top/lib/client/config.js'
 import clientConfig9 from 'C:/items/blog/node_modules/@vuepress/plugin-nprogress/lib/client/config.js'
+import clientConfig10 from 'C:/items/blog/config/client/index.ts'
 
 export const clientConfigs = [
   clientConfig0,
@@ -20,4 +21,5 @@ export const clientConfigs = [
   clientConfig7,
   clientConfig8,
   clientConfig9,
+  clientConfig10,
 ]
