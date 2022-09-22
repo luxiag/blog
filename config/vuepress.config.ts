@@ -69,7 +69,7 @@ export default defineUserConfig({
             // your options
         }),
         backToTopPlugin(),
-        nprogressPlugin(),
+        nprogressPlugin(),  
         blogPlugin({
             //插件选项
             getInfo: ({ frontmatter, title }) => ({

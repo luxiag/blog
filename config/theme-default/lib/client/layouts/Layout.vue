@@ -131,4 +131,26 @@ const onBeforeLeave = scrollPromise.pending
       </Transition>
     </slot>
   </div>
+  <svg width="0" height="0">
+    <filter id="surface">
+      <feTurbulence type="fractalNoise" baseFrequency='.95 .95' numOctaves="80" result='noise' />
+      <feDiffuseLighting in='noise' lighting-color='#ddd' surfaceScale='.8' result="grind">
+        <feDistantLight azimuth='500' elevation='50' />
+      </feDiffuseLighting>
+      <feGaussianBlur in="grind" stdDeviation=".5" />
+    </filter>
+  </svg>
 </template>
+<style>
+
+.theme-container::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  filter: url(#surface);
+
+}
+</style>
