@@ -2,7 +2,6 @@
 sidebar: false
 ---
 
-
 <script setup lang="ts">
     import {onMounted} from 'vue'
 import { useBlogType } from "vuepress-plugin-blog2/client";

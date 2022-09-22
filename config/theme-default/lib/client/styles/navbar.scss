@@ -95,19 +95,20 @@
 
 @media (min-width: $MQMobile) {
   .navbar-items a {
+   
     &:hover,
     &.router-link-active {
       color: var(--c-text);
     }
   }
 
-  .navbar-item > a {
-    &:hover,
-    &.router-link-active {
-      margin-bottom: -2px;
-      border-bottom: 2px solid var(--c-text-accent);
-    }
-  }
+  // .navbar-item > a {
+  //   &:hover,
+  //   &.router-link-active {
+  //     // margin-bottom: -2px;
+  //     // border-bottom: 2px solid var(--c-text-accent);
+  //   }
+  // }
 }
 
 /**
