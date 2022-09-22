@@ -65,7 +65,7 @@
   a {
     display: inline-block;
     line-height: 1.4rem;
-    color: inherit;
+    color: var(--default-text);
 
     &:hover,
     &.router-link-active {

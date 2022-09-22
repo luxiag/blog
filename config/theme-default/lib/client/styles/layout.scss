@@ -1,6 +1,9 @@
-@import '_mixins';
-@import '_variables';
+@import "_mixins";
+@import "_variables";
 
+body {
+  font-family: linux biolinum,'noto serif sc',sans-serif;
+}
 .page {
   padding-top: var(--navbar-height);
   padding-left: var(--sidebar-width);
@@ -56,9 +59,10 @@
   height: 100vh;
   display: none;
 }
-
+.font-sans {
+  font-family: var(--font-family);
+}
 .theme-container {
-  
   &.sidebar-open {
     .sidebar-mask {
       display: block;

@@ -75,7 +75,7 @@ const onBeforeLeave = scrollPromise.pending
 
 <template>
   <div
-    class="theme-container"
+    class="theme-container font-sans "
     :class="containerClass"
     @touchstart="onTouchStart"
     @touchend="onTouchEnd"

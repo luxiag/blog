@@ -1,5 +1,5 @@
-@import '_mixins';
-@import '_variables';
+@import "_mixins";
+@import "_variables";
 
 .sidebar {
   ul {
@@ -9,7 +9,6 @@
   }
 
   a {
-  
     display: inline-block;
   }
 
@@ -18,9 +17,9 @@
     border-bottom: 1px solid var(--c-border);
     transition: border-color var(--t-color);
     padding: 0.5rem 0 0.75rem 0;
-    color:var(--default-text);
     a {
       font-weight: 600;
+  
     }
 
     .navbar-item {

@@ -1,5 +1,5 @@
-@import '_mixins';
-@import '_variables';
+@import "_mixins";
+@import "_variables";
 
 .page {
   padding-bottom: 2rem;
@@ -42,6 +42,12 @@
   }
 }
 
+@media (min-width: $PagePL) {
+  .page {
+    padding-left: 0px;
+  }
+}
+
 @media (max-width: $MQMobile) {
   .page-meta {
     .last-updated {
@@ -71,13 +77,13 @@
 
   .prev {
     a:before {
-      content: '←';
+      content: "←";
     }
   }
   .next {
     float: right;
     a:after {
-      content: '→';
+      content: "→";
     }
   }
 }
