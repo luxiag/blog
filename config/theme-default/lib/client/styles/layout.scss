@@ -6,11 +6,11 @@ body {
 }
 .page {
   padding-top: var(--navbar-height);
-  padding-left: var(--sidebar-width);
+  // padding-left: var(--sidebar-width);
 }
 
 .navbar {
-  position: fixed;
+  // position: fixed;
   z-index: 20;
   top: 0;
   left: 0;
@@ -18,7 +18,7 @@ body {
   height: var(--navbar-height);
   box-sizing: border-box;
   border-bottom: 1px solid var(--c-border);
-  background-color: var(--c-bg-navbar);
+  // background-color: var(--c-bg-navbar);
   transition: background-color var(--t-color), border-color var(--t-color);
 }
 
@@ -28,15 +28,15 @@ body {
   position: fixed;
   z-index: 10;
   margin: 0;
-  top: var(--navbar-height);
-  left: 0;
+  top: 0;
+  right: 0;
   bottom: 0;
   box-sizing: border-box;
   border-right: 1px solid var(--c-border);
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--c-brand) var(--c-border);
-  background-color: var(--c-bg-sidebar);
+  // background-color: var(--c-bg-sidebar);
   transition: transform var(--t-transform), background-color var(--t-color),
     border-color var(--t-color);
   &::-webkit-scrollbar {
@@ -174,7 +174,7 @@ body {
   }
 
   .page {
-    padding-left: var(--sidebar-width-mobile);
+    // padding-left: var(--sidebar-width-mobile);
   }
 }
 

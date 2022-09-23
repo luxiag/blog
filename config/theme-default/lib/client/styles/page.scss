@@ -42,11 +42,11 @@
   }
 }
 
-@media (min-width: $PagePL) {
-  .page {
-    padding-left: 0px;
-  }
-}
+// @media (min-width: $PagePL) {
+//   .page {
+//     padding-left: 0px;
+//   }
+// }
 
 @media (max-width: $MQMobile) {
   .page-meta {

@@ -41,7 +41,7 @@ const tagline = computed(() => {
   return (
     frontmatter.value.tagline ||
     siteLocale.value.description ||
-    'Welcome to your VuePress site'
+    ''
   )
 })
 

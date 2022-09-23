@@ -23,7 +23,9 @@
 
   .navbar-items-wrapper {
     display: flex;
-    position: absolute;
+    // position: absolute;
+    justify-content: center;
+    align-items: center;
     box-sizing: border-box;
     top: var(--navbar-padding-v);
     right: var(--navbar-padding-h);
@@ -157,7 +159,7 @@
  */
 .toggle-color-mode-button {
   display: flex;
-  margin: auto;
+  margin: auto 0;
   margin-left: 1rem;
   border: 0;
   background: none;
