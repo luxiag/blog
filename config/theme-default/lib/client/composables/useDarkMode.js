@@ -49,6 +49,7 @@ export const updateHtmlDarkClass = (isDarkMode) => {
         // set `class="dark"` on `<html>` element
         const htmlEl = window?.document.querySelector('html');
         htmlEl?.classList.toggle('dark', value);
+       
     };
     onMounted(() => {
         watch(isDarkMode, update, { immediate: true });
