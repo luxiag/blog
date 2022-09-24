@@ -14,7 +14,7 @@
 
   .navbar-items {
     display: none;
-    border-bottom: 1px solid var(--c-border);
+    // border-bottom: 1px solid var(--c-border);
     transition: border-color var(--t-color);
     padding: 0.5rem 0 0.75rem 0;
     a {
@@ -32,6 +32,95 @@
 
   .sidebar-items {
     padding: 1.5rem 0;
+  }
+
+
+  .sidebar-toggle {
+    position: fixed;
+    right: 30px;
+    bottom: 45px;
+    width: 14px;
+    height: 14px;
+    padding: 5px;
+    background: #222;
+    line-height: 0;
+    z-index: 1050;
+    cursor: pointer;
+    -webkit-transform: translateZ(0);
+
+    right: 10px;
+    bottom: 43px;
+    background-color: rgba(247,149,51,.75);
+    border-radius: 5px;
+    box-shadow: 0 0 10px 0 rgb(0 0 0 / 35%);
+   
+      .sidebar-toggle-line {
+        position: relative;
+        display: inline-block;
+        vertical-align: top;
+        height: 2px;
+        width: 100%;
+        background: #fff;
+        margin-top: 3px;
+        width: 100%;
+        top: 0px;
+        transform: rotateZ(0deg);
+        opacity: 1;
+        left: 0px;
+     
+      }
+   
+      &.active {
+        .sidebar-toggle-line-wrap {
+          .sidebar-toggle-line-first{
+            width: 100%;
+            top: 5px;
+            transform: rotateZ(-45deg);
+            opacity: 1;
+            left: 0px;
+          }
+          .sidebar-toggle-line-middle {
+            width: 90%;
+            opacity: 0;
+            left: 0px;
+            top: 0px;
+            transform: rotateZ(0deg);
+          }
+          .sidebar-toggle-line-last{
+            width: 100%;
+            top: -5px;
+            transform: rotateZ(45deg);
+            opacity: 1;
+            left: 0px;
+          }
+        }
+   
+      }
+   
+  }
+
+  .sidebar-toggle:hover {
+    .sidebar-toggle-line-first{
+      width: 50%;
+      top: 2px;
+      transform: rotateZ(-45deg);
+      opacity: 1;
+      left: 0px;
+    }
+    .sidebar-toggle-line-middle {
+      width: 90%;
+      top: 0px;
+      transform: rotateZ(0deg);
+      opacity: 1;
+      left: 0px;
+    }
+    .sidebar-toggle-line-last{
+      width: 50%;
+      top: -2px;
+      transform: rotateZ(45deg);
+      opacity: 1;
+      left: 0px;
+    }
   }
 }
 

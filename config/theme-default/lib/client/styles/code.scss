@@ -24,6 +24,18 @@ pre[class*='language-'] {
   -moz-hyphens: none;
   -ms-hyphens: none;
   hyphens: none;
+  &::-webkit-scrollbar-thumb {
+    border-radius: 5px;
+    background-color: #ccc;
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    border-radius: 5px;
+    background-color: #ffa940;
+  }
+  &::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
 }
 
 /* Code blocks */

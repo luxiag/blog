@@ -4,7 +4,7 @@ import { getDirname, path } from '@vuepress/utils'
 import { seoPlugin } from "vuepress-plugin-seo2";
 import { mdEnhancePlugin } from "vuepress-plugin-md-enhance";
 import { photoSwipePlugin } from "vuepress-plugin-photo-swipe";
-import { backToTopPlugin } from '@vuepress/plugin-back-to-top'
+// import { backToTopPlugin } from '@vuepress/plugin-back-to-top'
 import { nprogressPlugin } from '@vuepress/plugin-nprogress'
 import { blogPlugin } from "vuepress-plugin-blog2";
 
@@ -68,7 +68,7 @@ export default defineUserConfig({
         photoSwipePlugin({
             // your options
         }),
-        backToTopPlugin(),
+        // backToTopPlugin(),
         nprogressPlugin(),  
         blogPlugin({
             //插件选项
