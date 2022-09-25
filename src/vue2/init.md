@@ -1,7 +1,7 @@
 ---
 page: true
 title: vue初始化
-
+date:  2021-12-01
 
 ---
 
@@ -28,7 +28,7 @@ import App from "./App.vue";
 console.log(App, "App");
 ```
 
-![](images/20220817160800.png)
+![](./images/20220817160800.png)
 
 # entry
 

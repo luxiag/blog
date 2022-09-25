@@ -13,7 +13,7 @@ tags:
 (1) 找出基线条件，这种条件必须尽可能简单。
 (2) 不断将问题分解（或者说缩小规模），直到符合基线条件
 将一块 1680 x 640 的图片分成方块，方块要尽可能的大
-![](images/20220919111551.png)
+![](./images/20220919111551.png)
 
 1. 1680 x 640=> 640x640 + 640x640 + 640x400
 2. 640x 400 => 400x 400 + 400x240
@@ -42,4 +42,4 @@ const sum = (arrays, total = 0) => {
 对挑选出的2个数组，重复上述操作
 
 <a><https://www.cnblogs.com/MOBIN/p/4681369.html/></a>
-![来源(https://www.cnblogs.com/MOBIN/p/4681369.html)](images/20220919164026.png)
+![来源(https://www.cnblogs.com/MOBIN/p/4681369.html)](./images/20220919164026.png)

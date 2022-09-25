@@ -143,7 +143,7 @@ const onBeforeLeave = scrollPromise.pending;
       />
       <feDiffuseLighting
         in="noise"
-        lighting-color="#ddd"
+        lighting-color="#fff"
         surfaceScale=".8"
         result="grind"
       >

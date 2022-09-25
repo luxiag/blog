@@ -20,10 +20,10 @@ const toggleSideBar = () => {
 </script>
 
 <template>
-  <aside  class="sidebar">
+  <aside class="sidebar">
     <NavbarItems />
     <slot name="top" />
-    <SidebarItems  v-show="showSidebar"/>
+    <SidebarItems v-show="showSidebar" />
     <slot name="bottom" />
 
     <div @click="toggleSideBar" :class="['sidebar-toggle',showSidebar?'active':'']">

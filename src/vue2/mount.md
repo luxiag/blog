@@ -1,5 +1,8 @@
 ---
 page: true
+title: vue2挂载原理
+date: 2021-12-25
+
 ---
 
 # mount
@@ -15,11 +18,11 @@ Vue.prototype.$mount = function (
 ```
 
 `this`
-![](images/20220811104229.png)
+![](./images/20220811104229.png)
 
 # mountComponent
 
-![](images/20220811111106.png)  
+![](./images/20220811111106.png)  
 `core/instance/lifecycle`
 
 ```js
@@ -852,7 +855,7 @@ function patchVnode(
 
 ### updateChildren
 
-![](images/20220816165854.png)
+![](./images/20220816165854.png)
 
 - 先把 newChildren 数组里的所有未处理子节点的第一个子节点和 oldChildren 数组里所有未处理子节点的第一个子节点做比对，如果相同，那就直接进入更新节点的操作；
 - 如果不同，再把 newChildren 数组里所有未处理子节点的最后一个子节点和 oldChildren 数组里所有未处理子节点的最后一个子节点做比对，如果相同，那就直接进入更新节点的操作；

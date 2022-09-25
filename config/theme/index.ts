@@ -15,11 +15,16 @@ export default defaultTheme({
             link: "/category/",
         },
     ],
+    logo: '/images/logo.png',
     sidebarDepth: 5,
     sidebar: "auto",
     lastUpdated: false,
     lastUpdatedText: '',
-    contributors: false
+    contributors: false,
+    colorModeSwitch:false,
+    repo:'https://github.com/luxiag/luxiag.github.io',
+    
+    
 
 
 })

@@ -1,13 +1,14 @@
 ---
-title: 编译
-page: true
+title: vue2里template是怎么编译的 
+isPage: true
+date: 2021-12-25
 lang: en-ZH
 sidebarDepth: 2
 ---
 
 # 前言
 
-![](images/20220810165446.png)
+![](./images/20220810165446.png)
 
 vue 基于源码构建的有两个版本，一个是 runtime only(一个只包含运行时的版本)，另一个是 runtime + compiler(一个同时包含编译器和运行时的完整版本)。而两个版本的区别仅在于后者包含了一个编译器。
 
@@ -106,8 +107,8 @@ Vue.prototype.$mount = function (
 
 # 流程
 
-![](images/20220713173220.png)
-![](images/20220728101022.png)
+![](./images/20220713173220.png)
+![](./images/20220728101022.png)
 
 - 模板解析阶段：将一堆模板字符串用正则等方式解析成抽象语法树 AST；
 - 优化阶段：遍历 AST，找出其中的静态节点，并打上标记；
@@ -117,7 +118,7 @@ template -> compileToFunctions() ->
 
 `template`
 
-![](images/20220714155754.png)
+![](./images/20220714155754.png)
 
 `src/platforms/web`
 
@@ -329,8 +330,8 @@ export function createCompileToFunctionFn(compile: Function): Function {
 
 # parse
 
-![](images/20220715085332.png)
-![](images/20220719161947.png)
+![](./images/20220715085332.png)
+![](./images/20220719161947.png)
 type 为 1 表示是普通元素，为 2 表示是表达式，为 3 表示是纯文本
 
 ```js
@@ -1018,7 +1019,7 @@ AST => render
 ```
 
 `AST`
-![](images/20220809154438.png)  
+![](./images/20220809154438.png)  
 `render`
 
 ```js

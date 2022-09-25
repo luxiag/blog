@@ -4,3 +4,4 @@
 src/.vuepress
 .cache
 .temp
+.dist

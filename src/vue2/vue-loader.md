@@ -1,13 +1,15 @@
 ---
-title: vue-loader-15.9.8
-url: https://mp.weixin.qq.com/s/FJzDRLchG_DWA80Wp141Vg
+page: true
+title: vue-loader是怎么解析.vue文件？
+date: 2021-12-26
+reference: https://mp.weixin.qq.com/s/FJzDRLchG_DWA80Wp141Vg
 ---
 
-![](images/20220824144717.png)
+![](./images/20220824144717.png)
 
-![](images/20220824102531.png)  
-![](images/20220824102931.png)
-![](images/20220824103614.png)
+![](./images/20220824102531.png)  
+![](./images/20220824102931.png)
+![](./images/20220824103614.png)
 
 # loader 执行顺序
 
@@ -215,15 +217,15 @@ class VueLoaderPlugin {
 
 ```
 
-![](images/20220824164740.png)
+![](./images/20220824164740.png)
 
 # pitchLoader
 
-![](images/20220824144942.png)
+![](./images/20220824144942.png)
 
 | 提示：Webpack 内部会使用 loader-runner 这个库来运行已配置的 loaders。
 
-![](images/20220824170620.png)
+![](./images/20220824170620.png)
 
 ```js
 
@@ -247,4 +249,4 @@ module.exports.pitch = function (remainingRequest) {
 }
 ```
 
-![](images/20220824104728.png)
+![](./images/20220824104728.png)
