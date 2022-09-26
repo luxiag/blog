@@ -226,15 +226,15 @@ body {
 
 
   .theme-container {
-    .navbar::before {
-      content: "";
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height:  var(--navbar-height);
-    filter: url(#hight);
-    }
+    // .navbar::before {
+    //   content: "";
+    // position: fixed;
+    // top: 0;
+    // left: 0;
+    // width: 100%;
+    // height:  var(--navbar-height);
+    // filter: url(#hight);
+    // }
     .sidebar-mask {
       background: rgba(0, 0, 0, .6);
     }

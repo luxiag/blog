@@ -173,7 +173,7 @@ const onBeforeLeave = scrollPromise.pending;
   </svg>
 </template>
 <style>
-.theme-container::before {
+/* .theme-container::before {
   content: "";
   position: fixed;
   top: 0;
@@ -190,5 +190,5 @@ const onBeforeLeave = scrollPromise.pending;
   width: 100%;
   height: 100%;
   filter: url(#dark);
-}
+} */
 </style>

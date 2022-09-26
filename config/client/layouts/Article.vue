@@ -17,7 +17,7 @@
                     </RouterLink>
                   </header>
                   <p v-if="info?.date" class="date">
-                    {{ new Date(info.date).toLocaleDateString() }}
+                    {{dayjs(info.date).format('YYYY-MM-DD') }}
                   </p>
                 </article>
               </div>
@@ -33,6 +33,8 @@
 import ParentLayout from "@theme-default/layouts/Layout.vue";
 import { onMounted, ref } from "vue";
 import { useBlogType } from "vuepress-plugin-blog2/client";
+import dayjs from "dayjs";
+
 const articles = useBlogType("article");
 const posts = ref([]);
 const addPosts = () => {

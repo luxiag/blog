@@ -1,5 +1,7 @@
 ---
 layout: Article
+sidebar: false
+home: true
 ---
 
 <!-- <div v-for="ite in list">{{ite}}</div>

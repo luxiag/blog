@@ -20,7 +20,7 @@ export default defineUserConfig({
   theme,
   dest: path.resolve(__dirname, "../dist/"),
   public: path.resolve(__dirname, "../public"),
-  logo: '/images/logo.png',
+  logo: "/images/logo.png",
   alias: {
     "@theme-default": path.resolve(__dirname, "./theme-default/lib/client/"),
   },
@@ -36,6 +36,7 @@ export default defineUserConfig({
       author: "luxiag",
     }),
     mdEnhancePlugin({
+      tabs: true,
       // 启用流程图
       flowchart: true,
       // 启用 mermaid
@@ -58,6 +59,8 @@ export default defineUserConfig({
       imageSize: true,
       // 启用导入支持
       include: true,
+      demo: true,
+      container: true,
     }),
     // commentPlugin({
     //     // 插件选项
@@ -76,7 +79,7 @@ export default defineUserConfig({
         date: frontmatter.date || null,
         category: frontmatter.category || [],
         tag: frontmatter.tag || [],
-        page:frontmatter.page || false
+        page: frontmatter.page || false,
       }),
       category: [
         {

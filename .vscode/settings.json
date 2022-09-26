@@ -3,5 +3,6 @@
         "luxiag",
         "nprogress",
         "vuepress"
-    ]
+    ],
+    "liveServer.settings.port": 5501
 }
