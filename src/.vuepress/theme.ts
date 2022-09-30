@@ -18,7 +18,8 @@ export default hopeTheme({
 
   // docsDir: "docs",
   // 文章信息，可以填入数组，数组的顺序是各条目显示的顺序
-  pageInfo: ["Author", "Original", "Date", "Category", "Tag", "ReadingTime"],
+  // pageInfo: ["Author", "Original", "Date", "Category", "Tag", "ReadingTime"],
+  pageInfo:false,
 
   blog: {
     // name:'luxiag',
@@ -30,9 +31,10 @@ export default hopeTheme({
 
   // sidebar
   sidebar: "structure",
+  headerDepth:4,
   // 默认的页脚文字
   footer: "页脚",
-
+  editLink:false,
   displayFooter: false,
   copyright: false,
 
