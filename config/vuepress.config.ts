@@ -7,7 +7,7 @@ import { photoSwipePlugin } from "vuepress-plugin-photo-swipe";
 // import { backToTopPlugin } from '@vuepress/plugin-back-to-top'
 import { nprogressPlugin } from "@vuepress/plugin-nprogress";
 import { blogPlugin } from "vuepress-plugin-blog2";
-
+import { docsearchPlugin } from "@vuepress/plugin-docsearch";
 // import { commentPlugin } from "vuepress-plugin-comment2";
 
 import theme from "./theme";
@@ -20,7 +20,7 @@ export default defineUserConfig({
   theme,
   dest: path.resolve(__dirname, "../dist/"),
   public: path.resolve(__dirname, "../public"),
-  logo: "/images/logo.png",
+
   alias: {
     "@theme-default": path.resolve(__dirname, "./theme-default/lib/client/"),
   },
@@ -31,6 +31,12 @@ export default defineUserConfig({
   },
   clientConfigFile: path.resolve(__dirname, "./client/index.ts"),
   plugins: [
+    docsearchPlugin({
+      // 配置项
+      indexName: "web-note",
+      appId: "54K2H4COST",
+      apiKey: "fe48e3a775fcc146027f0076e1d634c8",
+    }),
     seoPlugin({
       hostname: "luxiag.github.io",
       author: "luxiag",

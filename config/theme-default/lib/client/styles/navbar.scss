@@ -4,6 +4,19 @@
   --navbar-line-height: calc(
     var(--navbar-height) - 2 * var(--navbar-padding-v)
   );
+  display: flex;
+  width: 100%;
+  background: #fff;
+  .compat-grid {
+    width: 100%;
+    display: grid;
+    grid-template-columns: [full-start] minmax(2rem,1fr) [standard-start] 3.75rem [narrow-start] minmax(1rem,67.5rem) [narrow-end] 3.75rem [standard-end] minmax(2rem,1fr) [full-end];
+    position: relative;
+    .masthead-content {
+      display: flex;
+      grid-column: standard;
+    }
+  }
 
   padding: var(--navbar-padding-v) var(--navbar-padding-h);
   line-height: var(--navbar-line-height);
@@ -22,13 +35,13 @@
   }
 
   .navbar-items-wrapper {
-    display: flex;
-    // position: absolute;
-    justify-content: center;
-    align-items: center;
-    box-sizing: border-box;
-    top: var(--navbar-padding-v);
-    right: var(--navbar-padding-h);
+    // display: flex;
+    // // position: absolute;
+    // justify-content: center;
+    // align-items: center;
+    // box-sizing: border-box;
+    // top: var(--navbar-padding-v);
+    // right: var(--navbar-padding-h);
     height: var(--navbar-line-height);
     padding-left: var(--navbar-padding-h);
     white-space: nowrap;
