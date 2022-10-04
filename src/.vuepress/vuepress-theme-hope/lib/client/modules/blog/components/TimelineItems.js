@@ -20,7 +20,7 @@ export default defineComponent({
             children: [],
         })));
         return () => h("div", { class: "timeline-wrapper" }, h("ul", { class: "timeline-content" }, [
-            h(DropTransition, () => h("li", { class: "motto" }, hint.value)),
+            // h(DropTransition, () => h("li", { class: "motto" }, hint.value)),
             h(TOC, { items: items.value }),
             ...timelines.value.config.map(({ year, items }, index) => h(DropTransition, { appear: true, delay: 0.08 * (index + 1), type: "group" }, () => [
                 h("h3", { key: "title", id: year, class: "timeline-year-title" }, h("span", year)),

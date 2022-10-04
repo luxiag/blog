@@ -84,9 +84,10 @@ export default defineComponent({
                   style:
                     index > 6
                       ? [
-                          `top: ${(index - 6) * 14 + 50}%;`,
-                          
-                          `left:${String(Math.random()).slice(4, 6) - 50}%`,
+                          `top: ${(index - 6) * 14.44 + 50}%;`,
+                          index % 2 === 1
+                            ? `left:${Math.random() * 30 + 10}%`
+                            : `right:${Math.random() * 30 + 10}%`,
                         ]
                       : "",
                 })

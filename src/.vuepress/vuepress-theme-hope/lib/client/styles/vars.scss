@@ -14,10 +14,13 @@
   --c-bg: var(--bg-color);
   --c-bg-light: var(--bg-color-light);
   --c-border: var(--border-color);
+  --c-screen: #f2f5f8;
 
   // layout
   --navbar-bg-color: var(--bg-color-float-blur);
   --sidebar-bg-color: var(--bg-color-blur);
+
+  //
 }
 
 #{hope-config.$dark-selector} {
@@ -35,6 +38,7 @@
   --c-bg-light: var(--bg-color-light);
   --c-border: var(--border-color);
 
+  --c-screen: transparent;
   /* others */
 
   // layout
