@@ -94,9 +94,9 @@ export default defineComponent({
       // console.log('getDataToBottom',scrollTop+windowHeight,scrollHeight)
     };
     onMounted(() => {
-    //   const { page } = route.query;
-    //   updatePage(page ? Number(page) : 1);
-        console.log(props,'props')
+      //   const { page } = route.query;
+      //   updatePage(page ? Number(page) : 1);
+      console.log(props, "props");
       window.addEventListener("scroll", debounce(getDataToBottom));
     });
     onUnmounted(() => {
@@ -106,21 +106,20 @@ export default defineComponent({
       h(
         "div",
         { id: "article-list", class: "article-wrapper" },
-        currentArticles.value.length
-          ? [
-              ...currentArticles.value.map(({ info, path }, index) =>
-                h(DropTransition, { appear: true, delay: index * 0.04 }, () =>
-                  h(ArticleItem, { key: path, info, path })
-                )
-              ),
-              // h(Pagination, {
-              //     currentPage: currentPage.value,
-              //     perPage: articlePerPage.value,
-              //     total: props.items.length,
-              //     onUpdateCurrentPage: updatePage,
-              // }),
-            ]
-          : h(EmptyIcon)
+        props.items.length
+          ? props.items.map(({ info, path }, index) =>
+              h(DropTransition, { appear: true, delay: index * 0.04 }, () =>
+                h(ArticleItem, { key: path, info, path })
+              )
+            )
+          : // h(Pagination, {
+            //     currentPage: currentPage.value,
+            //     perPage: articlePerPage.value,
+            //     total: props.items.length,
+            //     onUpdateCurrentPage: updatePage,
+            // }),
+
+            h(EmptyIcon)
       );
   },
 });
