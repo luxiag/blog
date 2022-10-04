@@ -3,8 +3,9 @@ import { Navbar } from "./navbar/index.js";
 // import { enSidebar, zhSidebar } from "./sidebar/index.js";
 
 export default hopeTheme({
-  hostname: "https://luxiag.github.io",
 
+  hostname: "https://luxiag.github.io",
+  fullscreen: true,
   author: {
     name: "luxiag",
     url: "https://luxiag.github.io",
@@ -23,21 +24,30 @@ export default hopeTheme({
 
   blog: {
     // name:'luxiag',
-    articleInfo: ["Date"],
+    articleInfo: ["Date","ReadingTime"],
     timeline: "",
   },
   // navbar
   navbar: Navbar,
 
   // sidebar
-  sidebar: false,
+  sidebar: "structure",
   headerDepth:4,
   // 默认的页脚文字
   footer: "页脚",
   editLink:false,
   displayFooter: false,
   copyright: false,
+  breadcrumb:false,
+  toc:true,
+  themeColor: {
+    blue: "#2196f3",
+    red: "#f26d6d",
+    green: "#3eaf7c",
+    orange: "#fb9b5f",
+  },
 
+  navbarLayout:{left: ["Brand"], center: [], right: ["Links","Language", "Repo", "Outlook", "Search"]},
   // page meta
   metaLocales: {
     editLink: "在 GitHub 上编辑此页",
@@ -55,6 +65,7 @@ export default hopeTheme({
   plugins: {
     blog: {
       autoExcerpt: true,
+
     },
 
     // If you don't need comment feature, you can remove following option
@@ -96,7 +107,7 @@ export default hopeTheme({
       gfm: true,
       imageSize: true,
       include: true,
-      katex: true,
+      // katex: true,
       lazyLoad: true,
       mark: true,
       mermaid: true,

@@ -1,4 +1,4 @@
-import { defineComponent, h } from "vue";
+import { defineComponent, h, ref } from "vue";
 import ArticleList from "@theme-hope/modules/blog/components/ArticleList.js";
 import BlogHero from "@theme-hope/modules/blog/components/BlogHero.js";
 import InfoPanel from "@theme-hope/modules/blog/components/InfoPanel.js";
@@ -11,15 +11,22 @@ export default defineComponent({
   name: "BlogHome",
   setup() {
     const articles = useArticles();
-    const screens = [1, 2, 3, 4, 5, 6];
-
+    const screens = articles.value.items;
+    const screensRef = ref();
     return () =>
       h("div", { class: "page blog" }, [
         h("div", { class: "home-bg" }, [
           h(
             "div",
-            { class: "home-bg-blank-screens" },
-            screens.map((ite,index) => h("div", { class: "home-bg-blank-screen",appear: true, delay: index * 0.04 }))
+            { class: "home-bg-blank-screens", ref: screensRef },
+            screens.map((ite, index) =>
+              h("div", {
+                class: "home-bg-blank-screen",
+                appear: true,
+                delay: index * 0.04,
+                style: index > 6 ? `top: ${index * 8}%` : ""
+              })
+            )
           ),
         ]),
         h(BlogHero),
@@ -29,7 +36,10 @@ export default defineComponent({
               h(ProjectPanel)
             ),
             h(DropTransition, { appear: true, delay: 0.24 }, () =>
-              h(ArticleList, { items: articles.value.items })
+              h(ArticleList, {
+                items: articles.value.items,
+                screensRef: screensRef,
+              })
             ),
           ]),
           h(DropTransition, { appear: true, delay: 0.16 }, () => h(InfoPanel)),
