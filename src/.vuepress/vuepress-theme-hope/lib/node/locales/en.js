@@ -6,7 +6,8 @@ export const enLocale = {
     },
     metaLocales: {
         author: "Author",
-        date: "Writing Date",
+        // date: "Writing Date",
+        date:"日期",
         origin: "Original",
         views: "Page views",
         category: "Category",

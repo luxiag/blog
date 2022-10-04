@@ -8,20 +8,36 @@ import MarkdownContent from "@theme-hope/components/MarkdownContent.js";
 import { useArticles } from "@theme-hope/modules/blog/composables/index.js";
 import "../styles/home.scss";
 export default defineComponent({
-    name: "BlogHome",
-    setup() {
-        const articles = useArticles();
-        return () => h("div", { class: "page blog" }, [
-            h(BlogHero),
-            h("div", { class: "blog-page-wrapper" }, [
-                h("main", { class: "blog-home", id: "main-content" }, [
-                    h(DropTransition, { appear: true, delay: 0.16 }, () => h(ProjectPanel)),
-                    h(DropTransition, { appear: true, delay: 0.24 }, () => h(ArticleList, { items: articles.value.items })),
-                ]),
-                h(DropTransition, { appear: true, delay: 0.16 }, () => h(InfoPanel)),
-            ]),
-            h(DropTransition, { appear: true, delay: 0.28 }, () => h(MarkdownContent)),
-        ]);
-    },
+  name: "BlogHome",
+  setup() {
+    const articles = useArticles();
+    const screens = [1, 2, 3, 4, 5, 6];
+
+    return () =>
+      h("div", { class: "page blog" }, [
+        h("div", { class: "home-bg" }, [
+          h(
+            "div",
+            { class: "home-bg-blank-screens" },
+            screens.map((ite,index) => h("div", { class: "home-bg-blank-screen",appear: true, delay: index * 0.04 }))
+          ),
+        ]),
+        h(BlogHero),
+        h("div", { class: "blog-page-wrapper" }, [
+          h("main", { class: "blog-home", id: "main-content" }, [
+            h(DropTransition, { appear: true, delay: 0.16 }, () =>
+              h(ProjectPanel)
+            ),
+            h(DropTransition, { appear: true, delay: 0.24 }, () =>
+              h(ArticleList, { items: articles.value.items })
+            ),
+          ]),
+          h(DropTransition, { appear: true, delay: 0.16 }, () => h(InfoPanel)),
+        ]),
+        h(DropTransition, { appear: true, delay: 0.28 }, () =>
+          h(MarkdownContent)
+        ),
+      ]);
+  },
 });
 //# sourceMappingURL=BlogHome.js.map
