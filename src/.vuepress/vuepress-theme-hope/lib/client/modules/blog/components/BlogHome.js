@@ -76,12 +76,21 @@ export default defineComponent({
             "div",
             { class: "home-bg-blank-screens", ref: screensRef },
             currentArticles.value.map((ite, index) =>
-              h("div", {
-                class: "home-bg-blank-screen",
-                appear: true,
-                delay: index * 0.04,
-                style: index > 6 ? [`top: ${(index -6) * 14 + 50}%;`,`left:${(Math.random()-0.5)*100}%`] : "",
-              })
+              h(DropTransition, { appear: true, delay: index * 0.04 }, () =>
+                h("div", {
+                  class: "home-bg-blank-screen",
+                  appear: true,
+                  delay: index * 0.04,
+                  style:
+                    index > 6
+                      ? [
+                          `top: ${(index - 6) * 14 + 50}%;`,
+                          
+                          `left:${String(Math.random()).slice(4, 6) - 50}%`,
+                        ]
+                      : "",
+                })
+              )
             )
           ),
         ]),
