@@ -3,6 +3,8 @@
     display: flex;
     flex-direction: column;
     justify-content: space-between;
+    position: relative;
+    // overflow: hidden;
 
     box-sizing: border-box;
 
@@ -48,8 +50,8 @@
   position: absolute;
   top: 0;
   width: 80vw;
-  min-height: 100vh;
-  // overflow: hidden;
+  min-height: 100%;
+  overflow: hidden;
   box-sizing: border-box;
   > * {
     grid-area: container;

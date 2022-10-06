@@ -19,7 +19,7 @@ export default defineComponent({
     const blogOptions = useBlogOptions();
     const currentPage = ref(1);
     const articlePerPage = computed(
-      () => blogOptions.value.articlePerPage || 10
+      () => blogOptions.value.articlePerPage || 20
     );
     const currentArticles = computed(() =>
       articles.value.items.slice(0, currentPage.value * articlePerPage.value)
