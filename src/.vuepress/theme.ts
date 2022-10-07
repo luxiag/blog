@@ -1,9 +1,7 @@
 import { hopeTheme } from "./vuepress-theme-hope";
 import { Navbar } from "./navbar/index.js";
 // import { enSidebar, zhSidebar } from "./sidebar/index.js";
-
 export default hopeTheme({
-
   hostname: "https://luxiag.github.io",
   fullscreen: true,
   author: {
@@ -20,11 +18,11 @@ export default hopeTheme({
   // docsDir: "docs",
   // 文章信息，可以填入数组，数组的顺序是各条目显示的顺序
   // pageInfo: ["Author", "Original", "Date", "Category", "Tag", "ReadingTime"],
-  pageInfo:false,
+  pageInfo: false,
 
   blog: {
     // name:'luxiag',
-    articleInfo: ["Date","ReadingTime"],
+    articleInfo: ["Date", "ReadingTime"],
     timeline: "",
   },
   // navbar
@@ -32,28 +30,32 @@ export default hopeTheme({
 
   // sidebar
   // sidebar: "structure",
-  sidebar:false,
-  headerDepth:4,
+  sidebar: false,
+  headerDepth: 4,
   // 默认的页脚文字
   footer: "页脚",
-  editLink:false,
+  editLink: false,
   displayFooter: false,
   copyright: false,
-  breadcrumb:false,
-  toc:true,
+  breadcrumb: false,
+  toc: true,
   themeColor: {
     blue: "#2196f3",
     red: "#f26d6d",
     green: "#3eaf7c",
     orange: "#fb9b5f",
-    gray:"#bbb"
+    gray: "#bbb",
   },
 
-  navbarLayout:{left: ["Brand"], center: [], right: ["Links","Language", "Repo", "Outlook", "Search"]},
+  navbarLayout: {
+    left: ["Brand"],
+    center: [],
+    right: ["Links", "Language", "Repo", "Outlook", "Search"],
+  },
   // page meta
   metaLocales: {
     editLink: "在 GitHub 上编辑此页",
-    toc:"目录"
+    toc: "目录",
   },
 
   encrypt: {
@@ -67,8 +69,21 @@ export default hopeTheme({
   plugins: {
     blog: {
       autoExcerpt: true,
-
     },
+    // components:{
+    //   backToTop: true,
+    components: [
+      "Badge",
+      "BiliBili",
+      "CodePen",
+      "FontIcon",
+      "PDF",
+      "StackBlitz",
+      "VideoPlayer",
+      "YouTube",
+    ],
+    //   iconAssets: "iconfont",
+    // },
 
     // If you don't need comment feature, you can remove following option
     // The following config is for demo ONLY, if you need comment feature, please generate and use your own config, see comment plugin documentation for details.
