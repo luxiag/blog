@@ -62,7 +62,7 @@ category:
 
 :::
 
-::: normal-demo 未 clear 之后的浮动元素
+::: normal-demo  clear 之后的浮动元素
 
 ```html
 <div class="parent">
@@ -92,3 +92,14 @@ category:
 ```
 
 :::
+
+## zoom
+
+- 百分比值：`zoom:50%`，表示缩小到原来的一半。
+- 数值：`zoom:0.5`，表示缩小到原来的一半。
+- normal关键字：`zoom:normal`等同于`zoom:1`.
+
+### zoom和scale
+
+1. 浏览器兼容性。IE全族/Chrome/Safari和IE9+现代浏览器的差别。
+2. 控制缩放的值不一样。`zoom`更全面，但是不能是负数，只能等比例控制；而`scale`虽然只能是数值，但是能负数，可以只控制1个维度。

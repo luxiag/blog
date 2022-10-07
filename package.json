@@ -16,6 +16,10 @@
     "vuepress-theme-hope": "2.0.0-beta.104"
   },
   "dependencies": {
+    "vue-accessible-color-picker": "^4.1.0",
+    "vue-color": "^2.8.1",
+    "vue-color-gradient-picker": "^0.1.2",
+    "vue-color-kit": "^1.0.5",
     "vuepress-plugin-components": "^2.0.0-beta.99"
   }
 }
