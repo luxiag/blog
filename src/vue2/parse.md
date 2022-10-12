@@ -1,7 +1,8 @@
 ---
-title: 编译
-lang: en-ZH
-sidebarDepth: 2
+title: Vue2.x框架原理分析-编译
+date: 2021-08-15
+category:
+  - vue2
 ---
 
 # 前言
@@ -16,43 +17,43 @@ vue 基于源码构建的有两个版本，一个是 runtime only(一个只包�
 
 ```js
 new Vue({
-  template:'<div></div>'
-})
+  template: "<div></div>",
+});
 ```
 
-源码中，是先定义只包含运行时版本的$mount方法，再定义完整版本的$mount方法
+源码中，是先定义只包含运行时版本的$mount方法，再定义完整版本的$mount 方法
 `plantforms/web/runtime-with-compiler`
 
 ```js
-const mount = Vue.prototype.$mount
+const mount = Vue.prototype.$mount;
 Vue.prototype.$mount = function (
   el?: string | Element,
   hydrating?: boolean
 ): Component {
-  el = el && query(el)
+  el = el && query(el);
   /* istanbul ignore if */
   if (el === document.body || el === document.documentElement) {
-    return this
+    return this;
   }
 
-  const options = this.$options
+  const options = this.$options;
   // resolve template/el and convert to render function
   if (!options.render) {
-    let template = options.template
+    let template = options.template;
     if (template) {
-      if (typeof template === 'string') {
-        if (template.charAt(0) === '#') {
-          template = idToTemplate(template)
+      if (typeof template === "string") {
+        if (template.charAt(0) === "#") {
+          template = idToTemplate(template);
           /* istanbul ignore if */
         }
       } else if (template.nodeType) {
-        template = template.innerHTML
+        template = template.innerHTML;
       } else {
-        return this
+        return this;
       }
     } else if (el) {
       // @ts-expect-error
-      template = getOuterHTML(el)
+      template = getOuterHTML(el);
     }
     if (template) {
       /* istanbul ignore if */
@@ -63,18 +64,16 @@ Vue.prototype.$mount = function (
           shouldDecodeNewlines,
           shouldDecodeNewlinesForHref,
           delimiters: options.delimiters,
-          comments: options.comments
+          comments: options.comments,
         },
         this
-      )
-      options.render = render
-      options.staticRenderFns = staticRenderFns
+      );
+      options.render = render;
+      options.staticRenderFns = staticRenderFns;
     }
   }
-  return mount.call(this, el, hydrating)
-}
-
-
+  return mount.call(this, el, hydrating);
+};
 ```
 
 ## 运行时
@@ -84,10 +83,8 @@ Vue.prototype.$mount = function (
 ```js
 import App from "./App.vue";
 new Vue({
-  render (h) {
-  
-  }
-})
+  render(h) {},
+});
 ```
 
 **完整版和只包含运行时版之间的差异主要在于是否有模板编译阶段**
@@ -98,9 +95,9 @@ Vue.prototype.$mount = function (
   el?: string | Element,
   hydrating?: boolean
 ): Component {
-  el = el && inBrowser ? query(el) : undefined
-  return mountComponent(this, el, hydrating)
-}
+  el = el && inBrowser ? query(el) : undefined;
+  return mountComponent(this, el, hydrating);
+};
 ```
 
 # 流程

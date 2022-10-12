@@ -1,6 +1,9 @@
 ---
-title: vue-loader-15.9.8
+title: vue-loader-15.9.8代码分析
 reference: https://mp.weixin.qq.com/s/FJzDRLchG_DWA80Wp141Vg
+category:
+  - vue2
+  - webpack
 ---
 
 ![](./images/20220824144717.png)

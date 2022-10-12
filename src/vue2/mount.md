@@ -1,6 +1,8 @@
 ---
-title: Vue2初始化
-date: 2021-08-22
+title: Vue2.x框架原理分析-挂载
+date: 2021-08-10
+category:
+  - vue2
 ---
 
 # mount
