@@ -13,12 +13,12 @@ category:
 ![](./images/20220824102931.png)
 ![](./images/20220824103614.png)
 
-# loader 执行顺序
+## loader 执行顺序
 
 先左到右执行 loader 上的 pitch 方法
 在右到左执行 loader
 
-# vue-loader
+## vue-loader
 
 ```js
 const { parse } = require("@vue/component-compiler-utils");
@@ -44,11 +44,7 @@ module.exports = function (source) {
 };
 ```
 
-`console.log(descriptor)`
-<el-collapse>
-<el-collapse-item title="console.log(descriptor)" name="1">
-</el-collapse-item>
-</el-collapse>
+::: details `console.log(descriptor)`
 
 ```js
   template: {
@@ -140,6 +136,8 @@ module.exports = function (source) {
 
 ```
 
+:::
+
 ```js
 let templateImport = `var render, staticRenderFns`;
 let templateRequest;
@@ -180,7 +178,7 @@ export default script
 */
 ```
 
-# VueLoaderPlugin
+## VueLoaderPlugin
 
 Plugin 的作用，主要有以下两条：
 
@@ -221,7 +219,7 @@ class VueLoaderPlugin {
 
 ![](./images/20220824164740.png)
 
-# pitchLoader
+## pitchLoader
 
 ![](./images/20220824144942.png)
 

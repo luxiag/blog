@@ -5,7 +5,7 @@ category:
   - vue2
 ---
 
-# mount
+## mount
 
 ```js
 Vue.prototype.$mount = function (
@@ -20,7 +20,7 @@ Vue.prototype.$mount = function (
 `this`
 ![](./images/20220811104229.png)
 
-# mountComponent
+## mountComponent
 
 ![](./images/20220811111106.png)  
 `core/instance/lifecycle`
@@ -86,7 +86,9 @@ export function mountComponent(
 }
 ```
 
-## render
+### render
+
+::: details _render
 
 ```js
   Vue.prototype._render = function (): VNode {
@@ -143,12 +145,18 @@ export function mountComponent(
 
 ```
 
-## createElement
+:::
+
+### createElement
 
 ```js
 vnode = render.call(vm._renderProxy, vm.$createElement);
 vm.$createElement = (a, b, c, d) => createElement(vm, a, b, c, d, true);
+//  => vm._renderProxy.render(vm.$createElement)
+// App.vue  render: h => h(App)
 ```
+
+![](./images/20220817160800.png)
 
 ```js
 export function createElement(
@@ -242,7 +250,7 @@ export function _createElement(
 }
 ```
 
-## createComponent
+### createComponent
 
 ```js
 export function createComponent(
@@ -338,7 +346,7 @@ export function createComponent(
 
 ```
 
-## \_update
+### \_update
 
 ```js
 const vnode = vm._render();
@@ -384,7 +392,7 @@ Vue.prototype._update = function (vnode: VNode, hydrating?: boolean) {
 };
 ```
 
-# createPathFunction
+## createPathFunction
 
 DOM-Diff 过程叫做 patch 过程。patch,意为“补丁”，即指对旧的 VNode 修补，打补丁从而得到新的 VNode
 
@@ -405,7 +413,7 @@ export function createPathFunction(backend) {
 }
 ```
 
-## path
+### path
 
 ```js
 export function isUndef(v: any): v is undefined | null {
@@ -533,7 +541,7 @@ return function patch(oldVnode, vnode, hydrating, removeOnly) {
 };
 ```
 
-### sameVnode
+#### sameVnode
 
 - key 必须相同（都是 undefined 则也是相同的），
 - DOM 元素的标签必须相同。比如都是 div
@@ -560,7 +568,7 @@ function sameVnode(a, b) {
 }
 ```
 
-### createElm
+#### createElm
 
 基于 vnode 创建整棵 DOM 树，并插入到父节点上
 
@@ -627,7 +635,7 @@ function createElm(
 }
 ```
 
-#### createComponent()
+##### createComponent()
 
 ```js
 /**
@@ -668,7 +676,7 @@ function createComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
 }
 ```
 
-##### initComponent
+###### initComponent
 
 ```js
 function initComponent(vnode, insertedVnodeQueue) {
@@ -690,7 +698,7 @@ function initComponent(vnode, insertedVnodeQueue) {
 }
 ```
 
-#### insert
+##### insert
 
 向父节点插入节点
 
@@ -708,7 +716,7 @@ function insert(parent, elm, ref) {
 }
 ```
 
-### removeNode
+#### removeNode
 
 ```js
 function removeNode(el) {
@@ -720,7 +728,7 @@ function removeNode(el) {
 }
 ```
 
-### invokeCreateHooks
+#### invokeCreateHooks
 
 `createPatchFunction`
 
@@ -757,7 +765,7 @@ function invokeCreateHooks(vnode, insertedVnodeQueue) {
 }
 ```
 
-### patchVnode
+#### patchVnode
 
 更新节点
 
@@ -853,7 +861,7 @@ function patchVnode(
 }
 ```
 
-### updateChildren
+#### updateChildren
 
 ![](./images/20220816165854.png)
 

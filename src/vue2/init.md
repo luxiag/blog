@@ -847,6 +847,207 @@ this.get() => new Dep => dep.depend() = Watcher.addDep(dep)
 
 this.set() => dep.notify() => watcher.update() => queueWatcher(watcher) => nextTick(flushSchedulerQueue) => watcher.run() => this.get() => vm._render() =>vm._update() => patch() => 更新
 
+### 更新过程
+
+::: details 更新过程
+
+```js
+// 1.set()
+dep.notify();
+// 2.notify()
+notify(info?: DebuggerEventExtraInfo) {
+  const subs = this.subs.slice()
+  for (let i = 0, l = subs.length; i < l; i++) {
+    //  watcher 类的update方法
+    subs[i].update()
+  }
+}
+// 3. Watcher update
+update() {
+  /* istanbul ignore else */
+  if (this.lazy) {
+    this.dirty = true
+  } else if (this.sync) {
+    this.run()
+  } else {
+    queueWatcher(this)
+  }
+}
+// 4. queueWatcher
+// flushing
+//  false => flushSchedulerQueue: flushing= true => resetSchedulerState：flushing = false
+let flushing = false
+export function queueWatcher(watcher: Watcher) {
+  const id = watcher.id
+  // 如果 watcher 已经存在，则跳过，不会重复入队
+  if (has[id] != null) {
+    return
+  }
+  if (watcher === Dep.target && watcher.noRecurse) {
+    return
+  }
+  // 缓存 watcher.id，用于判断 watcher 是否已经入队
+  has[id] = true
+  if (!flushing) {
+    // 当前没有处于刷新队列状态，watcher 直接入队
+    queue.push(watcher)
+  } else {
+    // if already flushing, splice the watcher based on its id
+    // if already past its id, it will be run next immediately.
+    // 已经在刷新队列了
+    // 从队列末尾开始倒序遍历，根据当前 watcher.id 找到它大于的 watcher.id 的位置，然后将自己插入到该位置之后的下一个位置
+    // 即将当前 watcher 放入已排序的队列中，且队列仍是有序的
+    let i = queue.length - 1
+    while (i > index && queue[i].id > watcher.id) {
+      i--
+    }
+    queue.splice(i + 1, 0, watcher)
+  }
+  // queue the flush
+  if (!waiting) {
+    waiting = true
+    nextTick(flushSchedulerQueue)
+  }
+  // 5.nextTick
+  // 6.flushSchedulerQueue
+  // 7.watcher.run
+}
+```
+
+#### flushSchedulerQueue
+
+- Flush both queues and run the watchers.
+- 刷新队列，由 flushCallbacks 函数负责调用，主要做了如下两件事：
+- 1、更新 flushing 为 ture，表示正在刷新队列，在此期间往队列中 push 新的 watcher 时需要特殊处理（将其放在队列的合适位置）
+- 2、按照队列中的 watcher.id 从小到大排序，保证先创建的 watcher 先执行，也配合 第一步
+- 3、遍历 watcher 队列，依次执行 watcher.before、watcher.run，并清除缓存的 watcher
+::: details flushSchedulerQueue
+
+```js
+// 会存入 nextTick的callbacks数组中，当浏览器没有执行队列才会执行
+function flushSchedulerQueue() {
+  currentFlushTimestamp = getNow();
+  flushing = true;
+  let watcher, id;
+
+  // Sort queue before flush.
+  // This ensures that:
+  // 1. Components are updated from parent to child. (because parent is always
+  //    created before the child)
+  // 2. A component's user watchers are run before its render watcher (because
+  //    user watchers are created before the render watcher)
+  // 3. If a component is destroyed during a parent component's watcher run,
+  //    its watchers can be skipped.
+
+  queue.sort((a, b) => a.id - b.id);
+  /**
+   * 刷新队列之前先给队列排序（升序），可以保证：
+   *   1、组件的更新顺序为从父级到子级，因为父组件总是在子组件之前被创建
+   *   2、一个组件的用户 watcher 在其渲染 watcher 之前被执行，因为用户 watcher 先于 渲染 watcher 创建
+   *   3、如果一个组件在其父组件的 watcher 执行期间被销毁，则它的 watcher 可以被跳过
+   * 排序以后在刷新队列期间新进来的 watcher 也会按顺序放入队列的合适位置
+   */
+
+  for (index = 0; index < queue.length; index++) {
+    watcher = queue[index];
+    if (watcher.before) {
+      // 执行 before 钩子，在使用 vm.$watch 或者 watch 选项时可以通过配置项（options.before）传递
+      watcher.before();
+    }
+    // 将缓存的 watcher 清除
+    id = watcher.id;
+    has[id] = null;
+    //执行 watcher.run，最终触发更新函数，比如 updateComponent 或者 获取 this.xx（xx 为用户 watch 的第二个参数），当然第二个参数也有可能是一个函数，那就直接执行
+    watcher.run();
+  }
+
+  // keep copies of post queues before resetting state
+  const activatedQueue = activatedChildren.slice();
+  const updatedQueue = queue.slice();
+  /**
+   * 重置调度状态：
+   *   1、重置 has 缓存对象，has = {}
+   *   2、waiting = flushing = false，表示刷新队列结束
+   *     waiting = flushing = false，表示可以像 callbacks 数组中放入新的 flushSchedulerQueue 函数，并且可以向浏览器的任务队列放入下一个 flushCallbacks 函数了
+   */
+  resetSchedulerState();
+
+  // call component updated and activated hooks
+  callActivatedHooks(activatedQueue);
+  callUpdatedHooks(updatedQueue);
+
+  // devtool hook
+  /* istanbul ignore if */
+  if (devtools && config.devtools) {
+    devtools.emit("flush");
+  }
+}
+```
+
+:::
+
+::: details resetSchedulerState
+
+```js
+// 重置更新队列
+function resetSchedulerState() {
+  index = queue.length = activatedChildren.length = 0
+  has = {}
+  waiting = flushing = false
+}
+
+```
+
+:::
+
+##### watcher.run
+
+::: details watcher.run
+
+```js
+/*
+ * 由 刷新队列函数 flushSchedulerQueue 调用，如果是同步 watch，则由 this.update 直接调用，完成如下几件事：
+ *   1、执行实例化 watcher 传递的第二个参数，updateComponent 或者 获取 this.xx 的一个函数(parsePath 返回的函数)
+ *   2、更新旧值为新值
+ *   3、执行实例化 watcher 时传递的第三个参数，比如用户 watcher 的回调函数
+*/
+  run() {
+    if (this.active) {
+       // 调用 this.get 方法
+      const value = this.get()
+      if (
+        value !== this.value ||
+        // Deep watchers and watchers on Object/Arrays should fire even
+        // when the value is the same, because the value may
+        // have mutated.
+        isObject(value) ||
+        this.deep
+      ) {
+        // set new value
+        // 更新旧值为新值
+        const oldValue = this.value
+        this.value = value
+        if (this.user) {
+          // 如果是用户 watcher，则执行用户传递的第三个参数 —— 回调函数，参数为 val 和 oldVal
+          const info = `callback for watcher "${this.expression}"`
+          invokeWithErrorHandling(
+            this.cb,
+            this.vm,
+            [value, oldValue],
+            this.vm,
+            info
+          )
+        } else {
+           // 渲染 watcher，this.cb = noop，一个空函数
+          this.cb.call(this.vm, value, oldValue)
+        }
+      }
+    }
+  }
+```
+
+:::
+
 Object.defineProperty() 方法会直接在一个对象上定义一个新属性，或者修改一个对象的现有属性，并返回此对象。
 
 ::: details defineProperty
@@ -1531,265 +1732,7 @@ const render = function () {
 //  
 ```
 
-#### 依赖收集
-
-```js
-// core/instance/lifecycle
-updateComponent = () => {
-  vm._update(vm._render(), hydrating);
-};
-
-new Watcher(
-  vm,
-  updateComponent,
-  noop,
-  watcherOptions,
-  true /* isRenderWatcher */
-);
-// new Watcher constructor
-this.value = this.lazy ? undefined : this.get();
-// this.get
-  get() {
-    // Dep.target = this => Watcher
-    pushTarget(this)
-    let value
-    const vm = this.vm
-    try {
-      // this.getter = updateComponent
-      value = this.getter.call(vm, vm)
-    } catch (e: any) {
-      if (this.user) {
-        handleError(e, vm, `getter for watcher "${this.expression}"`)
-      } else {
-        throw e
-      }
-    } finally {
-      // "touch" every property so they are all tracked as
-      // dependencies for deep watching
-      if (this.deep) {
-        traverse(value)
-      }
-      popTarget()
-      this.cleanupDeps()
-    }
-    return value
-  }
-  // this.getter.call(vm,vm) => vm.updateComponent(vm)
-   vm._update(vm._render(), hydrating);
-  //  vm._render()
-  vnode=render.call(vm._renderProxy,vm.$createElement)
-  // render 是模板编译后生成的函数 调用生成VNode
-  // 第二个参数为 data  会从 vm中获取数据 => vm.msg
-  // vm.msg 获取msg数据 触发 reactiveGetter 中的get 进行依赖收集
-
-
-```
-
-#### 派发更新
-
-数据发生变化时触发`defineReactive`中的 get
-
-```js
-dep.notify();
-//
-notify(info?: DebuggerEventExtraInfo) {
-  const subs = this.subs.slice()
-  for (let i = 0, l = subs.length; i < l; i++) {
-    //  watcher 类的update方法
-    subs[i].update()
-  }
-}
-// Watcher update
-update() {
-  /* istanbul ignore else */
-  if (this.lazy) {
-    this.dirty = true
-  } else if (this.sync) {
-    this.run()
-  } else {
-    queueWatcher(this)
-  }
-}
-// queueWatcher
-export function queueWatcher(watcher: Watcher) {
-  const id = watcher.id
-  // 如果 watcher 已经存在，则跳过，不会重复入队
-  if (has[id] != null) {
-    return
-  }
-  if (watcher === Dep.target && watcher.noRecurse) {
-    return
-  }
-  // 缓存 watcher.id，用于判断 watcher 是否已经入队
-  has[id] = true
-  if (!flushing) {
-    // 当前没有处于刷新队列状态，watcher 直接入队
-    queue.push(watcher)
-  } else {
-    // if already flushing, splice the watcher based on its id
-    // if already past its id, it will be run next immediately.
-    // 已经在刷新队列了
-    // 从队列末尾开始倒序遍历，根据当前 watcher.id 找到它大于的 watcher.id 的位置，然后将自己插入到该位置之后的下一个位置
-    // 即将当前 watcher 放入已排序的队列中，且队列仍是有序的
-    let i = queue.length - 1
-    while (i > index && queue[i].id > watcher.id) {
-      i--
-    }
-    queue.splice(i + 1, 0, watcher)
-  }
-  // queue the flush
-  if (!waiting) {
-    waiting = true
-    nextTick(flushSchedulerQueue)
-  }
-}
-```
-
-##### flushSchedulerQueue
-
-- Flush both queues and run the watchers.
-- 刷新队列，由 flushCallbacks 函数负责调用，主要做了如下两件事：
-- 1、更新 flushing 为 ture，表示正在刷新队列，在此期间往队列中 push 新的 watcher 时需要特殊处理（将其放在队列的合适位置）
-- 2、按照队列中的 watcher.id 从小到大排序，保证先创建的 watcher 先执行，也配合 第一步
-- 3、遍历 watcher 队列，依次执行 watcher.before、watcher.run，并清除缓存的 watcher
-
-```js
-// 会存入 nextTick的callbacks数组中，当浏览器没有执行队列才会执行
-function flushSchedulerQueue() {
-  currentFlushTimestamp = getNow();
-  flushing = true;
-  let watcher, id;
-
-  // Sort queue before flush.
-  // This ensures that:
-  // 1. Components are updated from parent to child. (because parent is always
-  //    created before the child)
-  // 2. A component's user watchers are run before its render watcher (because
-  //    user watchers are created before the render watcher)
-  // 3. If a component is destroyed during a parent component's watcher run,
-  //    its watchers can be skipped.
-
-  queue.sort((a, b) => a.id - b.id);
-  /**
-   * 刷新队列之前先给队列排序（升序），可以保证：
-   *   1、组件的更新顺序为从父级到子级，因为父组件总是在子组件之前被创建
-   *   2、一个组件的用户 watcher 在其渲染 watcher 之前被执行，因为用户 watcher 先于 渲染 watcher 创建
-   *   3、如果一个组件在其父组件的 watcher 执行期间被销毁，则它的 watcher 可以被跳过
-   * 排序以后在刷新队列期间新进来的 watcher 也会按顺序放入队列的合适位置
-   */
-
-  for (index = 0; index < queue.length; index++) {
-    watcher = queue[index];
-    if (watcher.before) {
-      // 执行 before 钩子，在使用 vm.$watch 或者 watch 选项时可以通过配置项（options.before）传递
-      watcher.before();
-    }
-    // 将缓存的 watcher 清除
-    id = watcher.id;
-    has[id] = null;
-    //执行 watcher.run，最终触发更新函数，比如 updateComponent 或者 获取 this.xx（xx 为用户 watch 的第二个参数），当然第二个参数也有可能是一个函数，那就直接执行
-    watcher.run();
-  }
-
-  // keep copies of post queues before resetting state
-  const activatedQueue = activatedChildren.slice();
-  const updatedQueue = queue.slice();
-  /**
-   * 重置调度状态：
-   *   1、重置 has 缓存对象，has = {}
-   *   2、waiting = flushing = false，表示刷新队列结束
-   *     waiting = flushing = false，表示可以像 callbacks 数组中放入新的 flushSchedulerQueue 函数，并且可以向浏览器的任务队列放入下一个 flushCallbacks 函数了
-   */
-  resetSchedulerState();
-
-  // call component updated and activated hooks
-  callActivatedHooks(activatedQueue);
-  callUpdatedHooks(updatedQueue);
-
-  // devtool hook
-  /* istanbul ignore if */
-  if (devtools && config.devtools) {
-    devtools.emit("flush");
-  }
-}
-```
-
-##### watcher.run
-
-```js
-/*
- * 由 刷新队列函数 flushSchedulerQueue 调用，如果是同步 watch，则由 this.update 直接调用，完成如下几件事：
- *   1、执行实例化 watcher 传递的第二个参数，updateComponent 或者 获取 this.xx 的一个函数(parsePath 返回的函数)
- *   2、更新旧值为新值
- *   3、执行实例化 watcher 时传递的第三个参数，比如用户 watcher 的回调函数
-*/
-  run() {
-    if (this.active) {
-       // 调用 this.get 方法
-      const value = this.get()
-      if (
-        value !== this.value ||
-        // Deep watchers and watchers on Object/Arrays should fire even
-        // when the value is the same, because the value may
-        // have mutated.
-        isObject(value) ||
-        this.deep
-      ) {
-        // set new value
-        // 更新旧值为新值
-        const oldValue = this.value
-        this.value = value
-        if (this.user) {
-          // 如果是用户 watcher，则执行用户传递的第三个参数 —— 回调函数，参数为 val 和 oldVal
-          const info = `callback for watcher "${this.expression}"`
-          invokeWithErrorHandling(
-            this.cb,
-            this.vm,
-            [value, oldValue],
-            this.vm,
-            info
-          )
-        } else {
-           // 渲染 watcher，this.cb = noop，一个空函数
-          this.cb.call(this.vm, value, oldValue)
-        }
-      }
-    }
-  }
-```
-
-`this.get`时调用 this.getter
-
-```js
-  get() {
-    pushTarget(this)
-    let value
-    const vm = this.vm
-    try {
-      // this.getter = updateComponent = () => {
-      // vm._update(vm._render(), hydrating);
-      //};
-      value = this.getter.call(vm, vm)
-    } catch (e: any) {
-      if (this.user) {
-        handleError(e, vm, `getter for watcher "${this.expression}"`)
-      } else {
-        throw e
-      }
-    } finally {
-      // "touch" every property so they are all tracked as
-      // dependencies for deep watching
-      if (this.deep) {
-        traverse(value)
-      }
-      popTarget()
-      this.cleanupDeps()
-    }
-    return value
-  }
-```
-
-#### nextTick
+## nextTick
 
 ```js
 // 存放要执行的队列 当 pending为false 才遍历执行
@@ -1833,14 +1776,12 @@ export function nextTick(cb?: (...args: any[]) => any, ctx?: object) {
 
 ```
 
-##### timerFunc
+### timerFunc
 
 ```js
 /**
  *
  *  callbacks 数组就是 watcher对象集合
- * nextTick时将
- * 做了三件事：
  *   1、将 pending 置为 false
  *   2、清空 callbacks 数组
  *   3、执行 callbacks 数组中的每一个函数（比如 flushSchedulerQueue、用户调用 nextTick 传递的回调函数）

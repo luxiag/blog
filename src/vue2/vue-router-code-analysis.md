@@ -1194,6 +1194,8 @@ runQueue(queue, iterator, () => {
 
 ## router-view 更新机制
 
+_route 改变触发更新
+
 将路由主机渲染出来
 
 ```js
