@@ -828,7 +828,24 @@ Vue.prototype.$watch = function (
 
 ## 响应式原理
 
-### defineProperty
+利用`defineProperty`对数据进行拦截,在`initState()`对 data 和 props 进行拦截，
+
+initState => initData => observe => Observer => defineReactive
+=> initProps
+
+defineReactive 利用`Object.defineProperty`对数据的 get 和 set 进行拦截操作
+
+当组件挂载时`new Watcher`里的 `this.get()` 方法中进行`pushTarget()`将当前 Watcher 赋值给 Dep.target
+
+对数据进行 `get`时，触发 get 拦截器，将定义的`Dep`对象添加进入`Watcher`中的`newDeps`数组中,同时将`Watcher`添加进入`Dep`中的`subs`中
+
+new Watcher => Dep.target = Watcher
+this.get() => new Dep => dep.depend() = Watcher.addDep(dep)
+= watcher.newDeps.push(dep) && dep.subs.push(watcher)
+
+对数据进行 `set`时，触发 set 拦截器，触发`dep.notify()`遍历 subs 数组执行`sub.update`即`watcher.update()`将 watcher 加入更新`queue`队列,执行`nextTick`更新队列,批量执行`queue`队列执行`watcher.run()`在方法中会执行`this.get()`获取值进行对比，`this.get`会在次触发`updateComponent`
+
+this.set() => dep.notify() => watcher.update() => queueWatcher(watcher) => nextTick(flushSchedulerQueue) => watcher.run() => this.get() => vm._render() =>vm._update() => patch() => 更新
 
 Object.defineProperty() 方法会直接在一个对象上定义一个新属性，或者修改一个对象的现有属性，并返回此对象。
 
@@ -1028,25 +1045,6 @@ methodsToPatch.forEach(function (method) {
 - 1、在第一次读取时收集依赖，比如执行 render 函数生成虚拟 DOM 时会有读取操作
 - 2、在更新时设置新值并通知依赖更新
 
-::: details Dep.target
-
-```js
-Dep.target = null;
-const targetStack: Array<DepTarget | null | undefined> = [];
-
-export function pushTarget(target?: DepTarget | null) {
-  targetStack.push(target);
-  Dep.target = target;
-}
-
-export function popTarget() {
-  targetStack.pop();
-  Dep.target = targetStack[targetStack.length - 1];
-}
-```
-
-:::
-
 ::: details defineReactive
 
 ```js
@@ -1067,7 +1065,7 @@ export function defineReactive(
   if (property && property.configurable === false) {
     return;
   }
-  // 只有定义了响应式get和set才有这个属性  第一次进来没有该属性
+
   // cater for pre-defined getter/setters
   const getter = property && property.get;
   const setter = property && property.set;
@@ -1145,6 +1143,24 @@ export function defineReactive(
   });
 
   return dep;
+}
+```
+
+:::
+::: details Dep.target
+
+```js
+Dep.target = null;
+const targetStack: Array<DepTarget | null | undefined> = [];
+
+export function pushTarget(target?: DepTarget | null) {
+  targetStack.push(target);
+  Dep.target = target;
+}
+
+export function popTarget() {
+  targetStack.pop();
+  Dep.target = targetStack[targetStack.length - 1];
 }
 ```
 
@@ -1415,7 +1431,7 @@ export default class Watcher implements DepTarget {
 
 ```
 
-## 过程分析
+## 初始化过程分析
 
 ```js
 //1. vue._init()
@@ -1464,6 +1480,7 @@ export default class Watcher implements DepTarget {
   ) {
     // ...
     if (isFunction(expOrFn)) {
+      // this.getter = updateComponent
       this.getter = expOrFn;
     } else {
       this.getter = parsePath(expOrFn);
@@ -1481,6 +1498,7 @@ export default class Watcher implements DepTarget {
       if (this.deep) {
         traverse(value);
       }
+      // 将 Dep.target 复原
       popTarget();
       this.cleanupDeps();
     }
@@ -1494,6 +1512,23 @@ Vue.prototype._render = function (): VNode {
   const { render, _parentVnode } = vm.$options;
   vnode = render.call(vm._renderProxy, vm.$createElement);
 };
+// 6. render() 每个组件的render方法
+// 触发 this.get()
+// app
+const render = function () {
+  var _vm = this;
+  var _h = _vm.$createElement;
+  var _c = _vm._self._c || _h;
+    return _c(
+    "div",
+    { attrs: { id: "app" } },
+    [
+    //  获取_vm里面的数据 在次触发 get()
+    ],
+    1
+  )
+};
+//  
 ```
 
 #### 依赖收集
@@ -1619,6 +1654,7 @@ export function queueWatcher(watcher: Watcher) {
 - 3、遍历 watcher 队列，依次执行 watcher.before、watcher.run，并清除缓存的 watcher
 
 ```js
+// 会存入 nextTick的callbacks数组中，当浏览器没有执行队列才会执行
 function flushSchedulerQueue() {
   currentFlushTimestamp = getNow();
   flushing = true;
@@ -1756,10 +1792,12 @@ function flushSchedulerQueue() {
 #### nextTick
 
 ```js
+// 存放要执行的队列 当 pending为false 才遍历执行
 const callbacks: Array<Function> = []
 /*
 如果 pending 为 false，表示现在浏览器的任务队列中没有 flushCallbacks 函数
 如果 pending 为 true，则表示浏览器的任务队列中已经被放入了 flushCallbacks 函数，
+当 pending为 false callbacks才会被调用执行
 待执行 flushCallbacks 函数时，pending 会被再次置为 false，表示下一个 flushCallbacks 函数可以进入浏览器的任务队列了
 */
 let pending = false
@@ -1778,7 +1816,11 @@ export function nextTick(cb?: (...args: any[]) => any, ctx?: object) {
   })
   if (!pending) {
     pending = true
-    // 执行 timerFunc，在浏览器的任务队列中（首选微任务队列）放入 flushCallbacks 函数
+    // 判断浏览器是否支持 promise 等判断来选择对应的浏览器任务队列
+    // 同步任务 > 微任务 > requestAnimationFrame > DOM渲染 > 宏任务
+    //  在选择的对应任务队列中（首选微任务队列）放入 flushCallbacks 函数
+    //  flushCallbacks 在执行 callback队列
+    //
     timerFunc()
   }
   // $flow-disable-line
@@ -1795,6 +1837,9 @@ export function nextTick(cb?: (...args: any[]) => any, ctx?: object) {
 
 ```js
 /**
+ *
+ *  callbacks 数组就是 watcher对象集合
+ * nextTick时将
  * 做了三件事：
  *   1、将 pending 置为 false
  *   2、清空 callbacks 数组
