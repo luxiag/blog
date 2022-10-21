@@ -1,11 +1,18 @@
 ---
-title: Vue2.x框架原理分析-挂载
+title: Vue2.x框架原理分析-组件挂载
 date: 2021-08-10
 category:
   - vue2
 ---
 
 ## mount
+
+```js
+// vue._init()
+if (vm.$options.el) {
+  vm.$mount(vm.$options.el);
+}
+```
 
 ```js
 Vue.prototype.$mount = function (
@@ -88,7 +95,7 @@ export function mountComponent(
 
 ### render
 
-::: details _render
+::: details \_render
 
 ```js
   Vue.prototype._render = function (): VNode {
@@ -153,7 +160,7 @@ export function mountComponent(
 vnode = render.call(vm._renderProxy, vm.$createElement);
 vm.$createElement = (a, b, c, d) => createElement(vm, a, b, c, d, true);
 //  => vm._renderProxy.render(vm.$createElement)
-// App.vue  render: h => h(App)
+// App.vue  render: h => h(App) = h =vm.$createElement
 ```
 
 ![](./images/20220817160800.png)
@@ -252,6 +259,8 @@ export function _createElement(
 
 ### createComponent
 
+节点是组件
+
 ```js
 export function createComponent(
   Ctor: typeof Component | Function | ComponentOptions | void,
@@ -263,6 +272,7 @@ export function createComponent(
   if (isUndef(Ctor)) {
     return
   }
+  // Vue.options._base = Vue
   const baseCtor = context.$options._base
   // plain options object: turn it into a constructor
   if (isObject(Ctor)) {
@@ -284,6 +294,7 @@ export function createComponent(
     }
   }
   data = data || {}
+  //  合并 options, 就是把自定义的 options 和 默认的 `options` 合并
   resolveConstructorOptions(Ctor as typeof Component)
   if (isDef(data.model)) {
     // @ts-expect-error
@@ -321,6 +332,7 @@ export function createComponent(
       data.slot = slot
     }
   }
+  // 安装组件钩子函数
   // install component management hooks onto the placeholder node
   installComponentHooks(data)
 
