@@ -236,7 +236,7 @@ function Vue(options) {
 }
 ```
 
-::: detail Vue.\_init()
+::: details Vue.\_init()
 
 ```js
   Vue.prototype._init = function (options?: Record<string, any>) {

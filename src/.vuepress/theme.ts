@@ -19,7 +19,7 @@ export default hopeTheme({
   // 文章信息，可以填入数组，数组的顺序是各条目显示的顺序
   // pageInfo: ["Author", "Original", "Date", "Category", "Tag", "ReadingTime"],
   pageInfo: false,
-
+  lastUpdated: false,
   blog: {
     // name:'luxiag',
     articleInfo: ["Date", "ReadingTime"],

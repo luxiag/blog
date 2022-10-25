@@ -52,7 +52,10 @@ module.exports = function (source) {
   }
 
   // ....
-
+  // 开启热更新
+  if (needsHotReload) {
+    code += `\n` + genHotReloadCode(id, hasFunctional, templateRequest);
+  }
   return code;
 };
 ```
@@ -305,6 +308,7 @@ class VueLoaderPlugin {
       resourceQuery: query => {
         if (!query) { return false }
         const parsed = qs.parse(query.slice(1))
+        // 带有?vue的都会匹配到
         return parsed.vue != null
       },
       options: { ... }
@@ -327,7 +331,6 @@ class VueLoaderPlugin {
 
 // vue-loader lib/loaders/pitcher.js
 module.exports.pitch = function (remainingRequest) {
-
     // this.resourceQuery import文件?后的内容
     // ?vue&type=script&lang=js&
     // ?vue&type=template&id=3942140e&scoped=true&
@@ -345,14 +348,56 @@ module.exports.pitch = function (remainingRequest) {
 
 ```js
 //  template ?vue&type=template&id=39502b8f&scoped=true&
-export * from "-!../../source-code/vue-loader-15.9.8/lib/loaders/templateLoader.js??vue-loader-options!../../source-code/vue-loader-15.9.8/lib/index.js??vue-loader-options!./HomeChild2.vue?vue&type=template&id=39502b8f&scoped=true&"
+export * from "-!../../source-code/vue-loader-15.9.8/lib/loaders/templateLoader.js??vue-loader-options!../../source-code/vue-loader-15.9.8/lib/index.js??vue-loader-options!./HelloWorld.vue?vue&type=template&id=469af010&scoped=true&";
 
 //  style vue&type=style&index=0&id=469af010&scoped=true&lang=css&
-"-!../../node_modules/style-loader/dist/cjs.js!../../node_modules/css-loader/dist/cjs.js!../../source-code/vue-loader-15.9.8/lib/loaders/stylePostLoader.js!../../node_modules/postcss-loader/dist/cjs.js!../../node_modules/less-loader/dist/cjs.js!../../source-code/vue-loader-15.9.8/lib/index.js??vue-loader-options!./HelloWorld.vue?vue&type=style&index=0&id=469af010&scoped=true&lang=css&"
-//  script vue&type=script&lang=js& 
-import mod from "-!../../node_modules/babel-loader/lib/index.js??clonedRuleSet-1[0].rules[0].use!../../source-code/vue-loader-15.9.8/lib/index.js??vue-loader-options!./HomeChild2.vue?vue&type=script&lang=js&";
+export * from "-!../../node_modules/style-loader/dist/cjs.js!../../node_modules/css-loader/dist/cjs.js!../../source-code/vue-loader-15.9.8/lib/loaders/stylePostLoader.js!../../node_modules/postcss-loader/dist/cjs.js!../../node_modules/less-loader/dist/cjs.js!../../source-code/vue-loader-15.9.8/lib/index.js??vue-loader-options!./HelloWorld.vue?vue&type=style&index=0&id=469af010&scoped=true&lang=css&";
+//  script vue&type=script&lang=js&
+// lonedRuleSet-1[0].rules[0].use 使用配置的js rule处理
+import mod from "-!../../node_modules/babel-loader/lib/index.js??clonedRuleSet-1[0].rules[0].use!../../source-code/vue-loader-15.9.8/lib/index.js??vue-loader-options!./HelloWorld.vue?vue&type=script&lang=js&";
 export default mod;
-export * from "-!../../node_modules/babel-loader/lib/index.js??clonedRuleSet-1[0].rules[0].use!../../source-code/vue-loader-15.9.8/lib/index.js??vue-loader-options!./HomeChild2.vue?vue&type=script&lang=js&";
+export * from "-!../../node_modules/babel-loader/lib/index.js??clonedRuleSet-1[0].rules[0].use!../../source-code/vue-loader-15.9.8/lib/index.js??vue-loader-options!./HelloWorld.vue?vue&type=script&lang=js&";
 ```
 
 :::
+
+## 匹配过程
+
+::: details template 匹配过程
+
+```js
+//  1. Vue-loader处理 ?vue 匹配到pitch loader
+"./HelloWorld.vue?vue&type=template&id=469af010&scoped=true&";
+// 2. pitch Loader 匹配 type=template 进行处理 结果
+export * from "-!../../source-code/vue-loader-15.9.8/lib/loaders/templateLoader.js??vue-loader-options!../../source-code/vue-loader-15.9.8/lib/index.js??vue-loader-options!./HelloWorld.vue?vue&type=template&id=469af010&scoped=true&";
+// 3. -! 禁用所有已配置的 preLoader 和 loader，但是不禁用 postLoaders 再次进入vue-loader处理后续.vue文件  type= template
+if (incomingQuery.type) {
+  return selectBlock(
+    descriptor,
+    loaderContext,
+    incomingQuery,
+    !!options.appendExtension
+  );
+}
+// 4. 匹配 templateLoader 的postLoader
+return code + `\nexport { render, staticRenderFns }`;
+// 5. Vue-loader 输出
+import {
+  render,
+  staticRenderFns,
+} from "./HelloWorld.vue?vue&type=template&id=469af010&scoped=true&";
+// ....
+var component = normalizer(
+  script,
+  render,
+  staticRenderFns,
+  false,
+  null,
+  "469af010",
+  null
+);
+```
+
+:::
+
+![](images/20221024150004.png)
