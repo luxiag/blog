@@ -163,8 +163,6 @@ vm.$createElement = (a, b, c, d) => createElement(vm, a, b, c, d, true);
 // App.vue  render: h => h(App) = h =vm.$createElement
 ```
 
-![](./images/20220817160800.png)
-
 ```js
 export function createElement(
   context: Component, //context 表示 VNode 的上下文环境
@@ -678,6 +676,7 @@ function createComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
       // 这时候就可以给组件执行各个模块的的 create 钩子了
       initComponent(vnode, insertedVnodeQueue);
       insert(parentElm, vnode.elm, refElm);
+      
       if (isTrue(isReactivated)) {
         // 组件被 keep-alive 包裹的情况，激活组件
         reactivateComponent(vnode, insertedVnodeQueue, parentElm, refElm);
