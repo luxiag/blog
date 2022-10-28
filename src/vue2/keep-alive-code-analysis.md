@@ -2,6 +2,9 @@
 title: Vue2.x keep-alive原理分析
 ---
 
+`<keep-alive>`是 Vue 中内置的一个抽象组件，自身不会渲染，也不会出现在父组件链中。当它包裹动态组件时，会缓存不活动的组件实例，而不是销毁它们。
+组件一旦被 `<keep-alive>` 缓存，再次渲染的时候不会执行 created、mounted 等钩子函数
+
 ## 使用
 
 ```html
@@ -86,6 +89,7 @@ function pruneCache(
   }
 }
 
+// 判断是否存在缓存的组件 将其摧毁
 function pruneCacheEntry(
   cache: CacheEntryMap,
   key: string,
@@ -118,6 +122,8 @@ export default {
   methods: {
     cacheVNode() {
       const { cache, keys, vnodeToCache, keyToCache } = this;
+      // 判断是否存在缓存对象
+      // 将其缓存起来
       if (vnodeToCache) {
         const { tag, componentInstance, componentOptions } = vnodeToCache;
         cache[keyToCache] = {
@@ -127,6 +133,7 @@ export default {
         };
         keys.push(keyToCache);
         // prune oldest entry
+        // 检查缓存数量是否超过 max设置值
         if (this.max && keys.length > parseInt(this.max)) {
           pruneCacheEntry(cache, keys[0], keys, this._vnode);
         }
@@ -213,7 +220,11 @@ export default {
 
 :::
 
-### patch 阶段
+## 使用缓存
+
+patch => createElm => 如果是组件 createComponent()
+
+### createComponent
 
 ::: details createComponent
 
@@ -221,6 +232,7 @@ export default {
 function createComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
   let i = vnode.data;
   if (isDef(i)) {
+    // 首次加载 vnode.componentInstance 为undefined
     const isReactivated = isDef(vnode.componentInstance) && i.keepAlive;
     if (isDef((i = i.hook)) && isDef((i = i.init))) {
       i(vnode, false /* hydrating */);
@@ -230,7 +242,9 @@ function createComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
     // component also has set the placeholder vnode's elm.
     // in that case we can just return the element and be done.
     if (isDef(vnode.componentInstance)) {
+      // 将 vnode.elm 赋值为真实DOM
       initComponent(vnode, insertedVnodeQueue);
+      // 将组件真实DOM插入到父元素
       insert(parentElm, vnode.elm, refElm);
       // 如果被keep alive 包裹
       if (isTrue(isReactivated)) {
@@ -240,6 +254,31 @@ function createComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
     }
   }
 }
+```
+
+```js
+  function reactivateComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
+    let i
+    // hack for #4339: a reactivated component with inner transition
+    // does not trigger because the inner node's created hooks are not called
+    // again. It's not ideal to involve module-specific logic in here but
+    // there doesn't seem to be a better way to do it.
+    let innerNode = vnode
+    while (innerNode.componentInstance) {
+      innerNode = innerNode.componentInstance._vnode
+      if (isDef((i = innerNode.data)) && isDef((i = i.transition))) {
+        for (i = 0; i < cbs.activate.length; ++i) {
+          cbs.activate[i](emptyNode, innerNode)
+        }
+        insertedVnodeQueue.push(innerNode)
+        break
+      }
+    }
+    // unlike a newly created component,
+    // a reactivated keep-alive component doesn't insert itself
+    insert(parentElm, vnode.elm, refElm)
+  }
+
 ```
 
 :::

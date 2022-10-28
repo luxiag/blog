@@ -5,6 +5,26 @@ category:
   - vue2
 ---
 
+```mermaid
+flowchart TB
+  vue._init --> vm.$mount
+  vm.$mount --> mountComponent
+  mountComponent --> 执行渲染Watcher
+  渲染Watcher --> 执行updateComponent
+  执行updateComponent --> 执行_render获取虚拟VNode
+  执行_render获取虚拟VNode --> 内部执行_createElement
+   内部执行_createElement --> 没有tag,创建空VNode
+  内部执行_createElement --> tag是真实节点,创建VNode
+   内部执行_createElement --> 内置节点,创建普通VNode
+  内部执行_createElement --> tag是Component类型
+  tag是Component类型 --> 执行createComponent方法
+   执行createComponent方法 --> 使用extend继承Vue
+    执行createComponent方法 --> 合并Vue的默认options
+    执行createComponent方法 --> 是函数组件,createFunctionalComponent处理
+      执行createComponent方法 --> 是Vue组件,安装组件构造函数,返回Vnode
+
+```
+
 ## mount
 
 ```js
@@ -125,6 +145,7 @@ export function mountComponent(
       // when parent component is patched.
       setCurrentInstance(vm)
       currentRenderingInstance = vm
+      // vm._renderProxy = vm
       vnode = render.call(vm._renderProxy, vm.$createElement)
     } catch (e: any) {
       handleError(e, vm, `render`)
@@ -159,7 +180,8 @@ export function mountComponent(
 ```js
 vnode = render.call(vm._renderProxy, vm.$createElement);
 vm.$createElement = (a, b, c, d) => createElement(vm, a, b, c, d, true);
-//  => vm._renderProxy.render(vm.$createElement)
+//  => vm._renderProxy.render(vm.$createElement) _renderProxy = vm
+//  => vm.render(vm.$createElement)
 // App.vue  render: h => h(App) = h =vm.$createElement
 ```
 
@@ -625,8 +647,9 @@ function createElm(
       ? nodeOps.createElementNS(vnode.ns, tag)
       : nodeOps.createElement(tag, vnode);
     setScope(vnode);
-
+    // 循环遍历 children调用 createElm
     createChildren(vnode, children, insertedVnodeQueue);
+
     if (isDef(data)) {
       invokeCreateHooks(vnode, insertedVnodeQueue);
     }
@@ -676,7 +699,7 @@ function createComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
       // 这时候就可以给组件执行各个模块的的 create 钩子了
       initComponent(vnode, insertedVnodeQueue);
       insert(parentElm, vnode.elm, refElm);
-      
+
       if (isTrue(isReactivated)) {
         // 组件被 keep-alive 包裹的情况，激活组件
         reactivateComponent(vnode, insertedVnodeQueue, parentElm, refElm);
