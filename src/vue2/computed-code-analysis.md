@@ -1,5 +1,8 @@
 ---
 title: Vue2.x computed原理分析
+date: 2021-09-21
+category:
+  - vue2
 ---
 
 ```js

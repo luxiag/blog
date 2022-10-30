@@ -1,5 +1,5 @@
 ---
-title: Vue2.x框架原理分析-初始化 响应式原理
+title: Vue2.x框架原理分析-初始化、响应式原理
 date: 2021-07-22
 next: mounted
 category:

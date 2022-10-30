@@ -1,5 +1,6 @@
-import { defineUserConfig } from "vuepress";
+import { defineUserConfig } from "@vuepress/cli";
 import theme from "./theme.js";
+// import { webpackBundler } from "@vuepress/bundler-webpack";
 // import { componentsPlugin } from "vuepress-plugin-components";
 
 export default defineUserConfig({
@@ -11,5 +12,8 @@ export default defineUserConfig({
   theme,
 
   shouldPrefetch: false,
-
+  // bundler: webpackBundler({
+  //   postcss: {},
+  //   vue: {},
+  // }),
 });

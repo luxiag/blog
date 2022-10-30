@@ -13,7 +13,7 @@ export default hopeTheme({
 
   logo: "/logo.svg",
 
-  repo: "luxiag/blog",
+  repo: "luxiag/luxiag.github.io",
 
   // docsDir: "docs",
   // 文章信息，可以填入数组，数组的顺序是各条目显示的顺序
@@ -35,6 +35,7 @@ export default hopeTheme({
   // 默认的页脚文字
   footer: "页脚",
   editLink: false,
+  contributors:false,
   displayFooter: false,
   copyright: false,
   breadcrumb: false,
@@ -115,7 +116,7 @@ export default hopeTheme({
     mdEnhance: {
       align: true,
       attrs: true,
-      chart: true,
+      // chart: true,
       codetabs: true,
       container: true,
       demo: true,
