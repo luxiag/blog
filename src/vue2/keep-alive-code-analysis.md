@@ -223,9 +223,13 @@ export default {
 
 :::
 
-## 使用缓存
+## 使用渲染
 
-patch => createElm => 如果是组件 createComponent()
+首次渲染只会在keep-alive建立缓存，其他和普通缓存没有区别
+
+vnode.elm缓存创建的DOM节点
+
+patch => createElm => 如果是组件 createComponent() => reactivateComponent() => 将vnode.elm插入父节点
 
 ### createComponent
 
@@ -238,6 +242,7 @@ function createComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
     // 首次加载 vnode.componentInstance 为undefined
     const isReactivated = isDef(vnode.componentInstance) && i.keepAlive;
     if (isDef((i = i.hook)) && isDef((i = i.init))) {
+      // 执行初始化 init
       i(vnode, false /* hydrating */);
     }
     // after calling the init hook, if the vnode is a child component
@@ -249,7 +254,7 @@ function createComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
       initComponent(vnode, insertedVnodeQueue);
       // 将组件真实DOM插入到父元素
       insert(parentElm, vnode.elm, refElm);
-      // 如果被keep alive 包裹
+      // 如果被keep alive 包裹 且不是首次加载
       if (isTrue(isReactivated)) {
         reactivateComponent(vnode, insertedVnodeQueue, parentElm, refElm);
       }
@@ -279,6 +284,7 @@ function createComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
     }
     // unlike a newly created component,
     // a reactivated keep-alive component doesn't insert itself
+    // 将缓存的DOM插入父节点
     insert(parentElm, vnode.elm, refElm)
   }
 

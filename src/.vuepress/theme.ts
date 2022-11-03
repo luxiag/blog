@@ -35,7 +35,7 @@ export default hopeTheme({
   // 默认的页脚文字
   footer: "页脚",
   editLink: false,
-  contributors:false,
+  contributors: false,
   displayFooter: false,
   copyright: false,
   breadcrumb: false,
@@ -70,6 +70,8 @@ export default hopeTheme({
   plugins: {
     blog: {
       autoExcerpt: true,
+      filter: (page) =>
+        Boolean(page.frontmatter?.title && page.frontmatter?.date),
     },
     // components:{
     //   backToTop: true,

@@ -10,5 +10,6 @@
 - [] eslint 原理
 - [] prettier
 - [] async 被调用的函数标记了 async， 这个函数的返回值就是 promise， 调用的时候不用 await，就会得到一个 promise，你喜欢 await 或者.then 获取 promise 的结果都行
-
-  ![](./images/20221021091812.png)
+- [] 小程序组件、支付
+- [] 前端埋点
+- ![](./images/20221021091812.png)

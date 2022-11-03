@@ -51,6 +51,7 @@ Vue.prototype.$mount = function (
 ## mountComponent
 
 ![](./images/20220811111106.png)  
+
 `core/instance/lifecycle`
 
 ```js
@@ -185,6 +186,52 @@ vm.$createElement = (a, b, c, d) => createElement(vm, a, b, c, d, true);
 //  => vm.render(vm.$createElement)
 // App.vue  render: h => h(App) = h =vm.$createElement
 ```
+
+::: details render
+
+```js
+var render = function () {
+  var _vm = this
+  var _h = _vm.$createElement
+  var _c = _vm._self._c || _h
+  return _c(
+    "div",
+    { attrs: { id: "app" } },
+    [
+      _c("img", {
+        attrs: { alt: "Vue logo", src: __webpack_require__(/*! ./assets/logo.png */ "./src/assets/logo.png") },
+      }),
+      _vm._v(" "),
+      _c("HelloWorldVue", { attrs: { msg: "Welcome to Your Vue.js App" } }),
+      _vm._v(" "),
+      _c("input", { directives: [{ name: "focus", rawName: "v-focus" }] }),
+      _vm._v(" "),
+      _c("router-link", { attrs: { to: "/home" } }, [_vm._v("Home")]),
+      _vm._v(" "),
+      _c("router-link", { attrs: { to: "/about" } }, [_vm._v("About")]),
+      _vm._v(" "),
+      _c("KeepAlive", [_c("router-view")], 1),
+      _vm._v(" "),
+      _c(
+        "button",
+        {
+          on: {
+            click: function ($event) {
+              _vm.num = _vm.num + 1
+            },
+          },
+        },
+        [_vm._v(_vm._s(_vm.num))]
+      ),
+    ],
+    1
+  )
+}
+```
+
+:::
+
+![](./images/20221031164038.png)  
 
 ```js
 export function createElement(
@@ -385,6 +432,14 @@ export function createComponent(
 const vnode = vm._render();
 vm._update(vnode, hydrating);
 ```
+
+::: details vnode
+
+```js
+
+```
+
+:::
 
 ```js
 /*

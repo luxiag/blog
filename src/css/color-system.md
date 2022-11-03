@@ -373,7 +373,7 @@ transparent 的字面意思就是透明 类似`rgba(0,0,0,0)`
 rgb() 表示颜色的红-绿-蓝（red-green-blue (RGB)）模式
 rgba() 多一个 a ，表示其透明度，取值为 0-1
 
-<!-- <GgbaColorPicker /> -->
+<GgbaColorPicker />
 ## hsl()和 hsla()
 
 hsl()被定义为色相-饱和度-明度（Hue-saturation-lightness）
@@ -387,16 +387,19 @@ hsla() 多一个 a ，表示其透明度，取值为 0-1
 
 <script>
 import { ColorPicker } from 'vue-accessible-color-picker'
-// import { ColorPicker as GgbaColorPicker } from 'vue-color-kit'
-//  import 'vue-color-kit/dist/vue-color-kit.css'
+import { ColorPicker as GgbaColorPicker } from 'vue-color-kit'
 // import {   ColorPicker     } from 'vue-color-gradient-picker';
 export default {
  name: 'MyComponent',
  components: {
   ColorPicker,
-    // GgbaColorPicker
+    GgbaColorPicker
     // Sketch
  },
 }
 
 </script>
+<style>
+@import 'vue-color-kit/dist/vue-color-kit.css';
+
+</style>

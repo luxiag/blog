@@ -157,9 +157,7 @@ module.exports = merge(baseConfig, {
 
 :::
 
-
 ## `webpack.prod.js`
-
 
 details webpack.prod.js
 
@@ -258,3 +256,5 @@ module.exports = merge(baseConfig, {
 });
 
 ```
+
+:::
