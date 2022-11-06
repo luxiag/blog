@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "vuepress-webpack build src",
+    "vite:build": "vuepress-vite build src",
     "docs:clean-dev": "vuepress dev src --clean-cache",
     "start": "vuepress-webpack dev src",
     "dev": "vuepress-vite dev src",
