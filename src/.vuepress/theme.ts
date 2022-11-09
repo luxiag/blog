@@ -1,4 +1,4 @@
-import { hopeTheme } from "./vuepress-theme-hope";
+import { hopeTheme } from "./vuepress-theme-hope/lib/node/index.js";
 import { Navbar } from "./navbar/index.js";
 // import { enSidebar, zhSidebar } from "./sidebar/index.js";
 export default hopeTheme({
