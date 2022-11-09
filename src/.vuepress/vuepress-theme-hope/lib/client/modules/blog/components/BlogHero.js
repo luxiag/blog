@@ -38,51 +38,52 @@ export default defineComponent({
                 ...frontmatter.value.bgImageStyle,
             };
         });
-        return () => frontmatter.value.hero !== false
-            ? h("div", {
-                ref: hero,
-                class: ["blog-hero", { fullscreen: isFullScreen.value }],
-                style: bgImageStyle.value,
-            }, [
-                bgImage.value
-                    ? h("div", {
-                        class: "mask",
-                        style: {
-                            background: `url(${bgImage.value}) center/cover no-repeat`,
-                        },
-                    })
-                    : null,
-                slots["heroImage"]?.() ||
-                    h(DropTransition, { appear: true, delay: 0.04 }, () => heroImage.value
-                        ? h("img", {
-                            class: "hero-image",
-                            style: heroImageStyle.value,
-                            src: withBase(heroImage.value),
-                            alt: frontmatter.value.heroAlt || "hero image",
-                        })
-                        : null),
-                h(DropTransition, { appear: true, delay: 0.08 }, () => frontmatter.value.heroText !== false
-                    ? h("h1", frontmatter.value.heroText || title.value)
-                    : null),
-                h(DropTransition, { appear: true, delay: 0.12 }, () => frontmatter.value.tagline
-                    ? h("p", {
-                        class: "description",
-                        innerHTML: frontmatter.value.tagline,
-                    })
-                    : null),
-                isFullScreen.value
-                    ? h("button", {
-                        class: "slide-down-button",
-                        onClick: () => {
-                            window.scrollTo({
-                                top: hero.value.clientHeight,
-                                behavior: "smooth",
-                            });
-                        },
-                    }, [h(SlideDownIcon), h(SlideDownIcon)])
-                    : null,
-            ])
-            : null;
+        return null
+        // return () => frontmatter.value.hero !== false
+        //     ? h("div", {
+        //         ref: hero,
+        //         class: ["blog-hero", { fullscreen: isFullScreen.value }],
+        //         style: bgImageStyle.value,
+        //     }, [
+        //         bgImage.value
+        //             ? h("div", {
+        //                 class: "mask",
+        //                 style: {
+        //                     background: `url(${bgImage.value}) center/cover no-repeat`,
+        //                 },
+        //             })
+        //             : null,
+        //         slots["heroImage"]?.() ||
+        //             h(DropTransition, { appear: true, delay: 0.04 }, () => heroImage.value
+        //                 ? h("img", {
+        //                     class: "hero-image",
+        //                     style: heroImageStyle.value,
+        //                     src: withBase(heroImage.value),
+        //                     alt: frontmatter.value.heroAlt || "hero image",
+        //                 })
+        //                 : null),
+        //         h(DropTransition, { appear: true, delay: 0.08 }, () => frontmatter.value.heroText !== false
+        //             ? h("h1", frontmatter.value.heroText || title.value)
+        //             : null),
+        //         h(DropTransition, { appear: true, delay: 0.12 }, () => frontmatter.value.tagline
+        //             ? h("p", {
+        //                 class: "description",
+        //                 innerHTML: frontmatter.value.tagline,
+        //             })
+        //             : null),
+        //         isFullScreen.value
+        //             ? h("button", {
+        //                 class: "slide-down-button",
+        //                 onClick: () => {
+        //                     window.scrollTo({
+        //                         top: hero.value.clientHeight,
+        //                         behavior: "smooth",
+        //                     });
+        //                 },
+        //             }, [h(SlideDownIcon), h(SlideDownIcon)])
+        //             : null,
+        //     ])
+        //     : null;
     },
 });
 //# sourceMappingURL=BlogHero.js.map

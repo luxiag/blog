@@ -43,13 +43,13 @@ export default defineComponent({
                         : null,
                 ]),
             ]),
-            info.value["e" /* ArticleInfoType.excerpt */]
-                ? h("div", {
-                    class: "excerpt",
-                    innerHTML: info.value["e" /* ArticleInfoType.excerpt */],
-                })
-                : null,
-            h("hr", { class: "hr" }),
+            // info.value["e" /* ArticleInfoType.excerpt */]
+            //     ? h("div", {
+            //         class: "excerpt",
+            //         innerHTML: info.value["e" /* ArticleInfoType.excerpt */],
+            //     })
+            //     : null,
+            // h("hr", { class: "hr" }),
             h(PageInfo, {
                 config: unref(config),
                 ...(items.value ? { items: items.value } : {}),
