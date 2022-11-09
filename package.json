@@ -17,7 +17,13 @@
     "lint": "prettier --check --write .",
     "lint:check": "prettier --check .",
     "lint-md": "markdownlint **/*.md --ignore node_modules --fix",
-    "test": "echo \"Warning: no test specified\" && exit 0"
+    "test": "echo \"Warning: no test specified\" && exit 0",
+    "deploy": "bash scripts/deploy.sh",
+    "preview": "vite preview --port 8001"
+  },
+  "author": {
+    "email": "luxiag@qq.com",
+    "name": "luxiag"
   },
   "keywords": [
     "vuepress",
