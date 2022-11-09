@@ -7,7 +7,7 @@ export default defineUserConfig({
   base: "/",
   dest: "./dist",
   lang: "zh-CN",
-  title: "luxiag",
+  // title: "luxiag",
 
   theme,
 
