@@ -19,7 +19,7 @@
     "lint-md": "markdownlint **/*.md --ignore node_modules --fix",
     "test": "echo \"Warning: no test specified\" && exit 0",
     "deploy": "bash scripts/deploy.sh",
-    "preview": "vite preview --port 8001"
+    "preview": "http-server dist --port 8001"
   },
   "author": {
     "email": "luxiag@qq.com",
@@ -47,6 +47,7 @@
     "@vueuse/core": "^9.4.0",
     "balloon-css": "^1.2.0",
     "bcrypt-ts": "^2.2.0",
+    "http-server": "^14.1.1",
     "sass-loader": "13.1.0",
     "vue": "3.2.41",
     "vue-accessible-color-picker": "^4.1.0",

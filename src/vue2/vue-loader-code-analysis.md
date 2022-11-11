@@ -6,6 +6,8 @@ date: 2021-06-18
 category:
   - vue2
   - webpack
+tags:
+  - loader
 ---
 
 ## loader 执行顺序
