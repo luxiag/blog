@@ -3,7 +3,11 @@ title: Vue-Router3.x 框架原理分析
 date: 2021-08-22
 category:
   - vue2
+
 ---
+
+[]路由跳转匹配 - 子路由 孙路由跳转
+[]路由记录表的生成
 
 ```js
 import Vue from "vue";

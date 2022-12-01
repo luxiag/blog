@@ -71,7 +71,11 @@ export default hopeTheme({
     blog: {
       autoExcerpt: true,
       filter: (page) =>
-        Boolean(page.frontmatter?.title && page.frontmatter?.date),
+        Boolean(
+          page.frontmatter?.title &&
+            page.frontmatter?.date &&
+            !page.frontmatter?.noShow
+        ),
     },
     // components:{
     //   backToTop: true,
