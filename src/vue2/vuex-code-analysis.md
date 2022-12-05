@@ -5,7 +5,7 @@ category:
   - vue2
 ---
 
-![](./images/20221008144724.png)
+![](./images/1680123401008144724.png)
 
 ::: details vuex 使用
 
