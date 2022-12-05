@@ -133,7 +133,7 @@ Vue.directive("focus", {
 _c("input", { directives: [{ name: "focus", rawName: "v-focus" }] }),
 ```
 
-![](./images/20221103152225.png)
+![](./images/1680123401103152225.png)
 
 ### 局部方法
 
@@ -164,7 +164,7 @@ template => AST
 </template>
 ```
 
-![](./images/20221104103123.png)
+![](./images/1680123401104103123.png)
 
 ::: details render
 
@@ -178,7 +178,7 @@ with (this) {
 
 :::
 
-![](./images/20221104104223.png)
+![](./images/1680123401104104223.png)
 
 `src/compiler/parser/index.ts`
 `parseHTML()` => `end()` => `closeElement()` => `processElement` => `processAttrs`

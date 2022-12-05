@@ -28,7 +28,7 @@ import App from "./App.vue";
 console.log(App, "App");
 ```
 
-![](./images/20220817160800.png)
+![](./images/1680123400817160800.png)
 
 ### entry
 

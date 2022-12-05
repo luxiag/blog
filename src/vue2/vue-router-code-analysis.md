@@ -408,7 +408,7 @@ router.forward()
 
 ```
 
-![](./images/20221011152047.png)
+![](./images/1680123401011152047.png)
 
 ### html5
 
@@ -1032,7 +1032,7 @@ export function resolveAsyncComponents(matched: Array<RouteRecord>): Function {
 
 获取路由守卫
 从 record 中的 component 组件中获取到对应的路由导航
-![](./images/20221010173845.png)
+![](./images/1680123401010173845.png)
 
 ```js
 // 获取组件离开守卫
