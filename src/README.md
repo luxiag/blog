@@ -2,7 +2,7 @@
 home: true
 layout: Blog
 icon: home
-title: Blog Home
+title: luxiag's blog
 heroImage: /logo.svg
 heroFullScreen: true
 ---
