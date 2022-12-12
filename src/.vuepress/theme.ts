@@ -84,7 +84,7 @@ export default hopeTheme({
       "BiliBili",
       "CodePen",
       "FontIcon",
-      "PDF",
+      // "PDF",
       "StackBlitz",
       "VideoPlayer",
       "YouTube",
