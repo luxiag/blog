@@ -131,7 +131,7 @@ babel7.4.0之后，单独引入core-js和regenerator-runtime来完成polyfill的
  }
 ```
 
-![image-20210824150749960.png](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/44cf47ba-2317-4939-ac66-76f027030662/image-20210824150749960.png)
+<!-- ![image-20210824150749960.png](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/44cf47ba-2317-4939-ac66-76f027030662/image-20210824150749960.png) -->
 
 ## **Babel命令行使用**
 

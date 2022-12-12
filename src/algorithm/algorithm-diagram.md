@@ -11,5 +11,4 @@ tag:
 
 <script setup>
 import { withBase } from '@vuepress/client'
-
 </script>
