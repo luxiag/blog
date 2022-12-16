@@ -27,6 +27,7 @@ specifiers:
   prettier: 2.7.1
   rimraf: 3.0.2
   sass-loader: 13.1.0
+  three: ^0.147.0
   vue: 3.2.41
   vue-accessible-color-picker: ^4.1.0
   vue-router: ^4.1.6
@@ -68,6 +69,7 @@ dependencies:
   bcrypt-ts: 2.2.0
   http-server: 14.1.1
   sass-loader: 13.1.0
+  three: 0.147.0
   vue: 3.2.41
   vue-accessible-color-picker: 4.1.0_vue@3.2.41
   vue-router: 4.1.6_vue@3.2.41
@@ -6229,6 +6231,10 @@ packages:
       acorn: 8.8.0
       commander: 2.20.3
       source-map-support: 0.5.21
+
+  /three/0.147.0:
+    resolution: {integrity: sha512-LPTOslYQXFkmvceQjFTNnVVli2LaVF6C99Pv34fJypp8NbQLbTlu3KinZ0zURghS5zEehK+VQyvWuPZ/Sm8fzw==}
+    dev: false
 
   /thunky/1.1.0:
     resolution: {integrity: sha512-eHY7nBftgThBqOyHGVN+l8gF0BucP09fMo0oO/Lb0w1OF80dJv+lDVpXG60WMQvkcxAkNybKsrEIE3ZtKGmPrA==}
