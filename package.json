@@ -49,6 +49,7 @@
     "bcrypt-ts": "^2.2.0",
     "http-server": "^14.1.1",
     "sass-loader": "13.1.0",
+    "three": "^0.147.0",
     "vue": "3.2.41",
     "vue-accessible-color-picker": "^4.1.0",
     "vue-router": "^4.1.6",

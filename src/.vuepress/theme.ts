@@ -29,7 +29,9 @@ export default hopeTheme({
   navbar: Navbar,
 
   // sidebar
-  // sidebar: "structure",
+  // sidebar: {
+  //   "src/vue2":"structure"
+  // },
   sidebar: false,
   headerDepth: 4,
   // 默认的页脚文字
