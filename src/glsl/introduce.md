@@ -5,7 +5,7 @@ category:
 date: 2022-12-01
 ---
 
-<div ref="shader" id="shader"></div>
+<div ref="shader"></div>
 
 ```glsl
 #ifdef GL_ES
@@ -119,7 +119,6 @@ const renderer = new THREE.WebGLRenderer()
 const shader = ref()
 
 onMounted(() => {
-    console.log(shader.value.offsetHeight,'width')
     renderer.setSize(shader.value.offsetWidth, shader.value.offsetWidth/2)
     renderer.shadowMap.enabled = true
     shader.value.appendChild(renderer.domElement)
