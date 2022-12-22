@@ -2,7 +2,10 @@
 title: Vue-Router3.x 框架原理分析
 date: 2021-08-22
 category:
+  - vue
+type:
   - vue2
+  - vue-router
 
 ---
 

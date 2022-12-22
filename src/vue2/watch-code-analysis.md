@@ -2,6 +2,8 @@
 title: Vue2.x watch原理分析
 date: 2021-10-01
 category:
+  - vue
+type: 
   - vue2
 ---
 

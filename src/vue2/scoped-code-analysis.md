@@ -2,9 +2,10 @@
 title: Vue2.x Scoped原理分析
 date:  2021-09-22
 category:
-  - vue2
+  - vue
 tags:
   - loader
+  - vue2
 ---
 
 ![](images/1680123401111144500.png)

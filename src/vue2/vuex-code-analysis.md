@@ -2,7 +2,9 @@
 title: Vuex 3.x 框架原理分析
 date: 2021-09-11
 category:
-  - vue2
+  - vue
+type:
+  - vuex
 ---
 
 ![](./images/1680123401008144724.png)

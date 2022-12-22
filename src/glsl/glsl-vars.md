@@ -154,6 +154,12 @@ struct rotateMatrix {
 | gl_FragColor      | vec4  | 输出的颜色用于随后的像素操作                                                             |
 | gl_FragDepth      | float | 输出的深度用于随后的像素操作，如果这个值没有被写，则使用固定功能管线的深度值代替         |
 
+
+
+
+
+
+
 ## 修饰符
 
 | 修饰符             | 描述                                                                                                                                                                                                                                                                                                          |

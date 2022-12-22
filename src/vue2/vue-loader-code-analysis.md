@@ -4,10 +4,11 @@ reference: https://mp.weixin.qq.com/s/FJzDRLchG_DWA80Wp141Vg
 next: init
 date: 2021-06-18
 category:
-  - vue2
+  - vue
   - webpack
 tags:
   - loader
+  - vue2
 ---
 
 ## loader 执行顺序
