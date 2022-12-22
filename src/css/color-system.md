@@ -374,6 +374,7 @@ rgb() 表示颜色的红-绿-蓝（red-green-blue (RGB)）模式
 rgba() 多一个 a ，表示其透明度，取值为 0-1
 
 <!-- <GgbaColorPicker /> -->
+
 ## hsl()和 hsla()
 
 hsl()被定义为色相-饱和度-明度（Hue-saturation-lightness）
@@ -385,18 +386,12 @@ hsla() 多一个 a ，表示其透明度，取值为 0-1
 - 明度（V），亮度（L），取 0-100%。
   <ColorPicker />
 
-<script>
-import { ColorPicker } from 'vue-accessible-color-picker'
+<script setup>
+import { ColorPicker } from 'vue-accessible-color-picker';
 // import { ColorPicker as GgbaColorPicker } from 'vue-color-kit'
 // import {   ColorPicker     } from 'vue-color-gradient-picker';
-export default {
- name: 'MyComponent',
- components: {
-  ColorPicker,
-    // GgbaColorPicker
-    // Sketch
- },
-}
+
+
 
 </script>
 <!-- <style>

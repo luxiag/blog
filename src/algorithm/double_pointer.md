@@ -12,7 +12,7 @@ tag:
 
 来源： https://leetcode.cn/problems/container-with-most-water/description/
 
-![](images/168012340-12-01-15-21-17.png)
+![](./images/168012340-12-01-15-21-17.png)
 
 ```md
 输入：[1,8,6,2,5,4,8,3,7]

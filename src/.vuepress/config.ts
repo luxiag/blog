@@ -12,9 +12,9 @@ export default defineUserConfig({
   theme,
 
   shouldPrefetch: false,
-  plugins:[
+  // plugins:[
   
-  ]
+  // ]
   // bundler: webpackBundler({
   //   postcss: {},
   //   vue: {},

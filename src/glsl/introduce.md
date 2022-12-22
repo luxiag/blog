@@ -23,26 +23,26 @@ void main() {
 ## Fragment Shader(片段着色器)
 
 **Shaders 是一系列的指令，但是这些指令会对屏幕上的每个像素同时下达。**
+
 - shader 语言 有一个 main 函数，会在最后返回颜色值。这点和 C 语言很像。
 
 - 最终的像素颜色取决于预设的全局变量 gl_FragColor。
 
-- 这个类 C 语言有内建的变量（像gl_FragColor），函数和数据类型。
+- 这个类 C 语言有内建的变量（像 gl_FragColor），函数和数据类型。
 
 - vec4 类型，可以推测这四个变元分别响应红，绿，蓝和透明度通道。
 
 - 所有的宏都以 # 开头。预编译会在编译前一刻发生，把所有的命令复制到 #defines 里，检查#ifdef 条件句是否已被定义， #ifndef 条件句是否没有被定义。
 
-- loat类型在 shaders 中非常重要，所以精度非常重要。更低的精度会有更快的渲染速度，但是会以质量为代价。“低”（precision lowp float;），“高”（precision highp float;）。
+- loat 类型在 shaders 中非常重要，所以精度非常重要。更低的精度会有更快的渲染速度，但是会以质量为代价。“低”（precision lowp float;），“高”（precision highp float;）。
 
 - GLSL 语言规范并不保证变量会被自动转换类别。
+
 ```glsl
 void main() {
     gl_FragColor = vec4(1,0,0,1);   // 出错
 }
 ```
-
-
 
 ## GLSL
 
