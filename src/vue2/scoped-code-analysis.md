@@ -8,7 +8,7 @@ tags:
   - vue2
 ---
 
-![](images/1680123401111144500.png)
+![](./images/1680123401111144500.png)
 
 ```css
 .hello[data-v-469af010] {

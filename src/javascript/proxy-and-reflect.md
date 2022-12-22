@@ -289,13 +289,7 @@ console.log(proxy.foo); // TypeError
 
 通常，Object 上的方法适用于通用程序，而反射方法适用于细粒度的对象控制与操作。
 
-![在这里插入图片描述](images/%20%E4%BB%A3%E7%90%86%E4%B8%8E%E5%8F%8D%E5%B0%84/20210318195809150.png)
 
-
-
-![在这里插入图片描述](images/%20%E4%BB%A3%E7%90%86%E4%B8%8E%E5%8F%8D%E5%B0%84/2021031820000498.png)
-
-![在这里插入图片描述](images/%20%E4%BB%A3%E7%90%86%E4%B8%8E%E5%8F%8D%E5%B0%84/20210318201138261.png)
 
 
 
@@ -308,7 +302,6 @@ console.log(proxy.foo); // TypeError
 **使用`Object.defineProperty()`方法定义对象属性时会返回对象
 但使用`Reflect.defineProperty()`方法定义属性时会返回`true/false`表示成功/失败**
 
-![在这里插入图片描述](D:/items/resource/js/images/%2520javascript/20210318202709233.png)
 
 初始代码
 
@@ -323,9 +316,7 @@ try {
 } 
 ```
 
-![在这里插入图片描述](D:/items/resource/js/images/%2520javascript/2021031317011482.png)
 
-![在这里插入图片描述](D:/items/resource/js/images/%2520javascript/20210313170057202.png)
 
 **在定义新属性时如果发生问题，`Reflect.defineProperty()`会返回`false`，而不是抛出错误**
 
@@ -341,7 +332,7 @@ if(Reflect.defineProperty(o, 'foo', {value: 'bar'})) {
 } 
 ```
 
-![在这里插入图片描述](D:/items/resource/js/images/%2520javascript/20210313170533849.png)
+
 
 
 
@@ -414,7 +405,6 @@ console.log(secondProxy.foo);
 // bar
 ```
 
-![在这里插入图片描述](D:/items/resource/js/images/%2520javascript/20210313171257807.png)
 
 
 
@@ -491,7 +481,7 @@ target.getDate(); // 当前日期为几号, 如13号
 proxy.getDate(); // TypeError: 'this' is not a Date object
 ```
 
-![在这里插入图片描述](D:/items/resource/js/images/%2520javascript/2021031319471815.png)
+
 
 
 
