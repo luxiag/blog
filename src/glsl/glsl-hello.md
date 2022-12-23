@@ -5,7 +5,7 @@ category:
 date: 2022-12-01
 ---
 
-<div ref="shader"></div>
+<div ref="helloRef"></div>
 
 ```glsl
 #ifdef GL_ES
@@ -44,6 +44,40 @@ void main() {
 }
 ```
 
+<div ref="timeRef"></div>
+
+```glsl
+#ifdef GL_ES
+precision mediump float;
+#endif
+
+uniform float u_time;
+
+void main() {
+	gl_FragColor = vec4(abs(sin(u_time)),0.0,0.0,1.0);
+}
+
+```
+
+<div ref="fragRef"></div>
+
+```glsl
+
+#ifdef GL_ES
+precision mediump float;
+#endif
+
+uniform vec2 u_resolution;
+uniform vec2 u_mouse;
+uniform float u_time;
+
+void main() {
+vec2 st = gl_FragCoord.xy/u_resolution;
+gl_FragColor = vec4(st.x,st.y,0.0,1.0);
+}
+
+```
+
 ## GLSL
 
 GLSL 代表 openGL Shading Language，openGL 着色语言
@@ -60,78 +94,51 @@ import {
     OrbitControls
 } from 'three/examples/jsm/controls/OrbitControls'
 
-// 1.创建场景
-const scene = new THREE.Scene()
 
-
-// 2.创建相机
-const camera = new THREE.PerspectiveCamera(75,
-    window.innerWidth / window.innerHeight, 0.1, 1000);
-
-// 设置相机位置
-camera.position.set(0, 0, 10)
-scene.add(camera)
-
-
-// 着色器配置
-const shaderMaterial = new THREE.ShaderMaterial({
-    vertexShader: `
-    void main(){
-    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4( position, 1.0 ) ;
+const initScene = (shader)=>{
+    // 1.创建场景
+    const scene = new THREE.Scene()
+    const clock = new THREE.Clock();
+    const uniforms = {
+        u_time: { type: "f", value: 1.0 },
+        u_resolution: { type: "v2", value: new THREE.Vector2()}
     }
-    `,
-    fragmentShader: `
-    #ifdef GL_ES
-    precision mediump float;
-    #endif  
-    void main(){
-    gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+    // 2.创建相机
+    const camera = new THREE.PerspectiveCamera(75,
+    2 , 0.1, 1000);
+
+    // 设置相机位置
+    camera.position.set(0, 0, 10)
+    scene.add(camera)
+
+    // 着色器配置
+    const shaderMaterial = new THREE.ShaderMaterial({
+        uniforms:uniforms,
+        fragmentShader: shader.fragmentShader,
+        side: THREE.DoubleSide
+    })
+    // 创建平面
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), shaderMaterial)
+    scene.add(floor)
+    // 初始化渲染器
+    const renderer = new THREE.WebGLRenderer()
+    if(!__VUEPRESS_SSR__) {
+        renderer.setPixelRatio( window.devicePixelRatio );
     }
-    `,
-    side: THREE.DoubleSide
+    // 设置渲染器大小
 
-})
-
-
-// 创建平面
-const floor = new THREE.Mesh(new THREE.PlaneBufferGeometry(10, 10, 640, 640), shaderMaterial)
-scene.add(floor)
-
-
-
-// 聚光灯
-const spotLight = new THREE.SpotLight(0xffffff);
-spotLight.position.set(10, 10, 10);
-spotLight.castShadow = true;
-
-spotLight.shadow.mapSize.width = 4096;
-spotLight.shadow.mapSize.height = 4096;
-
-
-scene.add(spotLight);
-
-
-
-// 初始化渲染器
-const renderer = new THREE.WebGLRenderer()
-// 设置渲染器大小
-
-
-
-const shader = ref()
-
-onMounted(() => {
-    renderer.setSize(shader.value.offsetWidth, shader.value.offsetWidth/2)
+    renderer.setSize(shader.shaderDom.value.offsetWidth, shader.shaderDom.value.offsetWidth/2)
     renderer.shadowMap.enabled = true
-    shader.value.appendChild(renderer.domElement)
+    shader.shaderDom.value.appendChild(renderer.domElement)
     renderer.render(scene,camera)
-
-    // 创建轨道控制器
+        // 创建轨道控制器
     const controls = new OrbitControls(camera, renderer.domElement)
     // 设置控制器阻尼
     controls.enableDamping = true
-
+    uniforms.u_resolution.value.x = renderer.domElement.width
+    uniforms.u_resolution.value.y = renderer.domElement.height
     function render() {
+        uniforms.u_time.value += clock.getDelta();
         controls.update()
         renderer.render(scene, camera)
         requestAnimationFrame(render)
@@ -139,7 +146,65 @@ onMounted(() => {
 
     render()
 
+}
+const helloRef = ref()
+
+const helloShader = {
+    fragmentShader: `
+        #ifdef GL_ES
+        precision mediump float;
+        #endif
+        void main(){
+        gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+        }
+        `,
+    shaderDom:helloRef
+
+}
+
+const timeRef = ref()
+const timeShader = {
+    fragmentShader:`
+    #ifdef GL_ES
+    precision mediump float;
+    #endif
+
+    uniform float u_time;
+
+    void main() {
+	    gl_FragColor = vec4(abs(sin(u_time)),0.0,0.0,1.0);
+    }
+    `,
+    shaderDom:timeRef
+}
+
+
+const fragRef = ref()
+
+const fragShader = {
+    fragmentShader:`
+    #ifdef GL_ES
+    precision mediump float;
+    #endif
+
+    uniform vec2 u_resolution;
+    uniform vec2 u_mouse;
+    uniform float u_time;
+
+    void main() {
+    	vec2 st = gl_FragCoord.xy/u_resolution;
+    	gl_FragColor = vec4(st.x,st.y,0.0,1.0);
+    }`,
+    shaderDom:fragRef
+}
+
+onMounted(()=>{
+    initScene(helloShader)
+    initScene(timeShader)
+    initScene(fragShader)
 })
+
+
 
 
 </script>

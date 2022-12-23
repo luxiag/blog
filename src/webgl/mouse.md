@@ -2,7 +2,7 @@
 title: 鼠标移动特效
 date: 2022-11-15
 category:
-  - webgl
+  - WebGL
 ---
 
 <canvas class="mouse_gl" />
