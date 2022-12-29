@@ -14,15 +14,16 @@ category:
 | https://thebookofshaders.com/                             |
 | 《OpenGL 编程指南》                                       |
 
-|语法 |说明|
-|genType radians (genType degrees) |角度转弧度（degrees to radians）|
-|genType degrees (genType radians)| 弧度转角度（radians to degrees）|
-|genType sin (genType angle) |三角函数-正弦 sine|
-|genType cos (genType angle) |三角函数-余弦 cosine|
-|genType tan (genType angle) |三角函数-正切 tangent|
-|genType asin (genType x) |反三角函数-反正弦 arc sine|
-|genType atan (genType y, genType x) |反三角函数-反余弦 arc cosine|
-|genType atan (genType y_over_x) 反三角函数-反正切 arc tangent|
+| 语法                                | 说明                             |
+| ----------------------------------- | -------------------------------- |
+| genType radians (genType degrees)   | 角度转弧度（degrees to radians） |
+| genType degrees (genType radians)   | 弧度转角度（radians to degrees） |
+| genType sin (genType angle)         | 三角函数-正弦 sine               |
+| genType cos (genType angle)         | 三角函数-余弦 cosine             |
+| genType tan (genType angle)         | 三角函数-正切 tangent            |
+| genType asin (genType x)            | 反三角函数-反正弦 arc sine       |
+| genType atan (genType y, genType x) | 反三角函数-反余弦 arc cosine     |
+| genType atan (genType y_over_x)     | 反三角函数-反正切 arc tangent    |
 
 语法 说明
 genType pow (genType x, genType y) x 的 y 次方，\(x^y\)。如果 x<0，则结果是 undefined；如果 x=0 并且 y<=0，则结果是 undefined
