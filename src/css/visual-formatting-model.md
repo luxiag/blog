@@ -3,7 +3,7 @@ title: 视觉格式化模型
 date: 2021-11-16
 next: formatting-context
 category:
-  - css
+  - CSS
 ---
 
 CSS 视觉格式化模型（visual formatting model）是用来处理和在视觉媒体上显示文档时使用的计算规则。该模型是 CSS 的基础概念之一。

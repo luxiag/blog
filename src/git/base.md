@@ -2,7 +2,7 @@
 title: git基础
 date: 2021-01-02
 category:
-    - git
+    - Git
 ---
 
 ## **基本概念**

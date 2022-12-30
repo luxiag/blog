@@ -2,8 +2,8 @@
 title: babel是什么
 date: 2021-02-11
 category:
-    - webpack
-    - babel
+    - Webpack
+    - Babel
 ---
 
 

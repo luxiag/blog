@@ -2,7 +2,7 @@
 title: 修改已经提交的commit的用户名和邮箱
 date: 2022-10-12
 category:
-  - git
+  - Git
 ---
 
 在项目根目录创建 email.sh

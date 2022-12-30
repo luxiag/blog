@@ -2,7 +2,7 @@
 title: webpack常见配置
 date: 2021-06-18
 category:
-  - webpack
+  - Webpack
 ---
 
 ## `webpack.base.js`

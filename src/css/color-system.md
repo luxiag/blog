@@ -2,7 +2,7 @@
 title: CSS颜色体系
 date: 2021-10-15
 category:
-  - css
+  - CSS
 ---
 
 # CSS 颜色体系
@@ -373,7 +373,7 @@ transparent 的字面意思就是透明 类似`rgba(0,0,0,0)`
 rgb() 表示颜色的红-绿-蓝（red-green-blue (RGB)）模式
 rgba() 多一个 a ，表示其透明度，取值为 0-1
 
-<!-- <GgbaColorPicker /> -->
+
 
 ## hsl()和 hsla()
 
@@ -388,13 +388,6 @@ hsla() 多一个 a ，表示其透明度，取值为 0-1
 
 <script setup>
 import { ColorPicker } from 'vue-accessible-color-picker';
-// import { ColorPicker as GgbaColorPicker } from 'vue-color-kit'
-// import {   ColorPicker     } from 'vue-color-gradient-picker';
-
 
 
 </script>
-<!-- <style>
-@import 'vue-color-kit/dist/vue-color-kit.css';
-
-</style> -->

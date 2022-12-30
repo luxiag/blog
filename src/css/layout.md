@@ -2,7 +2,7 @@
 title: 响应式与自适应布局
 date: 2022-11-05
 category:
-  - css
+  - CSS
 ---
 
 ## 响应式布局
