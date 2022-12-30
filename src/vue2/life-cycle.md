@@ -7,4 +7,4 @@ type:
   - vue2
 ---
 
-[](./images/lifecycle.png)
+![](./images/lifecycle.png)
