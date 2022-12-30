@@ -3,7 +3,7 @@ title: Vue2.x框架原理分析-组件挂载
 date: 2021-08-10
 next: parse
 category:
-  - vue
+  - Vue
 type:
   - vue2
 ---

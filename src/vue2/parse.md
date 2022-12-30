@@ -3,7 +3,7 @@ title: Vue2.x框架原理分析-编译
 date: 2021-08-15
 next: vue-loader-code-analysis
 category:
-  - vue
+  - Vue
 type: 
   - vue2
 ---

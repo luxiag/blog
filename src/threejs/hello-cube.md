@@ -5,10 +5,16 @@ category:
   - Threejs
 ---
 
-Three.js 经常会和 WebGL 混淆， 但也并不总是，three.js 其实是使用 WebGL 来绘制三维效果的。 WebGL 是一个只能画点、线和三角形的非常底层的系统. 想要用 WebGL 来做一些实用的东西通常需要大量的代码， 这就是 Three.js 的用武之地。它封装了诸如场景、灯光、阴影、材质、贴图、空间运算等一系列功能，让你不必要再从底层 WebGL 开始写起。
+**参考：https://threejs.org/**
 
-在我们开始前，让我们试着让你了解一下一个 three.js 应用的整体结构。一个 three.js 应用需要创建很多对象，并且将他们关联在一起。下图是一个基础的 three.js 应用结构。
-![](images/156003009122942222.png)
+## Three.js 和 WebGL
+
+Three.js 经常会和 WebGL 混淆， 但也并不总是，three.js 其实是使用 WebGL 来绘制三维效果的。 WebGL 是一个只能画点、线和三角形的非常底层的系统. <br />
+想要用 WebGL 来做一些实用的东西通常需要大量的代码， 这就是 Three.js 的用武之地。它封装了诸如场景、灯光、阴影、材质、贴图、空间运算等一系列功能，让你不必要再从底层 WebGL 开始写起。
+
+## 基础的 three.js 应用结构
+
+![](./images/threejs-structure.svg)
 
 - 首先有一个渲染器(Renderer)。这可以说是 three.js 的主要对象。你传入一个场景(Scene)和一个摄像机(Camera)到渲染器(Renderer)中，然后它会将摄像机视椎体中的三维场景渲染成一个二维图片显示在画布上。
 
@@ -26,23 +32,28 @@ Three.js 经常会和 WebGL 混淆， 但也并不总是，three.js 其实是使
 
 - 光源(Light)对象代表不同种类的光。
 
-![](images/435004609122942222.png)
-首先是加载 three.js
+## 使用 three.js
+
+![](./images/threejs-1cube-no-light-scene.svg)
+
+1.首先是加载 three.js
 
 ```js
 import * as THREE from "three";
 ```
 
-创建一个 WebGL 渲染器(WebGLRenderer)。渲染器负责将你提供的所有数据渲染绘制到 canvas 上。之前还有其他渲染器，比如 CSS 渲染器(CSSRenderer)、Canvas 渲染器(CanvasRenderer)。将来也可能会有 WebGL2 渲染器(WebGL2Renderer)或 WebGPU 渲染器(WebGPURenderer)。目前的话是 WebGL 渲染器(WebGLRenderer)，它通过 WebGL 将三维空间渲染到 canvas 上。
+2.创建一个 WebGL 渲染器(WebGLRenderer)。
 
-注意这里有一些细节。如果你没有给 three.js 传 canvas，three.js 会自己创建一个 ，但是你必须手动把它添加到文档中。
+渲染器负责将你提供的所有数据渲染绘制到 canvas 上。之前还有其他渲染器，比如 CSS 渲染器(CSSRenderer)、Canvas 渲染器(CanvasRenderer)。将来也可能会有 WebGL2 渲染器(WebGL2Renderer)或 WebGPU 渲染器(WebGPURenderer)。目前的话是 WebGL 渲染器(WebGLRenderer)，它通过 WebGL 将三维空间渲染到 canvas 上。
+
+**注意这里有一些细节。如果你没有给 three.js 传 canvas，three.js 会自己创建一个 ，但是你必须手动把它添加到文档中。**
 
 ```js
 import * as THREE from "three";
 const renderer = new THREE.WebGLRenderer();
 ```
 
-需要一个透视摄像机(PerspectiveCamera)。
+3.需要一个透视摄像机(PerspectiveCamera)。
 
 ```js
 const fov = 75;
@@ -60,5 +71,120 @@ const camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
 
 这四个参数定义了一个 "视椎(frustum)"。 视椎(frustum)是指一个像被削去顶部的金字塔形状。换句话说，可以把"视椎(frustum)"想象成其他三维形状如球体、立方体、棱柱体、截椎体。
 
-![](./images/242002210122942222.png)
+![](./images/frustum-3d.svg)
+
+4.一个场景(Scene)。场景(Scene)是 three.js 的基本的组成部分。需要 three.js 绘制的东西都需要加入到 scene 中。
+
+```js
+const scene = new THREE.Scene();
+```
+
+5.一个包含盒子信息的立方几何体(BoxGeometry)。几乎所有希望在 three.js 中显示的物体都需要一个包含了组成三维物体的顶点信息的几何体。
+
+```js
+const boxWidth = 1;
+const boxHeight = 1;
+const boxDepth = 1;
+const geometry = new THREE.BoxGeometry(boxWidth, boxHeight, boxDepth);
+```
+
+6.一个基本的材质并设置它的颜色. 颜色的值可以用 css 方式和十六进制来表示。
+
+```js
+const material = new THREE.MeshBasicMaterial({ color: 0x44aa88 });
+```
+
+7.一个网格(Mesh)对象
+
+- 几何体(Geometry)(物体的形状)
+- 材质(Material)(如何绘制物体，光滑还是平整，什么颜色，什么贴图等等)
+- 对象在场景中相对于他父对象的位置、朝向、和缩放。下面的代码中父对象即为场景对象。
+
+```js
+const cube = new THREE.Mesh(geometry, material);
+// 将网格添加到场景中。
+scene.add(cube);
+// 之后将场景和摄像机传递给渲染器来渲染出整个场景。
+renderer.render(scene, camera);
+```
+
+8.添加些光照效果
+
+```js
+const color = 0xffffff;
+const intensity = 1;
+const light = new THREE.DirectionalLight(color, intensity);
+light.position.set(-1, 2, 4);
+scene.add(light);
+```
+
+![](./images/threejs-1cube-no-light-scene.svg)
+
+9.让立方体旋转起来
+
+```js
+function render(time) {
+  time *= 0.001; // 将时间单位变为秒
+  cube.rotation.x = time;
+  cube.rotation.y = time;
+  renderer.render(scene, camera);
+
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+```
+
+<div ref="helloCube"></div>
+
+<script setup>
+import * as THREE from 'three'
+import {ref,onMounted} from 'vue'
+
+const helloCube = ref()
+
+const initScene = () => {
+ 
+  const scene = new THREE.Scene()
+  const geometry = new THREE.BoxGeometry(1,1,1);
+  const material = new THREE.MeshBasicMaterial({ color: 0x44aa88 });
+  const cube = new THREE.Mesh(geometry, material);
+
+  // 将网格添加到场景中。
+  scene.add(cube);
+  // 摄相机
+  const camera = new THREE.PerspectiveCamera(75, 2, 0.1, 10);
+  camera.position.set(0, 0, 2)
+  scene.add(camera)
+
+ const renderer = new THREE.WebGLRenderer();
+  if(!__VUEPRESS_SSR__) {
+      renderer.setPixelRatio( window.devicePixelRatio );
+  }
+
+  renderer.setSize(helloCube.value.offsetWidth, helloCube.value.offsetWidth/2)
+  helloCube.value.appendChild(renderer.domElement)
+
+  // 之后将场景和摄像机传递给渲染器来渲染出整个场景。
+  renderer.render(scene, camera);
+
+  const light = new THREE.DirectionalLight(0xffffff, 1);
+  light.position.set(-1, 2, 4);
+  scene.add(light);
+
+  function render(time) {
+      // console.log(time,'time')
+      time*=0.001
+      cube.rotation.x = time;
+      cube.rotation.y = time;
+      renderer.render(scene, camera)
+      requestAnimationFrame(render)
+  }
+
+  render()
+}
+onMounted(()=>{
+  initScene()
+})
+</script>
+
 

@@ -2,7 +2,7 @@
 title: Vue2.x Scoped原理分析
 date:  2021-09-22
 category:
-  - vue
+  - Vue
 tags:
   - loader
   - vue2
