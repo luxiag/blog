@@ -2,7 +2,7 @@
 title: Browserslist
 date: 2020-10-15
 category:
-  - webpack
+  - Webpack
 ---
 
 Browserslist 是一个在不同的前端工具之间，共享目标浏览器和 Node.js 版本的配置：

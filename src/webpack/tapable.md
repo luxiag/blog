@@ -1,9 +1,9 @@
 ---
 title: Tapable
 category:
-    - webpack
+    - Webpack
 tag:
-    - tapable
+    - Tapable
 ---
 
 

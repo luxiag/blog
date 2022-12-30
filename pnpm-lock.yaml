@@ -21,6 +21,7 @@ specifiers:
   '@vueuse/core': ^9.4.0
   balloon-css: ^1.2.0
   bcrypt-ts: ^2.2.0
+  colorpicker-v3: ^2.10.2
   cross-env: 7.0.3
   http-server: ^14.1.1
   markdownlint-cli: 0.32.2
@@ -67,6 +68,7 @@ dependencies:
   '@vueuse/core': 9.4.0_vue@3.2.41
   balloon-css: 1.2.0
   bcrypt-ts: 2.2.0
+  colorpicker-v3: 2.10.2
   http-server: 14.1.1
   sass-loader: 13.1.0
   three: 0.147.0
@@ -2186,6 +2188,22 @@ packages:
     transitivePeerDependencies:
       - supports-color
 
+  /@vueuse/core/7.7.1_vue@3.2.41:
+    resolution: {integrity: sha512-PRRgbATMpoeUmkCEBtUeJgOwtew8s+4UsEd+Pm7MhkjL2ihCNrSqxNVtM6NFE4uP2sWnkGcZpCjPuNSxowJ1Ow==}
+    peerDependencies:
+      '@vue/composition-api': ^1.1.0
+      vue: ^2.6.0 || ^3.2.0
+    peerDependenciesMeta:
+      '@vue/composition-api':
+        optional: true
+      vue:
+        optional: true
+    dependencies:
+      '@vueuse/shared': 7.7.1_vue@3.2.41
+      vue: 3.2.41
+      vue-demi: 0.13.11_vue@3.2.41
+    dev: false
+
   /@vueuse/core/9.4.0_vue@3.2.41:
     resolution: {integrity: sha512-JzgenGj1ZF2BHOen5rsFiAyyI9sXAv7aKhNLlm9b7SwYQeKTcxTWdhudonURCSP3Egl9NQaRBzes2lv/1JUt/Q==}
     dependencies:
@@ -2200,6 +2218,21 @@ packages:
 
   /@vueuse/metadata/9.4.0:
     resolution: {integrity: sha512-7GKMdGAsJyQJl35MYOz/RDpP0FxuiZBRDSN79QIPbdqYx4Sd0sVTnIC68KJ6Oln0t0SouvSUMvRHuno216Ud2Q==}
+    dev: false
+
+  /@vueuse/shared/7.7.1_vue@3.2.41:
+    resolution: {integrity: sha512-rN2qd22AUl7VdBxihagWyhUNHCyVk9IpvBTTfHoLH9G7rGE552X1f+zeCfehuno0zXif13jPw+icW/wn2a0rnQ==}
+    peerDependencies:
+      '@vue/composition-api': ^1.1.0
+      vue: ^2.6.0 || ^3.2.0
+    peerDependenciesMeta:
+      '@vue/composition-api':
+        optional: true
+      vue:
+        optional: true
+    dependencies:
+      vue: 3.2.41
+      vue-demi: 0.13.11_vue@3.2.41
     dev: false
 
   /@vueuse/shared/9.4.0_vue@3.2.41:
@@ -2775,6 +2808,15 @@ packages:
 
   /colorette/2.0.19:
     resolution: {integrity: sha512-3tlv/dIP7FWvj3BsbHrGLJ6l/oKh1O3TcgBqMn+yyCagOxc23fyzDS6HypQbgxWbkpDnf52p1LuR4eWDQ/K9WQ==}
+
+  /colorpicker-v3/2.10.2:
+    resolution: {integrity: sha512-ZWPq5wcugS3NcL7DwYqVSP5mE/x45FK31olGpig+Tko5jUXk0danfEYi1Aei3lgYs+Z0zAfhbhqVuDgOdUs5Mw==}
+    dependencies:
+      '@vueuse/core': 7.7.1_vue@3.2.41
+      vue: 3.2.41
+    transitivePeerDependencies:
+      - '@vue/composition-api'
+    dev: false
 
   /commander/2.20.3:
     resolution: {integrity: sha512-GpVkmM8vF2vQUkj2LvZmD35JxeJOLCwJ9cUkugyk2nuhbv3+mJvpLYYt+0+USMxE+oj+ey/lJEnhZw75x/OMcQ==}

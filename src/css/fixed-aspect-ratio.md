@@ -2,7 +2,7 @@
 title: 固定宽高比
 date: 2021-10-17
 category:
-  - css
+  - CSS
 ---
 
 ## 可替换元素实现固定宽高比

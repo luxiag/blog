@@ -5,10 +5,10 @@ next: init
 date: 2021-06-18
 category:
   - Vue
-  - webpack
-tags:
-  - loader
-  - vue2
+  - Webpack
+tag:
+  - Loader
+  - Vue2
 ---
 
 ## loader 执行顺序

@@ -2,7 +2,7 @@
 title: CSS中的数据类型
 date: 2021-10-15
 category:
-  - css
+  - CSS
 ---
 
 ## 文本类型

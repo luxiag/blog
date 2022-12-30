@@ -2,7 +2,7 @@
 title: 清楚浮动原理
 date: 2021-11-22
 category:
-  - css
+  - CSS
 ---
 
 ## BFC 清除浮动

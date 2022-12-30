@@ -2,7 +2,7 @@
 title: webpack启动流程
 date: 2021-08-10
 category:
-  - webpack
+  - Webpack
 ---
 
 ![image-20210903154856146](./images/image-20210903154856146.png)
