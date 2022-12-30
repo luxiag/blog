@@ -1,7 +1,7 @@
 ---
 title: Vue2.x 指令原理
 category:
-  - vue
+  - Vue
 type:
   - vue2
 date: 2021-10-11

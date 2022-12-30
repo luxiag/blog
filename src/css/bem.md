@@ -2,7 +2,7 @@
 title: BEM规范
 date: 2021-11-22
 category:
-    - css
+  - CSS
 ---
 
 - 仅从名字就能知道一个 CSS 选择器具体做什么

@@ -4,7 +4,7 @@ reference: https://mp.weixin.qq.com/s/FJzDRLchG_DWA80Wp141Vg
 next: init
 date: 2021-06-18
 category:
-  - vue
+  - Vue
   - webpack
 tags:
   - loader
