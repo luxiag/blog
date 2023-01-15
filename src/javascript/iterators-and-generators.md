@@ -1,14 +1,13 @@
 ---
 title: 迭代器与生成器
 category:
-  - javascript
+  - JavaScript
+date: 2020-09-16
 ---
 
-## 迭代器原理
 
-### 理解迭代
 
-在 JavaScript 中，计数循环就是一种最简单的迭代
+
 
 ```jsx
 for (let i = 1; i <= 10; ++i) {
