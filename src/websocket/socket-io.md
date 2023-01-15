@@ -1,6 +1,7 @@
 ---
 title: Socket.IO
 category: WebSocket
+date: 2021-04-02
 ---
 
 [Socket.IO](https://socket.io/zh-CN/) 是一个 WebSocket 库，包括了客户端的 js 和服务器端的 nodejs，它的目标是构建可以在不同浏览器和移动设备上使用的实时应用。

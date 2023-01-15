@@ -1,6 +1,7 @@
 ---
 title: 浏览器渲染过程
 category: Browse
+date: 2021-05-12
 ---
 
 ## 进程架构

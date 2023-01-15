@@ -1,11 +1,9 @@
 ---
 title: 代理与反射
 category:
-    - javascript
+  - JavaScript
+date: 2020-09-12
 ---
-
-
-
 
 ECMAScript 6 新增的代理和反射为开发者提供了拦截并向基本操作嵌入额外行为的能力。
 
@@ -13,13 +11,7 @@ ECMAScript 6 新增的代理和反射为开发者提供了拦截并向基本操�
 
 在对目标对象的各种操作影响目标对象之前，可以在代理对象中对这些操作加以控制。
 
-
-
-
-
 ## 代理基础
-
-
 
 ### 创建空代理
 
@@ -41,46 +33,43 @@ handler
 ```js
 const target = {
   id: "target",
-}
+};
 
-const handler = {}
+const handler = {};
 
-const proxy = new Proxy(target, handler)
+const proxy = new Proxy(target, handler);
 
 // id 属性会访问同一个值
-console.log(target.id) // target
-console.log(proxy.id) // target
+console.log(target.id); // target
+console.log(proxy.id); // target
 
 // 给目标属性赋值会反映在两个对象上
 // 因为两个对象访问的是同一个值
-target.id = "foo"
-console.log(target.id) // foo
-console.log(proxy.id) // foo
+target.id = "foo";
+console.log(target.id); // foo
+console.log(proxy.id); // foo
 
 // 给代理属性赋值会反映在两个对象上
 // 因为这个赋值会转移到目标对象
-proxy.id = "bar"
-console.log(target.id) // bar
-console.log(proxy.id) // bar
+proxy.id = "bar";
+console.log(target.id); // bar
+console.log(proxy.id); // bar
 
 // hasOwnProperty()方法在两个地方
 // 都会应用到目标对象
-console.log(target.hasOwnProperty("id")) // true
-console.log(proxy.hasOwnProperty("id")) // true
+console.log(target.hasOwnProperty("id")); // true
+console.log(proxy.hasOwnProperty("id")); // true
 
 // Proxy.prototype 是undefined
 // 因此不能使用instanceof 操作符
-console.log(target instanceof Proxy) // TypeError: Function has non-object prototype
+console.log(target instanceof Proxy); // TypeError: Function has non-object prototype
 // 'undefined' in instanceof check
-console.log(proxy instanceof Proxy) // TypeError: Function has non-object prototype
+console.log(proxy instanceof Proxy); // TypeError: Function has non-object prototype
 // 'undefined' in instanceof check
 
 // 严格相等可以用来区分代理和目标
-console.log(target === proxy) // false
-
+console.log(target === proxy); // false
 ```
-
-
 
 ### 定义捕获器
 
@@ -89,28 +78,27 @@ console.log(target === proxy) // false
 ```js
 const target = {
   foo: "bar",
-}
+};
 const handler = {
   // 捕获器在处理程序对象中以方法名为键
   get() {
-    return "handler override"
+    return "handler override";
   },
-}
+};
 
-const proxy = new Proxy(target, handler)
+const proxy = new Proxy(target, handler);
 
-console.log(target.foo) // bar
-console.log(proxy.foo) // handler override
+console.log(target.foo); // bar
+console.log(proxy.foo); // handler override
 
-console.log(target["foo"]) // bar
-console.log(proxy["foo"]) // handler override
+console.log(target["foo"]); // bar
+console.log(proxy["foo"]); // handler override
 
-console.log(Object.create(target)["foo"]) // bar
-console.log(Object.create(proxy)["foo"]) // handler override
-
+console.log(Object.create(target)["foo"]); // bar
+console.log(Object.create(proxy)["foo"]); // handler override
 ```
 
-### 捕获器参数和反射API
+### 捕获器参数和反射 API
 
 所有捕获器都可以访问相应的参数，基于这些参数可以重建被捕获方法的原始行为
 
@@ -124,17 +112,17 @@ get(trapTarget,property,receiver))
 ```js
 const target = {
   foo: "bar",
-}
+};
 const handler = {
   get(trapTarget, property, receiver) {
-    console.log(trapTarget === target)
-    console.log(property)
-    console.log(receiver === proxy)
+    console.log(trapTarget === target);
+    console.log(property);
+    console.log(receiver === proxy);
   },
-}
-const proxy = new Proxy(target, handler)
+};
+const proxy = new Proxy(target, handler);
 
-proxy.foo
+proxy.foo;
 // true
 // foo
 // true
@@ -145,15 +133,15 @@ proxy.foo
 ```js
 const target = {
   foo: "bar",
-}
+};
 const handler = {
   get() {
-    return Reflect.get(...arguments)
+    return Reflect.get(...arguments);
   },
-}
-const proxy = new Proxy(target, handler)
-console.log(proxy.foo) // bar
-console.log(target.foo) // bar
+};
+const proxy = new Proxy(target, handler);
+console.log(proxy.foo); // bar
+console.log(target.foo); // bar
 ```
 
 简洁
@@ -161,90 +149,80 @@ console.log(target.foo) // bar
 ```js
 const target = {
   foo: "bar",
-}
+};
 const handler = {
   get: Reflect.get,
-}
+};
 
-const proxy = new Proxy(target, handler)
+const proxy = new Proxy(target, handler);
 
-console.log(proxy.foo) // bar
-console.log(target.foo) // bar
-
+console.log(proxy.foo); // bar
+console.log(target.foo); // bar
 ```
 
-
-
-如果想创建一个可以捕获所有方法，然后将每个方法转发给对应反射API 的空代理，那么甚至不需要定义处理程序对象：
+如果想创建一个可以捕获所有方法，然后将每个方法转发给对应反射 API 的空代理，那么甚至不需要定义处理程序对象：
 
 ```js
 const target = {
   foo: "bar",
-}
-const proxy = new Proxy(target, Reflect)
+};
+const proxy = new Proxy(target, Reflect);
 
-console.log(proxy.foo) // bar
-console.log(target.foo) // bar
-
+console.log(proxy.foo); // bar
+console.log(target.foo); // bar
 ```
 
-反射API 为开发者准备好了样板代码
+反射 API 为开发者准备好了样板代码
 
 ```js
 const target = {
   foo: "bar",
   baz: "qux",
-}
+};
 
 const handler = {
   get(trapTarget, property, receiver) {
-    let decoration = ""
+    let decoration = "";
     if (property === "foo") {
-      decoration = "!!!"
+      decoration = "!!!";
     }
-    return Reflect.get(...arguments) + decoration
+    return Reflect.get(...arguments) + decoration;
   },
-}
+};
 
-const proxy = new Proxy(target, handler)
+const proxy = new Proxy(target, handler);
 
-console.log(proxy.foo) // bar!!!
-console.log(target.foo) // bar
+console.log(proxy.foo); // bar!!!
+console.log(target.foo); // bar
 
-console.log(proxy.baz) // qux
-console.log(target.baz) // qux
-
+console.log(proxy.baz); // qux
+console.log(target.baz); // qux
 ```
 
 ### 捕获器不变式
 
 捕获处理程序的行为必须遵循“捕获器不变式”
 
-如果目标对象有一个不可配置且不可写的数据属性，那么在捕获器返回一个与该属性不同的值时，会抛出TypeError：
+如果目标对象有一个不可配置且不可写的数据属性，那么在捕获器返回一个与该属性不同的值时，会抛出 TypeError：
 
 ```js
-const target = {}; 
-Object.defineProperty(target, 'foo', { // 此处设置了foo属性不可配置且不可改写 
- configurable: false, 
- writable: false, 
- value: 'bar' 
-}); 
-const handler = { 
- get() { 
- 	return 'qux'; 
- } 
-}; 
-const proxy = new Proxy(target, handler); 
+const target = {};
+Object.defineProperty(target, "foo", {
+  // 此处设置了foo属性不可配置且不可改写
+  configurable: false,
+  writable: false,
+  value: "bar",
+});
+const handler = {
+  get() {
+    return "qux";
+  },
+};
+const proxy = new Proxy(target, handler);
 
-console.log(proxy.foo); 
-// TypeError 
+console.log(proxy.foo);
+// TypeError
 ```
-
-
-
-
-
-
 
 ### 可撤销代理
 
@@ -253,47 +231,33 @@ console.log(proxy.foo);
 撤销代理对象与目标对象的关联。撤销代理的操作是不可逆的。而且，撤销函数（revoke()）是幂等的，调用多少次的结果都一样。
 
 ```js
-const target = { 
- foo: 'bar' 
-}; 
-const handler = { 
- get() { 
- 	return 'intercepted'; 
- } 
-}; 
+const target = {
+  foo: "bar",
+};
+const handler = {
+  get() {
+    return "intercepted";
+  },
+};
 
 // 通过revocable()工厂方法，在实例化时同时生成撤销函数revoke和代理对象proxy
-const { proxy, revoke } = Proxy.revocable(target, handler); 
+const { proxy, revoke } = Proxy.revocable(target, handler);
 
-console.log(proxy.foo); // intercepted 
-console.log(target.foo); // bar 
+console.log(proxy.foo); // intercepted
+console.log(target.foo); // bar
 revoke(); // 执行撤销函数
-console.log(proxy.foo); // TypeError 
+console.log(proxy.foo); // TypeError
 ```
 
+### 实用反射 API
 
+#### 反射 API 与对象 API
 
+(1) 反射 API 并不限于捕获处理程序；
 
-
-
-
-### 实用反射API
-
-
-
-#### 反射API与对象API
-
-(1) 反射API 并不限于捕获处理程序；
-
-(2) 大多数反射API 方法在Object 类型上有对应的方法。
+(2) 大多数反射 API 方法在 Object 类型上有对应的方法。
 
 通常，Object 上的方法适用于通用程序，而反射方法适用于细粒度的对象控制与操作。
-
-
-
-
-
-
 
 #### 状态标记
 
@@ -302,21 +266,18 @@ console.log(proxy.foo); // TypeError
 **使用`Object.defineProperty()`方法定义对象属性时会返回对象
 但使用`Reflect.defineProperty()`方法定义属性时会返回`true/false`表示成功/失败**
 
-
 初始代码
 
 ```js
-// 初始代码 
-const o = {}; 
-try { 
- Object.defineProperty(o, 'foo', 'bar'); // 不符合defineProperty的语法规则而报错
- console.log('success'); 
-} catch(e) { 
- console.log('failure'); 
-} 
+// 初始代码
+const o = {};
+try {
+  Object.defineProperty(o, "foo", "bar"); // 不符合defineProperty的语法规则而报错
+  console.log("success");
+} catch (e) {
+  console.log("failure");
+}
 ```
-
-
 
 **在定义新属性时如果发生问题，`Reflect.defineProperty()`会返回`false`，而不是抛出错误**
 
@@ -324,133 +285,106 @@ try {
 
 ```js
 // 重构后的代码
-const o = {}; 
-if(Reflect.defineProperty(o, 'foo', {value: 'bar'})) { 
- console.log('success'); 
-} else { 
- console.log('failure'); 
-} 
+const o = {};
+if (Reflect.defineProperty(o, "foo", { value: "bar" })) {
+  console.log("success");
+} else {
+  console.log("failure");
+}
 ```
 
-
-
-
-
-以下反射方法都会提供状态标记, 即返回值都是布尔值true/false：
+以下反射方法都会提供状态标记, 即返回值都是布尔值 true/false：
  Reflect.defineProperty()
  Reflect.preventExtensions()
  Reflect.setPrototypeOf()
  Reflect.set()
  Reflect.deleteProperty()
 
-
-
 #### 一等函数代替操作符
 
  Reflect.get()：可以替代对象属性访问操作符。
  Reflect.set()：可以替代=赋值操作符。
- Reflect.has()：可以替代in 操作符或with()。
- Reflect.deleteProperty()：可以替代delete 操作符。
- Reflect.construct()：可以替代new 操作符。
-
-
+ Reflect.has()：可以替代 in 操作符或 with()。
+ Reflect.deleteProperty()：可以替代 delete 操作符。
+ Reflect.construct()：可以替代 new 操作符。
 
 #### 安全地应用函数
 
-在通过apply 方法调用函数时，被调用的函数可能也定义了自己的apply 属性
+在通过 apply 方法调用函数时，被调用的函数可能也定义了自己的 apply 属性
 
-为绕过这个问题，可以使用定义在Function 原型上的apply 方法
+为绕过这个问题，可以使用定义在 Function 原型上的 apply 方法
 
 ```js
 Function.prototype.apply.call(myFunc, thisVal, argumentList);
 ```
 
-可以使用Reflect.apply 来避免
+可以使用 Reflect.apply 来避免
 
 ```js
 Reflect.apply(myFunc, thisVal, argumentsList);
 ```
 
-
-
-
-
-
-
-
-
 ### 代理另一个代理
 
-代理可以拦截反射API 的操作，而这意味着完全可以创建一个代理，通过它去代理另一个代理。这样就可以在一个目标对象之上构建多层拦截网：
+代理可以拦截反射 API 的操作，而这意味着完全可以创建一个代理，通过它去代理另一个代理。这样就可以在一个目标对象之上构建多层拦截网：
 
 ```js
-const target = { 
- foo: 'bar' 
-}; 
-const firstProxy = new Proxy(target, { 
- get() { 
-	 console.log('first proxy'); 
-	 return Reflect.get(...arguments); 
- } 
-}); 
-const secondProxy = new Proxy(firstProxy, { 
- get() { 
-	 console.log('second proxy'); 
-	 return Reflect.get(...arguments); 
- } 
-}); 
-console.log(secondProxy.foo); 
-// second proxy 
-// first proxy 
+const target = {
+  foo: "bar",
+};
+const firstProxy = new Proxy(target, {
+  get() {
+    console.log("first proxy");
+    return Reflect.get(...arguments);
+  },
+});
+const secondProxy = new Proxy(firstProxy, {
+  get() {
+    console.log("second proxy");
+    return Reflect.get(...arguments);
+  },
+});
+console.log(secondProxy.foo);
+// second proxy
+// first proxy
 // bar
 ```
 
-
-
-
-
-
-
-
 ### 代理的问题与不足
 
-
-
-#### 代理中的this
+#### 代理中的 this
 
 ```js
-const target = { 
- thisValEqualsProxy() { 
- 	return this === proxy; 
- } 
-} 
+const target = {
+  thisValEqualsProxy() {
+    return this === proxy;
+  },
+};
 
-const proxy = new Proxy(target, {}); 
+const proxy = new Proxy(target, {});
 
-console.log(target.thisValEqualsProxy()); // false 
-console.log(proxy.thisValEqualsProxy()); // true 
+console.log(target.thisValEqualsProxy()); // false
+console.log(proxy.thisValEqualsProxy()); // true
 ```
 
-
-
 ```js
-const wm = new WeakMap(); 
-class User { 
- constructor(userId) { 
- 	wm.set(this, userId); 
- } 
- set id(userId) { 
- 	wm.set(this, userId); 
- } 
- get id() { 
- 	return wm.get(this); 
- } 
-} 
+const wm = new WeakMap();
+class User {
+  constructor(userId) {
+    wm.set(this, userId);
+  }
+  set id(userId) {
+    wm.set(this, userId);
+  }
+  get id() {
+    return wm.get(this);
+  }
+}
 const user = new User(123);
 console.log(user.id); // 123
 
-const userInstanceProxy = new Proxy(user, {}); 
-console.log(userInstanceProxy.id); // undefined 
+const userInstanceProxy = new Proxy(user, {});
+console.log(userInstanceProxy.id); // undefined
 ```
 
 `User` 实例一开始使用目标对象作为 `WeakMap` 的键，代理对象却尝试从自身取得这个实例。
@@ -459,41 +393,31 @@ console.log(userInstanceProxy.id); // undefined
 
 ```js
 // 把代理`User`实例改为代理 `User` 类本身
-const UserClassProxy = new Proxy(User, {}); 
-const proxyUser = new UserClassProxy(456); 
+const UserClassProxy = new Proxy(User, {});
+const proxyUser = new UserClassProxy(456);
 console.log(proxyUser.id); // 456
 ```
 
-
-
 #### 代理与内部插槽
 
-代理与内置引用类型（比如Array）的实例通常可以很好地协同，但有些ECMAScript 内置类型可能会依赖代理无法控制的机制，结果导致在代理上调用某些方法会出错。
+代理与内置引用类型（比如 Array）的实例通常可以很好地协同，但有些 ECMAScript 内置类型可能会依赖代理无法控制的机制，结果导致在代理上调用某些方法会出错。
 
-一个典型的例子就是Date 类型。根据ECMAScript 规范，Date 类型方法的执行依赖this 值上的内部槽位[[NumberDate]]。代理对象上不存在这个内部槽位，而且这个内部槽位的值也不能通过普通的get()和set()操作访问到，于是代理拦截后本应转发给目标对象的方法会抛出TypeError：
+一个典型的例子就是 Date 类型。根据 ECMAScript 规范，Date 类型方法的执行依赖 this 值上的内部槽位[[NumberDate]]。代理对象上不存在这个内部槽位，而且这个内部槽位的值也不能通过普通的 get()和 set()操作访问到，于是代理拦截后本应转发给目标对象的方法会抛出 TypeError：
 
 ```js
-const target = new Date(); 
-const proxy = new Proxy(target, {}); 
-console.log(proxy instanceof Date); // true 
+const target = new Date();
+const proxy = new Proxy(target, {});
+console.log(proxy instanceof Date); // true
 
 target.getDate(); // 当前日期为几号, 如13号
 proxy.getDate(); // TypeError: 'this' is not a Date object
 ```
 
-
-
-
-
-
-
 ## 代理捕获器与反射方法
 
 **代理可以捕获 13 种不同的基本操作。这些操作有各自不同的反射 `API` 方法、参数、关联 `ECMAScript` 操作和不变式。**
 
-### get() 对应Reflect.get()
-
-
+### get() 对应 Reflect.get()
 
 `get()`
 
@@ -509,20 +433,16 @@ Reflect.get(target, propertyKey[, receiver])
 ```
 
 ```js
-const myTarget = {}; 
-const proxy = new Proxy(myTarget, { 
- get(target, property, receiver) { 
- 	console.log('get()'); 
- 	return Reflect.get(...arguments) 
- } 
-}); 
-proxy.foo; 
-// get() 
+const myTarget = {};
+const proxy = new Proxy(myTarget, {
+  get(target, property, receiver) {
+    console.log("get()");
+    return Reflect.get(...arguments);
+  },
+});
+proxy.foo;
+// get()
 ```
-
-
-
-
 
 拦截的操作
  proxy.property
@@ -530,15 +450,11 @@ proxy.foo;
  Object.create(proxy)[property]
  Reflect.get(proxy, property, receiver)
 
-
-
 **捕获器不变式**
-如果target.property不可写且不可配置( 即configurable: false, writable: false)，则处理程序返回的值必须与target.property 匹配。
-如果target.property 不可配置( 即configurable: false) 且[[Get]]特性为undefined，处理程序的返回值也必须是undefined
+如果 target.property 不可写且不可配置( 即 configurable: false, writable: false)，则处理程序返回的值必须与 target.property 匹配。
+如果 target.property 不可配置( 即 configurable: false) 且[[Get]]特性为 undefined，处理程序的返回值也必须是 undefined
 
-
-
-### set()对应Reflect.set()
+### set()对应 Reflect.set()
 
 `set()`
 
@@ -555,14 +471,14 @@ Reflect.set(target, propertyKey, value[, receiver])
 ```
 
 ```js
-const myTarget = {}; 
-const proxy = new Proxy(myTarget, { 
- set(target, property, value, receiver) { 
- 	console.log('set()'); 
- 	return Reflect.set(...arguments) 
- } 
-}); 
-proxy.foo = 'bar'; 
+const myTarget = {};
+const proxy = new Proxy(myTarget, {
+  set(target, property, value, receiver) {
+    console.log("set()");
+    return Reflect.set(...arguments);
+  },
+});
+proxy.foo = "bar";
 // set()
 // 'bar' // 返回值
 ```
@@ -574,15 +490,13 @@ proxy.foo = 'bar';
  Reflect.set(proxy, property, value, receiver)
 
 **捕获器不变式**
-如果target.property 不可写且不可配置，则不能修改目标属性的值。
-如果target.property 不可配置且[[Set]]特性为undefined，则不能修改目标属性的值。
-在严格模式下，处理程序中返回false 会抛出TypeError。
+如果 target.property 不可写且不可配置，则不能修改目标属性的值。
+如果 target.property 不可配置且[[Set]]特性为 undefined，则不能修改目标属性的值。
+在严格模式下，处理程序中返回 false 会抛出 TypeError。
 
+### has()对应 Reflect.has()
 
-
-### has()对应Reflect.has()
-
-has()捕获器会在in 操作符中被调用
+has()捕获器会在 in 操作符中被调用
 
 `has()`
 
@@ -595,15 +509,15 @@ has()必须返回布尔值，表示属性是否存在。返回非布尔值会被
 ```
 
 ```js
-const myTarget = {}; 
-const proxy = new Proxy(myTarget, { 
- has(target, property) { 
- 	console.log('has()'); 
- 	return Reflect.has(...arguments) 
- } 
-}); 
-'foo' in proxy; 
-// has() 
+const myTarget = {};
+const proxy = new Proxy(myTarget, {
+  has(target, property) {
+    console.log("has()");
+    return Reflect.has(...arguments);
+  },
+});
+"foo" in proxy;
+// has()
 // false // 返回值
 ```
 
@@ -614,14 +528,12 @@ const proxy = new Proxy(myTarget, {
  Reflect.has(proxy, property)
 
 **捕获器不变式**
-如果target.property 存在且不可配置，则处理程序必须返回true。
-如果target.property 存在且目标对象不可扩展，则处理程序必须返回true。
+如果 target.property 存在且不可配置，则处理程序必须返回 true。
+如果 target.property 存在且目标对象不可扩展，则处理程序必须返回 true。
 
+### defineProperty()对应 Reflect.defineProperty()
 
-
-### defineProperty()对应Reflect.defineProperty()
-
-defineProperty()捕获器会在Object.defineProperty()中被调用
+defineProperty()捕获器会在 Object.defineProperty()中被调用
 
 `defineProperty()`
 
@@ -636,14 +548,14 @@ defineProperty()必须返回布尔值，表示属性是否成功定义。返回�
 ```
 
 ```js
-const myTarget = {}; 
-const proxy = new Proxy(myTarget, { 
- defineProperty(target, property, descriptor) { 
- 	console.log('defineProperty()'); 
- 	return Reflect.defineProperty(...arguments) 
- } 
-}); 
-Object.defineProperty(proxy, 'foo', { value: 'bar' }); 
+const myTarget = {};
+const proxy = new Proxy(myTarget, {
+  defineProperty(target, property, descriptor) {
+    console.log("defineProperty()");
+    return Reflect.defineProperty(...arguments);
+  },
+});
+Object.defineProperty(proxy, "foo", { value: "bar" });
 // defineProperty()
 ```
 
@@ -656,11 +568,9 @@ Object.defineProperty(proxy, 'foo', { value: 'bar' });
 如果目标对象有一个可配置的属性，则不能添加同名的不可配置属性。
 如果目标对象有一个不可配置的属性，则不能添加同名的可配置属性。
 
+### getOwnPropertyDescriptor()对应 Reflect.getOwnPropertyDescriptor()
 
-
-### getOwnPropertyDescriptor()对应Reflect.getOwnPropertyDescriptor()
-
-getOwnPropertyDescriptor()捕获器会在Object.getOwnPropertyDescriptor()中被调用
+getOwnPropertyDescriptor()捕获器会在 Object.getOwnPropertyDescriptor()中被调用
 
 如果在对象中存在，则返回给定的属性的属性描述符
 
@@ -673,15 +583,15 @@ getOwnPropertyDescriptor()必须返回对象，或者在属性不存在时返回
 ```
 
 ```js
-const myTarget = {}; 
-const proxy = new Proxy(myTarget, { 
- getOwnPropertyDescriptor(target, property) { 
- 	console.log('getOwnPropertyDescriptor()'); 
- 	return Reflect.getOwnPropertyDescriptor(...arguments) 
- } 
-}); 
-Object.getOwnPropertyDescriptor(proxy, 'foo'); 
-// getOwnPropertyDescriptor() 
+const myTarget = {};
+const proxy = new Proxy(myTarget, {
+  getOwnPropertyDescriptor(target, property) {
+    console.log("getOwnPropertyDescriptor()");
+    return Reflect.getOwnPropertyDescriptor(...arguments);
+  },
+});
+Object.getOwnPropertyDescriptor(proxy, "foo");
+// getOwnPropertyDescriptor()
 // undefined
 ```
 
@@ -690,17 +600,15 @@ Object.getOwnPropertyDescriptor(proxy, 'foo');
  Reflect.getOwnPropertyDescriptor(proxy, property)
 
 **捕获器不变式**
-如果自有的target.property 存在且不可配置，则处理程序必须返回一个表示该属性存在的对象。
-如果自有的target.property 存在且可配置，则处理程序必须返回表示该属性可配置的对象。
-如果自有的target.property 存在且target 不可扩展，则处理程序必须返回一个表示该属性存在的对象。
-如果target.property 不存在且target 不可扩展，则处理程序必须返回undefined 表示该属性不存在。
-如果target.property 不存在，则处理程序不能返回表示该属性可配置的对象。
+如果自有的 target.property 存在且不可配置，则处理程序必须返回一个表示该属性存在的对象。
+如果自有的 target.property 存在且可配置，则处理程序必须返回表示该属性可配置的对象。
+如果自有的 target.property 存在且 target 不可扩展，则处理程序必须返回一个表示该属性存在的对象。
+如果 target.property 不存在且 target 不可扩展，则处理程序必须返回 undefined 表示该属性不存在。
+如果 target.property 不存在，则处理程序不能返回表示该属性可配置的对象。
 
+### deleteProperty()对应 Reflect.deleteProperty()
 
-
-### deleteProperty()对应Reflect.deleteProperty()
-
-deleteProperty()捕获器会在delete 操作符中被调用。
+deleteProperty()捕获器会在 delete 操作符中被调用。
 
 ```js
 Reflect.deleteProperty(target, propertyKey)
@@ -711,16 +619,16 @@ Boolean 值表明该属性是否被成功删除。
 ```
 
 ```js
-const myTarget = {}; 
-const proxy = new Proxy(myTarget, { 
- deleteProperty(target, property) { 
- 	console.log('deleteProperty()'); 
- 	return Reflect.deleteProperty(...arguments) 
- } 
-}); 
+const myTarget = {};
+const proxy = new Proxy(myTarget, {
+  deleteProperty(target, property) {
+    console.log("deleteProperty()");
+    return Reflect.deleteProperty(...arguments);
+  },
+});
 
-delete proxy.foo 
-// deleteProperty() 
+delete proxy.foo;
+// deleteProperty()
 // true // 返回值
 ```
 
@@ -730,13 +638,11 @@ delete proxy.foo
  Reflect.deleteProperty(proxy, property)
 
 **捕获器不变式**
-如果自有的target.property 存在且不可配置，则处理程序不能删除这个属性。
+如果自有的 target.property 存在且不可配置，则处理程序不能删除这个属性。
 
+### ownKeys()对应 Reflect.ownKeys()
 
-
-### ownKeys()对应Reflect.ownKeys()
-
-ownKeys()捕获器会在Object.keys()及类似方法中被调用。
+ownKeys()捕获器会在 Object.keys()及类似方法中被调用。
 
 返回一个由目标对象自身的属性键组成的数组。
 
@@ -748,15 +654,15 @@ Reflect.ownKeys(target)
 ```
 
 ```js
-const myTarget = {}; 
-const proxy = new Proxy(myTarget, { 
- ownKeys(target) { 
- 	console.log('ownKeys()'); 
- 	return Reflect.ownKeys(...arguments) 
- } 
-}); 
-Object.keys(proxy); 
-// ownKeys() 
+const myTarget = {};
+const proxy = new Proxy(myTarget, {
+  ownKeys(target) {
+    console.log("ownKeys()");
+    return Reflect.ownKeys(...arguments);
+  },
+});
+Object.keys(proxy);
+// ownKeys()
 //[]
 ```
 
@@ -767,14 +673,12 @@ Object.keys(proxy);
  Reflect.ownKeys(proxy)
 
 **捕获器不变式**
-返回的可枚举对象必须包含target 的所有不可配置的自有属性。
-如果target 不可扩展，则返回可枚举对象必须准确地包含自有属性键。
+返回的可枚举对象必须包含 target 的所有不可配置的自有属性。
+如果 target 不可扩展，则返回可枚举对象必须准确地包含自有属性键。
 
+### getPrototypeOf()对应 Reflect.getPrototypeOf()
 
-
-### getPrototypeOf()对应Reflect.getPrototypeOf()
-
-getPrototypeOf()捕获器会在Object.getPrototypeOf()中被调用。
+getPrototypeOf()捕获器会在 Object.getPrototypeOf()中被调用。
 
 返回指定对象的原型（即内部的 `[[Prototype]]` 属性的值）。
 
@@ -784,15 +688,15 @@ Reflect.getPrototypeOf(target)
 ```
 
 ```js
-const myTarget = {}; 
-const proxy = new Proxy(myTarget, { 
- getPrototypeOf(target) { 
- 	console.log('getPrototypeOf()'); 
- 	return Reflect.getPrototypeOf(...arguments) 
- } 
-}); 
-Object.getPrototypeOf(proxy); 
-// getPrototypeOf() 
+const myTarget = {};
+const proxy = new Proxy(myTarget, {
+  getPrototypeOf(target) {
+    console.log("getPrototypeOf()");
+    return Reflect.getPrototypeOf(...arguments);
+  },
+});
+Object.getPrototypeOf(proxy);
+// getPrototypeOf()
 // 返回其原型, 此处即为object
 ```
 
@@ -800,19 +704,17 @@ Object.getPrototypeOf(proxy);
  Object.getPrototypeOf(proxy)
 
  Reflect.getPrototypeOf(proxy)
- proxy.__proto__
+ proxy.**proto**
  Object.prototype.isPrototypeOf(proxy)
  proxy instanceof Object
 
 **捕获器不变式**
-如果target 不可扩展，则Object.getPrototypeOf(proxy)唯一有效的返回值就是Object.
+如果 target 不可扩展，则 Object.getPrototypeOf(proxy)唯一有效的返回值就是 Object.
 getPrototypeOf(target)的返回值
 
+### setPrototypeOf()对应 Reflect.setPrototypeOf()
 
-
-### setPrototypeOf()对应Reflect.setPrototypeOf()
-
-setPrototypeOf()捕获器会在Object.setPrototypeOf()中被调用。
+setPrototypeOf()捕获器会在 Object.setPrototypeOf()中被调用。
 
 设置对象的原型（即内部的 `[[Prototype]]` 属性）为另一个对象或 [`null`](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Global_Objects/null)，如果操作成功返回 `true`，否则返回 `false`。
 
@@ -825,31 +727,27 @@ setPrototypeOf()必须返回布尔值，表示原型赋值是否成功。返回�
 ```
 
 ```js
-const myTarget = {}; 
-const proxy = new Proxy(myTarget, { 
- setPrototypeOf(target, prototype) { 
- 	console.log('setPrototypeOf()'); 
- 	return Reflect.setPrototypeOf(...arguments) 
- } 
-}); 
-Object.setPrototypeOf(proxy, Object); 
-// setPrototypeOf() 
+const myTarget = {};
+const proxy = new Proxy(myTarget, {
+  setPrototypeOf(target, prototype) {
+    console.log("setPrototypeOf()");
+    return Reflect.setPrototypeOf(...arguments);
+  },
+});
+Object.setPrototypeOf(proxy, Object);
+// setPrototypeOf()
 ```
-
-
 
 **拦截的操作**
  Object.setPrototypeOf(proxy)
  Reflect.setPrototypeOf(proxy)
 
 **捕获器不变式**
-如果target 不可扩展，则唯一有效的prototype 参数就是Object.getPrototypeOf(target)的返回值。
+如果 target 不可扩展，则唯一有效的 prototype 参数就是 Object.getPrototypeOf(target)的返回值。
 
+### isExtensible()对应 Reflect.isExtensible()
 
-
-### isExtensible()对应Reflect.isExtensible()
-
-isExtensible()捕获器会在Object.isExtensible()中被调用
+isExtensible()捕获器会在 Object.isExtensible()中被调用
 
 判断一个对象是否可扩展 （即是否能够添加新的属性）
 
@@ -861,15 +759,15 @@ isExtensible()必须返回布尔值，表示target 是否可扩展。返回非�
 ```
 
 ```js
-const myTarget = {}; 
-const proxy = new Proxy(myTarget, { 
- isExtensible(target) { 
- 	console.log('isExtensible()'); 
- 	return Reflect.isExtensible(...arguments) 
- } 
-}); 
-Object.isExtensible(proxy); 
-// isExtensible() 
+const myTarget = {};
+const proxy = new Proxy(myTarget, {
+  isExtensible(target) {
+    console.log("isExtensible()");
+    return Reflect.isExtensible(...arguments);
+  },
+});
+Object.isExtensible(proxy);
+// isExtensible()
 // true // 返回值
 ```
 
@@ -878,16 +776,12 @@ Object.isExtensible(proxy);
  Reflect.isExtensible(proxy)
 
 **捕获器不变式**
-如果target 可扩展，则处理程序必须返回true。
-如果target 不可扩展，则处理程序必须返回false。
+如果 target 可扩展，则处理程序必须返回 true。
+如果 target 不可扩展，则处理程序必须返回 false。
 
+### preventExtensions()对应 Reflect.preventExtensions()
 
-
-
-
-### preventExtensions()对应Reflect.preventExtensions()
-
-preventExtensions()捕获器会在Object.preventExtensions()中被调用
+preventExtensions()捕获器会在 Object.preventExtensions()中被调用
 
 方法阻止新属性添加到对象 (例如：防止将来对对象的扩展被添加到对象中)。
 
@@ -900,15 +794,15 @@ preventExtensions()必须返回布尔值，表示target 是否已经不可扩展
 ```
 
 ```js
-const myTarget = {}; 
-const proxy = new Proxy(myTarget, { 
- preventExtensions(target) { 
- 	console.log('preventExtensions()'); 
- 	return Reflect.preventExtensions(...arguments) 
- } 
-}); 
-Object.preventExtensions(proxy); 
-// preventExtensions() 
+const myTarget = {};
+const proxy = new Proxy(myTarget, {
+  preventExtensions(target) {
+    console.log("preventExtensions()");
+    return Reflect.preventExtensions(...arguments);
+  },
+});
+Object.preventExtensions(proxy);
+// preventExtensions()
 ```
 
 **拦截的操作**
@@ -916,11 +810,9 @@ Object.preventExtensions(proxy);
  Reflect.preventExtensions(proxy)
 
 **捕获器不变式**
-如果Object.isExtensible(proxy)是false，则处理程序必须返回true。
+如果 Object.isExtensible(proxy)是 false，则处理程序必须返回 true。
 
-
-
-### apply()对应Reflect.apply()
+### apply()对应 Reflect.apply()
 
 apply()捕获器会在调用函数时中被调用
 
@@ -934,14 +826,14 @@ Reflect.apply(target, thisArgument, argumentsList)
 ```
 
 ```js
-const myTarget = () => {}; 
-const proxy = new Proxy(myTarget, { 
- apply(target, thisArg, ...argumentsList) { 
- 	console.log('apply()'); 
- 	return Reflect.apply(...arguments) 
- } 
-}); 
-proxy(); 
+const myTarget = () => {};
+const proxy = new Proxy(myTarget, {
+  apply(target, thisArg, ...argumentsList) {
+    console.log("apply()");
+    return Reflect.apply(...arguments);
+  },
+});
+proxy();
 // apply()
 // undefined // 返回值
 ```
@@ -952,16 +844,12 @@ proxy();
  Function.prototype.call(thisArg, ...argumentsList)
  Reflect.apply(target, thisArgument, argumentsList)
 
-
-
 **捕获器不变式**
 target 必须是一个函数对象。
 
+### construct()对应 Reflect.construct()
 
-
-### construct()对应Reflect.construct()
-
-construct()捕获器会在new 操作符中被调用
+construct()捕获器会在 new 操作符中被调用
 
 方法的行为有点像 [`new` 操作符](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/new) 构造函数 ， 相当于运行 `new target(...args)`.
 
@@ -981,104 +869,93 @@ construct()必须返回一个对象
 **捕获器不变式**
 target 必须可以用作构造函数
 
-
-
 ## 代理模式
-
-
 
 ### 跟踪属性访问
 
-通过捕获get、set 和has 等操作，可以知道对象属性什么时候被访问、被查询。
+通过捕获 get、set 和 has 等操作，可以知道对象属性什么时候被访问、被查询。
 
 把实现相应捕获器的某个对象代理放到应用中，可以监控这个对象何时在何处被访问过：
 
 ```js
-const user = { 
- name: 'Jake' 
-}; 
-const proxy = new Proxy(user, { 
- get(target, property, receiver) { 
-	 console.log(`Getting ${property}`); 
-	 return Reflect.get(...arguments); 
- }, 
- set(target, property, value, receiver) { 
-	 console.log(`Setting ${property}=${value}`); 
-	 return Reflect.set(...arguments); 
- } 
-}); 
-proxy.name; // Getting name 
-proxy.age = 27; // Setting age=27 
+const user = {
+  name: "Jake",
+};
+const proxy = new Proxy(user, {
+  get(target, property, receiver) {
+    console.log(`Getting ${property}`);
+    return Reflect.get(...arguments);
+  },
+  set(target, property, value, receiver) {
+    console.log(`Setting ${property}=${value}`);
+    return Reflect.set(...arguments);
+  },
+});
+proxy.name; // Getting name
+proxy.age = 27; // Setting age=27
 ```
 
-
-
-
-
 ### 隐藏属性
-
-
 
 代理的内部实现对外部代码是不可见的，因此要隐藏目标对象上的属性也轻而易举
 
 ```js
-const hiddenProperties = ['foo', 'bar']; // 隐藏起foo, bar这两个属性
-const targetObject = { 
- foo: 1, 
- bar: 2, 
- baz: 3 
-}; 
+const hiddenProperties = ["foo", "bar"]; // 隐藏起foo, bar这两个属性
+const targetObject = {
+  foo: 1,
+  bar: 2,
+  baz: 3,
+};
 // 对设置隐藏的foo, bar两个属性单独处理
-const proxy = new Proxy(targetObject, { 
- get(target, property) { 
-	 if (hiddenProperties.includes(property)) {
-	 	return undefined; 
-	 } else { 
-	 	return Reflect.get(...arguments); 
-	 } 
- }, 
- has(target, property) { 
-	 if (hiddenProperties.includes(property)) { 
-	 	return false; 
-	 } else { 
-	 	return Reflect.has(...arguments); 
-	 } 
- } 
-}); 
-// get() 
-console.log(proxy.foo); // undefined 
-console.log(proxy.bar); // undefined 
-console.log(proxy.baz); // 3 
-// has() 
-console.log('foo' in proxy); // false 
-console.log('bar' in proxy); // false 
-console.log('baz' in proxy); // true 
+const proxy = new Proxy(targetObject, {
+  get(target, property) {
+    if (hiddenProperties.includes(property)) {
+      return undefined;
+    } else {
+      return Reflect.get(...arguments);
+    }
+  },
+  has(target, property) {
+    if (hiddenProperties.includes(property)) {
+      return false;
+    } else {
+      return Reflect.has(...arguments);
+    }
+  },
+});
+// get()
+console.log(proxy.foo); // undefined
+console.log(proxy.bar); // undefined
+console.log(proxy.baz); // 3
+// has()
+console.log("foo" in proxy); // false
+console.log("bar" in proxy); // false
+console.log("baz" in proxy); // true
 ```
-
-
 
 ### 属性验证
 
-所有赋值操作都会触发set()捕获器，所以可以根据所赋的值决定是允许还是拒绝赋值：
+所有赋值操作都会触发 set()捕获器，所以可以根据所赋的值决定是允许还是拒绝赋值：
 
 ```js
 const target = {
- onlyNumbersGoHere: 0
-}; 
-const proxy = new Proxy(target, { 
- set(target, property, value) { 
-	 if (typeof value !== 'number') { // 判断所赋的值
-	 	return false; 
-	 } else {
-	 	return Reflect.set(...arguments); 
-	 } 
- } 
-}); 
+  onlyNumbersGoHere: 0,
+};
+const proxy = new Proxy(target, {
+  set(target, property, value) {
+    if (typeof value !== "number") {
+      // 判断所赋的值
+      return false;
+    } else {
+      return Reflect.set(...arguments);
+    }
+  },
+});
 
-proxy.onlyNumbersGoHere = 1; 
-console.log(proxy.onlyNumbersGoHere); // 1 
-proxy.onlyNumbersGoHere = '2'; 
-console.log(proxy.onlyNumbersGoHere); // 1 
+proxy.onlyNumbersGoHere = 1;
+console.log(proxy.onlyNumbersGoHere); // 1
+proxy.onlyNumbersGoHere = "2";
+console.log(proxy.onlyNumbersGoHere); // 1
 ```
 
 ### 函数与构造函数参数验证
@@ -1086,47 +963,45 @@ console.log(proxy.onlyNumbersGoHere); // 1
 跟保护和验证对象属性类似，也可对函数和构造函数参数进行审查。比如，可以让函数只接收某种类型的值：
 
 ```js
-function median(...nums) { 
- // Math.floor() 返回小于或等于一个给定数字的最大整数。
- // Note:  可以理解 Math.floor()为向下取整
- return nums.sort()[Math.floor(nums.length / 2)]; 
-} 
-const proxy = new Proxy(median, { 
- apply(target, thisArg, argumentsList) { 
-	 for (const arg of argumentsList) { 
-		 if (typeof arg !== 'number') { 
-		 	throw 'Non-number argument provided'; 
-		 } 
-	 } 
-	 return Reflect.apply(...arguments); 
- } 
-}); 
-console.log(proxy(4, 7, 1)); // 4 
-console.log(proxy(4, '7', 1)); 
-// Error: Non-number argument provided 
+function median(...nums) {
+  // Math.floor() 返回小于或等于一个给定数字的最大整数。
+  // Note:  可以理解 Math.floor()为向下取整
+  return nums.sort()[Math.floor(nums.length / 2)];
+}
+const proxy = new Proxy(median, {
+  apply(target, thisArg, argumentsList) {
+    for (const arg of argumentsList) {
+      if (typeof arg !== "number") {
+        throw "Non-number argument provided";
+      }
+    }
+    return Reflect.apply(...arguments);
+  },
+});
+console.log(proxy(4, 7, 1)); // 4
+console.log(proxy(4, "7", 1));
+// Error: Non-number argument provided
 ```
 
 ```js
-class User { 
- constructor(id) { 
- this.id_ = id; 
- } 
-} 
-const proxy = new Proxy(User, { 
- construct(target, argumentsList, newTarget) { 
-	 if (argumentsList[0] === undefined) { 
-	 	throw 'User cannot be instantiated without id'; 
-	 } else { 
-	 	return Reflect.construct(...arguments); 
-	 } 
- } 
-}); 
-new proxy(1); 
-new proxy(); 
+class User {
+  constructor(id) {
+    this.id_ = id;
+  }
+}
+const proxy = new Proxy(User, {
+  construct(target, argumentsList, newTarget) {
+    if (argumentsList[0] === undefined) {
+      throw "User cannot be instantiated without id";
+    } else {
+      return Reflect.construct(...arguments);
+    }
+  },
+});
+new proxy(1);
+new proxy();
 // Error: User cannot be instantiated without id
 ```
-
-
 
 ### 数据绑定与可观测对象
 
@@ -1135,71 +1010,66 @@ new proxy();
 比如，可以将被代理的类绑定到一个全局实例集合，让所有创建的实例都被添加到这个集合中：
 
 ```js
-const userList = []; 
+const userList = [];
 
-class User { 
- constructor(name) { 
- 	this.name_ = name; 
- } 
-} 
+class User {
+  constructor(name) {
+    this.name_ = name;
+  }
+}
 
-const proxy = new Proxy(User, { 
- construct() { 
-	 const newUser = Reflect.construct(...arguments); 
-	 userList.push(newUser); 
-	 return newUser; 
- } 
-}); 
+const proxy = new Proxy(User, {
+  construct() {
+    const newUser = Reflect.construct(...arguments);
+    userList.push(newUser);
+    return newUser;
+  },
+});
 
-new proxy('John'); 
-new proxy('Jacob'); 
-new proxy('Jingleheimerschmidt'); 
-console.log(userList); // [User {}, User {}, User{}] 
+new proxy("John");
+new proxy("Jacob");
+new proxy("Jingleheimerschmidt");
+console.log(userList); // [User {}, User {}, User{}]
 ```
 
 还可以把集合绑定到一个事件分派程序，每次插入新实例时都会发送消息：
 
 ```js
-const userList = []; 
+const userList = [];
 
-function emit(newValue) { 
- console.log(newValue); 
-} 
+function emit(newValue) {
+  console.log(newValue);
+}
 
-const proxy = new Proxy(userList, { 
- set(target, property, value, receiver) { 
- 	 // Reflect.set() 返回true表示设置property为值value成功, false表示失败
-	 const result = Reflect.set(...arguments); 
-	 if (result) {
-	 	// 传参Reflect.get()的返回值, 即property属性的value值 
-	 	emit(Reflect.get(target, property, receiver)); 
-	 } 
-	 return result; 
- } 
-}); 
+const proxy = new Proxy(userList, {
+  set(target, property, value, receiver) {
+    // Reflect.set() 返回true表示设置property为值value成功, false表示失败
+    const result = Reflect.set(...arguments);
+    if (result) {
+      // 传参Reflect.get()的返回值, 即property属性的value值
+      emit(Reflect.get(target, property, receiver));
+    }
+    return result;
+  },
+});
 
-proxy.push('John'); 
-// John 
-proxy.push('Jacob'); 
-// Jacob 
+proxy.push("John");
+// John
+proxy.push("Jacob");
+// Jacob
 ```
-
-
-
-
 
 ```js
 // 创建一个代理对象a,代理的目标对象是数组,通过reduce方法返回了处理器对象,拦截了所有的代理API方法.
 // 在拦截器内部,每个方法都会通过console.log打印出其key值(拦截器的名字/反射api的名字)和参数
-var a = new Proxy([], Reflect.ownKeys(Reflect).reduce((handlers, key) => {
+var a = new Proxy(
+  [],
+  Reflect.ownKeys(Reflect).reduce((handlers, key) => {
     handlers[key] = (...args) => {
-	    console.log(key, ...args)
-	    return Reflect[key](...args)
-	}
-	return handlers
-}, {}))
+      console.log(key, ...args);
+      return Reflect[key](...args);
+    };
+    return handlers;
+  }, {})
+);
 ```
-
-
-
-

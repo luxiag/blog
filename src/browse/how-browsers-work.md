@@ -1,6 +1,5 @@
 ---
 title: 浏览器的工作原理
-date:
 category:
     - browse
 ---
