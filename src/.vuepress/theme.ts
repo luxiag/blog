@@ -14,7 +14,7 @@ export default hopeTheme({
   logo: "/logo.svg",
 
   repo: "luxiag/luxiag.github.io",
-
+  breadcrumb: true,
   // docsDir: "docs",
   // 文章信息，可以填入数组，数组的顺序是各条目显示的顺序
   // pageInfo: ["Author", "Original", "Date", "Category", "Tag", "ReadingTime"],
@@ -40,7 +40,7 @@ export default hopeTheme({
   contributors: false,
   displayFooter: false,
   copyright: false,
-  breadcrumb: false,
+  // breadcrumb: false,
   toc: true,
   themeColor: {
     blue: "#2196f3",
@@ -120,6 +120,13 @@ export default hopeTheme({
     //   // serverURL: "https://vuepress-theme-hope-comment.vercel.app",
     // },
 
+    comment: {
+      provider: "Waline",
+      serverURL: "https://blog-waline-flax-seven.vercel.app/", // your server url
+      pageview: true,
+      login: "force",
+      wordLimit:200
+    },
     // Disable features you don't want here
     mdEnhance: {
       align: true,
