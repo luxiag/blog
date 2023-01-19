@@ -3,6 +3,10 @@
   padding-bottom: 2rem;
   transition: padding var(--transform-transition);
 
+  // waline 主题色
+  --waline-theme-color: var(--theme-color);
+  --waline-active-color: var(--theme-color);
+
   // page should at least one screen length
   @media (max-width: hope-config.$tablet) {
     min-height: 100vh;
