@@ -174,6 +174,35 @@ struct rotateMatrix {
 | mediump | 满足片段着色语言的最低要求，其对于范围和精度的要求必须不低于 lowp 并且不高于 highp |
 | lowp    | 范围和精度可低于 mediump，但仍可以表示所有颜色通道的所有颜色值                     |
 
+```glsl
+precision highp float;
+precision mediump float;
+precision lowp float;
+```
+
 ## uniforms
 
 尽管每个线程和其他线程之间不能有数据交换，但我们能从 CPU 给每个线程输入数据。因为显卡的架构，所有线程的输入值必须统一（uniform），而且必须设为只读。
+
+```js
+let uniforms = {
+  u_time: { type: "f", value: 1.0 },
+  u_resolution: { type: "v2", value: new THREE.Vector2() },
+};
+
+let material = new THREE.ShaderMaterial({
+  uniforms: uniforms,
+  vertexShader: document.getElementById("vertexShader").textContent,
+  fragmentShader: document.getElementById("fragmentShader").textContent,
+});
+function onWindowResize(event) {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  uniforms.u_resolution.value.x = renderer.domElement.width;
+  uniforms.u_resolution.value.y = renderer.domElement.height;
+}
+let clock = new THREE.Clock();
+function render() {
+  uniforms.u_time.value += clock.getDelta();
+  renderer.render(scene, camera);
+}
+```

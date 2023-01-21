@@ -445,10 +445,11 @@ proxy.foo;
 ```
 
 拦截的操作
- proxy.property
- proxy[property]
- Object.create(proxy)[property]
- Reflect.get(proxy, property, receiver)
+
+- proxy.property
+- proxy[property]
+- Object.create(proxy)[property]
+- Reflect.get(proxy, property, receiver)
 
 **捕获器不变式**
 如果 target.property 不可写且不可配置( 即 configurable: false, writable: false)，则处理程序返回的值必须与 target.property 匹配。
@@ -484,10 +485,10 @@ proxy.foo = "bar";
 ```
 
 **拦截的操作**
- proxy.property = value
- proxy[property] = value
- Object.create(proxy)[property] = value
- Reflect.set(proxy, property, value, receiver)
+- proxy.property = value
+- proxy[property] = value
+- Object.create(proxy)[property] = value
+- Reflect.set(proxy, property, value, receiver)
 
 **捕获器不变式**
 如果 target.property 不可写且不可配置，则不能修改目标属性的值。
@@ -522,10 +523,10 @@ const proxy = new Proxy(myTarget, {
 ```
 
 **拦截的操作**
- property in proxy
- property in Object.create(proxy)
- with(proxy) {(property);}
- Reflect.has(proxy, property)
+- property in proxy
+- property in Object.create(proxy)
+- with(proxy) {(property);}
+- Reflect.has(proxy, property)
 
 **捕获器不变式**
 如果 target.property 存在且不可配置，则处理程序必须返回 true。
@@ -560,8 +561,8 @@ Object.defineProperty(proxy, "foo", { value: "bar" });
 ```
 
 **拦截的操作**
- Object.defineProperty(proxy, property, descriptor)
- Reflect.defineProperty(proxy, property, descriptor)
+- Object.defineProperty(proxy, property, descriptor)
+- Reflect.defineProperty(proxy, property, descriptor)
 
 **捕获器不变式**
 如果目标对象不可扩展，则无法定义属性。
@@ -596,8 +597,8 @@ Object.getOwnPropertyDescriptor(proxy, "foo");
 ```
 
 **拦截的操作**
- Object.getOwnPropertyDescriptor(proxy, property)
- Reflect.getOwnPropertyDescriptor(proxy, property)
+- Object.getOwnPropertyDescriptor(proxy, property)
+- Reflect.getOwnPropertyDescriptor(proxy, property)
 
 **捕获器不变式**
 如果自有的 target.property 存在且不可配置，则处理程序必须返回一个表示该属性存在的对象。
@@ -633,9 +634,9 @@ delete proxy.foo;
 ```
 
 **拦截的操作**
- delete proxy.property
- delete proxy[property]
- Reflect.deleteProperty(proxy, property)
+- delete proxy.property
+- delete proxy[property]
+- Reflect.deleteProperty(proxy, property)
 
 **捕获器不变式**
 如果自有的 target.property 存在且不可配置，则处理程序不能删除这个属性。
@@ -667,10 +668,10 @@ Object.keys(proxy);
 ```
 
 **拦截的操作**
- Object.getOwnPropertyNames(proxy)
- Object.getOwnPropertySymbols(proxy)
- Object.keys(proxy)
- Reflect.ownKeys(proxy)
+- Object.getOwnPropertyNames(proxy)
+- Object.getOwnPropertySymbols(proxy)
+- Object.keys(proxy)
+- Reflect.ownKeys(proxy)
 
 **捕获器不变式**
 返回的可枚举对象必须包含 target 的所有不可配置的自有属性。
@@ -701,12 +702,11 @@ Object.getPrototypeOf(proxy);
 ```
 
 **拦截的操作**
- Object.getPrototypeOf(proxy)
-
- Reflect.getPrototypeOf(proxy)
- proxy.**proto**
- Object.prototype.isPrototypeOf(proxy)
- proxy instanceof Object
+- Object.getPrototypeOf(proxy)
+- Reflect.getPrototypeOf(proxy)
+- proxy.**proto**
+- Object.prototype.isPrototypeOf(proxy)
+- proxy instanceof Object
 
 **捕获器不变式**
 如果 target 不可扩展，则 Object.getPrototypeOf(proxy)唯一有效的返回值就是 Object.
@@ -739,8 +739,8 @@ Object.setPrototypeOf(proxy, Object);
 ```
 
 **拦截的操作**
- Object.setPrototypeOf(proxy)
- Reflect.setPrototypeOf(proxy)
+- Object.setPrototypeOf(proxy)
+- Reflect.setPrototypeOf(proxy)
 
 **捕获器不变式**
 如果 target 不可扩展，则唯一有效的 prototype 参数就是 Object.getPrototypeOf(target)的返回值。
@@ -772,8 +772,8 @@ Object.isExtensible(proxy);
 ```
 
 **拦截的操作**
- Object.isExtensible(proxy)
- Reflect.isExtensible(proxy)
+- Object.isExtensible(proxy)
+- Reflect.isExtensible(proxy)
 
 **捕获器不变式**
 如果 target 可扩展，则处理程序必须返回 true。
@@ -806,8 +806,8 @@ Object.preventExtensions(proxy);
 ```
 
 **拦截的操作**
- Object.preventExtensions(proxy)
- Reflect.preventExtensions(proxy)
+- Object.preventExtensions(proxy)
+- Reflect.preventExtensions(proxy)
 
 **捕获器不变式**
 如果 Object.isExtensible(proxy)是 false，则处理程序必须返回 true。
@@ -839,10 +839,10 @@ proxy();
 ```
 
 **拦截的操作**
- proxy(...argumentsList)
- Function.prototype.apply(thisArg, argumentsList)
- Function.prototype.call(thisArg, ...argumentsList)
- Reflect.apply(target, thisArgument, argumentsList)
+- proxy(...argumentsList)
+- Function.prototype.apply(thisArg, argumentsList)
+- Function.prototype.call(thisArg, ...argumentsList)
+- Reflect.apply(target, thisArgument, argumentsList)
 
 **捕获器不变式**
 target 必须是一个函数对象。
@@ -863,8 +863,8 @@ construct()必须返回一个对象
 ```
 
 **拦截的操作**
- new proxy(...argumentsList)
- Reflect.construct(target, argumentsList, newTarget)
+- new proxy(...argumentsList)
+- Reflect.construct(target, argumentsList, newTarget)
 
 **捕获器不变式**
 target 必须可以用作构造函数
