@@ -155,6 +155,41 @@ void main(){
 
 <div ref="part29"></div>
 
+```glsl
+precision lowp float;
+varying vec2 vUv;
+void main(){
+     float strength = 1.0 - step(0.5,distance(vUv,vec2(0.5))+0.25) ;
+     gl_FragColor =vec4(strength,strength,strength,1);
+}
+```
+
+<div ref="part30"></div>
+
+```glsl
+precision lowp float;
+varying vec2 vUv;
+void main(){
+     float strength = step(0.5,distance(vUv,vec2(0.5))+0.35) ;
+     strength *= (1.0 - step(0.5,distance(vUv,vec2(0.5))+0.25)) ;
+     gl_FragColor =vec4(strength,strength,strength,1);
+
+}
+
+```
+<div ref="part31"></div>
+
+```glsl
+precision lowp float;
+varying vec2 vUv;
+void main(){
+     float strength =  abs(distance(vUv,vec2(0.5))-0.25) ;
+     gl_FragColor =vec4(strength,strength,strength,1);
+
+}
+```
+<div ref="part32"></div>
+
 <script setup>
 import * as THREE from 'three'
 import {ref,onMounted} from 'vue'
@@ -437,11 +472,8 @@ vec2 rotate(vec2 uv, float rotation, vec2 mid)
     );
 }
 void main(){
-    vec2 rotateUv = rotate(vUv,3.14*0.25,vec2(0.5));
-    // vec2 rotateUv = rotate(vUv,-uTime*5.0,vec2(0.5));
-    float  strength = 0.15 / distance(vec2(rotateUv.x,(rotateUv.y-0.5)*5.0+0.5),vec2(0.5,0.5)) - 1.0;
-    strength += 0.15 / distance(vec2(rotateUv.y,(rotateUv.x-0.5)*5.0+0.5),vec2(0.5,0.5)) - 1.0;
-    gl_FragColor =vec4(strength,strength,strength,strength);
+     float strength = 1.0 - step(0.5,distance(vUv,vec2(0.5))+0.25) ;
+     gl_FragColor =vec4(strength,strength,strength,1);
 
 
 }
@@ -455,8 +487,9 @@ const part31Shader = {
 precision lowp float;
 varying vec2 vUv;
 void main(){
-     float strength =0.15 / distance(vec2(vUv.x,(vUv.y-0.5)*5.0),vec2(0.5,0.5)) - 1.0;
-     gl_FragColor =vec4(strength,strength,strength,strength);
+     float strength = step(0.5,distance(vUv,vec2(0.5))+0.35) ;
+     strength *= (1.0 - step(0.5,distance(vUv,vec2(0.5))+0.25)) ;
+     gl_FragColor =vec4(strength,strength,strength,1);
 
 }
     `,
@@ -469,9 +502,8 @@ const part32Shader = {
 precision lowp float;
 varying vec2 vUv;
 void main(){
-    float  strength = 0.15 / distance(vec2(vUv.x,(vUv.y-0.5)*5.0+0.5),vec2(0.5,0.5)) - 1.0;
-    strength += 0.15 / distance(vec2(vUv.y,(vUv.x-0.5)*5.0+0.5),vec2(0.5,0.5)) - 1.0;
-    gl_FragColor =vec4(strength,strength,strength,strength);
+     float strength =  abs(distance(vUv,vec2(0.5))-0.25) ;
+     gl_FragColor =vec4(strength,strength,strength,1);
 
 }
     `,
@@ -493,9 +525,9 @@ onMounted(()=>{
     initScene(part27Shader)
     initScene(part28Shader)
     initScene(part29Shader)
-    // initScene(part30Shader)
-    // initScene(part31Shader)   
-    // initScene(part32Shader)
+    initScene(part30Shader)
+    initScene(part31Shader)   
+    initScene(part32Shader)
 
 
 
