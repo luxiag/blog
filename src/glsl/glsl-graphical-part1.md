@@ -1,6 +1,6 @@
 ---
 title: GLSL图形（一）
-date: 2022-10-10
+date: 2022-10-04
 category:
   - GLSL
 ---

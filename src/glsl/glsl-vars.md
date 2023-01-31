@@ -2,7 +2,7 @@
 title: GLSL的变量
 category:
   - GLSL
-date: 2022-12-06
+date: 2022-10-02
 ---
 
 | 参考：                                                    |

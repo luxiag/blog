@@ -1,6 +1,6 @@
 ---
 title: GLSL中的函数
-date: 2022-10-10
+date: 2022-10-03
 category:
   - GLSL
 ---

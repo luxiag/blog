@@ -2,7 +2,7 @@
 title: hello cube
 date: 2022-11-01
 category:
-  - Threejs
+  - ThreeJS
 ---
 
 **参考：https://threejs.org/**

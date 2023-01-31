@@ -1,6 +1,6 @@
 ---
 title: GLSL图形（三）
-date: 2022-10-11
+date: 2022-10-06
 category:
   - GLSL
 ---

@@ -3,7 +3,7 @@ title: WebGL和Three.js的工作原理
 date: 2022-12-23
 category:
   - WebGL
-  - Threejs
+  - ThreeJS
 ---
 
 | 转载 | http://www.cnblogs.com/wanbo/ |
