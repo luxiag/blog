@@ -153,12 +153,13 @@ const initScene = () => {
   scene.add(cube);
   // 摄相机
   const camera = new THREE.PerspectiveCamera(75, 2, 0.1, 10);
-  camera.position.set(0, 0, 2)
+  camera.position.set(0, 0, 2) 
   scene.add(camera)
 
  const renderer = new THREE.WebGLRenderer();
   if(!__VUEPRESS_SSR__) {
       renderer.setPixelRatio( window.devicePixelRatio );
+      window.addEventListener("resize",onWindowResize)
   }
 
   renderer.setSize(helloCube.value.offsetWidth, helloCube.value.offsetWidth/2)
@@ -179,12 +180,16 @@ const initScene = () => {
       renderer.render(scene, camera)
       requestAnimationFrame(render)
   }
+  function onWindowResize(){
+    if(!__VUEPRESS_SSR__) {
+      renderer.setPixelRatio(window.devicePixelRatio)
+      renderer.setSize(helloCube.value.offsetWidth, helloCube.value.offsetWidth/2)
 
+    }
+  }
   render()
 }
 onMounted(()=>{
   initScene()
 })
 </script>
-
-
