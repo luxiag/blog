@@ -3,6 +3,7 @@
         "GLSL",
         "luxiag",
         "nprogress",
+        "Uniapp",
         "vuepress"
     ],
     "liveServer.settings.port": 5501
