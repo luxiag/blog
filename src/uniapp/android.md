@@ -5,11 +5,11 @@ category:
   - Android
 date: 2022-12-13
 ---
-
 官方文档：https://nativesupport.dcloud.net.cn/AppDocs/#
 
 1.安装 jdk
 https://www.oracle.com/java/technologies/downloads/
+
 ![](./images/089004202011242323.png)
 
 ```bash
@@ -141,11 +141,13 @@ dependencies {
 ```
 
 删除默认 MainActivity 节点
+
 ![](./images/704001205031052323.png)
 
 8.gradle 导入证书
 
 ![](./images/426000805031052323.png)
+
 ![](./images/409000805031052323.png)
 
 9.uniapp进行打包将打包好的文件复制到 `assets/apps`里
@@ -155,4 +157,5 @@ dependencies {
 **保证`dcloud_control.xml`及uniapp项目id及Dcloud后台appID一致**
 
 10.输出apk文件
+
 ![](./images/091001605031052323.png)
