@@ -49,6 +49,7 @@
     "bcrypt-ts": "^2.2.0",
     "cannon-es": "^0.20.0",
     "dat.gui": "^0.7.9",
+    "gsap": "^3.11.4",
     "http-server": "^14.1.1",
     "lil-gui": "^0.18.1",
     "sass-loader": "13.1.0",
