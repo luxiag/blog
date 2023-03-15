@@ -1,5 +1,5 @@
 ---
-title: 点光源
+title: 物体发光
 category:
   - ThreeJS
 date: 2023-01-24
@@ -12,6 +12,9 @@ date: 2023-01-24
 <script setup>
 import {ref,onMounted} from 'vue'
 import * as THREE from "three";
+
+
+
 // 导入轨道控制器
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader";
