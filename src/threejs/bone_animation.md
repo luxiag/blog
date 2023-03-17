@@ -1,5 +1,5 @@
 ---
-title: 骨骼发光
+title: 骨骼动画
 category:
   - ThreeJS
 date: 2023-02-04
