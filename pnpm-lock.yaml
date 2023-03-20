@@ -24,6 +24,7 @@ specifiers:
   cannon-es: ^0.20.0
   cesium: ^1.103.0
   cross-env: 7.0.3
+  d3: ^7.8.2
   dat.gui: ^0.7.9
   gsap: ^3.11.4
   http-server: ^14.1.1
@@ -74,6 +75,7 @@ dependencies:
   bcrypt-ts: 2.2.0
   cannon-es: 0.20.0
   cesium: 1.103.0
+  d3: 7.8.2
   dat.gui: 0.7.9
   gsap: 3.11.4
   http-server: 14.1.1
@@ -3515,8 +3517,8 @@ packages:
       d3-zoom: 1.8.3
     dev: false
 
-  /d3/7.6.1:
-    resolution: {integrity: sha512-txMTdIHFbcpLx+8a0IFhZsbp+PfBBPt8yfbmukZTQFroKuFqIwqswF0qE5JXWefylaAVpSXFoKm3yP+jpNLFLw==}
+  /d3/7.8.2:
+    resolution: {integrity: sha512-WXty7qOGSHb7HR7CfOzwN1Gw04MUOzN8qh9ZUsvwycIMb4DYMpY9xczZ6jUorGtO6bR9BPMPaueIKwiDxu9uiQ==}
     engines: {node: '>=12'}
     dependencies:
       d3-array: 3.2.0
@@ -5214,7 +5216,7 @@ packages:
     resolution: {integrity: sha512-MRVHXy5FLjnUQUG7YS3UN9jEN6FXCJbFCXVGJQjVIbiR6Vhw0j/6pLIjqsiah9xoHmQU6DEaKOvB3S1g/1nBPA==}
     dependencies:
       '@braintree/sanitize-url': 6.0.1
-      d3: 7.6.1
+      d3: 7.8.2
       dagre: 0.8.5
       dagre-d3: 0.6.4
       dompurify: 2.4.0
