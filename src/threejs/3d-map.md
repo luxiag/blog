@@ -5,7 +5,7 @@ category:
 date: 2023-02-22
 ---
 
-<div ref="mapRef"></div>
+<div ref="mapRef" class="map_container"></div>
 
 <script setup>
 import {ref,onMounted} from 'vue'
@@ -20,8 +20,11 @@ const mapRef = ref()
 const init = () => {
 
 const stats = new Stats();
-mapRef.value.appendChild(stats)
 
+stats.dom.style.position = "absolute"
+stats.dom.style.top = 0;
+stats.dom.style.left = 0;
+mapRef.value.appendChild(stats.dom)
 const scene = new THREE.Scene()
 
 const camera = new THREE.PerspectiveCamera(90,2,0.1,10000)
@@ -40,7 +43,7 @@ const light = new THREE.AmbientLight(0xffffff, 0.5); // soft white light
 scene.add(light);
 
 // 初始化渲染器
-const renderer = new THREE.WebGLRenderer({ alpha: true });
+const renderer = new THREE.WebGLRenderer();
 // renderer.shadowMap.enabled = true;
 // renderer.shadowMap.type = THREE.BasicShadowMap;
 // renderer.shadowMap.type = THREE.VSMShadowMap;
@@ -92,7 +95,7 @@ const loader = new THREE.FileLoader();
 
 loader.load("/assets/JSON/10000_full.json",(data) => {
     const jsData = JSON.parse(data)
-
+    operationData(jsData)
 })
 
 function operationData(jsondata) {
@@ -253,4 +256,13 @@ function getCanvasRelativePosition(event) {
 }
 
 }
+onMounted(()=>{
+    init()
+})
  </script>
+<style>
+
+    .map_container {
+        position: relative;
+    }
+</style>
