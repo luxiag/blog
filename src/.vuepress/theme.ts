@@ -15,6 +15,7 @@ export default hopeTheme({
 
   repo: "luxiag/luxiag.github.io",
   breadcrumb: true,
+  breadcrumbIcon:true,
   // docsDir: "docs",
   // 文章信息，可以填入数组，数组的顺序是各条目显示的顺序
   // pageInfo: ["Author", "Original", "Date", "Category", "Tag", "ReadingTime"],
@@ -125,7 +126,7 @@ export default hopeTheme({
       serverURL: "https://blog-waline-flax-seven.vercel.app/", // your server url
       pageview: true,
       login: "force",
-      wordLimit:200
+      wordLimit: 200,
     },
     // Disable features you don't want here
     mdEnhance: {
@@ -168,6 +169,11 @@ export default hopeTheme({
       tabs: true,
       vpre: true,
       vuePlayground: true,
+    },
+    copyright: {
+      author: "luxiag",
+      global: true,
+      triggerWords: 10,
     },
 
     pwa: {
