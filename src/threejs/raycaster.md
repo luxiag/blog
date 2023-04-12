@@ -43,7 +43,6 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 
 const ray = ref()
 
-
 const init = () => {
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(75, 2, 0.1, 100);
@@ -54,7 +53,7 @@ const init = () => {
     const cubeGeometry = new THREE.BoxBufferGeometry(1,1,1);
     const material = new THREE.MeshBasicMaterial({
         // 网格
-        wireframe: true 
+        wireframe: true
     })
     const redMaterial = new THREE.MeshBasicMaterial({
         color:'#ff0000'
@@ -72,7 +71,6 @@ const init = () => {
         }
     }
 
-
     const renderer = new THREE.WebGLRenderer();
     // value.offsetWidth
     console.log(ray.value.offsetWidth,'width')
@@ -82,7 +80,6 @@ const init = () => {
 
     ray.value.appendChild(renderer.domElement);
 
-
     const controls = new OrbitControls(camera,renderer.domElement);
     controls.enableDamping = true;
 
@@ -90,16 +87,15 @@ const init = () => {
 
     const mouse = new THREE.Vector2();
 
-
     const axesHelper = new THREE.AxesHelper(5);
     scene.add(axesHelper);
 
     if(!__VUEPRESS_SSR__) {
-        
+
         window.addEventListener('mousemove',(event) => {
             console.log(event.clientX,event.clientY,'event')
-            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-            mouse.y = -((event.clientY / window.innerHeight) * 2 - 1);
+            mouse.x = (event.clientX / window.innerWidth) *2 - 1;
+mouse.y = -((event.clientY / window.innerHeight)* 2 - 1);
             raycaster.setFromCamera(mouse, camera);
             let result = raycaster.intersectObjects(cubeArr);
             //   console.log(result);
@@ -123,6 +119,5 @@ const init = () => {
 onMounted(() => {
 init();
 })
-
 
 </script>
