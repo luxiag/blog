@@ -338,15 +338,15 @@ gltfLoader.load("/assets/model/newyears_min.glb", (gltf) => {
   scene.add(gltf.scene);
 
   //   创建水面
-  const waterGeometry = new THREE.PlaneBufferGeometry(100, 100);
-  let water = new Water(waterGeometry, {
-    scale: 4,
-    textureHeight: 1024,
-    textureWidth: 1024,
-  });
-  water.position.y = 1;
-  water.rotation.x = -Math.PI / 2;
-  scene.add(water);
+  // const waterGeometry = new THREE.PlaneBufferGeometry(100, 100);
+  // let water = new Water(waterGeometry, {
+  //   scale: 4,
+  //   textureHeight: 1024,
+  //   textureWidth: 1024,
+  // });
+  // water.position.y = 1;
+  // water.rotation.x = -Math.PI / 2;
+  // scene.add(water);
 });
 
 gltfLoader.load("/assets/model/flyLight.glb", (gltf) => {
