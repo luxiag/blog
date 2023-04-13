@@ -231,7 +231,7 @@ let appearance = new Cesium.EllipsoidSurfaceAppearance({
 
 ### RectangleGeometry
 
-![]./(images/0409171155.png)
+![]./(./images/0409171155.png)
 
 <script setup>
 import {ref,onMounted} from 'vue'
@@ -241,7 +241,10 @@ const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3ZjRjYTEwNi0zZTlj
 Cesium.Ion.defaultAccessToken = token
 // 设置 cesium 静态资源路径
 // // 将 cesium 目录下的 Build/Cesium4 个目录拷贝到该路径
+if(!__VUEPRESS_SSR__) {
 window.CESIUM_BASE_URL = "/Cesium/";
+
+}
 
 // 设置 cesium 默认视角
 // 设置为 China
