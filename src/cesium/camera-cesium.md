@@ -134,7 +134,10 @@ const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3ZjRjYTEwNi0zZTlj
 Cesium.Ion.defaultAccessToken = token 
 // 设置cesium静态资源路径
 // // 将cesium目录下的Build/Cesium4个目录拷贝到该路径
+if(!__VUEPRESS_SSR__) {
 window.CESIUM_BASE_URL = "/Cesium/";
+
+}
 
 // 设置cesium默认视角 
 //  设置为China
