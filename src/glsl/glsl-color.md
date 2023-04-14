@@ -1,6 +1,6 @@
 ---
 title: GLSL中的颜色
-date: 2022-10-06
+date: 2022-10-04
 category:
   - GLSL
 ---
@@ -9,7 +9,10 @@ category:
 
 ## 混合颜色
 
-![](./images/429000703041012323.png)
+<!-- ![](./images/429000703041012323.png) -->
+
+
+<img src="./images/429000703041012323.png" style="width:50%;margin-left:25%;"/>
 
 ```glsl
 #ifdef GL_ES
@@ -41,7 +44,9 @@ void main() {
 
 ## 渐变
 
-![](./images/126001303041012323.png)
+<img src="./images/126001303041012323.png" style="width:50%;margin-left:25%;"/>
+
+<!-- ![](./images/126001303041012323.png) -->
 
 ```glsl
 #ifdef GL_ES
@@ -200,174 +205,79 @@ void main(){
 ## 落日
 
 ```glsl
-//来源：https://www.shadertoy.com/view/ldS3Wm
+//作者：https://www.shadertoy.com/view/XlsXDB
 // License: CC BY 4.0
+# ifdef GL_ES
+precision mediump float;
+# endif
 uniform vec3 iResolution;
 uniform float iTime;
-uniform float iTimeDelta;
-uniform float iFrameRate;
-uniform int iFrame;
-uniform float iChannelTime[4];
-uniform vec3 iChannelResolution[4];
-uniform vec4 iMouse;
-uniform sampler2D iChannel0;
-uniform sampler2D iChannel1;
-uniform sampler2D iChannel2;
-uniform sampler2D iChannel3;
 uniform vec4 iDate;
 
-#define ANIMATE_CLOUDS 0
+#define saturate(x) clamp(x,0.,1.)
+#define rgb(r,g,b) (vec3(r,g,b)/255.)
 
-const float R0 = 6360e3;
-const float Ra = 6380e3;
-const int steps = 128;
-const int stepss = 8;
-const float g = .76;
-const float g2 = g * g;
-const float Hr = 8e3;
-const float Hm = 1.2e3;
-const float I = 10.;
+float rand(float x) { return fract(sin(x) * 71.5413291); }
 
-uniform float u_time;
+float rand(vec2 x) { return rand(dot(x, vec2(13.4251, 15.5128))); }
 
-
-vec3 C = vec3(0., -R0, 0.);
-vec3 bM = vec3(21e-6);
-vec3 bR = vec3(5.8e-6, 13.5e-6, 33.1e-6);
-vec3 Ds = normalize(vec3(0., .09, -1.));
-
-float noise(in vec2 v) { return textureLod(iChannel0, (v+.5)/256., 0.).r; }
-
-// by iq
-float noise(in vec3 v) {
- vec3 p = floor(v);
-    vec3 f = fract(v);
- //f = f*f*(3.-2.*f);
- 
- vec2 uv = (p.xy+vec2(37.,17.)*p.z) + f.xy;
- vec2 rg = textureLod( iChannel0, (uv+.5)/256., 0.).yx;
- return mix(rg.x, rg.y, f.z);
+float noise(vec2 x)
+{
+    vec2 i = floor(x);
+    vec2 f = x - i;
+    f *= f*(3.-2.*f);
+    return mix(mix(rand(i), rand(i+vec2(1,0)), f.x),
+               mix(rand(i+vec2(0,1)), rand(i+vec2(1,1)), f.x), f.y);
 }
 
-float fnoise(in vec3 v) {
-#if ANIMATE_CLOUDS
- return
-  .55 * noise(v) +
-  .225 * noise(v*2. + t *.4) +
-  .125 * noise(v*3.99) +
-  .0625 * noise(v*8.9);
-#else
- return
-  .55 * noise(v) +
-  .225 * noise(v*2.) +
-  .125 * noise(v*3.99) +
-  .0625 * noise(v*8.9);
-#endif
+float fbm(vec2 x)
+{
+    float r = 0.0, s = 1.0, w = 1.0;
+    for (int i=0; i<5; i++)
+    {
+        s *= 2.0;
+        w *= 0.5;
+        r += w * noise(s * x);
+    }
+    return r;
 }
 
-float cloud(vec3 p) {
- float cld = fnoise(p*2e-4);
- cld = smoothstep(.4+.04, .6+.04, cld);
- cld *= cld * 40.;
- return cld;
+float cloud(vec2 uv, float scalex, float scaley, float density, float sharpness, float speed)
+{
+    return pow(saturate(fbm(vec2(scalex,scaley)*(uv+vec2(speed,0)*iTime))-(1.0-density)), 1.0-sharpness);
 }
 
-void densities(in vec3 pos, out float rayleigh, out float mie) {
- float h = length(pos - C) - R0;
- rayleigh =  exp(-h/Hr);
-
- float cld = 0.;
- if (5e3 < h && h < 10e3) {
-  cld = cloud(pos+vec3(23175.7, 0.,-t*3e3));
-  cld *= sin(3.1415*(h-5e3)/5e3);
- }
- mie = exp(-h/Hm) + cld;
+vec3 render(vec2 uv)
+{
+    // sky
+    vec3 color = mix(rgb(255,212,166), rgb(204,235,255), uv.y);
+    // sun
+    vec2 spos = uv - vec2(0., 0.4);
+    float sun = exp(-20.*dot(spos,spos));
+    vec3 scol = rgb(255,155,102) * sun * 0.7;
+    color += scol;
+    // clouds
+    vec3 cl1 = mix(rgb(151,138,153), rgb(166,191,224),uv.y);
+    float d1 = mix(0.9,0.1,pow(uv.y, 0.7));
+    color = mix(color, cl1, cloud(uv,2.,8.,d1,0.4,0.04));
+    color = mix(color, vec3(0.9), 8.*cloud(uv,14.,18.,0.9,0.75,0.02) * cloud(uv,2.,5.,0.6,0.15,0.01)*uv.y);
+    color = mix(color, vec3(0.8), 5.*cloud(uv,12.,15.,0.9,0.75,0.03) * cloud(uv,2.,8.,0.5,0.0,0.02)*uv.y);
+    // post
+    color *= vec3(1.0,0.93,0.81)*1.04;
+    color = mix(0.75*rgb(255,205,161), color, smoothstep(-0.1,0.3,uv.y));
+    color = pow(color,vec3(1.3));
+    return color;
 }
 
-float escape(in vec3 p, in vec3 d, in float R) {
- vec3 v = p - C;
- float b = dot(v, d);
- float c = dot(v, v) - R*R;
- float det2 = b * b - c;
- if (det2 < 0.) return -1.;
- float det = sqrt(det2);
- float t1 = -b - det, t2 = -b + det;
- return (t1 >= 0.) ? t1 : t2;
+void main()
+{
+	vec2 uv = gl_FragCoord.xy / iResolution.xy;
+    uv.x -= 0.5;
+    uv.x *= iResolution.x / iResolution.y;
+    
+	gl_FragColor = vec4(render(uv),1.0);
 }
 
-// this can be explained: http://www.scratchapixel.com/lessons/3d-advanced-lessons/simulating-the-colors-of-the-sky/atmospheric-scattering/
-vec3 scatter(vec3 o, vec3 d) {
- float L = escape(o, d, Ra); 
- float mu = dot(d, Ds);
- float opmu2 = 1. + mu*mu;
- float phaseR = .0596831 * opmu2;
- float phaseM = .1193662 * (1. - g2) * opmu2 / ((2. + g2) * pow(1. + g2 - 2.*g*mu, 1.5));
- 
- float depthR = 0., depthM = 0.;
- vec3 R = vec3(0.), M = vec3(0.);
- 
- float dl = L / float(steps);
- for (int i = 0; i < steps; ++i) {
-  float l = float(i) * dl;
-  vec3 p = o + d * l;
-
-  float dR, dM;
-  densities(p, dR, dM);
-  dR *= dl; dM *= dl;
-  depthR += dR;
-  depthM += dM;
-
-  float Ls = escape(p, Ds, Ra);
-  if (Ls > 0.) {
-   float dls = Ls / float(stepss);
-   float depthRs = 0., depthMs = 0.;
-   for (int j = 0; j < stepss; ++j) {
-    float ls = float(j) * dls;
-    vec3 ps = p + Ds * ls;
-    float dRs, dMs;
-    densities(ps, dRs, dMs);
-    depthRs += dRs * dls;
-    depthMs += dMs * dls;
-   }
-   
-   vec3 A = exp(-(bR * (depthRs + depthR) + bM * (depthMs + depthM)));
-   R += A * dR;
-   M += A * dM;
-  } else {
-   return vec3(0.);
-  }
- }
- 
- return I * (R * bR * phaseR + M * bM * phaseM);
-}
-
-void main(  ) {
- if (iMouse.z > 0.) {
-  float ph = 3.3 * (1. - iMouse.y / iResolution.y);
-  Ds = normalize(vec3(iMouse.x / iResolution.x - .5, sin(ph), cos(ph)));
- }
- 
- vec2 uv = gl_FragCoord.xy / iResolution.xy * 2. - 1.;
- uv.x *= iResolution.x / iResolution.y;
- 
- vec3 O = vec3(uv * .1, 0.) + vec3(0., 25e2, 0.);
- vec3 D = normalize(vec3(uv, -2.));
- 
- float att = 1.;
- if (D.y < -.02) {
-  float L = - O.y / D.y;
-  O = O + D * L;
-  
-  D.y = -D.y;
-  D = normalize(D+vec3(0.,.003*sin(t+6.2831*noise(O.xz*.8+vec2(0.,-t*3e3))),0.));
-  att = .6;
- }
- 
- vec3 color = att * scatter(O, D);
-
- float env = pow(1. - smoothstep(.5, iResolution.x / iResolution.y, length(uv*.8)), .3);
- gl_FragColor = vec4(env * pow(color, vec3(.4)), 1.);
-}
 ```
 
 <div ref="sunsetRef"></div>
@@ -720,177 +630,77 @@ const sunsetRef = ref()
 const sunsetShader = {
 shaderDom:sunsetRef,
 fragmentShader:`
-
-//来源：https://www.shadertoy.com/view/ldS3Wm
-// License: CC BY 4.0
+# ifdef GL_ES
+precision mediump float;
+# endif
 uniform vec3 iResolution;
 uniform float iTime;
-uniform float iTimeDelta;
-uniform float iFrameRate;
-uniform int iFrame;
-uniform float iChannelTime[4];
-uniform vec3 iChannelResolution[4];
-uniform vec4 iMouse;
-uniform sampler2D iChannel0;
-uniform sampler2D iChannel1;
-uniform sampler2D iChannel2;
-uniform sampler2D iChannel3;
 uniform vec4 iDate;
 
-# define ANIMATE_CLOUDS 0
-# define t iTime
+#define saturate(x) clamp(x,0.,1.)
+#define rgb(r,g,b) (vec3(r,g,b)/255.)
 
-const float R0 = 6360e3;
-const float Ra = 6380e3;
-const int steps = 128;
-const int stepss = 8;
-const float g = .76;
-const float g2 = g * g;
-const float Hr = 8e3;
-const float Hm = 1.2e3;
-const float I = 10.;
+float rand(float x) { return fract(sin(x) * 71.5413291); }
 
-varying vec2 v_uv;
+float rand(vec2 x) { return rand(dot(x, vec2(13.4251, 15.5128))); }
 
-vec3 C = vec3(0., -R0, 0.);
-vec3 bM = vec3(21e-6);
-vec3 bR = vec3(5.8e-6, 13.5e-6, 33.1e-6);
-vec3 Ds = normalize(vec3(0., .09, -1.));
-
-float noise(in vec2 v) { return textureLod(iChannel0, (v+.5)/256., 0.).r; }
-
-// by iq
-float noise(in vec3 v) {
- vec3 p = floor(v);
-    vec3 f = fract(v);
- //f = f*f*(3.-2.*f);
-
- vec2 uv = (p.xy+vec2(37.,17.)*p.z) + f.xy;
- vec2 rg = textureLod( iChannel0, (uv+.5)/256., 0.).yx;
- return mix(rg.x, rg.y, f.z);
+float noise(vec2 x)
+{
+    vec2 i = floor(x);
+    vec2 f = x - i;
+    f *= f*(3.-2.*f);
+    return mix(mix(rand(i), rand(i+vec2(1,0)), f.x),
+               mix(rand(i+vec2(0,1)), rand(i+vec2(1,1)), f.x), f.y);
 }
 
-float fnoise(in vec3 v) {
-# if ANIMATE_CLOUDS
- return
-  .55 *noise(v) +
-.225* noise(v*2. + t*.4) +
-  .125 *noise(v*3.99) +
-  .0625 *noise(v*8.9);
-# else
- return
-  .55 *noise(v) +
-.225* noise(v*2.) +
-.125* noise(v*3.99) +
-.0625* noise(v*8.9);
-# endif
+float fbm(vec2 x)
+{
+    float r = 0.0, s = 1.0, w = 1.0;
+    for (int i=0; i<5; i++)
+    {
+        s *= 2.0;
+        w *= 0.5;
+        r += w * noise(s * x);
+    }
+    return r;
 }
 
-float cloud(vec3 p) {
- float cld = fnoise(p*2e-4);
- cld = smoothstep(.4+.04, .6+.04, cld);
-cld*= cld * 40.;
- return cld;
+float cloud(vec2 uv, float scalex, float scaley, float density, float sharpness, float speed)
+{
+    return pow(saturate(fbm(vec2(scalex,scaley)*(uv+vec2(speed,0)*iTime))-(1.0-density)), 1.0-sharpness);
 }
 
-void densities(in vec3 pos, out float rayleigh, out float mie) {
- float h = length(pos - C) - R0;
- rayleigh =  exp(-h/Hr);
-
- float cld = 0.;
- if (5e3 < h && h < 10e3) {
-  cld = cloud(pos+vec3(23175.7, 0.,-t*3e3));
-cld*= sin(3.1415*(h-5e3)/5e3);
- }
- mie = exp(-h/Hm) + cld;
+vec3 render(vec2 uv)
+{
+    // sky
+    vec3 color = mix(rgb(255,212,166), rgb(204,235,255), uv.y);
+    // sun
+    vec2 spos = uv - vec2(0., 0.4);
+    float sun = exp(-20.*dot(spos,spos));
+    vec3 scol = rgb(255,155,102) * sun * 0.7;
+    color += scol;
+    // clouds
+    vec3 cl1 = mix(rgb(151,138,153), rgb(166,191,224),uv.y);
+    float d1 = mix(0.9,0.1,pow(uv.y, 0.7));
+    color = mix(color, cl1, cloud(uv,2.,8.,d1,0.4,0.04));
+    color = mix(color, vec3(0.9), 8.*cloud(uv,14.,18.,0.9,0.75,0.02) * cloud(uv,2.,5.,0.6,0.15,0.01)*uv.y);
+    color = mix(color, vec3(0.8), 5.*cloud(uv,12.,15.,0.9,0.75,0.03) * cloud(uv,2.,8.,0.5,0.0,0.02)*uv.y);
+    // post
+    color *= vec3(1.0,0.93,0.81)*1.04;
+    color = mix(0.75*rgb(255,205,161), color, smoothstep(-0.1,0.3,uv.y));
+    color = pow(color,vec3(1.3));
+    return color;
 }
 
-float escape(in vec3 p, in vec3 d, in float R) {
- vec3 v = p - C;
- float b = dot(v, d);
- float c = dot(v, v) - R*R;
-float det2 = b* b - c;
- if (det2 < 0.) return -1.;
- float det = sqrt(det2);
- float t1 = -b - det, t2 = -b + det;
- return (t1 >= 0.) ? t1 : t2;
+void main()
+{
+	vec2 uv = gl_FragCoord.xy / iResolution.xy;
+    uv.x -= 0.5;
+    uv.x *= iResolution.x / iResolution.y;
+    
+	gl_FragColor = vec4(render(uv),1.0);
 }
 
-// this can be explained: http://www.scratchapixel.com/lessons/3d-advanced-lessons/simulating-the-colors-of-the-sky/atmospheric-scattering/
-vec3 scatter(vec3 o, vec3 d) {
- float L = escape(o, d, Ra);
- float mu = dot(d, Ds);
- float opmu2 = 1. + mu*mu;
-float phaseR = .0596831* opmu2;
- float phaseM = .1193662 *(1. - g2)* opmu2 / ((2. + g2) *pow(1. + g2 - 2.*g*mu, 1.5));
-
- float depthR = 0., depthM = 0.;
- vec3 R = vec3(0.), M = vec3(0.);
-
- float dl = L / float(steps);
- for (int i = 0; i < steps; ++i) {
-  float l = float(i) *dl;
-vec3 p = o + d* l;
-
-  float dR, dM;
-  densities(p, dR, dM);
-  dR *= dl; dM*= dl;
-  depthR += dR;
-  depthM += dM;
-
-  float Ls = escape(p, Ds, Ra);
-  if (Ls > 0.) {
-   float dls = Ls / float(stepss);
-   float depthRs = 0., depthMs = 0.;
-   for (int j = 0; j < stepss; ++j) {
-    float ls = float(j) *dls;
-vec3 ps = p + Ds* ls;
-    float dRs, dMs;
-    densities(ps, dRs, dMs);
-    depthRs += dRs *dls;
-depthMs += dMs* dls;
-   }
-
-   vec3 A = exp(-(bR *(depthRs + depthR) + bM* (depthMs + depthM)));
-   R += A *dR;
-M += A* dM;
-  } else {
-   return vec3(0.);
-  }
- }
-
- return I *(R* bR *phaseR + M* bM * phaseM);
-}
-
-void main() {
- if (iMouse.z > 0.) {
-  float ph = 3.3 * (1. - iMouse.y / iResolution.y);
-  Ds = normalize(vec3(iMouse.x / iResolution.x - .5, sin(ph), cos(ph)));
- }
-
-//  vec2 uv = gl_FragCoord.xy / iResolution.xy *2. - 1.;
-vec2 uv = v_uv;
-// uv.x*= iResolution.x / iResolution.y;
-
- vec3 O = vec3(uv * .1, 0.) + vec3(0., 25e2, 0.);
- vec3 D = normalize(vec3(uv, -2.));
-
- float att = 1.;
- if (D.y < -.02) {
-  float L = - O.y / D.y;
-  O = O + D * L;
-  
-  D.y = -D.y;
-  D = normalize(D+vec3(0.,.003*sin(t+6.2831*noise(O.xz*.8+vec2(0.,-t*3e3))),0.));
-  att = .6;
- }
-
- vec3 color = att * scatter(O, D);
-
- float env = pow(1. - smoothstep(.5, iResolution.x / iResolution.y, length(uv*.8)), .3);
-    // gl_FragColor = vec4(env*pow(color, vec3(.4)), 1.);
-    gl_FragColor = vec4(color,1.0);
-}
 `
 }
 onMounted(()=>{
