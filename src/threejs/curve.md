@@ -5,6 +5,42 @@ category:
   - ThreeJS
 ---
 
+## 球体生成
+
+```js
+// 半径
+const EARTH_RADIUS = 5;
+const earthGeometry = new THREE.SphereGeometry(EARTH_RADIUS, 16, 16)
+const earthMaterial = new THREE.MeshPhongMaterial({
+  specular: 0x333333,
+  shininess: 5,
+  map: textureLoader.load("/assets/textures/planets/earth_atmos_2048.jpg"),
+  specularMap: textureLoader.load("/assets/textures/planets/earth_specular_2048.jpg"),
+  normalMap: textureLoader.load("/assets/textures/planets/earth_normal_2048.jpg"),
+  normalScale: new THREE.Vector2(0.85, 0.85),
+});
+earth = new THREE.Mesh(earthGeometry, earthMaterial);
+scene.add(earth)
+
+```
+### SphereGeometry
+```js
+SphereGeometry(radius : Float, widthSegments : Integer, heightSegments : Integer, phiStart : Float, phiLength : Float, thetaStart : Float, thetaLength : Float)
+radius — 球体半径，默认为1。
+widthSegments — 水平分段数（沿着经线分段），最小值为3，默认值为32。
+heightSegments — 垂直分段数（沿着纬线分段），最小值为2，默认值为16。
+phiStart — 指定水平（经线）起始角度，默认值为0。。
+phiLength — 指定水平（经线）扫描角度的大小，默认值为 Math.PI * 2。
+thetaStart — 指定垂直（纬线）起始角度，默认值为0。
+thetaLength — 指定垂直（纬线）扫描角度大小，默认值为 Math.PI。
+
+```
+
+### MeshPhongMaterial
+
+
+
+
 ```js
 // 光线投射用于进行鼠标拾取（在三维空间中计算出鼠标移过了什么物体）。
 const raycaster = new THREE.Raycaster();
@@ -15,7 +51,21 @@ raycaster.setFromCamera(pointer, camera);
 // 计算物体和射线的焦点
 const intersects = raycaster.intersectObjects(scene.children);
 
-moon.position.set(Math.sin(elapsed) * 8, 0, Math.cos(elapsed) * 8);
+  // 如果没有碰撞到任何物体，那么让标签显示
+  if(intersects.length == 0){
+    chinaLabel.element.style.visibility = 'initial'
+    // chinaLabel.element.classList.add('visible');
+    
+  }else{
+    // if(labelDistance)
+    const minDistance = intersects[0].distance;
+    if(minDistance<labelDistance){
+    chinaLabel.element.style.visibility = 'hidden'
+    }else{
+    chinaLabel.element.style.visibility = 'initial'
+    }
+    
+  }
 
 ```
 
