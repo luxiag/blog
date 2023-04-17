@@ -1,5 +1,5 @@
 ---
-title: 曲线应用
+title: ThreeJS中的曲线应用
 date: 2023-01-02
 category:
   - ThreeJS

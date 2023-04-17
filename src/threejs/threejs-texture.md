@@ -77,6 +77,38 @@ new THREE.BufferAttribute(planeGeometry.attributes.uv.array, 2)
 
 <div ref="textureKeyRef"></div>
 
+
+<div  class="texture-imgs">
+    <div class="img">
+        doorColorTexture
+        <img src="/assets/textures/door/color.jpg"/>
+    </div>
+      <div class="img">
+        doorAplhaTexture
+        <img src="/assets/textures/door/alpha.jpg"/>
+    </div>
+         <div class="img">
+        doorAoTexture
+        <img src="/assets/textures/door/ambientOcclusion.jpg"/>
+    </div>
+         <div class="img">
+        doorHeightTexture
+        <img src="/assets/textures/door/height.jpg"/>
+    </div>
+         <div class="img">
+        roughnessTexture
+        <img src="/assets/textures/door/roughness.jpg"/>
+    </div>
+             <div class="img">
+        metalnessTexture
+        <img src="/assets/textures/door/metalness.jpg"/>
+    </div>
+                 <div class="img">
+        normalTexture
+        <img src="/assets/textures/door/normal.jpg"/>
+    </div>
+</div>
+
 ## 纹理的加载
 ```js
 const loader = new THREE.TextureLoader();
@@ -142,6 +174,39 @@ const loadingManager = new THREE.LoadingManager(
 );
 
 ```
+
+
+## filtering过滤
+
+
+### mips
+
+Mips 是纹理的副本，每一个都是前一个 mip 的一半宽和一半高，其中的像素已经被混合以制作下一个较小的 mip。Mips一直被创建，直到我们得到1x1像素的Mip。对于上面的图片，所有的Mip最终会变成这样的样子
+
+![](./images/857005209041712323.png)
+
+当立方体被画得很小，只有1或2个像素大时，GPU可以选择只用最小或次小级别的mip来决定让小立方体变成什么颜色。
+### magFilter 
+当一个纹素覆盖大于一个像素时，贴图将如何采样。
+- 默认值为THREE.LinearFilter， 指从纹理中选择离我们应该选择颜色的地方最近的4个像素，并根据实际点与4个像素的距离，以适当的比例进行混合。 
+- 另一个选项是THREE.NearestFilter，只需从原始纹理中选取最接近的一个像素。
+
+
+### minFilter
+当一个纹素覆盖小于一个像素时，贴图将如何采样。默认值为THREE.LinearMipmapLinearFilter， 它将使用mipmapping以及三次线性滤镜。
+
+- `THREE.NearestFilter`在纹理中选择最近的像素。
+
+- `THREE.LinearFilter`从纹理中选择4个像素，然后混合它们
+
+- `THREE.NearestMipmapNearestFilter`选择合适的mip，然后选择一个像素。
+
+- `THREE.NearestMipmapLinearFilter`选择2个mips，从每个mips中选择一个像素，混合这2个像素。
+
+- `THREE.LinearMipmapNearestFilter`选择合适的mip，然后选择4个像素并将它们混合。
+
+- `THREE.LinearMipmapLinearFilter`选择2个mips，从每个mips中选择4个像素，然后将所有8个像素混合成1个像素。
+
 <script setup>
 import {ref,onMounted} from 'vue'
 import * as THREE from 'three'
@@ -244,3 +309,11 @@ onMounted(()=>{
     initTextureRef()
 })
  </script>
+ <style lang="less" scoped>
+
+.texture-imgs {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    text-align: center;
+}
+ </style>
