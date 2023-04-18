@@ -172,7 +172,7 @@ export default hopeTheme({
     },
     copyright: {
       author: "luxiag",
-      global: true,
+      global: false,
       triggerWords: 10,
     },
 
