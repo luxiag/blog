@@ -162,11 +162,75 @@ function onPointerMove(event) {
 
 <div ref="ray"></div>
 
+
+## 文字显示隐藏
+
+```js
+// 月亮Label隐藏
+const elapsed = clock.getElapsedTime();
+moon.position.set(Math.sin(elapsed) * 8, 0, Math.cos(elapsed) * 8);
+
+const moonPosition = moon.position.clone();
+const cameraPos = camera.position.clone()
+/*
+通过 moonPosition.clone() 和 camera.position.clone() 克隆 moon 的位置和摄像机的位置，避免直接修改 moonPosition 和 cameraPos 对象的值。
+通过 moonPosition.sub(cameraPos) 计算出从摄像机指向 moon 的向量。
+通过 .normalize() 将向量转换为单位向量，即长度为 1 的向量，方便后续的计算。这样得到的向量就是一个方向，指向摄像机位置和 moon 位置之间的向量。
+*/
+rayCasterMoon.set(cameraPos,moonPosition.sub(cameraPos).normalize())
+const intersectsMoon = rayCasterMoon.intersectObjects(scene.children,true)
+if(intersectsMoon.length >0 && intersectsMoon[0].object !== moon) {
+    moonLabel.element.style.visibility = 'hidden'
+}else{
+    moonLabel.element.style.visibility = 'initial'
+}
+
+
+// 中国Label隐藏
+
+const chinaPosition = chinaLabel.position.clone();
+
+// 计算出标签跟摄像机的距离
+const labelDistance = chinaPosition.distanceTo(camera.position);
+// 检测射线的碰撞
+// 向量(坐标)从世界空间投影到相机的标准化设备坐标 (NDC) 空间。
+/*
+project() 方法是 Object3D 类的一个方法，用于将三维坐标转换为屏幕上的二维坐标。
+它需要传入一个参数 camera，表示用于投影计算的相机
+*/
+chinaPosition.project(camera);
+
+raycaster.setFromCamera(chinaPosition,camera);
+       
+const intersects = raycaster.intersectObjects(scene.children,true)
+
+if(intersects.length == 0){
+  chinaLabel.element.style.visibility = 'initial'
+}else{
+  const minDistance = intersects[0].distance;
+  if(minDistance<labelDistance){
+    chinaLabel.element.style.visibility = 'hidden'
+  }else{
+    chinaLabel.element.style.visibility = 'initial'
+  }
+}
+
+
+```
+
+<div class="curve" ref="curve">
+
+</div>
+
+
 <script setup>
 import {ref,onMounted} from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
-
+import {
+  CSS2DRenderer,
+  CSS2DObject,
+} from "three/examples/jsm/renderers/CSS2DRenderer.js";
 const ray = ref()
 
 const init = () => {
@@ -355,9 +419,191 @@ const initVoxel = () => {
     render();
 }
 
+const curve = ref();
+function initCurve() {
+    // 半径
+    const EARTH_RADIUS = 5;
+    const MOON_RADIUS = 0.5;
+    const clock = new THREE.Clock();
+    const textureLoader = new THREE.TextureLoader();
+    const raycaster = new THREE.Raycaster();
+    const rayCasterMoon = new THREE.Raycaster();
+
+    const camera = new THREE.PerspectiveCamera(75,2,0.1,200);
+    camera.position.set(0, 5, -10);
+
+    const scene = new THREE.Scene();
+
+    const dirLight = new THREE.DirectionalLight(0xffffff);
+    dirLight.position.set(0, 0, 10);
+
+    scene.add(dirLight);
+
+    const light = new THREE.AmbientLight(0xffffff, .8); // soft white light
+    scene.add(light);
+
+    const earthGeometry = new THREE.SphereGeometry(EARTH_RADIUS, 16, 16);
+
+    const earthMaterial = new THREE.MeshPhongMaterial({
+      specular: 0x333333,
+      shininess: 5,
+      map: textureLoader.load("/assets/textures/planets/earth_atmos_2048.jpg"),
+      specularMap: textureLoader.load("/assets/textures/planets/earth_specular_2048.jpg"),
+      normalMap: textureLoader.load("/assets/textures/planets/earth_normal_2048.jpg"),
+      normalScale: new THREE.Vector2(0.85, 0.85),
+    });
+    const earth = new THREE.Mesh(earthGeometry, earthMaterial);
+    //  earth.rotation.y = +Math.PI;
+    scene.add(earth);
+
+
+    const moonGeometry = new THREE.SphereGeometry(MOON_RADIUS, 16, 16);
+    const moonMaterial = new THREE.MeshPhongMaterial({
+      shininess: 5,
+      map: textureLoader.load("/assets/textures/planets/moon_1024.jpg"),
+    });
+    const moon = new THREE.Mesh(moonGeometry, moonMaterial);
+    scene.add(moon);
+
+
+    // const axesHelper = new THREE.AxesHelper( 15 );
+    // axesHelper.position.set(0,0,0)
+    // scene.add( axesHelper );
+    // 添加提示标签
+    const earthDiv = document.createElement('div');
+    earthDiv.className = "label";
+    earthDiv.innerHTML = "地球";
+    const earthLabel = new CSS2DObject(earthDiv);
+    earthLabel.position.set(0,6,0);
+    earth.add(earthLabel);
+  
+
+
+      // 中国
+    const chinaDiv = document.createElement('div');
+    chinaDiv.className = "label1";
+    chinaDiv.innerHTML = "中国";
+    const chinaLabel = new CSS2DObject(chinaDiv);
+    chinaLabel.position.set(-1.5,2.5,-5);
+    earth.add(chinaLabel);
+  
+    const moonDiv = document.createElement('div');
+    moonDiv.className = "label";
+    moonDiv.innerHTML = "月球";
+    const moonLabel = new CSS2DObject(moonDiv);
+    moonLabel.position.set(0,1,0);
+    moon.add(moonLabel);
+
+      // 实例化css2d的渲染器
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(curve.value.offsetWidth,curve.value.offsetWidth / 2);
+    // document.body.appendChild(labelRenderer.domElement)
+    curve.value.appendChild(labelRenderer.domElement);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.height = '100%';
+    labelRenderer.domElement.style.width = '100%';
+    // console.log(labelRenderer.domElement.style,'style')
+
+    // labelRenderer.domElement.style.left = '0px';
+    // labelRenderer.domElement.style.zIndex = '10';
+
+    const renderer = new THREE.WebGLRenderer();
+    renderer.setSize(curve.value.offsetWidth,curve.value.offsetWidth / 2)
+    curve.value.appendChild(renderer.domElement)
+    if(!__VUEPRESS_SSR__){
+        renderer.setPixelRatio(window.devicePixelRatio)
+        window.addEventListener("resize",onWindowResize);
+    }
+    renderer.render(scene, camera);
+
+    const controls = new OrbitControls(camera, labelRenderer.domElement);
+    controls.minDistance = 5;
+    controls.maxDistance = 100;
+    function onWindowResize(){
+      camera.aspect =  2;
+      camera.updateProjectionMatrix();
+          if(!__VUEPRESS_SSR__) {
+            labelRenderer.setSize(curve.value.offsetWidth,curve.value.offsetWidth / 2);
+            renderer.setSize(curve.value.offsetWidth,curve.value.offsetWidth / 2)
+              // renderer.setSize(window.innerWidth,window.innerHeight)
+              // labelRenderer.setSize(window.innerWidth,window.innerHeight);
+          }
+    }
+
+    function animate(){
+     
+        const elapsed = clock.getElapsedTime();
+        moon.position.set(Math.sin(elapsed) * 8, 0, Math.cos(elapsed) * 8);
+    
+        const chinaPosition = chinaLabel.position.clone();
+        const moonPosition = moon.position.clone();
+        const cameraPos = camera.position.clone()
+        // 计算出标签跟摄像机的距离
+        const labelDistance = chinaPosition.distanceTo(camera.position);
+        const monLabelDistance = moonPosition.distanceTo(camera.position)
+        // 检测射线的碰撞
+        // chinaLabel.position
+        // 向量(坐标)从世界空间投影到相机的标准化设备坐标 (NDC) 空间。
+        chinaPosition.project(camera);
+
+        raycaster.setFromCamera(chinaPosition,camera);
+
+        // rayCasterMoon.setFromCamera(moon.position,camera)
+        rayCasterMoon.set(cameraPos,moonPosition.sub(cameraPos).normalize())
+        
+        const intersects = raycaster.intersectObjects(scene.children,true)
+        const intersectsMoon = rayCasterMoon.intersectObjects(scene.children,true)
+          // console.log(chinaLabel.element.style,'aaa')
+        // 如果没有碰撞到任何物体，那么让标签显示
+        if(intersectsMoon.length >0 && intersectsMoon[0].object !== moon) {
+            moonLabel.element.style.visibility = 'hidden'
+            // intersects[ 0 ].object.material.color.set( 0x00000000 );
+
+
+        }else{
+            // intersects[ 0 ].object.material.color.set( 0xff0000 );
+            moonLabel.element.style.visibility = 'initial'
+        }
+
+        if(intersects.length == 0){
+          chinaLabel.element.style.visibility = 'initial'
+          // chinaLabel.element.classList.add('visible');
+
+        }else{
+          // if(labelDistance)
+          const minDistance = intersects[0].distance;
+          if(minDistance<labelDistance){
+          chinaLabel.element.style.visibility = 'hidden'
+          }else{
+          chinaLabel.element.style.visibility = 'initial'
+          }
+        }
+           labelRenderer.render(scene,camera);
+            renderer.render(scene,camera);
+        requestAnimationFrame(animate);
+    }
+    animate()
+
+}
+
+
 onMounted(() => {
 init();
 initVoxel()
+initCurve()
 })
 
 </script>
+<style scoped>
+
+  .curve {
+    position:relative;
+  }
+  .label {
+  font-size: 24px;
+  color: white;
+  text-shadow: 1px 1px black;
+  pointer-events: none;
+}
+</style>
+
