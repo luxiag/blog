@@ -96,6 +96,8 @@ const material = new THREE.MeshBasicMaterial({ color: 0x44aa88 });
 
 7.一个网格(Mesh)对象
 
+网格（Mesh）表示基于以三角形为polygon mesh（多边形网格）的物体的类。
+
 - 几何体(Geometry)(物体的形状)
 - 材质(Material)(如何绘制物体，光滑还是平整，什么颜色，什么贴图等等)
 - 对象在场景中相对于他父对象的位置、朝向、和缩放。下面的代码中父对象即为场景对象。
@@ -153,12 +155,13 @@ const initScene = () => {
   scene.add(cube);
   // 摄相机
   const camera = new THREE.PerspectiveCamera(75, 2, 0.1, 10);
-  camera.position.set(0, 0, 2)
+  camera.position.set(0, 0, 2) 
   scene.add(camera)
 
  const renderer = new THREE.WebGLRenderer();
   if(!__VUEPRESS_SSR__) {
       renderer.setPixelRatio( window.devicePixelRatio );
+      window.addEventListener("resize",onWindowResize)
   }
 
   renderer.setSize(helloCube.value.offsetWidth, helloCube.value.offsetWidth/2)
@@ -179,12 +182,16 @@ const initScene = () => {
       renderer.render(scene, camera)
       requestAnimationFrame(render)
   }
+  function onWindowResize(){
+    if(!__VUEPRESS_SSR__) {
+      renderer.setPixelRatio(window.devicePixelRatio)
+      renderer.setSize(helloCube.value.offsetWidth, helloCube.value.offsetWidth/2)
 
+    }
+  }
   render()
 }
 onMounted(()=>{
   initScene()
 })
 </script>
-
-
