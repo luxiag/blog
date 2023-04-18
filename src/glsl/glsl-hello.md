@@ -4,8 +4,9 @@ category:
   - GLSL
 date: 2022-10-01
 ---
+参考：《The Book of Shaders》
 
-<div ref="helloRef"></div>
+## Fragment Shader(片段着色器)
 
 ```glsl
 #ifdef GL_ES
@@ -15,12 +16,12 @@ precision mediump float;
 uniform float u_time;
 
 void main() {
-	gl_FragColor = vec4(1.0,0.0,1.0,1.0);
+ gl_FragColor = vec4(1.0,0.0,1.0,1.0);
 }
 
 ```
 
-## Fragment Shader(片段着色器)
+<div ref="helloRef"></div>
 
 **Shaders 是一系列的指令，但是这些指令会对屏幕上的每个像素同时下达。**
 
@@ -44,7 +45,10 @@ void main() {
 }
 ```
 
-<div ref="timeRef"></div>
+## uniform
+
+每个线程和其他线程之间不能有数据交换，但我们能从 CPU 给每个线程输入数据。因为显卡的架构，所有线程的输入值必须统一（uniform），而且必须设为只读。
+输入值叫做 uniform （统一值），它们的数据类型通常为：float, vec2, vec3, vec4, mat2, mat3, mat4, sampler2D and samplerCube。
 
 ```glsl
 #ifdef GL_ES
@@ -54,12 +58,17 @@ precision mediump float;
 uniform float u_time;
 
 void main() {
-	gl_FragColor = vec4(abs(sin(u_time)),0.0,0.0,1.0);
+ gl_FragColor = vec4(abs(sin(u_time)),0.0,0.0,1.0);
 }
 
 ```
 
-<div ref="fragRef"></div>
+<div ref="timeRef"></div>
+
+## gl_FragCoord
+
+gl_FragCoord存储了活动线程正在处理的像素或屏幕碎片的坐标。
+因为每个像素的坐标都不同，所以我们把它叫做 varying **（变化值）**。
 
 ```glsl
 
@@ -77,6 +86,9 @@ gl_FragColor = vec4(st.x,st.y,0.0,1.0);
 }
 
 ```
+<div ref="fragRef"></div>
+
+
 
 ## GLSL
 
@@ -88,12 +100,10 @@ GLSL 代表 openGL Shading Language，openGL 着色语言
 import * as THREE from 'three'
 import {ref,onMounted} from 'vue'
 
-
     // 导入轨道控制器
 import {
     OrbitControls
 } from 'three/examples/jsm/controls/OrbitControls'
-
 
 const initScene = (shader)=>{
     // 1.创建场景
@@ -122,9 +132,7 @@ const initScene = (shader)=>{
     scene.add(floor)
     // 初始化渲染器
     const renderer = new THREE.WebGLRenderer()
-    if(!__VUEPRESS_SSR__) {
-        renderer.setPixelRatio( window.devicePixelRatio );
-    }
+ 
     // 设置渲染器大小
 
     renderer.setSize(shader.shaderDom.value.offsetWidth, shader.shaderDom.value.offsetWidth/2)
@@ -172,12 +180,11 @@ const timeShader = {
     uniform float u_time;
 
     void main() {
-	    gl_FragColor = vec4(abs(sin(u_time)),0.0,0.0,1.0);
+     gl_FragColor = vec4(abs(sin(u_time)),0.0,0.0,1.0);
     }
     `,
     shaderDom:timeRef
 }
-
 
 const fragRef = ref()
 
@@ -192,8 +199,8 @@ const fragShader = {
     uniform float u_time;
 
     void main() {
-    	vec2 st = gl_FragCoord.xy/u_resolution;
-    	gl_FragColor = vec4(st.x,st.y,0.0,1.0);
+     vec2 st = gl_FragCoord.xy/u_resolution;
+     gl_FragColor = vec4(st.x,st.y,0.0,1.0);
     }`,
     shaderDom:fragRef
 }
@@ -203,8 +210,5 @@ onMounted(()=>{
     initScene(timeShader)
     initScene(fragShader)
 })
-
-
-
 
 </script>

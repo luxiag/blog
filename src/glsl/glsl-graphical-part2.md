@@ -1,6 +1,6 @@
 ---
 title: GLSL图形（二）
-date: 2022-10-05
+date: 2022-10-08
 category:
   - GLSL
 ---
@@ -237,7 +237,7 @@ const initScene = (shader)=>{
     // 初始化渲染器
     const renderer = new THREE.WebGLRenderer()
     if(!__VUEPRESS_SSR__) {
-        renderer.setPixelRatio( window.devicePixelRatio );
+        // renderer.setPixelRatio( window.devicePixelRatio );
     }
     // 设置渲染器大小
 
