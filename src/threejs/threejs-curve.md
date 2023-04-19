@@ -1,6 +1,6 @@
 ---
 title: ThreeJS中的曲线应用
-date: 2023-01-02
+date: 2022-02-01
 category:
   - ThreeJS
 ---

@@ -1,12 +1,22 @@
+---
+title: Android离线打包
+category:
+  - Uniapp
+  - Android
+date: 2022-12-13
+---
+官方文档：https://nativesupport.dcloud.net.cn/AppDocs/#
+
 1.安装 jdk
 https://www.oracle.com/java/technologies/downloads/
-![](images/089004202011242323.png)
+
+![](./images/089004202011242323.png)
 
 ```bash
 /usr/libexec/java_home -V
 ```
 
-![](images/838004802011242323.png)
+![](./images/838004802011242323.png)
 
 2.生成签名证书
 
@@ -14,7 +24,7 @@ https://www.oracle.com/java/technologies/downloads/
 keytool -genkey -alias testalias -keyalg RSA -keysize 2048 -validity 36500 -keystore test.keystore
 ```
 
-![](images/268000003011242323.png)
+![](./images/268000003011242323.png)
 
 3.查看证书
 
@@ -23,18 +33,38 @@ keytool -list -v -keystore test.keystore
 Enter keystore password: //输入密码，回车
 ```
 
-4.下载离线 SDK
+4.生成 AppKey
+
+```bash
+keytool -list -v -keystore test.keystore
+Enter keystore password: //输入密码，回车
+
+# 新版没有md5
+keytool -exportcert -keystore xxx.keystore | openssl dgst -md5
+# 参考 https://www.jianshu.com/p/3799489898b3
+```
+
+**包名必须和 android studio 项目的包名一致**
+
+![](./images/041000405031052323.png)
+
+5.下载离线 SDK
+
+hbuilderX 版本要和 SDK 保持一致
+
 https://nativesupport.dcloud.net.cn/AppDocs/download/android.html#
 
-5.android 创建项目
+6.android 创建项目
 
-![](./images/201003003011242323.png)
+创建项目的包名必须和 Dclound 里的包名一致
+
+![](././images/201003003011242323.png)
 
 - `.gradle 和.idea`在这两个目录下放置的都是 Android Studio 自动生成的文件，所以无需关心，不用编辑。
 
 - `app`项目中的代码、资源等内容几乎都是放在这个目录之下，后续的开发工作也是在这个目录下进行的。
 
-  - ![](./images/487003503011242323.png)
+  - ![](././images/487003503011242323.png)
   - `build`和外层的 build 一样，包含了一些编译时自动生成的文件，无需关心。
 
   - `libs`如果你在项目中使用到了第三方 jar 包，就需要把这些 jar 包放置在 libs 目录之下，放置之后，jar 包会被自动添加到构建路径里面去。
@@ -70,7 +100,9 @@ https://nativesupport.dcloud.net.cn/AppDocs/download/android.html#
 
 - `MyDemo.iml`iml 文件是所有 IntelliJ IDEA 项目都会自动生成的一个文件（因为 Android Studio 是基于 IntelliJ IDEA 开发的），用于表示这是一个 IntelliJ IDEA 文件，我们无需修改。
 
-6. 配置工程
+7. 配置工程
+
+将 SDK 实例项目中 `res/values`和`assets/data` 拷贝过来
 
 将 lib.5plus.base-release.aar、android-gif-drawable-release@1.2.23.aar、uniapp-v8-release.aar、oaid_sdk_1.0.25.aar 和 breakpad-build-release.aar 拷贝到 libs 目录下
 
@@ -79,8 +111,8 @@ https://nativesupport.dcloud.net.cn/AppDocs/download/android.html#
 ```gradle
 android{
     aaptOptions{
-        additionalParameters '--auto-add-overlay'  
-        ignoreAssetsPattern "!.svn:!.git:.*:!CVS:!thumbs.db:!picasa.ini:!*.scc:*~"  
+        additionalParameters '--auto-add-overlay'
+        ignoreAssetsPattern "!.svn:!.git:.*:!CVS:!thumbs.db:!picasa.ini:!*.scc:*~"
     }
 }
 
@@ -98,7 +130,7 @@ dependencies {
 }
 ```
 
-在Androidmanifest.xml
+在 Androidmanifest.xml 添加
 
 ```xml
 <application
@@ -107,3 +139,23 @@ dependencies {
         android:name="dcloud_appkey"
         android:value="替换为自己申请的Appkey" />
 ```
+
+删除默认 MainActivity 节点
+
+![](./images/704001205031052323.png)
+
+8.gradle 导入证书
+
+![](./images/426000805031052323.png)
+
+![](./images/409000805031052323.png)
+
+9.uniapp进行打包将打包好的文件复制到 `assets/apps`里
+
+![](./images/153001405031052323.png)
+
+**保证`dcloud_control.xml`及uniapp项目id及Dcloud后台appID一致**
+
+10.输出apk文件
+
+![](./images/091001605031052323.png)

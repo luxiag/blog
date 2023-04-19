@@ -1,6 +1,6 @@
 ---
 title: ThreeJS中的纹理
-date: 2022-10-10
+date: 2022-01-18
 category:
     - ThreeJS
 ---
