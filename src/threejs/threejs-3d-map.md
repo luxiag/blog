@@ -118,17 +118,7 @@ function drawExtrudeMesh(polygon, color, projection) {
 
 ```
 
-<div ref="mapRef" class="map_container"></div>
 
-```js
-//作者：https://github.com/Saitmob/3d-china-map
-
-
-```
-
-<div ref="geoMapRef">
-<div ref="geoMapInfoRef"></div>
-</div>
 
 <script setup>
 import {ref,onMounted} from 'vue'
