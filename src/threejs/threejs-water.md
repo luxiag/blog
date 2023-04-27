@@ -4,6 +4,7 @@ category:
   - ThreeJS
 date: 2022-02-22
 ---
+参考：https://threejs.org/
 
 ```js
 import { Water } from "three/examples/jsm/objects/Water2";

@@ -4,7 +4,7 @@ category:
   - ThreeJS
 date: 2022-03-02
 ---
-
+参考：https://threejs.org/
 
 ```js
 //outline pass 创建高亮轮廓

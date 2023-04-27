@@ -4,6 +4,7 @@ category:
     - ThreeJS
 date: 2022-03-07
 ---
+参考：https://threejs.org/
 
 ```js
 //遍历场景中的所有对象，然后判断当前对象是否是光源对象

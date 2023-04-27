@@ -118,7 +118,7 @@ function drawExtrudeMesh(polygon, color, projection) {
 
 ```
 
-
+<div ref="mapRef" class="ref-container"></div>
 
 <script setup>
 import {ref,onMounted} from 'vue'
