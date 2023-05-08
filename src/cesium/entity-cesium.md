@@ -73,7 +73,7 @@ var entity = viewer.entities.add({
 
 <iframe src="/cesium/examples/entity-cesium-entity.html" width="100%" height="500px"></iframe>
 
-## 材质
+## [材质](https://cesium.com/learn/cesiumjs-learn/cesiumjs-geometry-appearances/)
 
 
 1. ColorMaterialProperty: 颜色材质，用于指定实体的颜色。可以使用静态颜色或动态颜色。
