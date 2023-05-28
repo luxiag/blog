@@ -1,11 +1,41 @@
 ---
-page: true
-title: vue2挂载原理
-date: 2021-12-25
-
+title: Vue2.x框架原理分析-组件挂载
+date: 2021-08-10
+next: parse
+category:
+  - Vue
+type:
+  - vue2
 ---
 
-# mount
+```mermaid
+flowchart TB
+  vue._init --> vm.$mount
+  vm.$mount --> mountComponent
+  mountComponent --> 执行渲染Watcher
+  渲染Watcher --> 执行updateComponent
+  执行updateComponent --> 执行_render获取虚拟VNode
+  执行_render获取虚拟VNode --> 内部执行_createElement
+   内部执行_createElement --> 没有tag,创建空VNode
+  内部执行_createElement --> tag是真实节点,创建VNode
+   内部执行_createElement --> 内置节点,创建普通VNode
+  内部执行_createElement --> tag是Component类型
+  tag是Component类型 --> 执行createComponent方法
+   执行createComponent方法 --> 使用extend继承Vue
+    执行createComponent方法 --> 合并Vue的默认options
+    执行createComponent方法 --> 是函数组件,createFunctionalComponent处理
+      执行createComponent方法 --> 是Vue组件,安装组件构造函数,返回Vnode
+
+```
+
+## mount
+
+```js
+// vue._init()
+if (vm.$options.el) {
+  vm.$mount(vm.$options.el);
+}
+```
 
 ```js
 Vue.prototype.$mount = function (
@@ -18,11 +48,12 @@ Vue.prototype.$mount = function (
 ```
 
 `this`
-![](./images/20220811104229.png)
+![](./images/1680123400811104229.png)
 
-# mountComponent
+## mountComponent
 
-![](./images/20220811111106.png)  
+![](./images/1680123400811111106.png)  
+
 `core/instance/lifecycle`
 
 ```js
@@ -86,7 +117,9 @@ export function mountComponent(
 }
 ```
 
-## render
+### render
+
+::: details \_render
 
 ```js
   Vue.prototype._render = function (): VNode {
@@ -116,6 +149,7 @@ export function mountComponent(
       // when parent component is patched.
       setCurrentInstance(vm)
       currentRenderingInstance = vm
+      // vm._renderProxy = vm
       vnode = render.call(vm._renderProxy, vm.$createElement)
     } catch (e: any) {
       handleError(e, vm, `render`)
@@ -143,12 +177,63 @@ export function mountComponent(
 
 ```
 
-## createElement
+:::
+
+### createElement
 
 ```js
 vnode = render.call(vm._renderProxy, vm.$createElement);
 vm.$createElement = (a, b, c, d) => createElement(vm, a, b, c, d, true);
+//  => vm._renderProxy.render(vm.$createElement) _renderProxy = vm
+//  => vm.render(vm.$createElement)
+// App.vue  render: h => h(App) = h =vm.$createElement
 ```
+
+::: details render
+
+```js
+var render = function () {
+  var _vm = this
+  var _h = _vm.$createElement
+  var _c = _vm._self._c || _h
+  return _c(
+    "div",
+    { attrs: { id: "app" } },
+    [
+      _c("img", {
+        attrs: { alt: "Vue logo", src: __webpack_require__(/*! ./assets/logo.png */ "./src/assets/logo.png") },
+      }),
+      _vm._v(" "),
+      _c("HelloWorldVue", { attrs: { msg: "Welcome to Your Vue.js App" } }),
+      _vm._v(" "),
+      _c("input", { directives: [{ name: "focus", rawName: "v-focus" }] }),
+      _vm._v(" "),
+      _c("router-link", { attrs: { to: "/home" } }, [_vm._v("Home")]),
+      _vm._v(" "),
+      _c("router-link", { attrs: { to: "/about" } }, [_vm._v("About")]),
+      _vm._v(" "),
+      _c("KeepAlive", [_c("router-view")], 1),
+      _vm._v(" "),
+      _c(
+        "button",
+        {
+          on: {
+            click: function ($event) {
+              _vm.num = _vm.num + 1
+            },
+          },
+        },
+        [_vm._v(_vm._s(_vm.num))]
+      ),
+    ],
+    1
+  )
+}
+```
+
+:::
+
+![](./images/1680123401031164038.png)  
 
 ```js
 export function createElement(
@@ -242,7 +327,9 @@ export function _createElement(
 }
 ```
 
-## createComponent
+### createComponent
+
+节点是组件
 
 ```js
 export function createComponent(
@@ -255,6 +342,7 @@ export function createComponent(
   if (isUndef(Ctor)) {
     return
   }
+  // Vue.options._base = Vue
   const baseCtor = context.$options._base
   // plain options object: turn it into a constructor
   if (isObject(Ctor)) {
@@ -276,6 +364,7 @@ export function createComponent(
     }
   }
   data = data || {}
+  //  合并 options, 就是把自定义的 options 和 默认的 `options` 合并
   resolveConstructorOptions(Ctor as typeof Component)
   if (isDef(data.model)) {
     // @ts-expect-error
@@ -313,6 +402,7 @@ export function createComponent(
       data.slot = slot
     }
   }
+  // 安装组件钩子函数
   // install component management hooks onto the placeholder node
   installComponentHooks(data)
 
@@ -338,12 +428,20 @@ export function createComponent(
 
 ```
 
-## \_update
+### \_update
 
 ```js
 const vnode = vm._render();
 vm._update(vnode, hydrating);
 ```
+
+::: details vnode
+
+```js
+
+```
+
+:::
 
 ```js
 /*
@@ -384,7 +482,7 @@ Vue.prototype._update = function (vnode: VNode, hydrating?: boolean) {
 };
 ```
 
-# createPathFunction
+## createPathFunction
 
 DOM-Diff 过程叫做 patch 过程。patch,意为“补丁”，即指对旧的 VNode 修补，打补丁从而得到新的 VNode
 
@@ -405,7 +503,7 @@ export function createPathFunction(backend) {
 }
 ```
 
-## path
+### path
 
 ```js
 export function isUndef(v: any): v is undefined | null {
@@ -533,7 +631,7 @@ return function patch(oldVnode, vnode, hydrating, removeOnly) {
 };
 ```
 
-### sameVnode
+#### sameVnode
 
 - key 必须相同（都是 undefined 则也是相同的），
 - DOM 元素的标签必须相同。比如都是 div
@@ -560,7 +658,7 @@ function sameVnode(a, b) {
 }
 ```
 
-### createElm
+#### createElm
 
 基于 vnode 创建整棵 DOM 树，并插入到父节点上
 
@@ -607,8 +705,9 @@ function createElm(
       ? nodeOps.createElementNS(vnode.ns, tag)
       : nodeOps.createElement(tag, vnode);
     setScope(vnode);
-
+    // 循环遍历 children调用 createElm
     createChildren(vnode, children, insertedVnodeQueue);
+
     if (isDef(data)) {
       invokeCreateHooks(vnode, insertedVnodeQueue);
     }
@@ -627,7 +726,7 @@ function createElm(
 }
 ```
 
-#### createComponent()
+##### createComponent()
 
 ```js
 /**
@@ -658,6 +757,7 @@ function createComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
       // 这时候就可以给组件执行各个模块的的 create 钩子了
       initComponent(vnode, insertedVnodeQueue);
       insert(parentElm, vnode.elm, refElm);
+
       if (isTrue(isReactivated)) {
         // 组件被 keep-alive 包裹的情况，激活组件
         reactivateComponent(vnode, insertedVnodeQueue, parentElm, refElm);
@@ -668,7 +768,7 @@ function createComponent(vnode, insertedVnodeQueue, parentElm, refElm) {
 }
 ```
 
-##### initComponent
+###### initComponent
 
 ```js
 function initComponent(vnode, insertedVnodeQueue) {
@@ -690,7 +790,7 @@ function initComponent(vnode, insertedVnodeQueue) {
 }
 ```
 
-#### insert
+##### insert
 
 向父节点插入节点
 
@@ -708,7 +808,7 @@ function insert(parent, elm, ref) {
 }
 ```
 
-### removeNode
+#### removeNode
 
 ```js
 function removeNode(el) {
@@ -720,7 +820,7 @@ function removeNode(el) {
 }
 ```
 
-### invokeCreateHooks
+#### invokeCreateHooks
 
 `createPatchFunction`
 
@@ -757,7 +857,7 @@ function invokeCreateHooks(vnode, insertedVnodeQueue) {
 }
 ```
 
-### patchVnode
+#### patchVnode
 
 更新节点
 
@@ -853,9 +953,9 @@ function patchVnode(
 }
 ```
 
-### updateChildren
+#### updateChildren
 
-![](./images/20220816165854.png)
+![](./images/1680123400816165854.png)
 
 - 先把 newChildren 数组里的所有未处理子节点的第一个子节点和 oldChildren 数组里所有未处理子节点的第一个子节点做比对，如果相同，那就直接进入更新节点的操作；
 - 如果不同，再把 newChildren 数组里所有未处理子节点的最后一个子节点和 oldChildren 数组里所有未处理子节点的最后一个子节点做比对，如果相同，那就直接进入更新节点的操作；

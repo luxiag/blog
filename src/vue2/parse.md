@@ -1,60 +1,62 @@
 ---
-title: vue2里template是怎么编译的 
-isPage: true
-date: 2021-12-25
-lang: en-ZH
-sidebarDepth: 2
+title: Vue2.x框架原理分析-编译
+date: 2021-08-15
+next: vue-loader-code-analysis
+category:
+  - Vue
+type: 
+  - vue2
 ---
 
-# 前言
+## 前言
 
-![](./images/20220810165446.png)
+![](./images/1680123400810165446.png)
 
 vue 基于源码构建的有两个版本，一个是 runtime only(一个只包含运行时的版本)，另一个是 runtime + compiler(一个同时包含编译器和运行时的完整版本)。而两个版本的区别仅在于后者包含了一个编译器。
 
-## 完整版本
+### 完整版本
 
 - 完整版本
 
 ```js
 new Vue({
-  template:'<div></div>'
-})
+  template: "<div></div>",
+});
 ```
 
-源码中，是先定义只包含运行时版本的$mount方法，再定义完整版本的$mount方法
+源码中，是先定义只包含运行时版本的$mount方法，再定义完整版本的$mount 方法
 `plantforms/web/runtime-with-compiler`
 
 ```js
-const mount = Vue.prototype.$mount
+const mount = Vue.prototype.$mount;
 Vue.prototype.$mount = function (
   el?: string | Element,
   hydrating?: boolean
 ): Component {
-  el = el && query(el)
+  el = el && query(el);
   /* istanbul ignore if */
   if (el === document.body || el === document.documentElement) {
-    return this
+    return this;
   }
 
-  const options = this.$options
+  const options = this.$options;
   // resolve template/el and convert to render function
   if (!options.render) {
-    let template = options.template
+    let template = options.template;
     if (template) {
-      if (typeof template === 'string') {
-        if (template.charAt(0) === '#') {
-          template = idToTemplate(template)
+      if (typeof template === "string") {
+        if (template.charAt(0) === "#") {
+          template = idToTemplate(template);
           /* istanbul ignore if */
         }
       } else if (template.nodeType) {
-        template = template.innerHTML
+        template = template.innerHTML;
       } else {
-        return this
+        return this;
       }
     } else if (el) {
       // @ts-expect-error
-      template = getOuterHTML(el)
+      template = getOuterHTML(el);
     }
     if (template) {
       /* istanbul ignore if */
@@ -65,31 +67,27 @@ Vue.prototype.$mount = function (
           shouldDecodeNewlines,
           shouldDecodeNewlinesForHref,
           delimiters: options.delimiters,
-          comments: options.comments
+          comments: options.comments,
         },
         this
-      )
-      options.render = render
-      options.staticRenderFns = staticRenderFns
+      );
+      options.render = render;
+      options.staticRenderFns = staticRenderFns;
     }
   }
-  return mount.call(this, el, hydrating)
-}
-
-
+  return mount.call(this, el, hydrating);
+};
 ```
 
-## 运行时
+### 运行时
 
 - 只包含运行时版本
 
 ```js
 import App from "./App.vue";
 new Vue({
-  render (h) {
-  
-  }
-})
+  render(h) {},
+});
 ```
 
 **完整版和只包含运行时版之间的差异主要在于是否有模板编译阶段**
@@ -100,15 +98,15 @@ Vue.prototype.$mount = function (
   el?: string | Element,
   hydrating?: boolean
 ): Component {
-  el = el && inBrowser ? query(el) : undefined
-  return mountComponent(this, el, hydrating)
-}
+  el = el && inBrowser ? query(el) : undefined;
+  return mountComponent(this, el, hydrating);
+};
 ```
 
-# 流程
+## 流程
 
-![](./images/20220713173220.png)
-![](./images/20220728101022.png)
+![](./images/1680123400713173220.png)
+![](./images/1680123400728101022.png)
 
 - 模板解析阶段：将一堆模板字符串用正则等方式解析成抽象语法树 AST；
 - 优化阶段：遍历 AST，找出其中的静态节点，并打上标记；
@@ -118,7 +116,7 @@ template -> compileToFunctions() ->
 
 `template`
 
-![](./images/20220714155754.png)
+![](./images/1680123400714155754.png)
 
 `src/platforms/web`
 
@@ -328,10 +326,10 @@ export function createCompileToFunctionFn(compile: Function): Function {
 }
 ```
 
-# parse
+## parse
 
-![](./images/20220715085332.png)
-![](./images/20220719161947.png)
+![](./images/1680123400715085332.png)
+![](./images/1680123400719161947.png)
 type 为 1 表示是普通元素，为 2 表示是表达式，为 3 表示是纯文本
 
 ```js
@@ -369,7 +367,7 @@ export function parse(template: string, options: CompilerOptions): ASTElement {
 }
 ```
 
-# HTML 解析
+## HTML 解析
 
 流程
 `parseHTML`
@@ -377,7 +375,7 @@ export function parse(template: string, options: CompilerOptions): ASTElement {
 `handleStartTag`
 `start`
 
-## parseHTML
+### parseHTML
 
 ```js
 export function parseHTML(html, options: HTMLParserOptions) {
@@ -526,7 +524,7 @@ export function parseHTML(html, options: HTMLParserOptions) {
 }
 ```
 
-## `parseStartTag`
+### `parseStartTag`
 
 ```js
 const ncname = "[a-zA-Z_][\\w\\-\\.]*";
@@ -590,7 +588,7 @@ function parseStartTag() {
 }
 ```
 
-## handleStartTag
+### handleStartTag
 
 ```js
 function handleStartTag(match) {
@@ -645,7 +643,7 @@ function handleStartTag(match) {
 }
 ```
 
-## start
+### start
 
 ```js
     start(tag, attrs, unary, start, end) {
@@ -723,7 +721,7 @@ function handleStartTag(match) {
     },
 ```
 
-# 文本解析
+## 文本解析
 
 ```js
 
@@ -806,7 +804,7 @@ res = {
 }
 ```
 
-## parseText
+### parseText
 
 - 判断传入的文本是否包含变量
 - 构造 expression
@@ -867,7 +865,7 @@ export function parseText(text, delimiters) {
 }
 ```
 
-# optimize
+## optimize
 
 在优化阶段将所有静态节点都打上标记，这样在 patch 过程中就可以跳过对比这些节点。
 
@@ -889,7 +887,7 @@ export function optimize(
 }
 ```
 
-## markStatic
+### markStatic
 
 **从根节点开始，先标记根节点是否为静态节点，然后看根节点如果是元素节点，那么就去向下递归它的子节点，子节点如果还有子节点那就继续向下递归，直到标记完所有节点。**
 
@@ -965,7 +963,7 @@ function isStatic(node: ASTNode): boolean {
 }
 ```
 
-## markStaticRoots
+### markStaticRoots
 
 - 节点本身必须是静态节点；
 - 必须拥有子节点 children；
@@ -1005,7 +1003,7 @@ function markStaticRoots(node: ASTNode, isInFor: boolean) {
 }
 ```
 
-# generate
+## generate
 
 AST => render
 `template`
@@ -1019,7 +1017,7 @@ AST => render
 ```
 
 `AST`
-![](./images/20220809154438.png)  
+![](./images/1680123400809154438.png)  
 `render`
 
 ```js

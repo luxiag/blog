@@ -1,7 +1,11 @@
 ---
 title: 选择排序
 reference: 算法图解
-date: 2022-9-15
+date: 2022-09-15
+category:
+  - 算法
+tag: 
+  - 算法图解
 ---
 
 # 数组
