@@ -1,9 +1,10 @@
 ---
 title: ThreeJS烟火
 category:
-    - ThreeJS
+  - ThreeJS
 date: 2022-03-13
 ---
+
 参考：https://threejs.org/
 
 <div ref="fireworkRef"></div>
@@ -328,8 +329,7 @@ const gltfLoader = new GLTFLoader();
 let LightBox = null;
 
 gltfLoader.load("/assets/model/newyears_min.glb", (gltf) => {
-  console.log(gltf);
-  scene.add(gltf.scene);
+  // scene.add(gltf.scene);
 
   //   创建水面
   const waterGeometry = new THREE.PlaneBufferGeometry(100, 100);
@@ -344,7 +344,6 @@ gltfLoader.load("/assets/model/newyears_min.glb", (gltf) => {
 });
 
 gltfLoader.load("/assets/model/flyLight.glb", (gltf) => {
-  console.log(gltf);
 
   LightBox = gltf.scene.children[0];
   LightBox.material = shaderMaterial;
@@ -391,6 +390,10 @@ let createFireworks = () => {
   fireworks.push(firework);
 };
 
+
+  // 监听点击事件
+  // fireworkRef.value.addEventListener("click", createFireworks);
+
 if(!__VUEPRESS_SSR__) {
 // 监听屏幕大小改变的变化，设置渲染的尺寸
 window.addEventListener("resize", () => {
@@ -400,8 +403,6 @@ window.addEventListener("resize", () => {
   //   设置渲染器的像素比例
   renderer.setPixelRatio(window.devicePixelRatio);
 
-  // 监听点击事件
-  window.addEventListener("click", createFireworks);
 });
 
 }
@@ -410,8 +411,8 @@ const controls = new OrbitControls(camera, renderer.domElement);
 // 设置控制器阻尼
 controls.enableDamping = true;
 // 设置自动旋转
-controls.autoRotate = true;
-controls.autoRotateSpeed = 0.1;
+// controls.autoRotate = true;
+// controls.autoRotateSpeed = 0.1;
 
 const clock = new THREE.Clock();
 // 管理烟花
