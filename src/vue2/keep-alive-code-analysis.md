@@ -34,6 +34,14 @@ type:
 </keep-alive>
 ```
 
+
+- 保证keep-alive直接包裹组件
+  - 因为keep-alive会判断第一层dom是不是组件，如果包裹了一层div，则会缓存失败
+- 是否name配置不对
+  - keep-alive的include和exclude属性都是通过单文件组件中的name属性来判断是否缓存此组件；
+- 是否router-view嵌套超过两层
+  - 若超过，要在子级router-view处添加一层keep-alive。
+
 ### 结合路由
 
 ```js
