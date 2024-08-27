@@ -1,10 +1,10 @@
 ---
 title: ThreeJS中的纹理
-date: 2022-10-10
+date: 2022-01-18
 category:
     - ThreeJS
 ---
-
+参考：https://threejs.org/
 ## 纹理的使用
 
 * **map**：漫反射纹理，用于指定材质的baseColor，可以是THREE.Texture类型的实例对象。默认值为undefined。
