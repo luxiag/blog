@@ -55,13 +55,6 @@ export default defineConfig({
         const path = route.components.get('default')
         if (!path)
           return
-
-        if (!path.includes('projects.md') && path.endsWith('.md')) {
-          const { data } = matter(fs.readFileSync(path, 'utf-8'))
-          route.addToMeta({
-            frontmatter: data,
-          })
-        }
       },
     }),
 
@@ -69,88 +62,13 @@ export default defineConfig({
       include: [/\.vue$/, /\.md$/],
     }),
 
-    Markdown({
-      wrapperComponent: id => id.includes('/demo/')
-        ? 'WrapperDemo'
-        : 'WrapperPost',
-      wrapperClasses: (id, code) => code.includes('@layout-full-width')
-        ? ''
-        : 'prose m-auto slide-enter-content',
-      headEnabled: true,
-      exportFrontmatter: false,
-      exposeFrontmatter: false,
-      exposeExcerpt: false,
-      markdownItOptions: {
-        quotes: '""\'\'',
-      },
-      async markdownItSetup(md) {
-        md.use(await MarkdownItShiki({
-          themes: {
-            dark: 'vitesse-dark',
-            light: 'vitesse-light',
-          },
-          defaultColor: false,
-          cssVariablePrefix: '--s-',
-          transformers: [
-            transformerTwoslash({
-              explicitTrigger: true,
-              renderer: rendererRich(),
-            }),
-          ],
-        }))
-
-        md.use(anchor, {
-          slugify,
-          permalink: anchor.permalink.linkInsideHeader({
-            symbol: '#',
-            renderAttrs: () => ({ 'aria-hidden': 'true' }),
-          }),
-        })
-
-        md.use(LinkAttributes, {
-          matcher: (link: string) => /^https?:\/\//.test(link),
-          attrs: {
-            target: '_blank',
-            rel: 'noopener',
-          },
-        })
-
-        md.use(TOC, {
-          includeLevel: [1, 2, 3, 4],
-          slugify,
-          containerHeaderHtml: '<div class="table-of-contents-anchor"><div class="i-ri-menu-2-fill" /></div>',
-        })
-
-
-        md.use(GitHubAlerts)
-      },
-      frontmatterPreprocess(frontmatter, options, id, defaults) {
-        (() => {
-          if (!id.endsWith('.md'))
-            return
-          const route = basename(id, '.md')
-          if (route === 'index' || frontmatter.image || !frontmatter.title)
-            return
-          const path = `og/${route}.png`
-          promises.push(
-            fs.existsSync(`${id.slice(0, -3)}.png`)
-              ? fs.copy(`${id.slice(0, -3)}.png`, `public/${path}`)
-              : generateOg(frontmatter.title!.replace(/\s-\s.*$/, '').trim(), `public/${path}`),
-          )
-          frontmatter.image = `https://antfu.me/${path}`
-        })()
-        const head = defaults(frontmatter, options)
-        return { head, frontmatter }
-      },
-    }),
-
-    AutoImport({
-      imports: [
-        'vue',
-        VueRouterAutoImports,
-        '@vueuse/core',
-      ],
-    }),
+    // AutoImport({
+    //   imports: [
+    //     'vue',
+    //     VueRouterAutoImports,
+    //     '@vueuse/core',
+    //   ],
+    // }),
 
     Components({
       extensions: ['vue', 'md'],
@@ -185,46 +103,11 @@ export default defineConfig({
     },
   ],
 
-  build: {
-    rollupOptions: {
-      onwarn(warning, next) {
-        if (warning.code !== 'UNUSED_EXTERNAL_IMPORT')
-          next(warning)
-      },
-    },
-  },
+
 
   ssgOptions: {
     formatting: 'minify',
   },
 })
 
-const ogSVg = fs.readFileSync('./scripts/og-template.svg', 'utf-8')
 
-async function generateOg(title: string, output: string) {
-  if (fs.existsSync(output))
-    return
-
-  await fs.mkdir(dirname(output), { recursive: true })
-  // breakline every 30 chars
-  const lines = title.trim().split(/(.{0,30})(?:\s|$)/g).filter(Boolean)
-
-  const data: Record<string, string> = {
-    line1: lines[0],
-    line2: lines[1],
-    line3: lines[2],
-  }
-  const svg = ogSVg.replace(/\{\{([^}]+)\}\}/g, (_, name) => data[name] || '')
-
-   
-  console.log(`Generating ${output}`)
-  try {
-    await sharp(Buffer.from(svg))
-      .resize(1200 * 1.1, 630 * 1.1)
-      .png()
-      .toFile(output)
-  }
-  catch (e) {
-    console.error('Failed to generate og image', e)
-  }
-}

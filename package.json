@@ -3,7 +3,12 @@
   "version": "1.0.0",
   "description": "个人博客",
   "type": "module",
-  "scripts": {},
+  "packageManager": "pnpm@9.10.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "vite preview"
+  },
   "author": {
     "email": "luxiag@qq.com",
     "name": "luxiag"
@@ -21,6 +26,7 @@
     "@types/fs-extra": "^11.0.4",
     "@types/markdown-it-link-attributes": "^3.0.5",
     "@types/node": "^22.5.1",
+    "@unocss/postcss": "^0.62.3",
     "@vitejs/plugin-vue": "^5.1.2",
     "diacritics": "^1.3.0",
     "eslint": "^9.9.1",
@@ -32,6 +38,7 @@
     "markdown-it-anchor": "^9.1.0",
     "markdown-it-github-alerts": "^0.3.0",
     "markdown-it-link-attributes": "^4.0.1",
+    "markdown-it-table-of-contents": "^0.8.0",
     "pnpm": "^9.9.0",
     "sharp": "^0.33.5",
     "typescript": "^5.5.4",
