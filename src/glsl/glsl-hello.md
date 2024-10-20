@@ -132,9 +132,13 @@ const initScene = (shader)=>{
     scene.add(floor)
     // 初始化渲染器
     const renderer = new THREE.WebGLRenderer()
+<<<<<<< HEAD
     if(!__VUEPRESS_SSR__) {
         renderer.setPixelRatio( window.devicePixelRatio );
     }
+=======
+ 
+>>>>>>> 6456c69b7aa604175684f41baf40d6eb929d17cb
     // 设置渲染器大小
 
     renderer.setSize(shader.shaderDom.value.offsetWidth, shader.shaderDom.value.offsetWidth/2)

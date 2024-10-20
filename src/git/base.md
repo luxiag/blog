@@ -331,3 +331,9 @@ category:
 !src/ 不过滤该文件夹
 ！*.zip 不过滤所有.zip文件
 ```
+
+## 合并其他分支的commit
+
+```bash
+git cherry-pick <commitHash>
+```

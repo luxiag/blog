@@ -657,7 +657,14 @@ const initFloat = () => {
 
 }
 
+<<<<<<< HEAD
 onMounted(()=>{
+=======
+onMounted(async ()=>{
+// import * as dat from "dat.gui";
+ dat = await import('dat.gui')
+
+>>>>>>> 6456c69b7aa604175684f41baf40d6eb929d17cb
     initFog()
     initFloat()
 })

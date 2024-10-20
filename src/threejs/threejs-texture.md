@@ -1,10 +1,18 @@
 ---
 title: ThreeJS中的纹理
+<<<<<<< HEAD
 date: 2022-10-10
 category:
     - ThreeJS
 ---
 
+=======
+date: 2022-01-18
+category:
+    - ThreeJS
+---
+参考：https://threejs.org/
+>>>>>>> 6456c69b7aa604175684f41baf40d6eb929d17cb
 ## 纹理的使用
 
 * **map**：漫反射纹理，用于指定材质的baseColor，可以是THREE.Texture类型的实例对象。默认值为undefined。
@@ -316,4 +324,8 @@ onMounted(()=>{
     grid-template-columns: 1fr 1fr 1fr;
     text-align: center;
 }
+<<<<<<< HEAD
  </style>
+=======
+ </style>
+>>>>>>> 6456c69b7aa604175684f41baf40d6eb929d17cb

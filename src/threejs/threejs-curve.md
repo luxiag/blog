@@ -101,10 +101,127 @@ const intersects = raycaster.intersectObjects(scene.children);
   moon.position.copy(point);
 
 
+<<<<<<< HEAD
+=======
+  function animate(){
+      renderer.render(scene, camera);
+      const elapsed = clock.getElapsedTime();
+      const time = elapsed/10%1;
+      const point = curve.getPoint(time);
+      moon.position.copy(point);
+      camera.position.copy(point);
+      camera.lookAt(earth.position)
+      requestAnimationFrame(animate)
+  }
+
+>>>>>>> 6456c69b7aa604175684f41baf40d6eb929d17cb
 ```
 
 <div class="motion" ref="motion"></div>
 
+<<<<<<< HEAD
+=======
+```js
+const curveHandles = []; // 曲线控制点数组
+  // 初始化曲线控制点，设置成立方样条曲线
+  const initialPoints = [
+    { x: 1, y: 0, z: -1 },
+    { x: 1, y: 0, z: 1 },
+    { x: -1, y: 0, z: 1 },
+    { x: -1, y: 0, z: -1 },
+  ];
+  const boxGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+  const boxMaterial = new THREE.MeshBasicMaterial();
+  for (const handlePos of initialPoints) {
+    const handle = new THREE.Mesh(boxGeometry, boxMaterial);
+    handle.position.copy(handlePos);
+    curveHandles.push(handle);
+    scene.add(handle);
+  }
+
+   // 创建立方样条曲线
+ const curve = new THREE.CatmullRomCurve3(
+   curveHandles.map((handle) => handle.position)
+ );
+ curve.curveType = "centripetal"; // 曲线类型(切向加速调整)
+ curve.closed = true; // 是否封闭
+ // 创建曲线并根据关键点更新线条
+ const points = curve.getPoints(50);
+ const line = new THREE.LineLoop(
+   new THREE.BufferGeometry().setFromPoints(points),
+   new THREE.LineBasicMaterial({ color: 0x00ff00 })
+ );
+ scene.add(line);
+ // 加载字体并创建 3D 文本
+ const loader = new FontLoader();
+ loader.load("fonts/helvetiker_regular.typeface.json", function (font) {
+   const geometry = new TextGeometry("Hello three.js!", {
+     font: font,
+     size: 0.2,
+     height: 0.05,
+     curveSegments: 12,
+     bevelEnabled: true,
+     bevelThickness: 0.02,
+     bevelSize: 0.01,
+     bevelOffset: 0,
+     bevelSegments: 5,
+   });
+   geometry.rotateX(Math.PI);
+   const material = new THREE.MeshStandardMaterial({
+     color: 0x99ffff,
+   });
+   const objectToCurve = new THREE.Mesh(geometry, material);
+   /*
+   
+   
+   */
+   flow = new Flow(objectToCurve);
+   flow.updateCurve(0, curve);
+   scene.add(flow.object3D);
+ });
+ // 创建射线对象
+ rayCaster = new THREE.Raycaster();
+ // 创建变换控制器对象
+ control = new TransformControls(camera, renderer.domElement);
+ control.addEventListener("dragging-changed", function (event) {
+   if (!event.value) {
+     const points = curve.getPoints(50);
+     line.geometry.setFromPoints(points);
+     flow.updateCurve(0, curve);
+   }
+ });
+
+  // 逐帧动画函数
+function animate() {
+  requestAnimationFrame(animate);
+
+  // 判断是否点击场景
+  if (action === ACTION_SELECT) {
+    rayCaster.setFromCamera(mouse, camera);
+    action = ACTION_NONE;
+    const intersects = rayCaster.intersectObjects(curveHandles, false);
+    if (intersects.length) {
+      const target = intersects[0].object;
+      control.attach(target);
+      scene.add(control);
+    }
+  }
+
+  // 曲线模拟器运动
+  if (flow) {
+    flow.moveAlongCurve(0.001);
+  }
+
+  // 渲染场景
+  render();
+}
+```
+
+<!-- <div ref="modifierCurveRef"></div> -->
+
+<iframe src="/threejs/examples/webgl_modifier_curve.html" :height="width/2" :width="width"></iframe>
+
+>>>>>>> 6456c69b7aa604175684f41baf40d6eb929d17cb
 <script setup>
 
 import { withBase } from '@vuepress/client'
@@ -118,6 +235,14 @@ import {
 } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 
 const curve = ref();
+<<<<<<< HEAD
+=======
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import Stats from 'three/addons/libs/stats.module.js';
+import { Flow } from 'three/addons/modifiers/CurveModifier.js';
+import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+>>>>>>> 6456c69b7aa604175684f41baf40d6eb929d17cb
 const motion = ref();
 
 const clock = new THREE.Clock();
@@ -287,6 +412,10 @@ function animate(){
 
 }
 
+<<<<<<< HEAD
+=======
+const width = ref(900)
+>>>>>>> 6456c69b7aa604175684f41baf40d6eb929d17cb
 
 function initMotion(){
     let moon;
@@ -391,10 +520,195 @@ function initMotion(){
     animate()
 
 }
+<<<<<<< HEAD
+=======
+
+const modifierCurveRef = ref()
+
+const initModifierCurveRef = () => {
+			const ACTION_SELECT = 1, ACTION_NONE = 0;
+			const curveHandles = [];
+			const mouse = new THREE.Vector2();
+
+			let stats;
+			let scene,
+				camera,
+				renderer,
+				rayCaster,
+				control,
+				flow,
+				action = ACTION_NONE;
+
+				scene = new THREE.Scene();
+
+				camera = new THREE.PerspectiveCamera(
+					40,
+					2,
+					1,
+					1000
+				);
+				camera.position.set( 2, 2, 4 );
+				camera.lookAt( scene.position );
+
+				const initialPoints = [
+					{ x: 1, y: 0, z: - 1 },
+					{ x: 1, y: 0, z: 1 },
+					{ x: - 1, y: 0, z: 1 },
+					{ x: - 1, y: 0, z: - 1 },
+				];
+
+				const boxGeometry = new THREE.BoxGeometry( 0.1, 0.1, 0.1 );
+				const boxMaterial = new THREE.MeshBasicMaterial();
+
+				for ( const handlePos of initialPoints ) {
+
+					const handle = new THREE.Mesh( boxGeometry, boxMaterial );
+					handle.position.copy( handlePos );
+					curveHandles.push( handle );
+					scene.add( handle );
+
+				}
+				const curve = new THREE.CatmullRomCurve3(
+					curveHandles.map( ( handle ) => handle.position )
+				);
+				curve.curveType = 'centripetal';
+				curve.closed = true;
+
+				const points = curve.getPoints( 50 );
+				const line = new THREE.LineLoop(
+					new THREE.BufferGeometry().setFromPoints( points ),
+					new THREE.LineBasicMaterial( { color: 0x00ff00 } )
+				);
+
+				scene.add( line );
+
+				//
+
+				const light = new THREE.DirectionalLight( 0xffaa33 );
+				light.position.set( - 10, 10, 10 );
+				light.intensity = 1.0;
+				scene.add( light );
+
+				const light2 = new THREE.AmbientLight( 0x003973 );
+				light2.intensity = 1.0;
+				scene.add( light2 );
+
+				//
+				const loader = new FontLoader();
+				loader.load('/fonts/helvetiker_regular.typeface.json', function ( font ) {
+          const geometry = new TextGeometry( 'Hello three.js!', {
+                font:font,
+				  	    size: 0.2,
+				  	    height: 0.05,
+				  	    curveSegments: 12,
+				  	    bevelEnabled: true,
+				  	    bevelThickness: 0.02,
+				  	    bevelSize: 0.01,
+				  	    bevelOffset: 0,
+				  	    bevelSegments: 5,
+				  } );
+				  geometry.rotateX( Math.PI );
+				  const material = new THREE.MeshStandardMaterial( {
+				  	color: 0x99ffff
+				  } );
+				  const objectToCurve = new THREE.Mesh( geometry, material );
+
+
+				  flow = new Flow( objectToCurve );
+				  flow.updateCurve( 0, curve );
+				  scene.add( flow.object3D );
+
+        })
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				// renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( modifierCurveRef.value.offsetWidth, modifierCurveRef.value.offsetWidth /2  );
+				// document.body.appendChild( renderer.domElement );
+        modifierCurveRef.value.appendChild(renderer.domElement);
+
+				renderer.domElement.addEventListener( 'pointerdown', onPointerDown );
+
+				rayCaster = new THREE.Raycaster();
+				control = new TransformControls( camera, renderer.domElement );
+				control.addEventListener( 'dragging-changed', function ( event ) {
+
+					if ( ! event.value ) {
+
+						const points = curve.getPoints( 50 );
+						line.geometry.setFromPoints( points );
+						flow.updateCurve( 0, curve );
+
+					}
+				window.addEventListener( 'resize', onWindowResize );
+				} );
+
+
+			function onWindowResize() {
+
+				// camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( modifierCurveRef.value.offsetWidth, modifierCurveRef.value.offsetWidth /2 );
+
+			}
+
+			function onPointerDown( event ) {
+
+				action = ACTION_SELECT;
+				mouse.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+				mouse.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+
+			}
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				if ( action === ACTION_SELECT ) {
+
+					rayCaster.setFromCamera( mouse, camera );
+					action = ACTION_NONE;
+					const intersects = rayCaster.intersectObjects( curveHandles, false );
+          console.log(intersects,'a')
+					if ( intersects.length ) {
+
+						const target = intersects[ 0 ].object;
+						control.attach( target );
+						scene.add( control );
+
+					}
+
+				}
+
+				if ( flow ) {
+
+					flow.moveAlongCurve( 0.001 );
+
+				}
+
+				render();
+
+			}
+
+			function render() {
+
+				renderer.render( scene, camera );
+
+				// stats.update();
+
+			}
+      animate()
+}
+
+>>>>>>> 6456c69b7aa604175684f41baf40d6eb929d17cb
 onMounted(()=>{
     init();
     animate();
     initMotion();
+<<<<<<< HEAD
+=======
+    // initModifierCurveRef()
+    width.value = motion.value.offsetWidth
+>>>>>>> 6456c69b7aa604175684f41baf40d6eb929d17cb
 })
 </script>
 <style scoped>

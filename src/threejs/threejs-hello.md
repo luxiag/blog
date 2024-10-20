@@ -1,6 +1,10 @@
 ---
 title: hello cube
+<<<<<<< HEAD
 date: 2022-11-01
+=======
+date: 2022-01-01
+>>>>>>> 6456c69b7aa604175684f41baf40d6eb929d17cb
 category:
   - ThreeJS
 ---
