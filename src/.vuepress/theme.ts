@@ -143,6 +143,7 @@ export default hopeTheme(
         NoBlogsArr.forEach((item) => {
           if(page.path.includes(item)) isBlog = false
         })
+        if(!page.frontmatter.date) isBlog = false
         return isBlog
       }
     },
