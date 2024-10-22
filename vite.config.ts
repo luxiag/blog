@@ -22,10 +22,6 @@ import VueRouter from 'unplugin-vue-router/vite'
 import { VueRouterAutoImports } from 'unplugin-vue-router'
 import Exclude from 'vite-plugin-optimize-exclude'
 
-// @ts-expect-error missing types
-import TOC from 'markdown-it-table-of-contents'
-import sharp from 'sharp'
-import { slugify } from './scripts/slugify'
 
 const promises: Promise<unknown>[] = []
 
@@ -38,10 +34,7 @@ export default defineConfig({
   optimizeDeps: {
     include: [
       'vue',
-      'vue-router',
-      '@vueuse/core',
-      'dayjs',
-      'dayjs/plugin/localizedFormat',
+      'vue-router', 'dayjs',
     ],
   },
   plugins: [
@@ -49,7 +42,7 @@ export default defineConfig({
 
     VueRouter({
       extensions: ['.vue', '.md'],
-      routesFolder: 'pages',
+      routesFolder: 'src/pages',
       logs: true,
       extendRoute(route) {
         const path = route.components.get('default')
@@ -61,15 +54,23 @@ export default defineConfig({
     Vue({
       include: [/\.vue$/, /\.md$/],
     }),
+    // https://github.com/unplugin/unplugin-vue-markdown
+    /*
+    Compile Markdown to Vue component.
+    */
+    Markdown({
+        async markdownItSetup(md) {
+          console.log(md,'md')
 
-    // AutoImport({
-    //   imports: [
-    //     'vue',
-    //     VueRouterAutoImports,
-    //     '@vueuse/core',
-    //   ],
-    // }),
-
+        }
+    }),
+    AutoImport({
+      imports: [
+        'vue'
+      ],
+      dts: 'types/auto-imports.d.ts',
+    }),
+    // 组件自动引入
     Components({
       extensions: ['vue', 'md'],
       dts: true,
@@ -80,34 +81,24 @@ export default defineConfig({
         }),
       ],
     }),
-
+    // 检查 Vite 插件的中间状态。 安装后，你可以访问 localhost:5173/__inspect/ 来检查你项目的模块和栈信息。
     Inspect(),
 
     Icons({
       defaultClass: 'inline',
       defaultStyle: 'vertical-align: sub;',
     }),
-
+    // https://www.npmjs.com/package/vite-svg-loader
     SVG({
       svgo: false,
       defaultImport: 'url',
     }),
-
+    // Exclude ESM dependencies from Vite optimization. To reduce the chance of "New dependencies detected" page reloads.
     Exclude(),
 
-    {
-      name: 'await',
-      async closeBundle() {
-        await Promise.all(promises)
-      },
-    },
+
   ],
 
-
-
-  ssgOptions: {
-    formatting: 'minify',
-  },
 })
 
 
