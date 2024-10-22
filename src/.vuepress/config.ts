@@ -2,14 +2,19 @@ import { defineUserConfig } from "vuepress";
 
 import theme from "./theme.js";
 
+import alias from './components/index.js'
+
+
+
+
 export default defineUserConfig({
   base: "/",
 
   locales: {
     "/": {
       lang: "en-US",
-      title: "Blog Demo",
-      description: "A blog demo for vuepress-theme-hope",
+      // title: "Blog Demo",
+      // description: "A blog demo for vuepress-theme-hope",
     },
     // "/zh/": {
     //   lang: "zh-CN",
@@ -19,6 +24,7 @@ export default defineUserConfig({
   },
 
   theme,
+  alias
 
   // Enable it with pwa
   // shouldPrefetch: false,
