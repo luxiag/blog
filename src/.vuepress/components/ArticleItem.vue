@@ -6,9 +6,11 @@
       </h3>
     </router-link>
     <div>
-      <time class="artice-item-time">{{ dateWriting }}</time>
-      <span class="artice-item-reading_time">{{ readingTimeMeta }}</span>
-      <span class="artice-item-category" v-for="(c, i) in info.c" :key="i" @click="to(c)">#{{ c }}</span>
+      <time class="artice-item-time">{{ pageInfo.localizedDate }}</time>
+      <span class="artice-item-reading_time">{{ pageInfo.readingTimeLocale.words }}</span>
+      <span class="artice-item-reading_time">{{ pageInfo.readingTimeLocale.time }}</span>
+
+      <span class="artice-item-category" v-for="({name,path},i) in pageInfo.category" :key="i" @click="to(path)">#{{ name }}</span>
     </div>
     <p class="artice-item-summary">
       {{ postSummary }}
@@ -18,8 +20,8 @@
 </template>
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useMetaLocale } from "@theme-hope/modules/info/composables/index";
 import { useNavigate } from "@theme-hope/composables/index";
+import { useArticleInfo } from "@theme-hope/modules/blog/composables/index";
 
 
 
@@ -33,6 +35,7 @@ const props = defineProps({
     type: Object,
     required: true,
   },
+
   /**
    * Article path
    *
@@ -41,36 +44,15 @@ const props = defineProps({
   path: { type: String, required: true },
 })
 
+
+const { info: pageInfo } = useArticleInfo(props);
+
 const navigate = useNavigate();
 
-const metaLocale = useMetaLocale();
-const readingTimeMeta = computed(() => {
-  if (!props.info.r) {
-    return null;
-  }
-  const { minutes } = props.info.r;
-  return minutes < 1 ? "less than 1 min read" : `${Math.round(minutes)} min read`;
-});
 
 
-console.log(props, 'props')
 
 
-function formatDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0'); // 月份从0开始，所以需要+1
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-
-  return `${year}年${month}月${day}日`;
-}
-
-const dateWriting = computed(() => {
-  // const date = new Date(props.info.d);
-  // return formatDate(date)
-  return props.info.l
-})
 
 function extractFirstPTagText(html: string): string | null {
   // 使用正则表达式匹配第一个<p>或<div>标签的文本内容
@@ -87,9 +69,9 @@ const postSummary = computed(() => {
 })
 
 function to(path) {
-  if (!path) return
-  let url = '/category/' + path.charAt(0).toLowerCase() + path.slice(1) + '/'
-  navigate(url)
+
+  // let url = '/category/' + path.charAt(0).toLowerCase() + path.slice(1) + '/'
+  navigate(path)
 }
 </script>
 <style lang="scss" scoped>

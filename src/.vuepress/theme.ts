@@ -26,7 +26,10 @@ export default hopeTheme(
   docsDir: "src",
 
   blog: {
-    sidebarDisplay:"none",
+    name:'luxiag',
+    intro: 'https://github.com/luxiag',
+    timeline:'',
+    // sidebarDisplay:"none",
     articlePerPage: 20
     // medias: {
     //   Baidu: "https://example.com",
@@ -73,7 +76,8 @@ export default hopeTheme(
       navbar: enNavbar,
 
       // sidebar
-      sidebar: enSidebar,
+      // sidebar: enSidebar,
+      sidebar: false,
 
       footer: "Default footer",
 
@@ -81,6 +85,7 @@ export default hopeTheme(
 
       blog: {
         description: "A FrontEnd programmer",
+
         intro: "/intro.html",
       },
 
@@ -97,7 +102,8 @@ export default hopeTheme(
       navbar: zhNavbar,
 
       // sidebar
-      sidebar: zhSidebar,
+      // sidebar: zhSidebar,
+      sidebar:false,
 
       footer: "默认页脚",
 
@@ -130,21 +136,25 @@ export default hopeTheme(
   prevLink:false,
   nextLink:false,
   titleIcon:false,
-  pageInfo:false,
+  // pageInfo:false,
+  pageInfo: ["Date",'Category',"ReadingTime","PageView"],
   lastUpdated:false,
   contributors:false,
   editLink:false,
   copyright:false,
   plugins: {
     blog: {
+
+      // timeline:'',
       excerptLength: 100,
       filter:(page) => {
         let isBlog = true 
-        if(page.frontmatter.home) isBlog =  false
+        
+        if(page?.frontmatter?.home) isBlog =  false
         NoBlogsArr.forEach((item) => {
           if(page.path.includes(item)) isBlog = false
         })
-        if(!page.frontmatter.date) isBlog = false
+        if(!page?.frontmatter?.date) isBlog = false
         return isBlog
       }
     },

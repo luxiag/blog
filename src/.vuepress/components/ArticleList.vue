@@ -2,7 +2,7 @@
   <section id="article-list" class="vp-article-list" role="feed">
     <ArticleItem v-for="({info,path},index) in currentArticles" :key="path" :info="info" :path="path" />
     <div class="article-list-pagination" @click="handleAddArticles" v-if="currentArticles.length <  currentPage.totalSize">
-      . . . . . . . . ./
+      . . . . . . . . . /
     </div>
   </section>
 </template>
