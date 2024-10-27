@@ -2,13 +2,17 @@
   <section id="article-list" class="vp-article-list" role="feed">
     <ArticleItem v-for="({info,path},index) in currentArticles" :key="path" :info="info" :path="path" />
     <div class="article-list-pagination" @click="handleAddArticles" v-if="currentArticles.length <  currentPage.totalSize">
-      . . . . /
+      . . . . . . . . ./
     </div>
   </section>
 </template>
 <script setup>
 import { reactive,computed } from 'vue';
+import { useBlogOptions } from "@theme-hope/modules/blog/composables/index";
+
 import ArticleItem from './ArticleItem.vue';
+
+const blogOptions = useBlogOptions();
 
 
 const props = defineProps({
@@ -25,7 +29,7 @@ const props = defineProps({
 
 const currentPage = reactive({
   currentPage:1,
-  pageSize:20,
+  pageSize: blogOptions.value.articlePerPage ?? 20,
   totalSize:props.items.length
 })
 

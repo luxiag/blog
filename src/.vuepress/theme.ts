@@ -27,6 +27,7 @@ export default hopeTheme(
 
   blog: {
     sidebarDisplay:"none",
+    articlePerPage: 20
     // medias: {
     //   Baidu: "https://example.com",
     //   BiliBili: "https://example.com",

@@ -8,7 +8,7 @@
     <div>
       <time class="artice-item-time">{{ dateWriting }}</time>
       <span class="artice-item-reading_time">{{ readingTimeMeta }}</span>
-      <span class="artice-item-category" v-for="(c,i) in info.c" :key="i" @click="to(c)">#{{ c }}</span>
+      <span class="artice-item-category" v-for="(c, i) in info.c" :key="i" @click="to(c)">#{{ c }}</span>
     </div>
     <p class="artice-item-summary">
       {{ postSummary }}
@@ -53,7 +53,7 @@ const readingTimeMeta = computed(() => {
 });
 
 
-console.log(props,'props')
+console.log(props, 'props')
 
 
 function formatDate(date: Date): string {
@@ -74,18 +74,20 @@ const dateWriting = computed(() => {
 
 function extractFirstPTagText(html: string): string | null {
   // 使用正则表达式匹配第一个<p>或<div>标签的文本内容
-    const match = html?.match(/<(p|div)(?:[^>]*?)>(.*?)<\/\1>/s);
+  const match = html?.match(/<(p|div)(?:[^>]*?)>(.*?)<\/\1>/s);
+  let text = match ? match[2] : null;
+  text = text?.replace(/<[^>]*>/g, '') || null
 
-// 如果找到了匹配项，则返回其文本内容，否则返回null
-return match ? match[2] : null;
+  // 如果找到了匹配项，则返回其文本内容，否则返回null
+  return text
 }
 
-const postSummary = computed(()=>{
-return  extractFirstPTagText(props.info.e)
+const postSummary = computed(() => {
+  return extractFirstPTagText(props.info.e)
 })
 
-function to  (path)  {
-  if(!path) return
+function to(path) {
+  if (!path) return
   let url = '/category/' + path.charAt(0).toLowerCase() + path.slice(1) + '/'
   navigate(url)
 }
@@ -96,17 +98,20 @@ function to  (path)  {
   // width: min(56rem, 90vw);
   line-height: 1.65;
   text-align: left;
+
   .artice-item-title {
- 
+
     font-weight: 700;
     text-decoration: none;
     overflow-wrap: break-word;
+
     h3 {
       font-weight: 900;
       margin: 0;
     }
-  
+
   }
+
   .artice-item-time {
     font-size: .8em;
     opacity: .5;
@@ -117,16 +122,19 @@ function to  (path)  {
     opacity: .5;
     margin-left: 1em;
     cursor: pointer;
+
     &:hover {
       text-decoration: underline;
     }
   }
+
   .artice-item-reading_time {
     font-size: .8em;
     opacity: .5;
     margin-left: 1em;
- 
+
   }
+
   .artice-item-summary {
     font-size: .9em;
     margin-top: 0;

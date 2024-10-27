@@ -24,6 +24,7 @@
   "dependencies": {
     "@vuepress/plugin-shiki": "2.0.0-rc.55",
     "d3": "^7.9.0",
+    "dat.gui": "^0.7.9",
     "gsap": "^3.12.5",
     "lil-gui": "^0.19.2",
     "mitt": "^3.0.1",

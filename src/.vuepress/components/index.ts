@@ -17,7 +17,8 @@ export default  {
     // "@theme-hope/modules/navbar/components/NavbarLinks": path.resolve(__dirname,"./NavbarLinks.vue"),
      "@theme-hope/modules/blog/components/ArticleItem": path.resolve(__dirname,"./ArticleItem.vue"),
      "@theme-hope/modules/blog/components/Pagination": path.resolve(__dirname,"./Pagination.vue"),
-     "@theme-hope/modules/blog/components/ArticleList": path.resolve(__dirname,"./ArticleList.vue")
+     "@theme-hope/modules/blog/components/ArticleList": path.resolve(__dirname,"./ArticleList.vue"),
+     "@theme-hope/modules/sidebar/components/Sidebar": path.resolve(__dirname,"./Sidebar.vue")
   
 }
 
