@@ -2,7 +2,7 @@
 title: JavaScript执行机制
 ---
 
-参考: [浏览器工作原理与实践](https://time.geekbang.org/column/intro/100033601)
+
 
 ## 变量提升
 
@@ -355,3 +355,4 @@ console.log(bar.getName())
 this 是和执行上下文绑定的
 ![](images/509001211051952323.png)
 
+参考: [浏览器工作原理与实践](https://time.geekbang.org/column/intro/100033601)
