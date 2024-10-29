@@ -1,10 +1,6 @@
 {
-    "cSpell.words": [
-        "GLSL",
-        "luxiag",
-        "nprogress",
-        "vuepress"
-    ],
-    "liveServer.settings.port": 5501,
-    "git.ignoreLimitWarning": true
+  "cSpell.words": [
+    "luxiag",
+    "vuepress"
+  ]
 }

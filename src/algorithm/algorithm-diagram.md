@@ -7,8 +7,5 @@ tag:
   - 算法图解
 ---
 
-<PDF :url="withBase('/pdf/算法图解.pdf')"  height="calc(100vh - var(--navbar-height) - 150px"  />
+<!-- <PDF url="/pdf/算法图解.pdf"  height="calc(100vh - var(--navbar-height) - 150px"  /> -->
 
-<script setup>
-import { withBase } from '@vuepress/client'
-</script>

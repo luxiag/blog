@@ -20,22 +20,22 @@ XSS是跨站脚本攻击(Cross Site Scripting)，为不和层叠样式表(Cascad
 
 ### 反射型xss攻击
 
-- 用户误点开了带攻击的url : http://xxx?keyword=<script>alert('aaa')</script>
+- 用户误点开了带攻击的`url : http://xxx?keyword=<script>alert('aaa')</script>`
 - 网站给受害者的返回中包含了来自URL的的恶意文本
 - 用户的浏览器收到文本后执行页面，会在网页中弹窗aaa
 
 ### 储存型xss攻击
 
-- 攻击者通过评论表单提交将<script>alert(‘aaa’)</script>提交到网站
+- 攻击者通过评论表单提交将`<script>alert(‘aaa’)</script>`提交到网站
 - 网站后端对提交的评论数据不做任何操作，直接存储到数据库中
 - 其他用户访问正常访问网站，并且需要请求网站的评论数据
 - 网站后端会从数据库中取出数据，直接返回给用户
-- 用户得到页面后，直接运行攻击者提交的代码<script>alert(‘aaa’)</script>，所有用户都会在网页中弹出aaa的弹窗#
+- 用户得到页面后，直接运行攻击者提交的代码`<script>alert(‘aaa’)</script>`，所有用户都会在网页中弹出aaa的弹窗#
 
 
 ### DOM型xss攻击
 
-- 用户误点开了带攻击的url : http://xxx?name=<script>alert('aaa')</script>
+- 用户误点开了带攻击的`url : http://xxx?name=<script>alert('aaa')</script>`
 - 网站给受害者的返回中正常的网页
 - 用户的浏览器收到文本后执行页面合法脚本，这时候页面恶意脚本会被执行，会在网页中弹窗aaa
 
@@ -73,4 +73,3 @@ HPP，即 HTTP Parameter Pollution，HTTP 参数污染。在 HTTP 协议中是�
 
 目录遍历攻击又称目录穿越、恶意浏览、文件泄露等，攻击者利用系统漏洞访问合法应用之外的数据或文件目录，导致数据泄露或被篡改
 
-5-4

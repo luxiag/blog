@@ -43,5 +43,6 @@ const sum = (arrays, total = 0) => {
 选 2 作为基准值，挑选比 2 小的数值组成左侧数组，比 2 大的组成右侧数组
 对挑选出的 2 个数组，重复上述操作
 
-<a><https://www.cnblogs.com/MOBIN/p/4681369.html/></a>
+
+
 ![来源(https://www.cnblogs.com/MOBIN/p/4681369.html)](./images/1680123400919164026.png)

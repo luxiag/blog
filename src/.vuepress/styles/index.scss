@@ -1,10 +1,60 @@
 // place your custom styles here
-cr-icon-button,.cr-icon-button {
-    display: none;
+
+#navbar {
+  .vp-nav-item {
+    .route-link {
+      font-weight: 700;
+      font-size: 18px;
+      padding-left: 0.5em;
+    }
+
+  }
 }
-.ref {
-    position: relative;
+
+#main-content {
+  .vp-pagetitle {
+    padding-bottom: .5em;
+  }
+
+  h1,
+  h2 {
+    font-weight: 900;
+  }
 }
-.ref-container {
-    position: relative;
+
+
+#app {
+  [data-theme="light"] & {
+    $vp-c-text: #000000;
+
+    #navbar {
+
+      .vp-nav-item {
+        .route-link {
+          color: #000;
+        }
+
+      }
+    }
+
+    #main-content {
+      .artice-item {
+        .artice-item-title {
+          color: #000;
+        }
+      }
+
+      h1,
+      h2,
+      h3,
+      h4,
+      h5,
+      h6 {
+        color: rgba(0, 0, 0, .85);
+        border: none;
+
+      }
+    }
+
+  }
 }

@@ -81,7 +81,7 @@ module.exports = {
 
 loader 总是 从右到左被调用。有些情况下，loader 只关心 request 后面的 元数据(metadata)，并且忽略前一个 loader 的结果。在实际（从右到左）执行 loader 之前，会先 从左到右 调用 loader 上的 pitch 方法。
 
-![image-20210904174723961](images/webpack%E8%BF%9B%E9%98%B6/image-20210904174723961.png)
+![image-20210904174723961](./images/image-20210904174723961.png)
 
 ## **enforce**
 
