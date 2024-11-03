@@ -1,31 +1,22 @@
-import { defineUserConfig } from "vuepress";
-
+import { defineUserConfig } from "@vuepress/cli";
 import theme from "./theme.js";
-
-import alias from './components/index.js'
-
-
-
-
+// import customComponent from './components/index.js'
+// import { webpackBundler } from "@vuepress/bundler-webpack";
+// import { componentsPlugin } from "vuepress-plugin-components";
 export default defineUserConfig({
-  base: "/",
-
-  locales: {
-    "/": {
-      lang: "en-US",
-      // title: "Blog Demo",
-      // description: "A blog demo for vuepress-theme-hope",
-    },
-    // "/zh/": {
-    //   lang: "zh-CN",
-    //   title: "博客演示",
-    //   description: "vuepress-theme-hope 的博客演示",
-    // },
-  },
+  base: "/blog/",
+  dest: "./dist",
+  lang: "zh-CN",
+  // title: "luxiag's Blog",
 
   theme,
-  alias
 
-  // Enable it with pwa
-  // shouldPrefetch: false,
+  shouldPrefetch: false,
+  // plugins:[
+  
+  // ]
+  // bundler: webpackBundler({
+  //   postcss: {},
+  //   vue: {},
+  // }),
 });
