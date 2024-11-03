@@ -196,7 +196,13 @@ export default hopeTheme(
 
     // This features is enabled for demo, only preserve if you need it
     markdownTab: true,
-
+    comment: {
+      provider: "Waline",
+      serverURL: "https://blog-waline-flax-seven.vercel.app/", // your server url
+      pageview: true,
+      login: "force",
+      wordLimit:200
+    },
     // These features are enabled for demo, only preserve features you need here
     mdEnhance: {
       align: true,

@@ -36,6 +36,9 @@ importers:
       '@vuepress/bundler-vite':
         specifier: 2.0.0-rc.18
         version: 2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4)
+      '@waline/client':
+        specifier: ^3.3.2
+        version: 3.3.2
       cesium:
         specifier: ^1.122.0
         version: 1.122.0
@@ -56,7 +59,7 @@ importers:
         version: 2.0.0-rc.59(sass-embedded@1.80.4)(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
       vuepress-theme-hope:
         specifier: 2.0.0-rc.59
-        version: 2.0.0-rc.59(markdown-it@14.1.0)(sass-embedded@1.80.4)(vuepress-plugin-search-pro@2.0.0-rc.59(sass-embedded@1.80.4)(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12)))(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
+        version: 2.0.0-rc.59(@waline/client@3.3.2)(markdown-it@14.1.0)(sass-embedded@1.80.4)(vuepress-plugin-search-pro@2.0.0-rc.59(sass-embedded@1.80.4)(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12)))(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
 
 packages:
 
@@ -960,6 +963,14 @@ packages:
   '@vueuse/shared@11.1.0':
     resolution: {integrity: sha512-YUtIpY122q7osj+zsNMFAfMTubGz0sn5QzE5gPzAIiCmtt2ha3uQUY1+JPyL4gRCTsLPX82Y9brNbo/aqlA91w==}
 
+  '@waline/api@1.0.0-alpha.8':
+    resolution: {integrity: sha512-S6pgUUfv+gcXU3hiW3PNUwiUvPy7bXmmLB/bwdU3hN5YVT5Q7CxyVSLA3oJkrNO5lcisKK1GBPv0H2W1uB0eGA==}
+    engines: {node: '>=18'}
+
+  '@waline/client@3.3.2':
+    resolution: {integrity: sha512-CK8ef5QafKt29AAz3n+bXNwzXdT/yh+pMRLxxTNH4RAMl0Wl3utqh3uA/gDpNRLWS4sOkFMASUC0ckbpeOAJNg==}
+    engines: {node: '>=18'}
+
   '@zip.js/zip.js@2.7.52':
     resolution: {integrity: sha512-+5g7FQswvrCHwYKNMd/KFxZSObctLSsQOgqBSi0LzwHo3li9Eh1w5cF5ndjQw9Zbr3ajVnd2+XyiX85gAetx1Q==}
     engines: {bun: '>=0.7.0', deno: '>=1.0.0', node: '>=16.5.0'}
@@ -998,6 +1009,9 @@ packages:
     hasBin: true
     peerDependencies:
       postcss: ^8.1.0
+
+  autosize@6.0.1:
+    resolution: {integrity: sha512-f86EjiUKE6Xvczc4ioP1JBlWG7FKrE13qe/DxBCpe8GCipCq2nFw73aO8QEBKHfSbYGDN5eB9jXWKen7tspDqQ==}
 
   balloon-css@1.2.0:
     resolution: {integrity: sha512-urXwkHgwp6GsXVF+it01485Z2Cj4pnW02ICnM0TemOlkKmCNnDLmyy+ZZiRXBpwldUXO+aRNr7Hdia4CBvXJ5A==}
@@ -1614,6 +1628,16 @@ packages:
     resolution: {integrity: sha512-a54IwgWPaeBCAAsv13YgmALOF1elABB08FxO9i+r4VFk5Vl4pKokRPeX8u5TCgSsPi6ec1otfLjdOpVcgbpshg==}
     hasBin: true
 
+  marked-highlight@2.2.0:
+    resolution: {integrity: sha512-36LzwtVf7HEbbMITKU4j+iZuyWKgdXJfgYr4F5j27vs79oRPyApuBF3WkS5OsqO1+1lypWxztad7zNRM4qgXFw==}
+    peerDependencies:
+      marked: '>=4 <15'
+
+  marked@14.1.3:
+    resolution: {integrity: sha512-ZibJqTULGlt9g5k4VMARAktMAjXoVnnr+Y3aCqW1oDftcV4BA3UmrBifzXoZyenHRk75csiPu9iwsTj4VNBT0g==}
+    engines: {node: '>= 18'}
+    hasBin: true
+
   mdast-util-to-hast@13.2.0:
     resolution: {integrity: sha512-QGYKEuUsYT9ykKBCMOEDLsU5JRObWQusAolFMeko/tYPufNkRffBAQjIE+99jbA87xv6FgmjLtwjh9wBWajwAA==}
 
@@ -1847,6 +1871,9 @@ packages:
   readdirp@4.0.2:
     resolution: {integrity: sha512-yDMz9g+VaZkqBYS/ozoBJwaBhTbZo3UNYQHNRw1D3UFQB8oHB4uS/tAODO+ZLjGWmUbKnIlOWO+aaIiAxrUWHA==}
     engines: {node: '>= 14.16.0'}
+
+  recaptcha-v3@1.11.3:
+    resolution: {integrity: sha512-sEE6J0RzUkS+sKEBpgCD/AqCU0ffrAVOADGjvAx9vcttN+VLK42SWMkj/J/I6vHu3Kew+xcfbBqDVb65N0QGDw==}
 
   regex@4.3.3:
     resolution: {integrity: sha512-r/AadFO7owAq1QJVeZ/nq9jNS1vyZt+6t1p/E59B56Rn2GCya+gr1KSyOzNL/er+r+B7phv5jG2xU2Nz1YkmJg==}
@@ -3197,12 +3224,14 @@ snapshots:
       - '@vue/composition-api'
       - typescript
 
-  '@vuepress/plugin-comment@2.0.0-rc.56(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))':
+  '@vuepress/plugin-comment@2.0.0-rc.56(@waline/client@3.3.2)(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))':
     dependencies:
       '@vuepress/helper': 2.0.0-rc.56(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
       giscus: 1.5.0
       vue: 3.5.12
       vuepress: 2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12)
+    optionalDependencies:
+      '@waline/client': 3.3.2
     transitivePeerDependencies:
       - '@vue/composition-api'
       - typescript
@@ -3464,6 +3493,21 @@ snapshots:
       - '@vue/composition-api'
       - vue
 
+  '@waline/api@1.0.0-alpha.8': {}
+
+  '@waline/client@3.3.2':
+    dependencies:
+      '@vueuse/core': 11.1.0(vue@3.5.12)
+      '@waline/api': 1.0.0-alpha.8
+      autosize: 6.0.1
+      marked: 14.1.3
+      marked-highlight: 2.2.0(marked@14.1.3)
+      recaptcha-v3: 1.11.3
+      vue: 3.5.12
+    transitivePeerDependencies:
+      - '@vue/composition-api'
+      - typescript
+
   '@zip.js/zip.js@2.7.52': {}
 
   ansi-regex@5.0.1: {}
@@ -3500,6 +3544,8 @@ snapshots:
       picocolors: 1.1.1
       postcss: 8.4.47
       postcss-value-parser: 4.2.0
+
+  autosize@6.0.1: {}
 
   balloon-css@1.2.0: {}
 
@@ -4158,6 +4204,12 @@ snapshots:
       punycode.js: 2.3.1
       uc.micro: 2.1.0
 
+  marked-highlight@2.2.0(marked@14.1.3):
+    dependencies:
+      marked: 14.1.3
+
+  marked@14.1.3: {}
+
   mdast-util-to-hast@13.2.0:
     dependencies:
       '@types/hast': 3.0.4
@@ -4374,6 +4426,8 @@ snapshots:
       picomatch: 2.3.1
 
   readdirp@4.0.2: {}
+
+  recaptcha-v3@1.11.3: {}
 
   regex@4.3.3: {}
 
@@ -4787,14 +4841,14 @@ snapshots:
       - '@vue/composition-api'
       - typescript
 
-  vuepress-theme-hope@2.0.0-rc.59(markdown-it@14.1.0)(sass-embedded@1.80.4)(vuepress-plugin-search-pro@2.0.0-rc.59(sass-embedded@1.80.4)(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12)))(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12)):
+  vuepress-theme-hope@2.0.0-rc.59(@waline/client@3.3.2)(markdown-it@14.1.0)(sass-embedded@1.80.4)(vuepress-plugin-search-pro@2.0.0-rc.59(sass-embedded@1.80.4)(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12)))(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12)):
     dependencies:
       '@vuepress/helper': 2.0.0-rc.56(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
       '@vuepress/plugin-active-header-links': 2.0.0-rc.55(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
       '@vuepress/plugin-back-to-top': 2.0.0-rc.56(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
       '@vuepress/plugin-blog': 2.0.0-rc.56(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
       '@vuepress/plugin-catalog': 2.0.0-rc.56(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
-      '@vuepress/plugin-comment': 2.0.0-rc.56(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
+      '@vuepress/plugin-comment': 2.0.0-rc.56(@waline/client@3.3.2)(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
       '@vuepress/plugin-copy-code': 2.0.0-rc.56(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
       '@vuepress/plugin-copyright': 2.0.0-rc.56(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))
       '@vuepress/plugin-git': 2.0.0-rc.54(vuepress@2.0.0-rc.18(@vuepress/bundler-vite@2.0.0-rc.18(@types/node@22.8.1)(sass-embedded@1.80.4))(vue@3.5.12))

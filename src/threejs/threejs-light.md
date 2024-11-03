@@ -4,7 +4,7 @@ category:
     - ThreeJS
 date: 2022-03-07
 ---
-参考：<https://threejs.org/>
+参考：<https://blog/threejs.org/>
 
 ```js
 //遍历场景中的所有对象，然后判断当前对象是否是光源对象
@@ -75,7 +75,7 @@ function toggleLights( visible ) {
     const gltfLoader = new GLTFLoader()
     let LightBox = null 
 
-    gltfLoader.load("/assets/model/flyLight.glb",(gltf) => {
+    gltfLoader.load("/blog/assets/model/flyLight.glb",(gltf) => {
         LightBox = gltf.scene.children[1]
 
         LightBox.material = shaderMaterial;
@@ -204,14 +204,14 @@ const initLights = async () => {
  camera.position.set( - 2, 1.5, 3 );
 
     const rgbeLoader = new RGBELoader();
- const envMap = await rgbeLoader.loadAsync( '/threejs/textures/equirectangular/moonless_golf_1k.hdr ' );
+ const envMap = await rgbeLoader.loadAsync( '/blog/threejs/textures/equirectangular/moonless_golf_1k.hdr ' );
  envMap.mapping = THREE.EquirectangularReflectionMapping;
 
     scene.background = envMap;
  scene.environment = envMap;
 
     const loader = new GLTFLoader();
- const gltf = await loader.loadAsync( '/threejs/models/gltf/LightsPunctualLamp.glb' );
+ const gltf = await loader.loadAsync( '/blog/threejs/models/gltf/LightsPunctualLamp.glb' );
     scene.add( gltf.scene );
 
     const gui = new dat.GUI()
@@ -277,7 +277,7 @@ const initLantern = () => {
     camera.position.y = 5
 
     const rgbeLoader = new RGBELoader();
-    rgbeLoader.loadAsync("/assets/textures/2k.hdr").then((texture) => {
+    rgbeLoader.loadAsync("/blog/assets/textures/2k.hdr").then((texture) => {
         // 图像将如何应用到物体（对象）上
       texture.mapping = THREE.EquirectangularReflectionMapping;
       scene.background = texture;
@@ -330,7 +330,7 @@ const initLantern = () => {
     const gltfLoader = new GLTFLoader()
     let LightBox = null
 
-    gltfLoader.load("/assets/model/flyLight.glb",(gltf) => {
+    gltfLoader.load("/blog/assets/model/flyLight.glb",(gltf) => {
         LightBox = gltf.scene.children[1]
 
         LightBox.material = shaderMaterial;
