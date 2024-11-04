@@ -1,4 +1,7 @@
 import { defineUserConfig } from "vuepress";
+import { viteBundler } from '@vuepress/bundler-vite'
+import tailwindcss from 'tailwindcss'
+import autoprefixer from 'autoprefixer'
 
 import theme from "./theme.js";
 
@@ -24,7 +27,19 @@ export default defineUserConfig({
   },
 
   theme,
-  alias
+  alias,
+  builder: viteBundler({
+       viteOptions: {
+         css: {
+          postcss: {
+            plugins: [
+              autoprefixer(),
+              tailwindcss()
+            ]
+          }
+         }
+       }
+  })
 
   // Enable it with pwa
   // shouldPrefetch: false,

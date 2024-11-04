@@ -965,6 +965,8 @@ function patchVnode(
 - 如果老节点先于新节点遍历结束，则剩余的新节点执行新增节点操作
 - 如果新节点先于老节点遍历结束，则剩余的老节点执行删除操作，移除这些老节点
 
+对未处理的上下扫描一遍，交叉扫一遍
+
 ```js
 function updateChildren(
   parentElm,
