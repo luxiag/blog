@@ -19,6 +19,10 @@
   h1,
   h2 {
     font-weight: 900;
+
+    .header-anchor {
+      font-weight: 900;
+    }
   }
 }
 
@@ -26,6 +30,7 @@
 #app {
   [data-theme="light"] & {
     $vp-c-text: #000000;
+    --vp-c-text: rgba(0, 0, 0, .8);
 
     #navbar {
 

@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@vuepress/bundler-vite": "2.0.0-rc.18",
+    "@waline/client": "^3.3.2",
     "cesium": "^1.122.0",
     "sass-embedded": "^1.80.4",
     "three": "^0.169.0",

@@ -10,18 +10,18 @@ const NoBlogsArr = [
 
 export default hopeTheme(
   {
-  hostname: "https://mister-hope.github.io",
+  hostname: "https://luxiag.github.io/luxiag",
 
   author: {
     name: "luxiag",
-    url: "https://mister-hope.com",
+    url: "https://luxiag.github.io/luxiag",
   },
 
   iconAssets: "fontawesome-with-brands",
 
   logo: "./public/assets/images/logo.svg",
 
-  repo: "vuepress-theme-hope/vuepress-theme-hope",
+  repo: "luxiag/blog",
 
   docsDir: "src",
 
@@ -149,8 +149,8 @@ export default hopeTheme(
       excerptLength: 100,
       filter:(page) => {
         let isBlog = true 
-        
         if(page?.frontmatter?.home) isBlog =  false
+        if(page?.frontmatter?.onShow) isBlog =  false
         NoBlogsArr.forEach((item) => {
           if(page.path.includes(item)) isBlog = false
         })
@@ -196,7 +196,13 @@ export default hopeTheme(
 
     // This features is enabled for demo, only preserve if you need it
     markdownTab: true,
-
+    comment: {
+      provider: "Waline",
+      serverURL: "https://blog-waline-flax-seven.vercel.app/", // your server url
+      pageview: true,
+      login: "force",
+      wordLimit:200
+    },
     // These features are enabled for demo, only preserve features you need here
     mdEnhance: {
       align: true,
