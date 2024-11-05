@@ -2,6 +2,7 @@ import { hopeTheme } from "vuepress-theme-hope";
 
 import { enNavbar, zhNavbar } from "./navbar/index.js";
 import { enSidebar, zhSidebar } from "./sidebar/index.js";
+// import { docsearchPlugin } from '@vuepress/plugin-docsearch'
 
 
 const NoBlogsArr = [
@@ -166,7 +167,7 @@ export default hopeTheme(
       //   dark: "one-dark-pro",
       // },
     },
-    searchPro:true,
+    // searchPro:true,
 
     // Install @waline/client before enabling it
     // Note: This is for testing ONLY!
@@ -202,6 +203,11 @@ export default hopeTheme(
       pageview: true,
       login: "force",
       wordLimit:200
+    },
+    docsearch:{
+      appId: "E61AH5LVMY",
+      apiKey: "7ee7c421ead583565a0f595847080f06",
+      indexName: "luxiagio",
     },
     // These features are enabled for demo, only preserve features you need here
     mdEnhance: {

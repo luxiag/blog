@@ -28,7 +28,7 @@ export default defineUserConfig({
 
   theme,
   alias,
-  builder: viteBundler({
+  bundler: viteBundler({
        viteOptions: {
          css: {
           postcss: {
