@@ -4,7 +4,7 @@ category:
   - ThreeJS
 date: 2022-03-02
 ---
-参考：<https://threejs.org/>
+
 
 ```js
 //outline pass 创建高亮轮廓
@@ -198,6 +198,11 @@ function restoreMaterial( obj ) {
 ```
 
 <div ref="bloomRef" class="bloom"></div>
+
+
+
+# 参考
+参考：<https://threejs.org/>
 
 <script setup>
 import {ref,onMounted} from 'vue'

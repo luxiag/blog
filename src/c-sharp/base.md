@@ -353,6 +353,65 @@ foreach (int number in numbers)
 
 ```
 
+### 属性
+
+- Length：获取数组的长度（元素个数）。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  Console.WriteLine(numbers.Length); // 输出: 5
+  ```
+
+- Rank：获取数组的维数（数组的维度）。
+
+  ```cs
+  int[,] matrix = new int[3, 4];
+  Console.WriteLine(matrix.Rank); // 输出: 2
+  ```
+
+### 方法
+
+- GetValue：获取指定索引处的元素值。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  int value = (int)numbers.GetValue(2); // 获取索引为2的元素值
+  Console.WriteLine(value); // 输出: 3
+  ```
+
+- SetValue：设置指定索引处的元素值。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  numbers.SetValue(10, 2); // 将索引为2的元素值设置为10
+  Console.WriteLine(numbers[2]); // 输出: 10
+  ```
+
+- Clone：复制数组。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  int[] clone = (int[])numbers.Clone();
+  Console.WriteLine(clone[0]); // 输出: 1
+  ```
+
+- IndexOf：查找指定元素的索引。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  int index = Array.IndexOf(numbers, 3);
+  Console.WriteLine(index); // 输出: 2
+
+  ```
+
+- Find：查找满足指定条件的第一个元素。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  int result = Array.Find(numbers, element => element % 2 == 0);
+  Console.WriteLine(result); // 输出: 2
+  ```
+
 ### 矩形数组
 
 矩形数组（Rectangular Array）是一种二维数组，其中每一行都具有相同的列数。
@@ -386,6 +445,257 @@ for (int i = 0; i < matrix.GetLength(0); i++) // 行数
 ### 交错数组
 
 交错数组（Jagged Array）是一种数组的数组，即一个数组的元素是另一个数组。
+
+```cs
+
+// 定义一个3行2列的交错数组
+int[][] jaggedArray = new int[3][];
+jaggedArray[0] = new int[2] { 1, 2 };
+jaggedArray[1] = new int[3] { 3, 4, 5 };
+jaggedArray[2] = new int[1] { 6 };
+
+// 访问元素
+Console.WriteLine(jaggedArray[0][0]); // 输出: 1
+Console.WriteLine(jaggedArray[1][2]); // 输出: 5
+
+// 使用嵌套 for 循环
+for (int i = 0; i < jaggedArray.Length; i++)
+{
+    for (int j = 0; j < jaggedArray[i].Length; j++)
+    {
+        Console.Write(jaggedArray[i][j] + " ");
+    }
+    Console.WriteLine();
+}
+// 1 2 
+// 3 4 5 
+// 6 
+
+
+int[][] jaggedArray = new int[][]
+{
+    new int[] {1, 2},    // 第一个内层数组
+    new int[] {3, 4, 5}, // 第二个内层数组
+    new int[] {6}        // 第三个内层数组
+};
+```
+
+### 数组协变
+
+数组类型的协变特性，即允许将一个派生类型的数组赋值给一个基类型的数组变量。
+意味着你可以使用子类数组来替代父类数组。
+
+```cs
+class Animal { }
+class Dog : Animal { }
+class Cat : Animal { }
+
+class Program
+{
+    static void Main()
+    {
+        Dog[] dogs = new Dog[] { new Dog(), new Dog() };
+        
+        // 协变: 子类数组可以赋给父类数组
+        Animal[] animals = dogs;
+        
+        Console.WriteLine(animals.Length);  // 输出: 2
+    }
+}
+
+```
+
+## 委托
+
+一种类型安全的函数指针，它允许你将方法作为参数传递，或者将方法存储在变量中。委托可以用来实现事件和回调机制
+
+```cs
+public delegate void MyDelegate(string message);
+public class Program
+{
+    public static void Main()
+    {
+        MyDelegate del = new MyDelegate(PrintMessage);
+        del("Hello, Delegate!");  // 调用委托，输出: Hello, Delegate!
+    }
+
+    public static void PrintMessage(string message)
+    {
+        Console.WriteLine(message);
+    }
+}
+```
+
+### 组合委托
+
+委托可以组合在一起，这意味着可以将多个委托方法分配给同一个委托变量，然后通过调用该委托变量来依次调用这些方法。
+使用 += 操作符将多个方法添加到委托链中，使用 -= 移除方法。
+
+```cs
+using System;
+
+public delegate void MyDelegate(string message);
+
+class Program
+{
+    public static void Main()
+    {
+        MyDelegate del = PrintMessage1;
+        del += PrintMessage2;  // 添加方法到委托链中
+        del += PrintMessage3;
+
+        del("Hello, Combined Delegates!");  // 调用委托时，会依次调用三个方法
+    }
+
+    public static void PrintMessage1(string message)
+    {
+        Console.WriteLine("Message 1: " + message);
+    }
+
+    public static void PrintMessage2(string message)
+    {
+        Console.WriteLine("Message 2: " + message);
+    }
+
+    public static void PrintMessage3(string message)
+    {
+        Console.WriteLine("Message 3: " + message);
+    }
+}
+// Message 1: Hello, Combined Delegates!
+// Message 2: Hello, Combined Delegates!
+// Message 3: Hello, Combined Delegates!
+```
+
+### 带返回值的委托
+
+```cs
+public delegate int MyDelegate(int x);
+
+public class Program
+{
+    public static void Main()
+    {
+        MyDelegate del = Square;
+        int result = del(4);
+        Console.WriteLine(result);  // 输出: 16
+    }
+
+    public static int Square(int x)
+    {
+        return x * x;
+    }
+}
+
+```
+
+### 匿名委托
+
+```cs
+public delegate void MyDelegate(string message);
+
+public class Program
+{
+    public static void Main()
+    {
+        MyDelegate del = delegate(string message)
+        {
+            Console.WriteLine(message);
+        };
+        del("Hello from Anonymous Method!");
+    }
+}
+// Lambda
+public delegate void MyDelegate(string message);
+
+public class Program
+{
+    public static void Main()
+    {
+        MyDelegate del = (message) => Console.WriteLine(message);
+        del("Hello from Lambda Expression!");
+    }
+}
+```
+
+### 带引用参数的委托
+
+```cs
+using System;
+
+public delegate void RefDelegate(ref int x);
+
+class Program
+{
+    static void Main()
+    {
+        int number = 5;
+
+        // 创建委托实例，并将它绑定到修改值的方法
+        RefDelegate del = ModifyNumber;
+        
+        Console.WriteLine("Before delegate call: " + number);  // 输出: 5
+        
+        // 调用委托
+        del(ref number);
+        
+        Console.WriteLine("After delegate call: " + number);  // 输出: 10
+    }
+
+    // 该方法接收一个 ref 参数并修改它
+    public static void ModifyNumber(ref int x)
+    {
+        x = x * 2;
+    }
+}
+```
+
+## 事件
+
+事件是基于委托的一种特殊的机制。它允许在对象的状态发生变化时通知其他对象。你可以将事件视为一个信号，发布者发送信号，订阅者响应信号。
+
+```cs
+
+using System;
+
+public class MyEventPublisher
+{
+    // 定义一个事件，使用预定义的 EventHandler 委托类型
+    public event EventHandler MyEvent;
+
+    // 触发事件的方法
+    public void TriggerEvent()
+    {
+        Console.WriteLine("Event Triggered!");
+        // 触发事件，检查是否有订阅者
+        MyEvent?.Invoke(this, EventArgs.Empty);  // 使用空事件参数
+    }
+}
+
+class Program
+{
+
+
+    
+    static void Main()
+    {
+        MyEventPublisher publisher = new MyEventPublisher();
+
+        // 订阅事件
+        publisher.MyEvent += MyEventHandler;
+
+        // 触发事件
+        publisher.TriggerEvent();  // 输出: Event Triggered!
+                                  // 输出: Event Handled!
+    }
+
+    // 事件处理程序
+    public static void MyEventHandler(object sender, EventArgs e)
+    {
+        Console.WriteLine("Event Handled!");
+    }
+}
+```
 
 ## 类
 

@@ -202,7 +202,7 @@ export default hopeTheme(
       serverURL: "https://blog-waline-flax-seven.vercel.app/", // your server url
       pageview: true,
       login: "force",
-      wordLimit:200
+      wordLimit:800
     },
     docsearch:{
       appId: "E61AH5LVMY",

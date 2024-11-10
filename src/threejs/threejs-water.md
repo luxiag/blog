@@ -4,7 +4,7 @@ category:
   - ThreeJS
 date: 2022-02-22
 ---
-参考：<https://threejs.org/>
+
 
 ```js
 import { Water } from "three/examples/jsm/objects/Water2.js";
@@ -116,6 +116,10 @@ function updateSun() {
 
 <div ref="oceanRef" class="ocean"></div>
 
+# 参考
+
+参考：<https://threejs.org/>
+
 <script setup>
 import {ref,onMounted} from 'vue'
 import * as THREE from "three";
@@ -131,13 +135,16 @@ import { Sky } from 'three/addons/objects/Sky.js';
 let dat;
 const waterRef = ref()
 const init = () => {
+    if(!waterRef.value.offsetWidth) {
+      waterRef.value.offsetWidth = 800
+    }
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(90,2,0.1,1000);
     camera.position.set(5,5,5)
     scene.add(camera);
 
     const rgbeLoader = new RGBELoader();
-    rgbeLoader.loadAsync("/assets/textures/hdr/050.hdr").then((texture) => {
+    rgbeLoader.loadAsync("./assets/textures/hdr/050.hdr").then((texture) => {
       texture.mapping = THREE.EquirectangularReflectionMapping;
       scene.background = texture;
       scene.environment = texture;
@@ -145,7 +152,7 @@ const init = () => {
 
     // 加载浴缸
     const gltfLoader = new GLTFLoader();
-    gltfLoader.load("/assets/model/yugang.glb", (gltf) => {
+    gltfLoader.load("./assets/models/yugang.glb", (gltf) => {
       console.log(gltf);
       const yugang = gltf.scene.children[0];
       yugang.material.side = THREE.DoubleSide;
@@ -222,7 +229,7 @@ const initOcean = () => {
     const water = new Water(waterGeometry,{
          textureWidth: 512,
       textureHeight: 512,
-      waterNormals: new THREE.TextureLoader().load( 'textures/waternormals.jpg', function ( texture ) {
+      waterNormals: new THREE.TextureLoader().load( './assets/textures/water/waternormals.jpg', function ( texture ) {
 
        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
 

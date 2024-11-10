@@ -5,7 +5,7 @@ category:
     - ThreeJS
 ---
 
-参考：https://threejs.org/
+
 
 目前ThreeJS中存在18种材质
 
@@ -165,3 +165,7 @@ const m5 = new THREE.MeshBasicMaterial({color: 'hsl(0,100%,50%)'}); // 红色
 MeshStandardMaterial的扩展，提供了更高级的基于物理的渲染属性：
 
 <iframe width="100%" height="420px" src="https://threejs.org/docs/scenes/material-browser.html#MeshPhysicalMaterial"></iframe>
+
+
+# 参考
+参考：<https://threejs.org/>

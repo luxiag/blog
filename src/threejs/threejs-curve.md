@@ -4,7 +4,7 @@ date: 2022-02-01
 category:
   - ThreeJS
 ---
-参考：<https://threejs.org/>
+
 
 ## 曲线运动
 
@@ -143,7 +143,11 @@ function animate() {
 
 <!-- <div ref="modifierCurveRef"></div> -->
 
-<iframe src="/threejs/examples/webgl_modifier_curve.html" :height="width/2" :width="width"></iframe>
+<iframe src="https://threejs.org/examples/webgl_modifier_curve.html" :height="width/2" :width="width"></iframe>
+
+# 参考
+
+参考：<https://threejs.org/>
 
 <script setup>
 
@@ -193,9 +197,9 @@ function initMotion(){
     const earthMaterial = new THREE.MeshPhongMaterial({
       specular: 0x333333,
       shininess: 5,
-      map: textureLoader.load("/assets/textures/planets/earth_atmos_2048.jpg"),
-      specularMap: textureLoader.load("/assets/textures/planets/earth_specular_2048.jpg"),
-      normalMap: textureLoader.load("/assets/textures/planets/earth_normal_2048.jpg"),
+      map: textureLoader.load("./assets/textures/planets/earth_atmos_2048.jpg"),
+      specularMap: textureLoader.load("./assets/textures/planets/earth_specular_2048.jpg"),
+      normalMap: textureLoader.load("./assets/textures/planets/earth_normal_2048.jpg"),
       normalScale: new THREE.Vector2(0.85, 0.85),
     });
      earth = new THREE.Mesh(earthGeometry, earthMaterial);
@@ -206,7 +210,7 @@ function initMotion(){
     const moonGeometry = new THREE.SphereGeometry(MOON_RADIUS, 16, 16);
     const moonMaterial = new THREE.MeshPhongMaterial({
       shininess: 5,
-      map: textureLoader.load("/assets/textures/planets/moon_1024.jpg"),
+      map: textureLoader.load("./assets/textures/planets/moon_1024.jpg"),
     });
     moon = new THREE.Mesh(moonGeometry, moonMaterial);
     scene.add(moon);
@@ -343,7 +347,7 @@ const initModifierCurveRef = () => {
 
     //
     const loader = new FontLoader();
-    loader.load('/fonts/helvetiker_regular.typeface.json', function ( font ) {
+    loader.load('./assets/geojson/helvetiker_regular.typeface.json', function ( font ) {
           const geometry = new TextGeometry( 'Hello three.js!', {
                 font:font,
            size: 0.2,

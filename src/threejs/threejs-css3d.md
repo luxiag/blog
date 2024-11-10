@@ -4,7 +4,7 @@ category:
     - ThreeJS
 date: 2022-04-12
 ---
-参考：<https://threejs.org/>
+
 
 ```js
 const createTag = (object3d) => {
@@ -156,11 +156,14 @@ new Tween.Tween( this )
   </div>
 </div>
 
+# 参考
+参考：<https://threejs.org/>
+
 <script setup>
 import {ref,onMounted} from 'vue'
 import * as THREE from 'three'
 import gsap from "gsap";
-import  {Tween }from 'three/examples/jsm/libs/tween.module.js';
+// import  {Tween }from 'three/examples/jsm/libs/tween.module.js';
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { CSS3DRenderer } from "three/examples/jsm/renderers/CSS3DRenderer.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -170,6 +173,7 @@ import { FirstPersonControls } from "three/examples/jsm/controls/FirstPersonCont
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 // import Tween from 'three/addons/libs/tween.module.js';
+import * as Tween from 'three/examples/jsm/libs/tween.module.js';
 import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
 import Mitt from "mitt";
 
@@ -203,7 +207,7 @@ const initScene = () => {
     const scene = new THREE.Scene()
     const rgbeloader = new RGBELoader()
 
-    rgbeloader.loadAsync('/assets/textures/2k.hdr').then(texture => {
+    rgbeloader.loadAsync('./assets/textures/2k.hdr').then(texture => {
         texture.mapping = THREE.EquirectangularReflectionMapping;
         scene.background = texture
         scene.environment = texture
@@ -291,7 +295,7 @@ const createTag = (object3d) => {
 const createFactory = (scene) => {
     const gltfLoader = new GLTFLoader()
     const dracoLoader = new DRACOLoader()
-    dracoLoader.setDecoderPath("/assets/draco/");
+    dracoLoader.setDecoderPath("/blog/draco/");
     dracoLoader.setDecoderConfig({type: "js"});
     dracoLoader.preload();
     gltfLoader.setDRACOLoader(dracoLoader);
@@ -300,7 +304,8 @@ const createFactory = (scene) => {
     let floor2Group;
     let wallGroup;
     const floor2Tags = []
-    gltfLoader.load("/assets/model/floor2.glb",(gltf) => {
+    gltfLoader.load("./assets/models/floor2.glb",(gltf) => {
+      console.log(gltf,'gltf')
         let array = ["小型会议室", "核心科技室", "科技展台", "设计总监办公室"];
         floor2Group = gltf.scene
         gltf.scene.traverse((child) => {
@@ -318,8 +323,9 @@ const createFactory = (scene) => {
         floor2Group.visible = false
         scene.add(floor2Group)
     })
-    gltfLoader.load("/assets/model/floor1.glb",(gltf) => {
+    gltfLoader.load("./assets/models/floor1.glb",(gltf) => {
       floor1Group = gltf.scene;
+
       gltf.scene.traverse((child) => {
           if(child.isMesh) {
             child.material.emissiveIntensity = 5
@@ -329,7 +335,7 @@ const createFactory = (scene) => {
       scene.add(gltf.scene)
     })
 
-    gltfLoader.load("/assets/model/wall.glb",(gltf) => {
+    gltfLoader.load("./assets/models/wall.glb",(gltf) => {
       scene.add(gltf.scene)
       wallGroup = gltf.scene
     })
@@ -339,7 +345,7 @@ class Factory {
   constructor(scene,camera) {
     const gltfLoader = new GLTFLoader();
     const dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath("/assets/draco/");
+    dracoLoader.setDecoderPath("/blog/draco/");
     dracoLoader.setDecoderConfig({ type: "js" });
     dracoLoader.preload();
     gltfLoader.setDRACOLoader(dracoLoader);
@@ -350,8 +356,10 @@ class Factory {
     this.wallGroup;
     this.floor2Tags = [];
     this.camera = camera
-    gltfLoader.load("/assets/model/floor2.glb", (gltf) => {
-      console.log(gltf);
+
+    console.log('Factory',gltfLoader)
+    gltfLoader.load("./assets/models/floor2.glb", (gltf) => {
+      console.log(gltf,'gltf');
       this.floor2Group = gltf.scene;
 
       let array = ["小型会议室", "核心科技室", "科技展台", "设计总监办公室"];
@@ -374,9 +382,11 @@ class Factory {
       this.floor2Group.visible = false;
 
       scene.add(this.floor2Group);
-    });
+    },undefined,(err) => {
+      console.log('floor err',err)
+    })
 
-    gltfLoader.load("/assets/model/floor1.glb", (gltf) => {
+    gltfLoader.load("./assets/models/floor1.glb", (gltf) => {
       console.log(gltf);
       this.floor1Group = gltf.scene;
 
@@ -393,7 +403,7 @@ class Factory {
       scene.add(gltf.scene);
     });
 
-    gltfLoader.load("/assets/model/wall.glb", (gltf) => {
+    gltfLoader.load("./assets/models/wall.glb", (gltf) => {
       console.log(gltf);
       scene.add(gltf.scene);
       this.wallGroup = gltf.scene;
