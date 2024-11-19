@@ -668,6 +668,8 @@ public class MyEventPublisher
     {
         Console.WriteLine("Event Triggered!");
         // 触发事件，检查是否有订阅者
+        //  // 在这里执行一些操作...
+        // 当操作完成时，触发事件
         MyEvent?.Invoke(this, EventArgs.Empty);  // 使用空事件参数
     }
 }
@@ -682,6 +684,7 @@ class Program
         MyEventPublisher publisher = new MyEventPublisher();
 
         // 订阅事件
+        // 订阅者通过+=操作符来订阅事件，并提供一个事件处理函数，该函数将在事件触发时执行。
         publisher.MyEvent += MyEventHandler;
 
         // 触发事件
@@ -693,6 +696,263 @@ class Program
     public static void MyEventHandler(object sender, EventArgs e)
     {
         Console.WriteLine("Event Handled!");
+    }
+}
+```
+
+### 声明事件
+
+基本事件声明
+
+```cs
+public class Publisher
+{
+    // 定义一个委托 代表了事件处理函数的参数和返回类型。
+    public delegate void NotifyEventHandler(string message);
+
+    // 使用 event 关键字声明事件 事件必须是之前定义的委托类型的实例。
+    public event NotifyEventHandler OnNotify;
+
+    public void TriggerEvent(string message)
+    {
+        // 触发事件
+        // 提供事件触发机制：在类的方法中，当需要通知订阅者时，可以使用MyEvent变量的?.Invoke()方法来触发事件。
+        OnNotify?.Invoke(message); // 安全触发
+    }
+}
+
+```
+
+预定义委托简化声明
+
+```cs
+
+public class Publisher
+{
+    // 声明事件
+    public event EventHandler OnNotify;
+
+    public void TriggerEvent()
+    {
+        // 触发事件
+        OnNotify?.Invoke(this, EventArgs.Empty); // 传递事件数据
+    }
+}
+```
+
+### 订阅事件
+
+在订阅者类中，通过+=操作符来订阅事件，并提供一个与委托签名匹配的事件处理函数。
+
+```cs
+
+public class MySubscriber
+{
+    private MyClass myClass;
+
+    public MySubscriber(MyClass myClass)
+    {
+        this.myClass = myClass;
+        myClass.MyEvent += MyEventHandler;
+    }
+
+    private void MyEventHandler(object sender, EventArgs e)
+    {
+        // 事件处理函数
+        Console.WriteLine("事件被触发了！");
+    }
+}
+```
+
+同一个事件可以被多个方法订阅，触发事件时，所有订阅的方法都会依次被调用。
+
+```cs
+public class AnotherSubscriber
+{
+    public void AnotherHandleEvent(string message)
+    {
+        Console.WriteLine($"Another subscriber received: {message}");
+    }
+}
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        Publisher publisher = new Publisher();
+        Subscriber subscriber = new Subscriber();
+        AnotherSubscriber anotherSubscriber = new AnotherSubscriber();
+
+        // 订阅多个方法
+        publisher.OnNotify += subscriber.HandleEvent;
+        publisher.OnNotify += anotherSubscriber.AnotherHandleEvent;
+
+        // 触发事件
+        publisher.RaiseEvent("Multiple subscribers!");
+
+        // 输出:
+        // Event received: Multiple subscribers!
+        // Another subscriber received: Multiple subscribers!
+    }
+}
+
+```
+
+取消订阅事件：如果不再需要订阅事件，可以使用-=操作符来取消订阅
+
+```cs
+myClass.MyEvent -= MyEventHandler;
+
+```
+
+### 触发事件
+
+事件只能在声明它的类内部触发，外部类无法触发事件
+使用 Invoke 调用事件
+
+```cs
+public class Publisher
+{
+    // 定义委托和事件
+    public delegate void NotifyEventHandler(string message);
+    public event NotifyEventHandler OnNotify;
+
+    public void TriggerEvent(string message)
+    {
+        // 检查事件是否有订阅者并触发事件
+        OnNotify?.Invoke(message);  // 使用 ?. 防止空引用
+    }
+}
+
+public class Subscriber
+{
+    // 事件处理方法
+    public void HandleEvent(string message)
+    {
+        Console.WriteLine($"Event received: {message}");
+    }
+}
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        // 创建发布者和订阅者实例
+        Publisher publisher = new Publisher();
+        Subscriber subscriber = new Subscriber();
+
+        // 订阅事件
+        publisher.OnNotify += subscriber.HandleEvent;
+
+        // 触发事件
+        publisher.TriggerEvent("Hello, Event!");
+
+        // 输出: Event received: Hello, Event!
+    }
+}
+
+```
+
+### 标准事件的用法
+
+- 声明事件： 使用 EventHandler 或 EventHandler<T> 声明事件。
+- 订阅事件： 使用 += 将事件处理程序方法附加到事件。
+- 触发事件： 在类内部调用事件的 Invoke 方法，通知所有订阅者。
+
+```cs
+using System;
+
+public class Publisher
+{
+    // 声明一个标准事件
+    public event EventHandler OnNotify;
+
+    // 方法用于触发事件
+    public void RaiseEvent()
+    {
+        OnNotify?.Invoke(this, EventArgs.Empty); // 传递当前对象和空参数
+    }
+}
+
+public class Subscriber
+{
+    public void HandleEvent(object sender, EventArgs e)
+    {
+        Console.WriteLine("Event received from Publisher.");
+    }
+}
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        Publisher publisher = new Publisher();
+        Subscriber subscriber = new Subscriber();
+
+        // 订阅事件
+        publisher.OnNotify += subscriber.HandleEvent;
+
+        // 触发事件
+        publisher.RaiseEvent();
+
+        // 输出: Event received from Publisher.
+    }
+}
+
+```
+
+### 事件访问器
+
+```cs
+
+public class Publisher
+{
+    private EventHandler _myEvent;
+
+    // 使用事件访问器自定义事件
+    public event EventHandler MyEvent
+    {
+        add
+        {
+            Console.WriteLine("Adding a handler.");
+            _myEvent += value; // 将处理程序添加到委托列表
+        }
+        remove
+        {
+            Console.WriteLine("Removing a handler.");
+            _myEvent -= value; // 从委托列表中移除处理程序
+        }
+    }
+
+    // 触发事件的方法
+    public void RaiseEvent()
+    {
+        _myEvent?.Invoke(this, EventArgs.Empty);
+    }
+}
+public class Subscriber
+{
+    public void HandleEvent(object sender, EventArgs e)
+    {
+        Console.WriteLine("Event received.");
+    }
+}
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        Publisher publisher = new Publisher();
+        Subscriber subscriber = new Subscriber();
+
+        // 订阅事件
+        publisher.MyEvent += subscriber.HandleEvent; // 输出: Adding a handler.
+
+        // 触发事件
+        publisher.RaiseEvent(); // 输出: Event received.
+
+        // 取消订阅事件
+        publisher.MyEvent -= subscriber.HandleEvent; // 输出: Removing a handler.
     }
 }
 ```
@@ -1554,6 +1814,140 @@ public class Duck : IAnimal
 
 ```
 
+## 转换
+
+将一个数据类型的值转换为另一种数据类型
+
+### 隐式转换
+
+适用于数据范围不丢失、没有数据精度损失的转换，例如小范围类型转换为大范围类型。
+
+```cs
+int intValue = 100;
+long longValue = intValue; // 隐式转换：int -> long
+float floatValue = intValue; // 隐式转换：int -> float
+```
+
+### 显示转换和强制转换
+
+适用于可能导致数据丢失的转换。
+
+```cs
+double doubleValue = 9.78;
+int intValue = (int)doubleValue; // 显式转换，结果为 9
+```
+
+### 转换的类型
+
+隐式：从范围小的类型到范围大的类型。
+显式：从范围大的类型到范围小的类型。
+
+### 数字的转换
+
+隐式数字转换
+
+- 自动完成，无需显式指定。
+- 不会造成数据丢失（从范围小的类型到范围大的类型）
+
+```cs
+int intValue = 100;
+long longValue = intValue;   // 隐式转换：int -> long
+float floatValue = intValue; // 隐式转换：int -> float
+```
+
+显式数字转换
+
+- 必须使用强制转换 (type)。
+- 可能造成数据丢失（从范围大的类型到范围小的类型）。
+
+```cs
+double doubleValue = 123.45;
+int intValue = (int)doubleValue; // 显式转换，结果为 123（小数部分丢失）
+
+long longValue = 123456789;
+short shortValue = (short)longValue; // 可能溢出
+```
+
+Convert类转换
+
+```cs
+string strValue = "123";
+int intValue = Convert.ToInt32(strValue);  // 字符串转为整数
+double doubleValue = Convert.ToDouble(intValue); // 整数转为双精度
+```
+
+### 引用转换
+
+- 由引用保存的那部分信息是她指向的数据类型
+- 引用转换接受引用并放回一个指向堆中同一位置的引用
+
+### 装箱转换
+
+装箱（Boxing）是指将值类型转换为引用类型的过程。
+
+- 值类型的数据被复制到托管堆上。
+- 生成的引用指向该对象的地址
+
+```cs
+int value = 123;
+object boxedValue = value; // 装箱
+
+
+int value = 123;
+object boxedValue = (object)value; // 显式装箱
+
+```
+
+### 拆箱转换
+
+拆箱：将一个已经装箱的对象从堆内存中提取为值类型。
+特点：拆箱必须显式完成，并且类型必须完全匹配，否则会抛出异常。
+
+```cs
+object boxedValue = 123;      // 装箱
+int value = (int)boxedValue; // 拆箱
+
+object nullObject = null;
+
+try
+{
+    int value = (int)nullObject; // NullReferenceException
+}
+catch (NullReferenceException ex)
+{
+    Console.WriteLine("Cannot unbox null: " + ex.Message);
+}
+```
+
+### 用户自定义转换
+
+### is运算符
+
+检查对象是否可以转换为指定类型，返回布尔值。
+
+```cs
+object obj = 123;
+if (obj is string)
+{
+    string str = (string)obj;
+    Console.WriteLine(str);
+}
+else
+{
+    Console.WriteLine("Not a string");
+}
+```
+
+### as运算符
+
+尝试将对象转换为指定的引用类型，如果转换失败，返回 null。
+
+```cs
+object obj = "Hello";
+string str = obj as string; // 成功时返回字符串，否则返回 null
+
+```
+
 ## 泛型
 
 定义时指定，使用时再指定具体的类型。
@@ -1851,4 +2245,4 @@ class Program
 
 # 参考
 
-<https://blog.csdn.net/qq_51040417/article/details/141551584>
+《C#图解教程》
