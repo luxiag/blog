@@ -855,7 +855,7 @@ class Program
 
 ### 标准事件的用法
 
-- 声明事件： 使用 EventHandler 或 EventHandler<T> 声明事件。
+- 声明事件： 使用 EventHandler 或 `EventHandler<T>`声明事件。
 - 订阅事件： 使用 += 将事件处理程序方法附加到事件。
 - 触发事件： 在类内部调用事件的 Invoke 方法，通知所有订阅者。
 
