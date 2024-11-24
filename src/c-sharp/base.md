@@ -1921,6 +1921,75 @@ catch (NullReferenceException ex)
 
 ### 用户自定义转换
 
+隐式转换 (implicit)：
+
+- 无需显式使用强制转换运算符 (type)。
+- 适用于不会导致数据丢失或异常的转换。
+
+显式转换 (explicit)：
+
+- 必须显式使用强制转换运算符 (type)。
+- 适用于可能导致数据丢失或需要明确意图的转换
+
+定义
+
+```cs
+// 隐式转换
+public static implicit operator TargetType(SourceType value)
+{
+    // 转换逻辑
+    return new TargetType();
+}
+
+// 显式转换
+public static explicit operator TargetType(SourceType value)
+{
+    // 转换逻辑
+    return new TargetType();
+}
+```
+
+使用
+
+```cs
+
+public class Temperature
+{
+    public double Celsius { get; set; }
+
+    public Temperature(double celsius)
+    {
+        Celsius = celsius;
+    }
+
+    // 隐式转换：double -> Temperature
+    public static implicit operator Temperature(double celsius)
+    {
+        return new Temperature(celsius);
+    }
+
+    // 显式转换：Temperature -> double
+    public static explicit operator double(Temperature temp)
+    {
+        return temp.Celsius;
+    }
+}
+
+class Program
+{
+    static void Main()
+    {
+        // 隐式转换
+        Temperature temp = 36.5; // double -> Temperature
+        Console.WriteLine($"Temperature: {temp.Celsius}°C");
+
+        // 显式转换
+        double celsius = (double)temp; // Temperature -> double
+        Console.WriteLine($"Celsius: {celsius}°C");
+    }
+}
+```
+
 ### is运算符
 
 检查对象是否可以转换为指定类型，返回布尔值。
@@ -2239,6 +2308,125 @@ class Program
         IAnimalRepository<Animal> animalRepo = dogRepo;
 
         animalRepo.AddAnimal(new Dog());
+    }
+}
+```
+
+# 枚举器和迭代器
+
+枚举器是一个对象，它定义了一个用于循环访问集合的机制。枚举器通过实现 `IEnumerator` 或 `IEnumerable` 接口来创建。
+
+## foreach
+
+```cs
+
+int [] numbers = { 1, 2, 3, 4, 5 };
+
+foreach (int number in numbers)
+{
+    Console.WriteLine(number);
+}
+
+// 输出:
+// 1
+// 2
+// 3
+// 4
+// 5
+// 原因：foreach 语句使用 IEnumerator 接口来遍历集合中的元素。
+```
+
+## IEnumerator
+
+IEnumerator 是一个接口，定义了用于迭代集合的方法。
+
+```cs
+public interface IEnumerator
+{
+    object Current { get; }    // 获取当前元素
+    bool MoveNext();           // 移动到下一个元素
+    void Reset();              // 重置到起始位置
+}
+
+public interface IEnumerator<out T> : IDisposable, IEnumerator
+{
+    T Current { get; }  // 泛型的 Current 属性
+}
+```
+
+### 枚举器
+
+```cs
+public class MyEnumerator : IEnumerator<int>
+{
+    private int[] _data;
+    private int _position = -1;
+
+    public MyEnumerator(int[] data)
+    {
+        _data = data;
+    }
+
+    public bool MoveNext()
+    {
+        _position++;
+        return (_position < _data.Length);
+    }
+
+    public void Reset()
+    {
+        _position = -1;
+    }
+
+    public int Current
+    {
+        get
+        {
+            try
+            {
+                return _data[_position];
+            }
+            catch (IndexOutOfRangeException)
+            {
+                throw new InvalidOperationException();
+            }
+        }
+    }
+
+    object IEnumerator.Current => Current;
+
+    public void Dispose()
+    {
+        // 清理资源
+    }
+}
+```
+
+### 迭代器
+
+```cs
+public class MyCollection
+{
+    private int[] _data = { 1, 2, 3, 4, 5 };
+
+    public IEnumerator<int> GetEnumerator()
+    {
+        for (int i = 0; i < _data.Length; i++)
+        {
+            yield return _data[i];
+        }
+    }
+}
+
+class Program
+{
+    static void Main()
+    {
+    
+        foreach (var item in new MyCollection())
+        {
+            Console.WriteLine(item);
+        }
     }
 }
 ```
