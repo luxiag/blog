@@ -1,15 +1,25 @@
+---
+title: docker安装mysql
+date: 2024-07-22
+categories: 
+  - Docker
+---
 
 查看镜像
+
 ```bash
 docker images
 
 ```
+
 ![](./images/mysql/2041301721654668171.png)
+
 ```bash
 docker pull mysql
-docker run -p 3306:3306 --name mysql -v /opt/mysql/conf:/etc/mysql/conf.d -v /opt/mysql/logs:/logs -v /opt/mysql/data:/var/lib/mysql -e MYSQL_ROOT_PASSWORD=123456 -d 938b57d64674 --lower_case_table_names=1
+docker run -p 3306:3306 --name mysql -v /opt/mysql/conf:/etc/mysql/conf.d -v /opt/mysql/logs:/logs -v /opt/mysql/data:/var/lib/mysql -e MYSQL_ROOT_PASSWORD=123456 -d 56a8c14e1404 --lower_case_table_names=1
 
 ```
+
 -p 3306:3306：将容器的3306端口映射到主机的3306端口
 
 -v /opt/mysql/conf:/etc/mysql/conf.d：将主机路径下的conf目录挂载到容器的/etc/mysql/conf.d目录
@@ -25,6 +35,7 @@ docker run -p 3306:3306 --name mysql -v /opt/mysql/conf:/etc/mysql/conf.d -v /op
 --lower_case_table_names=1 设置表名参数名等忽略大小写
 
 查看容器运行状态
+
 ```bash
 docker ps
 # 进入容器

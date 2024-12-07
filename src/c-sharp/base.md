@@ -353,6 +353,65 @@ foreach (int number in numbers)
 
 ```
 
+### 属性
+
+- Length：获取数组的长度（元素个数）。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  Console.WriteLine(numbers.Length); // 输出: 5
+  ```
+
+- Rank：获取数组的维数（数组的维度）。
+
+  ```cs
+  int[,] matrix = new int[3, 4];
+  Console.WriteLine(matrix.Rank); // 输出: 2
+  ```
+
+### 方法
+
+- GetValue：获取指定索引处的元素值。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  int value = (int)numbers.GetValue(2); // 获取索引为2的元素值
+  Console.WriteLine(value); // 输出: 3
+  ```
+
+- SetValue：设置指定索引处的元素值。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  numbers.SetValue(10, 2); // 将索引为2的元素值设置为10
+  Console.WriteLine(numbers[2]); // 输出: 10
+  ```
+
+- Clone：复制数组。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  int[] clone = (int[])numbers.Clone();
+  Console.WriteLine(clone[0]); // 输出: 1
+  ```
+
+- IndexOf：查找指定元素的索引。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  int index = Array.IndexOf(numbers, 3);
+  Console.WriteLine(index); // 输出: 2
+
+  ```
+
+- Find：查找满足指定条件的第一个元素。
+
+  ```cs
+  int[] numbers = { 1, 2, 3, 4, 5 };
+  int result = Array.Find(numbers, element => element % 2 == 0);
+  Console.WriteLine(result); // 输出: 2
+  ```
+
 ### 矩形数组
 
 矩形数组（Rectangular Array）是一种二维数组，其中每一行都具有相同的列数。
@@ -386,6 +445,517 @@ for (int i = 0; i < matrix.GetLength(0); i++) // 行数
 ### 交错数组
 
 交错数组（Jagged Array）是一种数组的数组，即一个数组的元素是另一个数组。
+
+```cs
+
+// 定义一个3行2列的交错数组
+int[][] jaggedArray = new int[3][];
+jaggedArray[0] = new int[2] { 1, 2 };
+jaggedArray[1] = new int[3] { 3, 4, 5 };
+jaggedArray[2] = new int[1] { 6 };
+
+// 访问元素
+Console.WriteLine(jaggedArray[0][0]); // 输出: 1
+Console.WriteLine(jaggedArray[1][2]); // 输出: 5
+
+// 使用嵌套 for 循环
+for (int i = 0; i < jaggedArray.Length; i++)
+{
+    for (int j = 0; j < jaggedArray[i].Length; j++)
+    {
+        Console.Write(jaggedArray[i][j] + " ");
+    }
+    Console.WriteLine();
+}
+// 1 2 
+// 3 4 5 
+// 6 
+
+
+int[][] jaggedArray = new int[][]
+{
+    new int[] {1, 2},    // 第一个内层数组
+    new int[] {3, 4, 5}, // 第二个内层数组
+    new int[] {6}        // 第三个内层数组
+};
+```
+
+### 数组协变
+
+数组类型的协变特性，即允许将一个派生类型的数组赋值给一个基类型的数组变量。
+意味着你可以使用子类数组来替代父类数组。
+
+```cs
+class Animal { }
+class Dog : Animal { }
+class Cat : Animal { }
+
+class Program
+{
+    static void Main()
+    {
+        Dog[] dogs = new Dog[] { new Dog(), new Dog() };
+        
+        // 协变: 子类数组可以赋给父类数组
+        Animal[] animals = dogs;
+        
+        Console.WriteLine(animals.Length);  // 输出: 2
+    }
+}
+
+```
+
+## 委托
+
+一种类型安全的函数指针，它允许你将方法作为参数传递，或者将方法存储在变量中。委托可以用来实现事件和回调机制
+
+```cs
+public delegate void MyDelegate(string message);
+public class Program
+{
+    public static void Main()
+    {
+        MyDelegate del = new MyDelegate(PrintMessage);
+        del("Hello, Delegate!");  // 调用委托，输出: Hello, Delegate!
+    }
+
+    public static void PrintMessage(string message)
+    {
+        Console.WriteLine(message);
+    }
+}
+```
+
+### 组合委托
+
+委托可以组合在一起，这意味着可以将多个委托方法分配给同一个委托变量，然后通过调用该委托变量来依次调用这些方法。
+使用 += 操作符将多个方法添加到委托链中，使用 -= 移除方法。
+
+```cs
+using System;
+
+public delegate void MyDelegate(string message);
+
+class Program
+{
+    public static void Main()
+    {
+        MyDelegate del = PrintMessage1;
+        del += PrintMessage2;  // 添加方法到委托链中
+        del += PrintMessage3;
+
+        del("Hello, Combined Delegates!");  // 调用委托时，会依次调用三个方法
+    }
+
+    public static void PrintMessage1(string message)
+    {
+        Console.WriteLine("Message 1: " + message);
+    }
+
+    public static void PrintMessage2(string message)
+    {
+        Console.WriteLine("Message 2: " + message);
+    }
+
+    public static void PrintMessage3(string message)
+    {
+        Console.WriteLine("Message 3: " + message);
+    }
+}
+// Message 1: Hello, Combined Delegates!
+// Message 2: Hello, Combined Delegates!
+// Message 3: Hello, Combined Delegates!
+```
+
+### 带返回值的委托
+
+```cs
+public delegate int MyDelegate(int x);
+
+public class Program
+{
+    public static void Main()
+    {
+        MyDelegate del = Square;
+        int result = del(4);
+        Console.WriteLine(result);  // 输出: 16
+    }
+
+    public static int Square(int x)
+    {
+        return x * x;
+    }
+}
+
+```
+
+### 匿名委托
+
+```cs
+public delegate void MyDelegate(string message);
+
+public class Program
+{
+    public static void Main()
+    {
+        MyDelegate del = delegate(string message)
+        {
+            Console.WriteLine(message);
+        };
+        del("Hello from Anonymous Method!");
+    }
+}
+// Lambda
+public delegate void MyDelegate(string message);
+
+public class Program
+{
+    public static void Main()
+    {
+        MyDelegate del = (message) => Console.WriteLine(message);
+        del("Hello from Lambda Expression!");
+    }
+}
+```
+
+### 带引用参数的委托
+
+```cs
+using System;
+
+public delegate void RefDelegate(ref int x);
+
+class Program
+{
+    static void Main()
+    {
+        int number = 5;
+
+        // 创建委托实例，并将它绑定到修改值的方法
+        RefDelegate del = ModifyNumber;
+        
+        Console.WriteLine("Before delegate call: " + number);  // 输出: 5
+        
+        // 调用委托
+        del(ref number);
+        
+        Console.WriteLine("After delegate call: " + number);  // 输出: 10
+    }
+
+    // 该方法接收一个 ref 参数并修改它
+    public static void ModifyNumber(ref int x)
+    {
+        x = x * 2;
+    }
+}
+```
+
+## 事件
+
+事件是基于委托的一种特殊的机制。它允许在对象的状态发生变化时通知其他对象。你可以将事件视为一个信号，发布者发送信号，订阅者响应信号。
+
+```cs
+
+using System;
+
+public class MyEventPublisher
+{
+    // 定义一个事件，使用预定义的 EventHandler 委托类型
+    public event EventHandler MyEvent;
+
+    // 触发事件的方法
+    public void TriggerEvent()
+    {
+        Console.WriteLine("Event Triggered!");
+        // 触发事件，检查是否有订阅者
+        //  // 在这里执行一些操作...
+        // 当操作完成时，触发事件
+        MyEvent?.Invoke(this, EventArgs.Empty);  // 使用空事件参数
+    }
+}
+
+class Program
+{
+
+
+    
+    static void Main()
+    {
+        MyEventPublisher publisher = new MyEventPublisher();
+
+        // 订阅事件
+        // 订阅者通过+=操作符来订阅事件，并提供一个事件处理函数，该函数将在事件触发时执行。
+        publisher.MyEvent += MyEventHandler;
+
+        // 触发事件
+        publisher.TriggerEvent();  // 输出: Event Triggered!
+                                  // 输出: Event Handled!
+    }
+
+    // 事件处理程序
+    public static void MyEventHandler(object sender, EventArgs e)
+    {
+        Console.WriteLine("Event Handled!");
+    }
+}
+```
+
+### 声明事件
+
+基本事件声明
+
+```cs
+public class Publisher
+{
+    // 定义一个委托 代表了事件处理函数的参数和返回类型。
+    public delegate void NotifyEventHandler(string message);
+
+    // 使用 event 关键字声明事件 事件必须是之前定义的委托类型的实例。
+    public event NotifyEventHandler OnNotify;
+
+    public void TriggerEvent(string message)
+    {
+        // 触发事件
+        // 提供事件触发机制：在类的方法中，当需要通知订阅者时，可以使用MyEvent变量的?.Invoke()方法来触发事件。
+        OnNotify?.Invoke(message); // 安全触发
+    }
+}
+
+```
+
+预定义委托简化声明
+
+```cs
+
+public class Publisher
+{
+    // 声明事件
+    public event EventHandler OnNotify;
+
+    public void TriggerEvent()
+    {
+        // 触发事件
+        OnNotify?.Invoke(this, EventArgs.Empty); // 传递事件数据
+    }
+}
+```
+
+### 订阅事件
+
+在订阅者类中，通过+=操作符来订阅事件，并提供一个与委托签名匹配的事件处理函数。
+
+```cs
+
+public class MySubscriber
+{
+    private MyClass myClass;
+
+    public MySubscriber(MyClass myClass)
+    {
+        this.myClass = myClass;
+        myClass.MyEvent += MyEventHandler;
+    }
+
+    private void MyEventHandler(object sender, EventArgs e)
+    {
+        // 事件处理函数
+        Console.WriteLine("事件被触发了！");
+    }
+}
+```
+
+同一个事件可以被多个方法订阅，触发事件时，所有订阅的方法都会依次被调用。
+
+```cs
+public class AnotherSubscriber
+{
+    public void AnotherHandleEvent(string message)
+    {
+        Console.WriteLine($"Another subscriber received: {message}");
+    }
+}
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        Publisher publisher = new Publisher();
+        Subscriber subscriber = new Subscriber();
+        AnotherSubscriber anotherSubscriber = new AnotherSubscriber();
+
+        // 订阅多个方法
+        publisher.OnNotify += subscriber.HandleEvent;
+        publisher.OnNotify += anotherSubscriber.AnotherHandleEvent;
+
+        // 触发事件
+        publisher.RaiseEvent("Multiple subscribers!");
+
+        // 输出:
+        // Event received: Multiple subscribers!
+        // Another subscriber received: Multiple subscribers!
+    }
+}
+
+```
+
+取消订阅事件：如果不再需要订阅事件，可以使用-=操作符来取消订阅
+
+```cs
+myClass.MyEvent -= MyEventHandler;
+
+```
+
+### 触发事件
+
+事件只能在声明它的类内部触发，外部类无法触发事件
+使用 Invoke 调用事件
+
+```cs
+public class Publisher
+{
+    // 定义委托和事件
+    public delegate void NotifyEventHandler(string message);
+    public event NotifyEventHandler OnNotify;
+
+    public void TriggerEvent(string message)
+    {
+        // 检查事件是否有订阅者并触发事件
+        OnNotify?.Invoke(message);  // 使用 ?. 防止空引用
+    }
+}
+
+public class Subscriber
+{
+    // 事件处理方法
+    public void HandleEvent(string message)
+    {
+        Console.WriteLine($"Event received: {message}");
+    }
+}
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        // 创建发布者和订阅者实例
+        Publisher publisher = new Publisher();
+        Subscriber subscriber = new Subscriber();
+
+        // 订阅事件
+        publisher.OnNotify += subscriber.HandleEvent;
+
+        // 触发事件
+        publisher.TriggerEvent("Hello, Event!");
+
+        // 输出: Event received: Hello, Event!
+    }
+}
+
+```
+
+### 标准事件的用法
+
+- 声明事件： 使用 EventHandler 或 `EventHandler<T>`声明事件。
+- 订阅事件： 使用 += 将事件处理程序方法附加到事件。
+- 触发事件： 在类内部调用事件的 Invoke 方法，通知所有订阅者。
+
+```cs
+using System;
+
+public class Publisher
+{
+    // 声明一个标准事件
+    public event EventHandler OnNotify;
+
+    // 方法用于触发事件
+    public void RaiseEvent()
+    {
+        OnNotify?.Invoke(this, EventArgs.Empty); // 传递当前对象和空参数
+    }
+}
+
+public class Subscriber
+{
+    public void HandleEvent(object sender, EventArgs e)
+    {
+        Console.WriteLine("Event received from Publisher.");
+    }
+}
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        Publisher publisher = new Publisher();
+        Subscriber subscriber = new Subscriber();
+
+        // 订阅事件
+        publisher.OnNotify += subscriber.HandleEvent;
+
+        // 触发事件
+        publisher.RaiseEvent();
+
+        // 输出: Event received from Publisher.
+    }
+}
+
+```
+
+### 事件访问器
+
+```cs
+
+public class Publisher
+{
+    private EventHandler _myEvent;
+
+    // 使用事件访问器自定义事件
+    public event EventHandler MyEvent
+    {
+        add
+        {
+            Console.WriteLine("Adding a handler.");
+            _myEvent += value; // 将处理程序添加到委托列表
+        }
+        remove
+        {
+            Console.WriteLine("Removing a handler.");
+            _myEvent -= value; // 从委托列表中移除处理程序
+        }
+    }
+
+    // 触发事件的方法
+    public void RaiseEvent()
+    {
+        _myEvent?.Invoke(this, EventArgs.Empty);
+    }
+}
+public class Subscriber
+{
+    public void HandleEvent(object sender, EventArgs e)
+    {
+        Console.WriteLine("Event received.");
+    }
+}
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        Publisher publisher = new Publisher();
+        Subscriber subscriber = new Subscriber();
+
+        // 订阅事件
+        publisher.MyEvent += subscriber.HandleEvent; // 输出: Adding a handler.
+
+        // 触发事件
+        publisher.RaiseEvent(); // 输出: Event received.
+
+        // 取消订阅事件
+        publisher.MyEvent -= subscriber.HandleEvent; // 输出: Removing a handler.
+    }
+}
+```
 
 ## 类
 
@@ -1244,6 +1814,209 @@ public class Duck : IAnimal
 
 ```
 
+## 转换
+
+将一个数据类型的值转换为另一种数据类型
+
+### 隐式转换
+
+适用于数据范围不丢失、没有数据精度损失的转换，例如小范围类型转换为大范围类型。
+
+```cs
+int intValue = 100;
+long longValue = intValue; // 隐式转换：int -> long
+float floatValue = intValue; // 隐式转换：int -> float
+```
+
+### 显示转换和强制转换
+
+适用于可能导致数据丢失的转换。
+
+```cs
+double doubleValue = 9.78;
+int intValue = (int)doubleValue; // 显式转换，结果为 9
+```
+
+### 转换的类型
+
+隐式：从范围小的类型到范围大的类型。
+显式：从范围大的类型到范围小的类型。
+
+### 数字的转换
+
+隐式数字转换
+
+- 自动完成，无需显式指定。
+- 不会造成数据丢失（从范围小的类型到范围大的类型）
+
+```cs
+int intValue = 100;
+long longValue = intValue;   // 隐式转换：int -> long
+float floatValue = intValue; // 隐式转换：int -> float
+```
+
+显式数字转换
+
+- 必须使用强制转换 (type)。
+- 可能造成数据丢失（从范围大的类型到范围小的类型）。
+
+```cs
+double doubleValue = 123.45;
+int intValue = (int)doubleValue; // 显式转换，结果为 123（小数部分丢失）
+
+long longValue = 123456789;
+short shortValue = (short)longValue; // 可能溢出
+```
+
+Convert类转换
+
+```cs
+string strValue = "123";
+int intValue = Convert.ToInt32(strValue);  // 字符串转为整数
+double doubleValue = Convert.ToDouble(intValue); // 整数转为双精度
+```
+
+### 引用转换
+
+- 由引用保存的那部分信息是她指向的数据类型
+- 引用转换接受引用并放回一个指向堆中同一位置的引用
+
+### 装箱转换
+
+装箱（Boxing）是指将值类型转换为引用类型的过程。
+
+- 值类型的数据被复制到托管堆上。
+- 生成的引用指向该对象的地址
+
+```cs
+int value = 123;
+object boxedValue = value; // 装箱
+
+
+int value = 123;
+object boxedValue = (object)value; // 显式装箱
+
+```
+
+### 拆箱转换
+
+拆箱：将一个已经装箱的对象从堆内存中提取为值类型。
+特点：拆箱必须显式完成，并且类型必须完全匹配，否则会抛出异常。
+
+```cs
+object boxedValue = 123;      // 装箱
+int value = (int)boxedValue; // 拆箱
+
+object nullObject = null;
+
+try
+{
+    int value = (int)nullObject; // NullReferenceException
+}
+catch (NullReferenceException ex)
+{
+    Console.WriteLine("Cannot unbox null: " + ex.Message);
+}
+```
+
+### 用户自定义转换
+
+隐式转换 (implicit)：
+
+- 无需显式使用强制转换运算符 (type)。
+- 适用于不会导致数据丢失或异常的转换。
+
+显式转换 (explicit)：
+
+- 必须显式使用强制转换运算符 (type)。
+- 适用于可能导致数据丢失或需要明确意图的转换
+
+定义
+
+```cs
+// 隐式转换
+public static implicit operator TargetType(SourceType value)
+{
+    // 转换逻辑
+    return new TargetType();
+}
+
+// 显式转换
+public static explicit operator TargetType(SourceType value)
+{
+    // 转换逻辑
+    return new TargetType();
+}
+```
+
+使用
+
+```cs
+
+public class Temperature
+{
+    public double Celsius { get; set; }
+
+    public Temperature(double celsius)
+    {
+        Celsius = celsius;
+    }
+
+    // 隐式转换：double -> Temperature
+    public static implicit operator Temperature(double celsius)
+    {
+        return new Temperature(celsius);
+    }
+
+    // 显式转换：Temperature -> double
+    public static explicit operator double(Temperature temp)
+    {
+        return temp.Celsius;
+    }
+}
+
+class Program
+{
+    static void Main()
+    {
+        // 隐式转换
+        Temperature temp = 36.5; // double -> Temperature
+        Console.WriteLine($"Temperature: {temp.Celsius}°C");
+
+        // 显式转换
+        double celsius = (double)temp; // Temperature -> double
+        Console.WriteLine($"Celsius: {celsius}°C");
+    }
+}
+```
+
+### is运算符
+
+检查对象是否可以转换为指定类型，返回布尔值。
+
+```cs
+object obj = 123;
+if (obj is string)
+{
+    string str = (string)obj;
+    Console.WriteLine(str);
+}
+else
+{
+    Console.WriteLine("Not a string");
+}
+```
+
+### as运算符
+
+尝试将对象转换为指定的引用类型，如果转换失败，返回 null。
+
+```cs
+object obj = "Hello";
+string str = obj as string; // 成功时返回字符串，否则返回 null
+
+```
+
 ## 泛型
 
 定义时指定，使用时再指定具体的类型。
@@ -1539,6 +2312,125 @@ class Program
 }
 ```
 
+# 枚举器和迭代器
+
+枚举器是一个对象，它定义了一个用于循环访问集合的机制。枚举器通过实现 `IEnumerator` 或 `IEnumerable` 接口来创建。
+
+## foreach
+
+```cs
+
+int [] numbers = { 1, 2, 3, 4, 5 };
+
+foreach (int number in numbers)
+{
+    Console.WriteLine(number);
+}
+
+// 输出:
+// 1
+// 2
+// 3
+// 4
+// 5
+// 原因：foreach 语句使用 IEnumerator 接口来遍历集合中的元素。
+```
+
+## IEnumerator
+
+IEnumerator 是一个接口，定义了用于迭代集合的方法。
+
+```cs
+public interface IEnumerator
+{
+    object Current { get; }    // 获取当前元素
+    bool MoveNext();           // 移动到下一个元素
+    void Reset();              // 重置到起始位置
+}
+
+public interface IEnumerator<out T> : IDisposable, IEnumerator
+{
+    T Current { get; }  // 泛型的 Current 属性
+}
+```
+
+### 枚举器
+
+```cs
+public class MyEnumerator : IEnumerator<int>
+{
+    private int[] _data;
+    private int _position = -1;
+
+    public MyEnumerator(int[] data)
+    {
+        _data = data;
+    }
+
+    public bool MoveNext()
+    {
+        _position++;
+        return (_position < _data.Length);
+    }
+
+    public void Reset()
+    {
+        _position = -1;
+    }
+
+    public int Current
+    {
+        get
+        {
+            try
+            {
+                return _data[_position];
+            }
+            catch (IndexOutOfRangeException)
+            {
+                throw new InvalidOperationException();
+            }
+        }
+    }
+
+    object IEnumerator.Current => Current;
+
+    public void Dispose()
+    {
+        // 清理资源
+    }
+}
+```
+
+### 迭代器
+
+```cs
+public class MyCollection
+{
+    private int[] _data = { 1, 2, 3, 4, 5 };
+
+    public IEnumerator<int> GetEnumerator()
+    {
+        for (int i = 0; i < _data.Length; i++)
+        {
+            yield return _data[i];
+        }
+    }
+}
+
+class Program
+{
+    static void Main()
+    {
+    
+        foreach (var item in new MyCollection())
+        {
+            Console.WriteLine(item);
+        }
+    }
+}
+```
+
 # 参考
 
-<https://blog.csdn.net/qq_51040417/article/details/141551584>
+《C#图解教程》

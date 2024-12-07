@@ -4,7 +4,7 @@ date: 2022-01-18
 category:
     - ThreeJS
 ---
-参考：<https://threejs.org/>
+
 
 ## 纹理的使用
 
@@ -79,31 +79,31 @@ new THREE.BufferAttribute(planeGeometry.attributes.uv.array, 2)
 <div  class="texture-imgs">
     <div class="img">
         doorColorTexture
-        <img src="/assets/textures/door/color.jpg"/>
+        <img src="./assets/textures/door/color.jpg"/>
     </div>
       <div class="img">
         doorAplhaTexture
-        <img src="/assets/textures/door/alpha.jpg"/>
+        <img src="./assets/textures/door/alpha.jpg"/>
     </div>
          <div class="img">
         doorAoTexture
-        <img src="/assets/textures/door/ambientOcclusion.jpg"/>
+        <img src="./assets/textures/door/ambientOcclusion.jpg"/>
     </div>
          <div class="img">
         doorHeightTexture
-        <img src="/assets/textures/door/height.jpg"/>
+        <img src="./assets/textures/door/height.jpg"/>
     </div>
          <div class="img">
         roughnessTexture
-        <img src="/assets/textures/door/roughness.jpg"/>
+        <img src="./assets/textures/door/roughness.jpg"/>
     </div>
              <div class="img">
         metalnessTexture
-        <img src="/assets/textures/door/metalness.jpg"/>
+        <img src="./assets/textures/door/metalness.jpg"/>
     </div>
                  <div class="img">
         normalTexture
-        <img src="/assets/textures/door/normal.jpg"/>
+        <img src="./assets/textures/door/normal.jpg"/>
     </div>
 </div>
 
@@ -208,6 +208,11 @@ Mips 是纹理的副本，每一个都是前一个 mip 的一半宽和一半高�
 
 * `THREE.LinearMipmapLinearFilter`选择2个mips，从每个mips中选择4个像素，然后将所有8个像素混合成1个像素。
 
+
+# 参考
+
+参考：<https://threejs.org/>
+
 <script setup>
 import {ref,onMounted} from 'vue'
 import * as THREE from 'three'
@@ -220,19 +225,19 @@ const initTextureRef = () => {
   const scene = new THREE.Scene()
 
   const textureLoader = new THREE.TextureLoader();
-  const doorColorTexture = textureLoader.load("/assets/textures/door/color.jpg");
-  const doorAplhaTexture = textureLoader.load("/assets/textures/door/alpha.jpg");
+  const doorColorTexture = textureLoader.load("./assets/textures/door/color.jpg");
+  const doorAplhaTexture = textureLoader.load("./assets/textures/door/alpha.jpg");
   const doorAoTexture = textureLoader.load(
-    "/assets/textures/door/ambientOcclusion.jpg"
+    "./assets/textures/door/ambientOcclusion.jpg"
   );
   //导入置换贴图
-const doorHeightTexture = textureLoader.load("/assets/textures/door/height.jpg");
+const doorHeightTexture = textureLoader.load("./assets/textures/door/height.jpg");
 // 导入粗糙度贴图
-const roughnessTexture = textureLoader.load("/assets/textures/door/roughness.jpg");
+const roughnessTexture = textureLoader.load("./assets/textures/door/roughness.jpg");
 // 导入金属贴图
-const metalnessTexture = textureLoader.load("/assets/textures/door/metalness.jpg");
+const metalnessTexture = textureLoader.load("./assets/textures/door/metalness.jpg");
 // 导入法线贴图
-const normalTexture = textureLoader.load("/assets/textures/door/normal.jpg");
+const normalTexture = textureLoader.load("./assets/textures/door/normal.jpg");
 
 const basicMaterial = new THREE.MeshBasicMaterial({
   color: "#ffff00",
@@ -252,7 +257,7 @@ const basicMaterial = new THREE.MeshBasicMaterial({
   side: THREE.DoubleSide,
   });
   // 添加平面
-  const planeGeometry = new THREE.PlaneBufferGeometry(1, 1);
+  const planeGeometry = new THREE.PlaneGeometry(1, 1);
   const plane = new THREE.Mesh(planeGeometry, basicMaterial);
 //   plane.position.set(3, 0, 0);
   

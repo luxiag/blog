@@ -4,7 +4,7 @@ category:
   - ThreeJS
 date: 2022-03-22
 ---
-参考：<https://threejs.org/>
+
 
 ## 动画类型
 
@@ -233,7 +233,7 @@ const initBlending = () => {
     scene.add( mesh );
 
     const loader = new GLTFLoader();
-    loader.load( '/threejs/models/gltf/Soldier.glb', function ( gltf ) {
+    loader.load( './assets/models/Soldier.glb', function ( gltf ) {
 
      model = gltf.scene;
      scene.add( model );

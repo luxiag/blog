@@ -130,8 +130,6 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import Stats from "three/examples/jsm/libs/stats.module.js";
 import * as d3 from "d3";
 
-
-
 const mapRef = ref()
 const initMap = async () => {
 
@@ -149,7 +147,6 @@ camera.position.set(0,0,100);
 
 scene.add(camera)
 
-
 // 加载纹理
 const map = new THREE.Object3D();
 
@@ -166,12 +163,10 @@ renderer.shadowMap.type = THREE.VSMShadowMap;
 
 renderer.setSize(mapRef.value.offsetWidth,mapRef.value.offsetWidth/2)
 
-
 if(!__VUEPRESS_SSR__){
 
 // 监听屏幕大小改变的变化，设置渲染的尺寸
 window.addEventListener("resize", () => {
-
 
   //   更新渲染器
 renderer.setSize(mapRef.value.offsetWidth,mapRef.value.offsetWidth/2)
@@ -201,15 +196,13 @@ function animate(t) {
   renderer.render(scene, camera);
 }
 
-
 animate();
-
 
 const projection1 = d3.geoMercator().center([116, 39]).translate([0, 0, 0]);
 
 const loader = new THREE.FileLoader();
 
-loader.load("/geojson/china.json",(data) => {
+loader.load("./assets/geojson/china.json",(data) => {
     const jsData = JSON.parse(data)
     operationData(jsData)
 })
@@ -371,11 +364,7 @@ function getCanvasRelativePosition(event) {
   };
 }
 
-
-
 }
-
-
 
 onMounted(()=>{
     initMap()
@@ -386,7 +375,7 @@ onMounted(()=>{
 
 <style scoped>
 
-    .map_container {
+    .ref-container {
         position: relative;
     }
 </style>

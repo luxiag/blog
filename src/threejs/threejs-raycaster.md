@@ -4,7 +4,7 @@ category:
   - ThreeJS
 date: 2022-01-24
 ---
-参考：<https://threejs.org/>
+
 
 ## Raycaster
 
@@ -219,6 +219,11 @@ if(intersects.length == 0){
 
 </div>
 
+
+# 参考
+
+参考：<https://threejs.org/>
+
 <script setup>
 import {ref,onMounted} from 'vue'
 import * as THREE from 'three'
@@ -237,7 +242,7 @@ const init = () => {
     camera.position.set(0,0,20);
     scene.add(camera);
 
-    const cubeGeometry = new THREE.BoxBufferGeometry(1,1,1);
+    const cubeGeometry = new THREE.BoxGeometry(1,1,1);
     const material = new THREE.MeshBasicMaterial({
         // 网格
         wireframe: true
@@ -319,7 +324,7 @@ const initVoxel = () => {
   scene.add( rollOverMesh );
 
     const cubeGeo = new THREE.BoxGeometry( 50, 50, 50 );
-  const cubeMaterial = new THREE.MeshLambertMaterial( { color: 0xfeb74c, map: new THREE.TextureLoader().load( '/assets/textures/square-outline-textured.png' ) } );
+  const cubeMaterial = new THREE.MeshLambertMaterial( { color: 0xfeb74c, map: new THREE.TextureLoader().load( './assets/textures/square-outline-textured.png' ) } );
 
     const gridHelper = new THREE.GridHelper( 1000, 20 );
   scene.add( gridHelper );
@@ -441,9 +446,9 @@ function initCurve() {
     const earthMaterial = new THREE.MeshPhongMaterial({
       specular: 0x333333,
       shininess: 5,
-      map: textureLoader.load("/assets/textures/planets/earth_atmos_2048.jpg"),
-      specularMap: textureLoader.load("/assets/textures/planets/earth_specular_2048.jpg"),
-      normalMap: textureLoader.load("/assets/textures/planets/earth_normal_2048.jpg"),
+      map: textureLoader.load("./assets/textures/planets/earth_atmos_2048.jpg"),
+      specularMap: textureLoader.load("./assets/textures/planets/earth_specular_2048.jpg"),
+      normalMap: textureLoader.load("./assets/textures/planets/earth_normal_2048.jpg"),
       normalScale: new THREE.Vector2(0.85, 0.85),
     });
     const earth = new THREE.Mesh(earthGeometry, earthMaterial);
@@ -453,7 +458,7 @@ function initCurve() {
     const moonGeometry = new THREE.SphereGeometry(MOON_RADIUS, 16, 16);
     const moonMaterial = new THREE.MeshPhongMaterial({
       shininess: 5,
-      map: textureLoader.load("/assets/textures/planets/moon_1024.jpg"),
+      map: textureLoader.load("./assets/textures/planets/moon_1024.jpg"),
     });
     const moon = new THREE.Mesh(moonGeometry, moonMaterial);
     scene.add(moon);

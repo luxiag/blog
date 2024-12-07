@@ -5,7 +5,7 @@ category:
   - ThreeJS
 ---
 
-**参考：<https://threejs.org/>**
+
 
 ## Three.js 和 WebGL
 
@@ -137,6 +137,10 @@ requestAnimationFrame(render);
 ```
 
 <div ref="helloCube"></div>
+
+
+# 参考
+参考：<https://threejs.org/>
 
 <script setup>
 import * as THREE from 'three'
