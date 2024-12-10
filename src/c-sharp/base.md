@@ -2312,6 +2312,51 @@ class Program
 }
 ```
 
+### 泛型集合
+
+```cs
+// 创建一个存储整数的 List
+List<int> numbers = new List<int>();
+
+// 创建一个存储字符串的 List
+List<string> names = new List<string>();
+
+numbers.Add(1);
+numbers.Add(2);
+numbers.Add(3);
+
+names.Add("Alice");
+names.Add("Bob");
+
+int firstNumber = numbers[0]; // 通过索引访问元素
+Console.WriteLine(firstNumber); // 输出 1
+
+foreach (var number in numbers)
+{
+    Console.WriteLine(number);
+}
+
+numbers.Remove(2); // 移除值为 2 的元素
+numbers.RemoveAt(0); // 移除索引为 0 的元素
+
+bool containsThree = numbers.Contains(3); // 返回 true
+
+
+```
+
+|方法 | 功能 |
+|--- | --- |
+|Add(T item) |将元素添加到 List 的末尾。 |
+|Remove(T item)| 移除第一个匹配的元素。 |
+|RemoveAt(int index) |移除指定索引处的元素。 |
+|Insert(int index, T item) |在指定位置插入元素。 |
+|Clear() |清空所有元素。 |
+|IndexOf(T item) |返回指定元素的索引，未找到时返回 -1。 |
+|Contains(T item) | 检查 List 中是否包含指定元素。 |
+|Sort() |按升序对 List 中的元素进行排序。 |
+|Reverse() |反转 List 中元素的顺序。 |
+|Find(Predicate<T>) | 返回与指定条件匹配的第一个元素。 |
+
 # 枚举器和迭代器
 
 枚举器是一个对象，它定义了一个用于循环访问集合的机制。枚举器通过实现 `IEnumerator` 或 `IEnumerable` 接口来创建。
