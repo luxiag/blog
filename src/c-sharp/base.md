@@ -2355,7 +2355,7 @@ bool containsThree = numbers.Contains(3); // 返回 true
 |Contains(T item) | 检查 List 中是否包含指定元素。 |
 |Sort() |按升序对 List 中的元素进行排序。 |
 |Reverse() |反转 List 中元素的顺序。 |
-|Find(Predicate<T>) | 返回与指定条件匹配的第一个元素。 |
+|`Find(Predicate<T>)` | 返回与指定条件匹配的第一个元素。 |
 
 # 枚举器和迭代器
 
