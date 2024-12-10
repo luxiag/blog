@@ -1,6 +1,8 @@
 ---
 title: Entity Framework Core
-
+category: 
+    - .Net
+date: 2024-08-05
 ---
 
 # 基础使用
@@ -394,7 +396,7 @@ Data Annotations 通过在模型类的属性上使用特性（Attributes）来�
 
      ```csharp
 
-     
+
      public class Product
      {
          [Timestamp]
@@ -430,7 +432,7 @@ Data Annotations 通过在模型类的属性上使用特性（Attributes）来�
 
 IEntityTypeConfiguration`<T>` 是 Entity Framework Core (EF Core) 中的一个接口，允许你为实体类型提供配置逻辑。它是 EF Core 提供的 Fluent API 的一部分，用于将实体的配置（如表名、主键、外键、列约束、索引等）从 DbContext 类中分离出来，帮助你保持代码的组织性和可维护性。
 
-- 分离配置逻辑：IEntityTypeConfiguration`<T>` 接口允许你将配置逻辑从 DbContext 中提取到单独的类中，使代码更清晰、可维护。特别是在实体模型很复杂时，使用 IEntityTypeConfiguration<T> 可以将每个实体的配置单独管理。
+- 分离配置逻辑：IEntityTypeConfiguration`<T>` 接口允许你将配置逻辑从 DbContext 中提取到单独的类中，使代码更清晰、可维护。特别是在实体模型很复杂时，使用 IEntityTypeConfiguration`<T>` 可以将每个实体的配置单独管理。
 - 实现 Fluent API 配置：通过实现该接口的 Configure 方法，你可以利用 Fluent API 为实体指定数据库表名、列类型、关系（如一对多、一对一）等属性。
 - 配置继承：你可以通过继承 IEntityTypeConfiguration`<T>`接口来为派生实体提供配置，从而实现配置的继承和重用。
 
