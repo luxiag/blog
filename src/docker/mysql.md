@@ -39,6 +39,7 @@ docker run -p 3306:3306 --name mysql -v /opt/mysql/conf:/etc/mysql/conf.d -v /op
 ```bash
 docker ps
 # 进入容器
+
 docker exec -it mysql /bin/bash
 # 登录数据库
 mysql -uroot -p123456 --default-character-set=utf8
