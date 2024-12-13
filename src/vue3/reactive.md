@@ -1,4 +1,30 @@
+---
+title: Vue3.5 响应式原理
+date: 2024-12-05
+category:
+  - Vue
+tag:
+  - Vue3
+---
 
+
+
+```js
+const state = reactive({
+  name:'黎明',
+  age:18
+})
+
+effect(()=>{
+  // 访问对象，触发get方法，收集对象的依赖
+  console.log(state.name,state.age)
+})
+
+// 触发set方法，触发依赖函数
+state.name = '黎明'
+state.age = 20
+
+```
 
 # Proxy
 Proxy 对象用于创建一个对象的代理，从而实现基本操作的拦截和自定义（如属性查找、赋值、枚举、函数调用等）。
@@ -44,27 +70,8 @@ alert(proxy.get('test')); // 1 (works!)
 ```
 
 
-```js
-const state = reactive({
-  name:'黎明',
-  age:18
-})
-
-effect(()=>{
-  // 访问对象，触发get方法，收集对象的依赖
-  console.log(state.name,state.age)
-})
-
-// 触发set方法，触发依赖函数
-state.name = '黎明'
-state.age = 20
-
-```
-
-```js
 
 
-```
 
 
 ```html
@@ -514,6 +521,7 @@ class BaseReactiveHandler implements ProxyHandler<Target> {
 ```js
 const collectionHandlers = {
   get(target, key, receiver) {
+    //proxy 局限性 Map,Set等无法直接使用set
     return Reflect.get(hasOwn(instrumentations,key) && key in target ? instrumentations :target,key,receiver)
   }
 }
@@ -838,7 +846,473 @@ function createIterableMethod(
 
 :::
 
+# ref
 
+`Getters/setters`
+```js
+class User {
+
+  constructor(name) {
+    // 调用 setter
+    this.name = name;
+  }
+
+  get name() {
+    return this._name;
+  }
+
+  set name(value) {
+    if (value.length < 4) {
+      alert("Name is too short.");
+      return;
+    }
+    this._name = value;
+  }
+
+}
+
+let user = new User("John");
+alert(user.name); // John
+
+user = new User(""); // Name is too short.
+```
+`ref`
+```ts
+export function ref(value?: unknown) {
+  return createRef(value, false)
+}
+function createRef(rawValue: unknown, shallow: boolean) {
+  if (isRef(rawValue)) {
+    return rawValue
+  }
+  return new RefImpl(rawValue, shallow)
+}
+class RefImpl<T = any> {
+  _value: T
+  private _rawValue: T
+
+  dep: Dep = new Dep()
+  constructor(value: T, isShallow: boolean) {
+    this._rawValue = isShallow ? value : toRaw(value)
+    this._value = isShallow ? value : toReactive(value)
+  }
+
+  get value() {
+    this.dep.track()
+    return this._value
+  }
+
+  set value(newValue) {
+    const oldValue = this._rawValue
+    if (hasChanged(newValue, oldValue)) {
+      this._rawValue = newValue
+      this._value = newValue 
+      this.dep.trigger()
+    }
+  }
+}
+
+```
+
+::: details RefImpl
+```ts
+class RefImpl<T = any> {
+  _value: T
+  private _rawValue: T
+
+  dep: Dep = new Dep()
+
+  public readonly [ReactiveFlags.IS_REF] = true
+  public readonly [ReactiveFlags.IS_SHALLOW]: boolean = false
+
+  constructor(value: T, isShallow: boolean) {
+    this._rawValue = isShallow ? value : toRaw(value)
+    this._value = isShallow ? value : toReactive(value)
+    this[ReactiveFlags.IS_SHALLOW] = isShallow
+  }
+
+  get value() {
+    if (__DEV__) {
+      this.dep.track({
+        target: this,
+        type: TrackOpTypes.GET,
+        key: 'value',
+      })
+    } else {
+      this.dep.track()
+    }
+    return this._value
+  }
+
+  set value(newValue) {
+    const oldValue = this._rawValue
+    const useDirectValue =
+      this[ReactiveFlags.IS_SHALLOW] ||
+      isShallow(newValue) ||
+      isReadonly(newValue)
+    newValue = useDirectValue ? newValue : toRaw(newValue)
+    if (hasChanged(newValue, oldValue)) {
+      this._rawValue = newValue
+      this._value = useDirectValue ? newValue : toReactive(newValue)
+      if (__DEV__) {
+        this.dep.trigger({
+          target: this,
+          type: TriggerOpTypes.SET,
+          key: 'value',
+          newValue,
+          oldValue,
+        })
+      } else {
+        this.dep.trigger()
+      }
+    }
+  }
+}
+
+
+```
+:::
+
+# Effect
+
+```ts
+it('should observe basic properties', () => {
+  let dummy
+  const counter = reactive({ num: 0 })
+  effect(() => (dummy = counter.num))
+  expect(dummy).toBe(0)
+  counter.num = 7
+  expect(dummy).toBe(7)
+})
+```
+
+
+
+effect是 reactive 的核心，主要负责收集依赖，更新依赖
+```ts
+function effect(fn){
+  const e = new ReactiveEffect(fn)
+  e.run()
+}
+class ReactiveEffect {
+  constructor(public fn: any) {
+    this.fn = fn
+  }
+  run(){
+    //  effect 从 deps 数组中移除，然后清空 deps 数组。
+    cleanupEffect(this)
+    //  
+    prepareDeps(this)
+    activeSub = this
+    shouldTrack = true
+    // 触发track收集
+    this.fn()
+  }
+}
+```
+访问reactive数据会触发get拦截进行track进行依赖收集
+```ts
+function track(target,type,key) {
+   if (shouldTrack && activeSub) { 
+    dep.track({target,type,key})
+   //  ....
+   }
+}
+class Dep{
+  track(){
+    let link = this.activeLink = new Link(activeSub,this)
+    addSub(link)
+  }
+}
+// 建立一个链表来管理依赖 link.sub = effect link.dep = Dep
+function addSub(link) {
+    const currentTail = link.dep.subs
+    // 更新订阅者链表
+    if (currentTail !== link) {
+      link.prevSub = currentTail
+      if (currentTail) currentTail.nextSub = link
+    } 
+    // 更新订阅者链表 
+    link.dep.subs = link
+}
+```
+更改reactive属性数据，会触发set拦截，进行trigger触发依赖更新
+```ts
+function trigger(target,type,key,newValue,oldValue,oldTarget) {
+  const run = (dep) => {dep.trigger()}
+  startBatch()
+  // 获取收集的依赖
+  const depsMap = targetMap.get(target)
+  depsMap.forEach(run)
+}
+class Dep{
+  trigger(){
+    this.notify()
+  },
+  notify(){
+    starBatch()
+    // 遍历订阅者链表，触发effect
+      for (let link = this.subs; link; link = link.prevSub) {
+        if (link.sub.notify()) {
+          ;(link.sub as ComputedRefImpl).dep.notify()
+        }
+    }
+    endBatch()
+  }
+}
+class ReactiveEffect{
+  notify(){
+    batch(this)
+  },
+  trigger(){
+    //  派发更新
+  }
+}
+let batchDepth = 0
+function starBatch(){
+  batchDepth ++
+}
+function batch(sub) {
+   batchedSub = sub
+}
+function endBatch(){
+  if(--batchDepth === 0){
+    return
+  }
+  batchedSub.trigger()
+}
+```
+
+
+::: details effect
+```ts
+export function effect<T = any>(
+  fn: () => T,
+  options?: ReactiveEffectOptions,
+): ReactiveEffectRunner<T> {
+  // // 如果传入的fn本身就是effect，那么就直接执行 effect的副作用
+  if ((fn as ReactiveEffectRunner).effect instanceof ReactiveEffect) {
+    fn = (fn as ReactiveEffectRunner).effect.fn
+  }
+
+  const e = new ReactiveEffect(fn)
+  if (options) {
+    extend(e, options)
+  }
+  try {
+    e.run()
+  } catch (err) {
+    e.stop()
+    throw err
+  }
+  const runner = e.run.bind(e) as ReactiveEffectRunner
+  runner.effect = e
+  return runner
+}
+export let activeEffectScope: EffectScope | undefined
+
+export class ReactiveEffect<T = any>
+  implements Subscriber, ReactiveEffectOptions
+{
+  /**
+   * @internal
+   */
+  deps?: Link = undefined
+  /**
+   * @internal
+   */
+  depsTail?: Link = undefined
+  /**
+   * @internal
+   */
+  flags: EffectFlags = EffectFlags.ACTIVE | EffectFlags.TRACKING
+  /**
+   * @internal
+   */
+  next?: Subscriber = undefined
+  /**
+   * @internal
+   */
+  cleanup?: () => void = undefined
+
+  scheduler?: EffectScheduler = undefined
+  onStop?: () => void
+  onTrack?: (event: DebuggerEvent) => void
+  onTrigger?: (event: DebuggerEvent) => void
+
+  constructor(public fn: () => T) {
+    if (activeEffectScope && activeEffectScope.active) {
+      activeEffectScope.effects.push(this)
+    }
+  }
+
+  pause(): void {
+    this.flags |= EffectFlags.PAUSED
+  }
+
+  resume(): void {
+    if (this.flags & EffectFlags.PAUSED) {
+      this.flags &= ~EffectFlags.PAUSED
+      if (pausedQueueEffects.has(this)) {
+        pausedQueueEffects.delete(this)
+        this.trigger()
+      }
+    }
+  }
+
+  /**
+   * @internal
+   */
+  notify(): void {
+    if (
+      this.flags & EffectFlags.RUNNING &&
+      !(this.flags & EffectFlags.ALLOW_RECURSE)
+    ) {
+      return
+    }
+    if (!(this.flags & EffectFlags.NOTIFIED)) {
+      batch(this)
+    }
+  }
+
+  run(): T {
+    // TODO cleanupEffect
+
+    if (!(this.flags & EffectFlags.ACTIVE)) {
+      // stopped during cleanup
+      return this.fn()
+    }
+
+    this.flags |= EffectFlags.RUNNING
+    cleanupEffect(this)
+    prepareDeps(this)
+    const prevEffect = activeSub
+    const prevShouldTrack = shouldTrack
+    activeSub = this
+    shouldTrack = true
+
+    try {
+      return this.fn()
+    } finally {
+      if (__DEV__ && activeSub !== this) {
+        warn(
+          'Active effect was not restored correctly - ' +
+            'this is likely a Vue internal bug.',
+        )
+      }
+      cleanupDeps(this)
+      activeSub = prevEffect
+      shouldTrack = prevShouldTrack
+      this.flags &= ~EffectFlags.RUNNING
+    }
+  }
+
+  stop(): void {
+    if (this.flags & EffectFlags.ACTIVE) {
+      for (let link = this.deps; link; link = link.nextDep) {
+        removeSub(link)
+      }
+      this.deps = this.depsTail = undefined
+      cleanupEffect(this)
+      this.onStop && this.onStop()
+      this.flags &= ~EffectFlags.ACTIVE
+    }
+  }
+
+  trigger(): void {
+    if (this.flags & EffectFlags.PAUSED) {
+      pausedQueueEffects.add(this)
+    } else if (this.scheduler) {
+      this.scheduler()
+    } else {
+      this.runIfDirty()
+    }
+  }
+
+  /**
+   * @internal
+   */
+  runIfDirty(): void {
+    if (isDirty(this)) {
+      this.run()
+    }
+  }
+
+  get dirty(): boolean {
+    return isDirty(this)
+  }
+}
+
+```
+
+:::
+
+# Dep
+
+- `targetMap`:存储了每个 "响应性对象属性" 关联的依赖；类型是 WeakMap
+- `depsMap`: 存储了每个属性的依赖；类型是 Map
+- `dep`: 存储了 effects ，一个 effects 集，这些 effect 在值发生变化时重新运行;类型是 Set
+
+![](./images/reactive/3426491733559038890.png)
+
+```ts
+//  存储effects ，一个 effects 集，这些 effect 在值发生变化时重新运行
+class Dep {
+  activeLink = undefined
+  track(){
+    // activeSub = ReactiveEffect
+    link = this.activeLink = new Link(activeSub,this)
+    // 建立链表，将链表的当前指向link,上一个link改为prevSub
+    addSub(link)
+  }
+  trigger(){
+    this.notify()
+  }
+  notify(){
+    startBatch()
+    try {
+      // 循环遍历链表
+      for (let link = this.subs; link; link = link.prevSub) {
+        if (link.sub.notify()) {
+          ;(link.sub as ComputedRefImpl).dep.notify()
+        }
+      }
+    } finally {
+      endBatch()
+    }
+  }
+}
+// 存储了每个 "响应性对象属性" 关联的依赖
+export const targetMap: WeakMap<object, KeyToDepMap> = new WeakMap()
+
+function track(target,type,key) {
+    let depsMap = targetMap.get(target)
+    if (!depsMap) {
+      //depsMap 存储了每个属性的依赖；
+      targetMap.set(target, (depsMap = new Map()))
+    }
+    let dep = depsMap.get(key)
+    if (!dep) {
+      depsMap.set(key, (dep = new Dep()))
+      dep.map = depsMap
+      dep.key = key
+    }
+    dep.track()
+    
+}
+function trigger(target,type,key,newValue,oldValue,oldTarget) {
+  const depsMap = targetMap.get(target)
+  const run = dep => dep.trigger()
+  startBatch()
+  depsMap.forEach(run)
+  endBatch()
+}
+
+```
+
+
+
+::: details track
 
 ```ts
 export const targetMap: WeakMap<object, KeyToDepMap> = new WeakMap()
@@ -877,11 +1351,10 @@ export function track(target: object, type: TrackOpTypes, key: unknown): void {
   }
 }
 
-//dep.track
-
-
-
 ```
+:::
+
+::: details trigger
 
 ```ts
 /**
@@ -990,6 +1463,8 @@ export function trigger(
 }
 
 ```
+
+:::
 
 ::: details Dep
 
