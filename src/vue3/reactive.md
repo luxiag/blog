@@ -996,7 +996,9 @@ function effect(fn){
 }
 class ReactiveEffect {
   constructor(public fn: any) {
-    this.fn = fn
+    if (activeEffectScope && activeEffectScope.active) {
+      activeEffectScope.effects.push(this)
+    }
   }
   run(){
     //  effect 从 deps 数组中移除，然后清空 deps 数组。
@@ -1633,3 +1635,4 @@ function addSub(link: Link) {
 ```
 
 :::
+
