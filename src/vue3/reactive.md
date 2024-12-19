@@ -1068,6 +1068,16 @@ class ReactiveEffect{
   },
   trigger(){
     //  派发更新
+    if (this.flags & EffectFlags.PAUSED) {
+      pausedQueueEffects.add(this)
+    } else if (this.scheduler) {
+      // 通过调度器来调用 fn
+      this.scheduler()
+    } else {
+      // this.fn()
+      // 触发回调函数进行更新
+      this.runIfDirty()
+    }
   }
 }
 let batchDepth = 0
@@ -1635,4 +1645,43 @@ function addSub(link: Link) {
 ```
 
 :::
+
+# summary
+
+- `targetMap`:存储了每个 "响应性对象" 关联的依赖；类型是 WeakMap
+- `depsMap`: 存储了每个属性的依赖；类型是 Map
+- `dep`: 一个class, 存储了 effects ，通过链表的形式存储了effect
+
+```ts
+export const targetMap: WeakMap<object, KeyToDepMap> = new WeakMap()
+export function track(target: object, type: TrackOpTypes, key: unknown): void {
+  if (shouldTrack && activeSub) {
+    let depsMap = targetMap.get(target)
+    if (!depsMap) {
+      // target代理的对象
+      // depsMap: 存储了每个属性的依赖
+      targetMap.set(target, (depsMap = new Map()))
+    }
+    let dep = depsMap.get(key)
+    if (!dep) {
+      depsMap.set(key, (dep = new Dep()))
+    }
+    dep.track()    
+    // ...
+  }
+}
+
+class Dep {
+  track(){
+    // activeSub 就是ReactiveEffect
+    let link = this.activeLink =  new Link(activeSub, this)
+    // 创建一个链表来存储ReactiveEffect,
+    // ReactiveEffect 本质就是回调函数，当依赖改变时，会执行回调函数
+    addSub(link)
+  }
+}
+
+```
+
+
 
