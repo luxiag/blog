@@ -24,7 +24,6 @@
     "three": "^0.169.0",
     "vue": "^3.5.12",
     "vuepress": "2.0.0-rc.18",
-    "vuepress-plugin-search-pro": "2.0.0-rc.59",
     "vuepress-theme-hope": "2.0.0-rc.59",
     "@types/bun": "latest"
   },
@@ -36,8 +35,7 @@
     "lil-gui": "^0.19.2",
     "mitt": "^3.0.1",
     "ol": "^10.2.1",
-    "vue-accessible-color-picker": "^5.1.0",
-    "vuepress-vite": "^2.0.0-rc.0"
+    "vue-accessible-color-picker": "^5.1.0"
   },
   "trustedDependencies": [
     "protobufjs"

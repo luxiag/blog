@@ -1,3 +1,12 @@
+---
+title: Vuex 4 原理
+date: 2024-11-01
+category:
+  - Vue
+tag: 
+  - Vuex
+---
+
 ```js
 import { createApp } from 'vue'
 import { createStore } from 'vuex'
@@ -22,14 +31,20 @@ const app = createApp({ /* your root component */ })
 app.use(store)
 
 ```
-
+# createStore
 ```js
 export function createStore (options) {
   return new Store(options)
 }
 
 export class Store {
-  
+    constructor (options = {}) {
+      // ...
+      this._modules = new ModuleCollection(options)
+      const state = this._modules.root.state
+      resetStoreState(this, state)
+
+    }
   // ...
     install (app, injectKey) {
     // export const storeKey = 'store'
@@ -46,11 +61,19 @@ export class Store {
   }
 }
 
+function resetStoreState (store, state) {
+  store._state = reactive({
+    data: state
+  })
+  // ...
+}
+
 ```
 
-`app.use`
+## `app.use`
 
 ```js
+// 执行install方法,将vue实例作为参数传入
 use(plugin: Plugin, ...options: any[]) {
   if (installedPlugins.has(plugin)) {
     __DEV__ && warn(`Plugin has already been applied to target app.`)
@@ -70,6 +93,7 @@ use(plugin: Plugin, ...options: any[]) {
 }
 ```
 
+## `provide`
 ```js
 export function createAppAPI<HostElement>(
   render: RootRenderFunction<HostElement>,
@@ -97,6 +121,7 @@ export function createAppContext(): AppContext {
     mixins: [],
     components: {},
     directives: {},
+    // Object.create() 静态方法以一个现有对象作为原型，创建一个新对象。
     provides: Object.create(null),
     optionsCache: new WeakMap(),
     propsCache: new WeakMap(),
@@ -135,6 +160,8 @@ export function createComponentInstance(
 
 ```
 
+# useStore
+
 ```js
 import { computed } from 'vue'
 import { useStore } from 'vuex'
@@ -153,6 +180,10 @@ export default {
   }
 }
 
+```
+## inject
+```js
+import { inject } from 'vue'
 
 export const storeKey = 'store'
 
@@ -189,7 +220,7 @@ export function inject(
     // to support `app.use` plugins,
     // fallback to appContext's `provides` if the instance is at root
     // #11488, in a nested createApp, prioritize using the provides from currentApp
-    //// 如果intance位于根目录下，则返回到appContext的provides，否则就返回父组件的provides
+    //// 如果instance位于根目录下，则返回到appContext的provides，否则就返回父组件的provides
     const provides = currentApp
       ? currentApp._context.provides
       : instance
