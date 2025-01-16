@@ -1,6 +1,7 @@
 // place your custom styles here
 @tailwind components;
 @tailwind utilities;
+@import "./color.scss";
 
 #navbar {
   .vp-nav-item {
