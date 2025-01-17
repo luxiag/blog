@@ -88,4 +88,16 @@
   --purple-800: #382aa4;
   --purple-900: #292142;
   --purple-000: #f5f2fc;
+
+  
+  $color-nums: 100, 200, 300, 400, 500, 600, 700, 800,900,000;
+  $color-vars: 'teal', 'blue', 'gold', 'red', 'green', 'pink', 'purple';
+
+  @each $color in $color-vars {
+    @each $num in $color-nums {
+      .#{$color}-#{$num} {
+        color: var(--#{$color}-#{$num});
+      }
+    }
+  }
 }
