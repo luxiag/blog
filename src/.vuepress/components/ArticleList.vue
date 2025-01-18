@@ -11,7 +11,7 @@
   </div>
 </template>
 <script setup>
-import { reactive, computed, watch, onMounted } from 'vue';
+import { reactive, computed, watch, onMounted, nextTick } from 'vue';
 import { useBlogOptions } from "@theme-hope/modules/blog/composables/index";
 
 import ArticleItem from './ArticleItem.vue';
@@ -60,32 +60,36 @@ const getRandom = (num, max) => {
 }
 
 const makeBlock = () => {
-  setTimeout(() => {
-    const arr = pageModel.blockList
-    const maxTop = document.getElementById('article-list')?.clientHeight
-    if (currentArticles.value.length !== pageModel.blockList.length) {
-      const len = currentArticles.value.length - pageModel.blockList.length
-      const index = pageModel.blockList.length
-      for (let i = 1; i <= len; i++) {
-        const top = (index + i) * 140
-        let newLeft = Math.random() * document.body.clientWidth
-        const oldLeft = arr[arr.length - 1]?.left
-        if (oldLeft) {
-          newLeft = getRandom(oldLeft, document.body.clientWidth)
-        }
-        if (!maxTop || top < maxTop) {
-          arr.push({
-            id: index + i,
-            top,
-            left: newLeft,
-          })
-        }
+
+  if (!__VUEPRESS_SSR__) {
+    nextTick(() => {
+      const arr = pageModel.blockList
+      const maxTop = document.getElementById('article-list')?.clientHeight
+      if (currentArticles.value.length !== pageModel.blockList.length) {
+        const len = currentArticles.value.length - pageModel.blockList.length
+        const index = pageModel.blockList.length
+        for (let i = 1; i <= len; i++) {
+          const top = (index + i) * 140
+          let newLeft = Math.random() * document.body.clientWidth
+          const oldLeft = arr[arr.length - 1]?.left
+          if (oldLeft) {
+            newLeft = getRandom(oldLeft, document.body.clientWidth)
+          }
+          if (!maxTop || top < maxTop) {
+            arr.push({
+              id: index + i,
+              top,
+              left: newLeft,
+            })
+          }
 
 
+        }
+        pageModel.blockList = arr
       }
-      pageModel.blockList = arr
-    }
-  })
+    })
+  }
+
 }
 
 watch(currentArticles, () => {
@@ -140,10 +144,11 @@ onMounted(() => {
     // z-index: -10;
 
   }
-  [data-theme="dark"] &{
+
+  [data-theme="dark"] & {
     .article-list-block {
-    background-color: transparent;
-  }
+      background-color: transparent;
+    }
   }
 }
 </style>
