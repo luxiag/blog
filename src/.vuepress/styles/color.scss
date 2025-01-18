@@ -1,4 +1,5 @@
 :root {
+  --black-bg-color: #f2f5f8;
   --neutral-light-100: #f6f6f7;
   --neutral-light-200: #e9ebed;
   --neutral-light-300: #d1d5da;
@@ -89,14 +90,27 @@
   --purple-900: #292142;
   --purple-000: #f5f2fc;
 
-  
-  $color-nums: 100, 200, 300, 400, 500, 600, 700, 800,900,000;
+
+
+
+  $color-nums: 000, 100, 200, 300, 400, 500, 600, 700;
   $color-vars: 'teal', 'blue', 'gold', 'red', 'green', 'pink', 'purple';
 
   @each $color in $color-vars {
     @each $num in $color-nums {
       .#{$color}-#{$num} {
-        color: var(--#{$color}-#{$num});
+        color: var(--#{$color}-#{900});
+        // color: #fff;
+        text-shadow: 0 0 5px var(--#{$color}-#{800}),
+        0 0 10px var(--#{$color}-#{800}),
+        0 0 15px var(--#{$color}-#{800}) 0 0 20px var(--#{$color}-#{800});
+        // text-shadow: 0 0 10px var(--#{$color}-#{800}),
+        // 0 0 20px var(--#{$color}-#{800}),
+        // 0 0 30px var(--#{$color}-#{800}),
+        // 0 0 40px var(--#{$color}-#{800});
+        background-color: var(--#{$color}-#{$num});
+
+
       }
     }
   }

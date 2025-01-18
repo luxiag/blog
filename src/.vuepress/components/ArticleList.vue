@@ -140,5 +140,10 @@ onMounted(() => {
     // z-index: -10;
 
   }
+  [data-theme="dark"] &{
+    .article-list-block {
+    background-color: transparent;
+  }
+  }
 }
 </style>
