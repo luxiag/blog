@@ -12,7 +12,7 @@ const NoBlogsArr = [
 export default hopeTheme(
   {
     hostname: "https://luxiag.github.io/luxiag",
-
+    favicon: "/favicon.ico",
     author: {
       name: "luxiag",
       url: "https://luxiag.github.io/luxiag",
@@ -20,7 +20,7 @@ export default hopeTheme(
 
     iconAssets: "fontawesome-with-brands",
 
-    logo: "./public/assets/images/logo.svg",
+    logo: "./public/favicon.svg",
 
     repo: "luxiag/blog",
 
