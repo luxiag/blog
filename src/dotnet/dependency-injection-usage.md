@@ -1,7 +1,7 @@
 ---
 title: 依赖注入
 category:
-  - .NET
+  - DotNet
 ---
 
 # 控制反转

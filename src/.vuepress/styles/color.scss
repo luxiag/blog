@@ -114,7 +114,7 @@
   @each $color in $color-vars {
     @each $num in $color-nums {
       .#{$color}-#{$num} {
-        color: var(--#{$color}-#{900});
+        color: var(--#{$color}-#{800});
         // color: #fff;
         text-shadow: 0 0 5px var(--#{$color}-#{800}),
         0 0 10px var(--#{$color}-#{800}),

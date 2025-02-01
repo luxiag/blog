@@ -2,7 +2,6 @@
 title: Android离线打包
 category:
   - Uniapp
-  - Android
 date: 2022-12-13
 ---
 官方文档：https://nativesupport.dcloud.net.cn/AppDocs/#

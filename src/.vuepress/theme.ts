@@ -151,7 +151,7 @@ export default hopeTheme(
         filter: (page) => {
           let isBlog = true
           if (page?.frontmatter?.home) isBlog = false
-          if (page?.frontmatter?.onShow) isBlog = false
+          if (page?.frontmatter?.noShow) isBlog = false
           NoBlogsArr.forEach((item) => {
             if (page.path.includes(item)) isBlog = false
           })

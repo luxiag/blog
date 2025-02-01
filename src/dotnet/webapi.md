@@ -1,3 +1,9 @@
+---
+title: WebApi
+category: 
+    - DotNet
+date: 2024-12-05
+---
 
 ![](./images/webapi/3301481732537389593.png)
 

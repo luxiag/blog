@@ -1,11 +1,6 @@
 <template>
   <nav class="navbar-links">
-    NavbarLinks
-    <ul>
-      <li>
-        <a></a>
-      </li>
-    </ul>
+
   </nav>
 </template>
 <script setup lang="ts">

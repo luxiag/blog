@@ -50,7 +50,6 @@ colorClass = shuffleArray(colorClass)
 const getArrayClassForType = (category) => {
 
   const index = generateIndexFromHash(category, colorClass.length)
-  console.log(index, 'index')
   const colorIndex = Math.floor(Math.random() * (colorClass.length - 1))
   const currentClass = colorClass[index]
   return currentClass

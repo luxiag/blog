@@ -8,7 +8,7 @@ category:
 
 "HEAD"当前活跃分支的游标,
 
-```sequence Greetings
+<!-- ```sequence Greetings
 Original ->> WorkSpace:  edit file
 WorkSpace ->> Original: git checkout .(已跟踪)
 WorkSpace ->> Original: git clean -df(未跟踪)
@@ -20,7 +20,7 @@ Repository ->> Remote: git push
 Remote ->> Repository: git fetch
 Remote ->> Repository: git remote update
 Remote ->> WorkSpace: git pull
-```
+``` -->
 
 
 

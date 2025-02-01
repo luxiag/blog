@@ -34,9 +34,10 @@ const binary_search = (list, aim) => {
 // 运行时间 log2(n)
 ```
 
-## 在排序数组中查找元素的第一个和最后一个位置
+# [在排序数组中查找元素的第一个和最后一个位置](https://leetcode.cn/problems/find-first-and-last-position-of-element-in-sorted-array/)
 
-<https://leetcode.cn/problems/find-first-and-last-position-of-element-in-sorted-array/>
+
+
 给你一个按照非递减顺序排列的整数数组 nums，和一个目标值 target。请你找出给定目标值在数组中的开始位置和结束位置。
 
 如果数组中不存在目标值 target，返回 [-1, -1]。
@@ -82,9 +83,9 @@ function search(nums: number[], target: number, lower: boolean): number {
 }
 ```
 
-## 寻找两个正序数组的中位数
+# [寻找两个正序数组的中位数](https://leetcode.cn/problems/median-of-two-sorted-arrays/)
 
-<https://leetcode.cn/problems/median-of-two-sorted-arrays/>
+# 寻找两个正序数组的中位数
 
 给定两个大小分别为 m 和 n 的正序（从小到大）数组 nums1 和 nums2。请你找出并返回这两个正序数组的 中位数
 **算法的时间复杂度应该为 O(log (m+n)) 。**
