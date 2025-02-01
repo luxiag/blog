@@ -35,7 +35,7 @@
     "lil-gui": "^0.19.2",
     "mitt": "^3.0.1",
     "ol": "^10.2.1",
-    "three": "0.147",
+    "three": "^0.169.0",
     "vue-accessible-color-picker": "^5.1.0"
   },
   "trustedDependencies": [
