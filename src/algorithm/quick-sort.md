@@ -1,5 +1,5 @@
 ---
-title: 算法图解笔记-快速排序
+title: 快速排序
 date: 2022-09-19
 reference: 算法图解
 noShow: true
@@ -42,7 +42,5 @@ const sum = (arrays, total = 0) => {
 有[2,4,3,9,1,6,5]数组
 选 2 作为基准值，挑选比 2 小的数值组成左侧数组，比 2 大的组成右侧数组
 对挑选出的 2 个数组，重复上述操作
-
-
 
 ![来源(https://www.cnblogs.com/MOBIN/p/4681369.html)](./images/1680123400919164026.png)

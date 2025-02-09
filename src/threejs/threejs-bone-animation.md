@@ -169,7 +169,7 @@ function animation(){
 }
 ```
 
-<div ref="blendingRef" class="ref"></div>
+<div ref="blendingRef" class="relative"></div>
 
 <script setup>
 import {ref,onMounted} from 'vue'
@@ -655,3 +655,9 @@ onMounted(async ()=> {
 })
 
 </script>
+
+<style lang="scss" scoped>
+  .relative {
+    position: relative;
+  }
+  </style>
