@@ -34,9 +34,7 @@ const a: A = "hello";
 const b: A = 123;
 ```
 
-
 ## Type Aliases 类型别名
-
 
 类型别名用来给一个类型起一个新名字。
 
@@ -72,6 +70,7 @@ type D = A[keyof A]; // D 的类型为 string | number
 ```
 
 ## Type Constraints 类型约束
+
 类型约束可以用来限制一个类型的范围。
 
 ```ts
@@ -86,6 +85,7 @@ function process<T extends number | string>(value: T) {
 ```
 
 ## Type Mapping 类型映射
+
 类型映射可以用来创建一个新的类型，该类型是原类型的每个属性的类型都被替换为新的类型。
 
 ```ts
@@ -113,7 +113,9 @@ const a = "hello"; // a 的类型为 string
 ## Type Guards 类型守卫
 
 类型守卫是一种特殊的类型谓词，用于在运行时检查变量的类型。
+
 ### typeof
+
 typeof 类型守卫可以用来检查一个变量的类型是否为某个值。
 
 ```ts
@@ -135,6 +137,7 @@ function process(value: any) {
 ```
 
 ### instanceof
+
 instanceof 类型守卫可以用来检查一个变量是否为某个类的实例。
 
 ```ts
@@ -152,6 +155,7 @@ function process(value: any) {
 ```
 
 ### in
+
 in 类型守卫可以用来检查一个变量是否具有某个属性。
 
 ```ts
@@ -307,4 +311,181 @@ let employees: Record<number, EmployeeType> = {
 type J = Parameters<() => void>; // []
 //  获取函数类型的返回类型。
 type K = ReturnType<() => void>; // void
+```
+
+# extends 和 implements
+
+- implements 实现，一个新的类，从父类或者接口实现所有的属性和方法，同时可以重写属性和方法，包含一些新的功能
+- 接口不能实现接口或者类，所以实现只能用于类身上,即类可以实现接口或类
+
+- extends 继承，从父类或者接口继承所有的属性和方法，不可以重写属性，但可以重写方法，接口可以继承多个接口，类只能继承一个类
+- 类不可以继承接口，类只能继承类
+- 接口可以继承接口或类，
+
+```ts
+// 继承类
+class Animal {
+  name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): void {
+    console.log(`My name is ${this.name}`);
+  }
+}
+
+class Dog extends Animal {
+  breed: string;
+
+  constructor(name: string, breed: string) {
+    super(name);
+    this.breed = breed;
+  }
+
+  speak(): void {
+    console.log(`Woof! My name is ${this.name} and I am a ${this.breed}`);
+  }
+}
+
+const dog = new Dog("Buddy", "Golden Retriever");
+dog.speak(); // 输出：Woof! My name is Buddy and I am a Golden Retriever
+
+
+// 接口继承类
+class Animal {
+  name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+}
+
+interface AnimalInterface {
+  name: string;
+  speak(): void;
+}
+
+interface DogInterface extends AnimalInterface {
+  breed: string;
+}
+
+class Dog implements DogInterface {
+  name: string;
+  breed: string;
+
+  constructor(name: string, breed: string) {
+    this.name = name;
+    this.breed = breed;
+  }
+
+  speak(): void {
+    console.log(`Woof! My name is ${this.name} and I am a ${this.breed}`);
+  }
+}
+
+const dog = new Dog("Buddy", "Golden Retriever");
+dog.speak(); // 输出：Woof! My name is Buddy and I am a Golden Retriever
+
+// 继承接口
+interface Animal {
+  name: string;
+  speak(): void;
+}
+
+interface Dog extends Animal {
+  breed: string;
+}
+
+class Dog implements Dog {
+  name: string;
+  breed: string;
+
+  constructor(name: string, breed: string) {
+    this.name = name;
+    this.breed = breed;
+  }
+
+  speak(): void {
+    console.log(`Woof! My name is ${this.name} and I am a ${this.breed}`);
+  }
+}
+
+const dog = new Dog("Buddy", "Golden Retriever");
+dog.speak(); // 输出：Woof! My name is Buddy and I am a Golden Retriever
+
+// 多继承
+interface Animal {
+  name: string;
+  speak(): void;
+}
+
+interface Walkable {
+  walk(): void;
+}
+
+interface Dog extends Animal, Walkable {
+  breed: string;
+}
+
+class Dog implements Dog {
+  name: string;
+  breed: string;
+
+  constructor(name: string, breed: string) {
+    this.name = name;
+    this.breed = breed;
+  }
+
+  speak(): void {
+    console.log(`Woof! My name is ${this.name} and I am a ${this.breed}`);
+  }
+
+  walk(): void {
+    console.log(`I am walking`);
+  }
+}
+
+const dog = new Dog("Buddy", "Golden Retriever");
+dog.speak(); // 输出：Woof! My name is Buddy and I am a Golden Retriever
+dog.walk(); // 输出：I am walking
+
+
+```
+
+# Type 和 Interface的区别
+
+- type 是 类型别名，给一些类型的组合起别名，这样能够更方便地在各个地方使用。
+- type 能表示的任何类型组合。
+
+```ts
+type ID = string | number;
+type Circle = {
+  x: number;
+  y: number;
+  radius: number;
+}
+```
+
+- interface 是接口，用于定义对象的类型，只能描述对象结构。
+- interface 可以继承（extends）另一个 interface，也可以继承自 type，但只能是对象结构，或多个对象组成交叉类型（&）的 type。
+- interface 支持声明合并，文件下多个同名的 interface，它们的属性会进行合并。
+
+```ts
+interface Position {
+  x: number;
+  y: number;
+}
+
+// 声明合并
+interface Point {
+  x: number;
+}
+
+interface Point {
+  y: number;
+}
+
+const point: Point = { x: 10, y: 30 };
 ```
