@@ -1,5 +1,7 @@
 ---
 title: 压缩
+category:
+  - Optimization
 ---
 
 ## 代码压缩

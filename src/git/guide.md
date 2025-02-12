@@ -8,7 +8,7 @@ category:
 
 "HEAD"当前活跃分支的游标,
 
-<!-- ```sequence Greetings
+```sequence Greetings
 Original ->> WorkSpace:  edit file
 WorkSpace ->> Original: git checkout .(已跟踪)
 WorkSpace ->> Original: git clean -df(未跟踪)
@@ -20,7 +20,7 @@ Repository ->> Remote: git push
 Remote ->> Repository: git fetch
 Remote ->> Repository: git remote update
 Remote ->> WorkSpace: git pull
-``` -->
+```
 
 
 
@@ -169,4 +169,25 @@ git tag v1.0
 ## 对历史提交的
 
 
-# rebase and revert
+# reset 
+
+git reset 用于移动 HEAD 指针和当前分支的引用
+
+```bash
+# –soft：只移动 HEAD 指针，不改变工作目录和暂存区，保留更改。
+git reset --soft commit_hash
+
+# –mixed（默认）：移动 HEAD 指针和暂存区，但不改变工作目录，将更改放回工作目录。
+git reset --mixed commit_hash
+
+# –hard：移动 HEAD 指针、暂存区和工作目录，将所有更改丢弃。
+git reset --hard commit_hash
+```
+
+# revert
+
+git revert 用于创建一个新的提交，用来撤销之前的提交。与 reset 不同，revert 不修改提交历史，而是创建新的提交来撤销之前的更改。
+
+```bash
+git revert commit_hash
+```
