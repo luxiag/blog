@@ -157,6 +157,7 @@ new Tween.Tween( this )
 </div>
 
 # 参考
+
 参考：<https://threejs.org/>
 
 <script setup>
@@ -357,9 +358,8 @@ class Factory {
     this.floor2Tags = [];
     this.camera = camera
 
-    console.log('Factory',gltfLoader)
     gltfLoader.load("./assets/models/floor2.glb", (gltf) => {
-      console.log(gltf,'gltf');
+      console.log('aaaa');
       this.floor2Group = gltf.scene;
 
       let array = ["小型会议室", "核心科技室", "科技展台", "设计总监办公室"];
