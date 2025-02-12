@@ -26,7 +26,9 @@ controller.abort(); // 中止！
 // 事件触发，signal.aborted 变为 true
 alert(signal.aborted); // true
 ```
+
 fetch使用
+
 ```ts
 // 1 秒后中止
 let controller = new AbortController();
@@ -46,6 +48,7 @@ try {
 ```
 
 axios使用
+
 ```js
 const controller = new AbortController();
 
@@ -61,6 +64,7 @@ controller.abort()
 # Cancel Token
 
 **单个请求**
+
 ```js
 const CancelToken = axios.CancelToken; 
 let cancel; 
@@ -99,9 +103,11 @@ axios.post('/user/12345', {
  // 取消请求（message 参数是可选的） 
 source.cancel('Operation canceled by the user.');
 ```
+
 ## 原理
 
 ::: detail CancelToken
+
 ```ts
 class CancelToken {
   constructor(executor) {
@@ -227,7 +233,10 @@ class CancelToken {
 }
 
 ```
+
 :::
+
+### `CancelToken.source`
 
 ```ts
 CancelToken.source = function source() {
@@ -242,7 +251,9 @@ CancelToken.source = function source() {
 };
 
 ```
+
 `cancel = c = function cancel(){}`
+
 ```ts
 class CancelToken {
   constructor(executor) {
@@ -265,7 +276,9 @@ class CancelToken {
   }
 }
 ```
-XHRAdapter
+
+### XHRAdapter
+
 ```ts
 if (_config.cancelToken || _config.signal) {
   // Handle cancellation
@@ -285,8 +298,8 @@ if (_config.cancelToken || _config.signal) {
 }
 ```
 
+### 中断请求
 
-中断请求
 ```ts
 const source = CancelToken.source();  
  // 取消请求（message 参数是可选的） 
@@ -302,7 +315,8 @@ function cancel(message, config, request) {
   resolvePromise(token.reason);
 }
 ```
-resolvePromise
+
+### resolvePromise
 
 ```ts
 this.promise = new Promise(function promiseExecutor(resolve) {
@@ -322,10 +336,80 @@ this.promise.then = onfulfilled => {
 };
  ```
 
-
 暴露 promise中的resolve,调用中断执行resolve=> 执行`.then` => 执行`xhr.abort()`
 
 通过发布订阅模式实现的,将axios.CancelToken构造器的实例通过cancelToken传入,就会调用实例上的subscribe方法订阅取消消息,再根据需求执行cancel方法触发订阅器取消请求。
 
+### FetchAdapter
 
+```ts
+let composedSignal = composeSignals([signal, cancelToken && cancelToken.toAbortSignal()], timeout);
 
+new Request(url,{
+  signal: composedSignal,
+  // ...
+})
+
+// ...
+  toAbortSignal() {
+    const controller = new AbortController();
+
+    const abort = (err) => {
+      controller.abort(err);
+    };
+
+    this.subscribe(abort);
+
+    controller.signal.unsubscribe = () => this.unsubscribe(abort);
+
+    return controller.signal;
+  }
+
+```
+
+### composeSignals
+
+```ts
+const composeSignals = (signals, timeout) => {
+  const {length} = (signals = signals ? signals.filter(Boolean) : []);
+
+  if (timeout || length) {
+    let controller = new AbortController();
+
+    let aborted;
+
+    const onabort = function (reason) {
+      if (!aborted) {
+        aborted = true;
+        unsubscribe();
+        const err = reason instanceof Error ? reason : this.reason;
+        controller.abort(err instanceof AxiosError ? err : new CanceledError(err instanceof Error ? err.message : err));
+      }
+    }
+
+    let timer = timeout && setTimeout(() => {
+      timer = null;
+      onabort(new AxiosError(`timeout ${timeout} of ms exceeded`, AxiosError.ETIMEDOUT))
+    }, timeout)
+
+    const unsubscribe = () => {
+      if (signals) {
+        timer && clearTimeout(timer);
+        timer = null;
+        signals.forEach(signal => {
+          signal.unsubscribe ? signal.unsubscribe(onabort) : signal.removeEventListener('abort', onabort);
+        });
+        signals = null;
+      }
+    }
+
+    signals.forEach((signal) => signal.addEventListener('abort', onabort));
+
+    const {signal} = controller;
+
+    signal.unsubscribe = () => utils.asap(unsubscribe);
+
+    return signal;
+  }
+}
+```
