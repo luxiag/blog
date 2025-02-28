@@ -560,7 +560,8 @@ let e2 = l2 - 1 // next ending index
 要对非理想情况下未被处理的节点进行处理，就需要先找出那些需要移动的节点。
 
 
-**1.构建索引表**
+
+### 构建索引表
 
 为新的一组子节点构建一张索引表，用来存储新的一组子节点的 key 和节点位置索引之间的映射，其目的是为了可以快速找到新的一组子节点中节点所在的位置，解决潜在的性能问题。
 
@@ -571,6 +572,8 @@ let e2 = l2 - 1 // next ending index
       const s2 = i // next starting index
 
       // 5.1 build key:index map for newChildren
+      // map 集合的键是节点的 key
+      // map 集合的值是节点的索引位置
       const keyToNewIndexMap: Map<PropertyKey, number> = new Map()
       for (i = s2; i <= e2; i++) {
         const nextChild = (c2[i] = optimized
@@ -588,6 +591,135 @@ let e2 = l2 - 1 // next ending index
         }
       }
 
+```
+
+### 构造 newIndexToOldIndexMap 数组
+
+newIndexToOldIndexMap 数组用来存储新的一组子节点中的节点在旧的一组子节点中的位置索引，后面将会使用它计算出一个最长递增子序列，并用于辅助完成 DOM 移动的操作。
+
+![](./images/diff/0584091740623451532.png)
+
+![](./images/diff/0584091740623604121.png)
+
+```ts
+      // 5.2 loop through old children left to be patched and try to patch
+      // matching nodes & remove nodes that are no longer present
+      let j
+      let patched = 0
+      const toBePatched = e2 - s2 + 1
+      let moved = false
+      // used to track whether any node has moved
+      let maxNewIndexSoFar = 0
+      // works as Map<newIndex, oldIndex>
+      // Note that oldIndex is offset by +1
+      // and oldIndex = 0 is a special value indicating the new node has
+      // no corresponding old node.
+      // used for determining longest stable subsequence
+      const newIndexToOldIndexMap = new Array(toBePatched)
+      for (i = 0; i < toBePatched; i++) newIndexToOldIndexMap[i] = 0
+      // 遍历旧节点
+      for (i = s1; i <= e1; i++) {
+        // 旧数组中剩余未处理的节点
+        const prevChild = c1[i]
+        // 如果更新过的节点数量大于需要更新的节点数量，则卸载多余的节点
+        if (patched >= toBePatched) {
+          // all new children have been patched so this can only be a removal
+          unmount(prevChild, parentComponent, parentSuspense, true)
+          continue
+        }
+        let newIndex
+        if (prevChild.key != null) {
+          // 获取旧节点在新节点中的位置
+          newIndex = keyToNewIndexMap.get(prevChild.key)
+        } else {
+          // key-less node, try to locate a key-less node of the same type
+          // s2新节点数组起始位置
+          for (j = s2; j <= e2; j++) {
+            if (
+              newIndexToOldIndexMap[j - s2] === 0 &&
+              isSameVNodeType(prevChild, c2[j] as VNode)
+            ) {
+              newIndex = j
+              break
+            }
+          }
+        }
+        // 新节点没有卸载
+        if (newIndex === undefined) {
+          unmount(prevChild, parentComponent, parentSuspense, true)
+        } else {
+         // s2新节点数组起始位置
+          newIndexToOldIndexMap[newIndex - s2] = i + 1
+          // 通过比较 newIndex 和 maxNewIndexSoFar 的值来判断节点是否需要移动
+          // 如果在遍历过程中遇到的索引值呈现递增趋势，则说明不需要移动节点
+          if (newIndex >= maxNewIndexSoFar) {
+            maxNewIndexSoFar = newIndex
+          } else {
+           // 否则需要移动
+            moved = true
+          }
+          patch(
+            prevChild,
+            c2[newIndex] as VNode,
+            container,
+            null,
+            parentComponent,
+            parentSuspense,
+            namespace,
+            slotScopeIds,
+            optimized,
+          )
+          patched++
+        }
+      }
+
+```
+
+### 移动节点
+
+```ts
+
+  // 5.3 move and mount
+  // generate longest stable subsequence only when nodes have moved
+  // 移动 计算最长递增子序列的索引
+  const increasingNewIndexSequence = moved
+    ? getSequence(newIndexToOldIndexMap)
+    : EMPTY_ARR
+  j = increasingNewIndexSequence.length - 1
+  // looping backwards so that we can use last patched node as anchor
+  // 新的一组子节点中剩余未处理节点的数量
+  for (i = toBePatched - 1; i >= 0; i--) {
+    const nextIndex = s2 + i
+    const nextChild = c2[nextIndex] as VNode
+    const anchor =
+      nextIndex + 1 < l2 ? (c2[nextIndex + 1] as VNode).el : parentAnchor
+    if (newIndexToOldIndexMap[i] === 0) {
+      // mount new
+      patch(
+        null,
+        nextChild,
+        container,
+        anchor,
+        parentComponent,
+        parentSuspense,
+        namespace,
+        slotScopeIds,
+        optimized,
+      )
+    } else if (moved) {
+      // move if:
+      // There is no stable subsequence (e.g. a reverse)
+      // OR current node is not among the stable sequence
+      //  i 新节点索引
+      //  j 子序列索引
+      //  不相等 节点需要移动
+      if (j < 0 || i !== increasingNewIndexSequence[j]) {
+        move(nextChild, container, anchor, MoveType.REORDER)
+      } else {
+        j--
+      }
+    }
+  }
 ```
 
 # 参考
