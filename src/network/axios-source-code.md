@@ -7,6 +7,8 @@ tag:
 date: 2025-02-07  
 ---
 
+# Axios 封装使用
+
 ```ts
 import axios, 
     { AxiosInstance,
@@ -141,7 +143,11 @@ const httpRequest = new HttpRequest()
 export default httpRequest;
 
 ```
+
+# Axios实例
+
 `lib/axios.js`
+
 ```ts
 import Axios from './core/Axios.js';
 import defaults from './defaults/index.js';
@@ -169,13 +175,28 @@ axios.Axios = Axios;
 // ...
 export default axios
 ```
-` bind(Axios.prototype.request, context);`
+
+`bind(Axios.prototype.request, context);`
+
 ```ts
 const instance = function wrap(){
     return Axios.prototype.request.apply(Axios, arguments)
 }
 ```
 
+`extend(instance,Axios.prototype)`实现Axios更多实例调用
+
+- `axios#request(config)`
+- `axios#get(url[, config])`
+- `axios#delete(url[, config])`
+- `axios#head(url[, config])`
+- `axios#options(url[, config])`
+- `axios#post(url[, data[, config]])`
+- `axios#put(url[, data[, config]])`
+- `axios#patch(url[, data[, config]])`
+- `axios#getUri([config])`
+
+## Axios类
 
 ```ts
 class Axios {
@@ -224,7 +245,34 @@ utils.forEach(['post', 'put', 'patch'], function forEachMethodWithData(method) {
 export default Axios;
 ```
 
+# InterceptorManager 拦截器
 
+```ts
+//  定义了请求和响应拦截器
+this.interceptors = {
+  request: new InterceptorManager(),
+  response: new InterceptorManager()
+};
+
+this.interceptors.request.use(function onFulfilled(config) {
+  // ...
+  return config;
+}, function onRejected(reason) {
+  // ...
+  return Promise.reject(reason)
+})
+
+this.interceptors.response.use(function onFulfilled(response) {
+  // ...
+  return response;
+}, function onRejected(reason) {
+  // ...
+  return Promise.reject(reason)
+})
+```
+
+定义一个`handlers[]`接受对应拦截器
+通过forEach循环调用拦截器
 
 ```ts
 class InterceptorManager {
@@ -256,7 +304,7 @@ class InterceptorManager {
     }
   }
 
-
+  // 循环调用所有拦截器
   forEach(fn) {
     utils.forEach(this.handlers, function forEachHandler(h) {
       if (h !== null) {
@@ -268,6 +316,61 @@ class InterceptorManager {
 
 export default InterceptorManager;
 
+```
+
+拦截器有同步和异步执行，通过`synchronous`判断是否同步
+
+定义`InterceptorChain`拦截器执行链，通过forEach循环加入
+请求拦截器`unshift`加入，后定义的先执行
+响应拦截器`push`加入，先定义先执行
+
+**异步拦截器**
+
+通过`promise = promise.then` => `promise.then.then`形成链调异步执行
+
+```ts
+// dispatchRequest 真正执行http请求
+ const chain = [dispatchRequest.bind(this), undefined];
+  chain.unshift.apply(chain, requestInterceptorChain);
+  chain.push.apply(chain, responseInterceptorChain);
+  len = chain.length
+  promise = Promise.resolve(config)
+  while (i < len) {
+    // [fulfilled,reject]
+    // 0  1
+    // promise.then(requestfulfilled,requestrejected).then(dispatchRequest,undefined).then(responsefulfilled,responserejected)
+    promise = promise.then(chain[i++], chain[i++]);
+  }
+
+```
+
+**同步拦截器**
+
+直接`white`遍历执行
+
+```ts
+ let newConfig = config
+ i = 0
+ while (i < len) {
+   const onFulfilled = requestInterceptorChain[i++];
+   const onRejected = requestInterceptorChain[i++];
+   try {
+     newConfig = onFulfilled(newConfig);
+   } catch (error) {
+     onRejected.call(this, error);
+     break;
+   }
+ 
+ try {
+   promise = dispatchRequest.call(this, newConfig);
+ } catch (error) {
+   return Promise.reject(error);
+ 
+ i = 0;
+ len = responseInterceptorChain.length
+ while (i < len) {
+   promise = promise.then(responseInterceptorChain[i++], responseInterceptorChain[i++]);
+ }
 ```
 
 ```ts
@@ -407,6 +510,12 @@ export default InterceptorManager;
 
 ```
 
+# Http 调用
+
+`dispatchRequest`真正执行http的方法
+通过adapter获取要调用http请求的适配器,默认是xhrAdapter
+适配器`[xhrAdapter,httpAdapter,fetchAdapter]`
+
 ```ts
 export default function dispatchRequest(config) {
   throwIfCancellationRequested(config);
@@ -459,15 +568,15 @@ export default function dispatchRequest(config) {
 
 ```
 
-
 `defaults/index.js`
+
 ```ts
 const defaults = {
    adapter: ['xhr', 'http', 'fetch']
 }
 ```
 
-adapters
+## adapters
 
 ```ts
 const knownAdapters = {
@@ -518,6 +627,10 @@ export default {
 }
 ```
 
+# XHR
+
+xhr原生使用
+
 ```ts
 let xhr = new XMLHttpRequest();
 
@@ -554,6 +667,8 @@ xhr.onerror = function() {
   // 处理非 HTTP error（例如网络中断）
 };
 ```
+
+## Axios中XHR内部封装
 
 ```ts
 const isXHRAdapterSupported = typeof XMLHttpRequest !== 'undefined';
@@ -748,6 +863,9 @@ export default isXHRAdapterSupported && function (config) {
 
 
 ```
+
+# Fetch
+
 ```ts
 // Step 1：启动 fetch，并获得一个 reader
 let response = await fetch('https://api.github.com/repos/javascript-tutorial/en.javascript.info/commits?per_page=100');
@@ -787,6 +905,9 @@ let result = new TextDecoder("utf-8").decode(chunksAll);
 // 我们完成啦！
 let commits = JSON.parse(result);
 ```
+
+## Axios中Fetch封装
+
 ```ts
 const isFetchSupported = typeof fetch === 'function' && typeof Request === 'function' && typeof Response === 'function';
 export default isFetchSupported && (async (config) => {
@@ -924,7 +1045,8 @@ export default isFetchSupported && (async (config) => {
 
 ```
 
+# 参考
 
-- https://github.com/liushi-cli/v3-ts-tailwind-template/blob/master/src/utils/axios/axios.ts
-- https://juejin.cn/post/7224415869367943205#heading-5
+- <https://github.com/liushi-cli/v3-ts-tailwind-template/blob/master/src/utils/axios/axios.ts>
+- <https://juejin.cn/post/7224415869367943205#heading-5>
 - 《现代 JavaScript 教程》
