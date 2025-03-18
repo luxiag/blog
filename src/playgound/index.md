@@ -1,4 +1,4 @@
 ---
 title: Playground
-layout: custom
+layout: Playground
 ---
