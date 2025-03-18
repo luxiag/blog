@@ -1,7 +1,7 @@
 import { defineClientConfig } from 'vuepress/client'
 
 import MyComponent from './components/custom/MyComponent.vue'
-import Tools from './layout/tools.vue'
+import Tools from './components/ToolsLayout.vue'
 
 export default defineClientConfig({
   // https://vuepress.vuejs.org/zh/advanced/cookbook/usage-of-client-config.html

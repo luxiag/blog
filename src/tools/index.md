@@ -1,6 +1,7 @@
 ---
 home: true
 title: Tools
+layout: Tools
 # heroText: Tools
 # tagline: 工具集合
 # actions:
@@ -21,5 +22,9 @@ features:
     link: https://chat-gpt-lu.vercel.app/
 # heroFullScreen: true
 ---
+
+
+
+
 
 

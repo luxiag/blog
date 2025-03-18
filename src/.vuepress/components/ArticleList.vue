@@ -46,7 +46,6 @@ const currentArticles = computed(() => {
 const handleAddArticles = () => {
   if (currentArticles.value.length < pageModel.totalSize) {
     pageModel.currentPage++
-    console.log('handleAddArticles', pageModel.currentPage)
   }
 }
 

@@ -2,7 +2,7 @@
   <article class="artice-item">
     <router-link class="artice-item-title" :to="path">
       <h3>
-        {{ info.t }}
+        {{ info.title }}
       </h3>
     </router-link>
     <div>
