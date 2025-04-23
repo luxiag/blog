@@ -1,7 +1,7 @@
 ---
 title: C# 基础
 category:
- - c-sharp
+ - C#
 date: 2024-01-02
 ---
 
@@ -12,6 +12,8 @@ date: 2024-01-02
 using System;
 // 命名空间
 namespace Simple {
+
+    
   // 类
   class Program {
     // 

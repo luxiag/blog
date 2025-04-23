@@ -1,9 +1,67 @@
 ---
-title: 配置系统
+title: 配置系统Configuration
 date: 2022-10-07
 category:
   - DotNet
+
 ---
+
+
+在 .NET 中，Configuration 主要用于读取和管理应用程序的配置信息。它是配置系统的一部分，广泛用于 ASP.NET Core、控制台应用、桌面应用等各种类型的 .NET 项目。
+
+- 读取配置文件（如 appsettings.json）
+
+- 集中管理配置数据（如连接字符串、API密钥、应用设置等）
+
+- 支持不同的环境（开发、生产）配置切换
+
+- 绑定配置到强类型对象
+
+- 支持多种配置来源（JSON、环境变量、命令行、Azure Key Vault 等）
+
+**.net5**
+
+```c#
+public class Startup
+{
+    public IConfiguration Configuration { get; }
+
+    public Startup(IConfiguration configuration)
+    {
+        Configuration = configuration;
+    }
+
+    public void ConfigureServices(IServiceCollection services)
+    {
+        // 使用 Configuration 加载配置
+        var myConfig = Configuration.GetSection("MyConfig").Get<MyConfig>();
+        services.AddSingleton(myConfig);
+    }
+
+    public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+    {
+        // 配置中间件管道
+    }
+}
+
+```
+
+**.net6**
+
+```c#
+var builder = WebApplication.CreateBuilder(args);
+
+// 加载配置
+// 从配置中获取名为 "MyConfig" 的部分（section），并将它的值映射到 MyConfig 这个强类型对象上。
+var myConfig = builder.Configuration.GetSection("MyConfig").Get<MyConfig>();
+
+// 将配置注入到服务容器
+builder.Services.AddSingleton(myConfig);
+
+var app = builder.Build();
+
+app.Run();
+```
 
 # Json文件配置
 
@@ -11,6 +69,7 @@ category:
 - NuGet安装Microsoft.Extensions.Configuration和Microsoft.Extensions.Configuration.Json
 
 `test.json`
+
 ```json
 {   
     "port":8080,
@@ -26,6 +85,7 @@ category:
 ```
 
 `xxx.cs`
+
 ```cs
 using Microsoft.Extensions.Configuration;
 static void Main(string[] args) {
@@ -53,6 +113,7 @@ static void Main(string[] args) {
 - NuGet安装：Microsoft.Extensions.Configuration.Binder
 
 `xxx.cs`
+
 ```cs
 class Config {
     public int port {get;set;}
@@ -84,8 +145,6 @@ static void Main(string[] args) {
 ```
 
 # Configuration
-
-## 基础知识
 
 配置的本质是键值对，微软对于配置提供了大量的配置源提供程序，包括xml，json，ini，环境变量，命令行参数，内存等等。还提供了一个扩展包用于配置绑定和类型转换。
 
@@ -247,7 +306,7 @@ var options2 = configuration.GetSection("MvcOptions").Get<MvcOptions>();
       {
           return;
       }
-  	//通过IChangeToken注册回调
+   //通过IChangeToken注册回调
       IDisposable registraton = token.RegisterChangeCallback(s => ((ChangeTokenRegistration<TState>)s).OnChangeTokenFired(), this);
   
       SetDisposable(registraton);
@@ -474,4 +533,4 @@ public static class HttpConfigurationExtensions
 
 # 参考
 
-https://www.bilibili.com/video/BV1W14y1c7yt
+<https://www.bilibili.com/video/BV1W14y1c7yt>

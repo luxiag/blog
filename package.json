@@ -39,6 +39,7 @@
     "@vuepress/plugin-shiki": "2.0.0-rc.80",
     "d3": "^7.9.0",
     "dat.gui": "^0.7.9",
+    "fabric": "^6.6.1",
     "gsap": "^3.12.7",
     "lil-gui": "^0.19.2",
     "mitt": "^3.0.1",
