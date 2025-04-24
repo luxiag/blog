@@ -4,13 +4,17 @@
       <h3>
         {{ info.title }}
       </h3>
+
     </router-link>
+    <!-- <p v-html="info.excerpt" class="article-item-excerpt">
+    </p> -->
     <div>
       <time class="artice-item-time">{{ pageInfo.localizedDate }}</time>
       <span class="artice-item-reading_time">{{ pageInfo.readingTimeLocale.words }}</span>
       <span class="artice-item-reading_time">{{ pageInfo.readingTimeLocale.time }}</span>
 
-      <span class="artice-item-category" v-for="({name,path},i) in pageInfo.category" :key="i" @click="to(path)">#{{ name }}</span>
+      <span class="artice-item-category" v-for="({ name, path }, i) in pageInfo.category" :key="i" @click="to(path)">#{{
+        name }}</span>
     </div>
     <p class="artice-item-summary">
       {{ postSummary }}
@@ -83,14 +87,27 @@ function to(path) {
 
   .artice-item-title {
 
-    font-weight: 700;
-    text-decoration: none;
-    overflow-wrap: break-word;
+
 
     h3 {
       font-weight: 900;
       margin: 0;
+      font-weight: 700;
+      text-decoration: none;
+      overflow-wrap: break-word;
     }
+
+
+  }
+
+  .article-item-excerpt {
+    font-size: 0.8em;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
 
   }
 

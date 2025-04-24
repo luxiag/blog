@@ -17,3 +17,37 @@ mysql -h主机名  -u用户名 -p密码
  `-e "SELECT * FROM mytable;"`   执行 SQL 查询并退出   `mysql -u root -p -e "SELECT * FROM mytable;"`  
 
 性能调优，索引优化，事务处理
+
+## DDL
+
+## DML
+
+## DQL
+
+## DCL
+
+## 函数
+
+## 约束
+
+## 多表查询
+
+## 事务
+
+## 储存引擎
+
+## 索引
+
+## SQL优化
+
+## 视图
+
+## 储存过程
+
+## 触发器
+
+## 锁
+
+## InnoDB引擎
+
+##

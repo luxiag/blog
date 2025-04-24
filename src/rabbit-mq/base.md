@@ -22,6 +22,8 @@ RabbitMQ 的优点、用途等，大概是可靠性高、灵活的路由规则�
 
 - 提供一套用于管理和监视 RabbitMQ 的 HTTP-API、命令行工具和 UI。
 
+## MQ是什么
+
 ## 为什么要用MQ
 
 - 高并发的流量削峰
@@ -183,6 +185,351 @@ public class RabbitMqHelper : IRabbitMqHelper, IDisposable
         _channel?.Close();
         _connection?.Close();
     }
+}
+```
+
+## 队列
+
+### 死信队列
+
+死信指的是无法被正常消费的消息，RabbitMQ 会自动把它投递到一个“死信队列”里，以便你后续处理。
+
+|场景 | 说明|
+|---|---|
+|❌ 消息被拒绝（Nack/Requeue = false） | 消费者明确拒收|
+|⏱️ 消息过期（TTL 到期） | 设置了 TTL，未及时消费|
+|📦 队列已满（max-length 限制） | 队列超过最大消息数量|
+
+```text
+[Producer] 
+   ↓
+[Delay Queue (TTL = 30s, DLX = real.exchange)]
+   ↓ (30s later)
+[Dead Letter → real.exchange → real.queue]
+   ↓
+[Consumer]
+```
+
+```csharp
+var args = new Dictionary<string, object>
+{
+    { "x-dead-letter-exchange", "dlx.exchange" },             // 死信交换机
+    { "x-dead-letter-routing-key", "dlx.routing.key" }        // 死信消息的路由键
+};
+
+_channel.QueueDeclare("normal.queue", durable: true, exclusive: false, autoDelete: false, arguments: args);
+
+_channel.ExchangeDeclare("dlx.exchange", ExchangeType.Direct, durable: true);
+_channel.QueueDeclare("dlx.queue", durable: true, exclusive: false, autoDelete: false);
+_channel.QueueBind("dlx.queue", "dlx.exchange", "dlx.routing.key");
+
+```
+
+### 延时队列
+
+#### 使用 x-delayed-message 插件
+
+1.安装插件
+
+```bash
+rabbitmq-plugins enable rabbitmq_delayed_message_exchange
+```
+
+2.声明延迟交换机和队列（C#）
+
+```csharp
+_channel.ExchangeDeclare("delay-exchange", type: "x-delayed-message", durable: true, autoDelete: false,
+    arguments: new Dictionary<string, object> { { "x-delayed-type", "direct" } });
+
+_channel.QueueDeclare("delay-queue", durable: true, exclusive: false, autoDelete: false);
+
+_channel.QueueBind("delay-queue", "delay-exchange", "delay-key");
+```
+
+3.发送延迟消息（C#）
+
+```csharp
+var props = _channel.CreateBasicProperties();
+props.Headers = new Dictionary<string, object>
+{
+    { "x-delay", delayMs } // 以毫秒为单位设置延迟时间
+};
+
+_channel.BasicPublish("delay-exchange", "delay-key", props, body);
+```
+
+```csharp
+using RabbitMQ.Client;
+using System.Text;
+using System.Text.Json;
+
+public class RabbitMqHelper : IDisposable
+{
+    private readonly IConnection _connection;
+    private readonly IModel _channel;
+
+    private const string ExchangeName = "delay-exchange";
+    private const string QueueName = "delay-queue";
+    private const string RoutingKey = "delay-key";
+
+    public RabbitMqHelper(IConfiguration configuration)
+    {
+        var factory = new ConnectionFactory
+        {
+            HostName = configuration["RabbitMQ:Host"],
+            Port = int.Parse(configuration["RabbitMQ:Port"] ?? "5672"),
+            UserName = configuration["RabbitMQ:User"],
+            Password = configuration["RabbitMQ:Password"]
+        };
+
+        _connection = factory.CreateConnection();
+        _channel = _connection.CreateModel();
+
+        // 声明延迟交换机
+        _channel.ExchangeDeclare(ExchangeName, "x-delayed-message", durable: true, autoDelete: false,
+            arguments: new Dictionary<string, object>
+            {
+                { "x-delayed-type", "direct" }
+            });
+
+        // 声明绑定队列
+        _channel.QueueDeclare(QueueName, durable: true, exclusive: false, autoDelete: false);
+        _channel.QueueBind(QueueName, ExchangeName, RoutingKey);
+    }
+
+    public void Publish<T>(T message)
+    {
+        PublishDelayed(message, delayMilliseconds: 0);
+    }
+
+    public void PublishDelayed<T>(T message, double delayMilliseconds)
+    {
+        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+        var props = _channel.CreateBasicProperties();
+        props.DeliveryMode = 2; // persistent
+        props.Headers = new Dictionary<string, object>
+        {
+            { "x-delay", (int)delayMilliseconds }
+        };
+
+        _channel.BasicPublish(
+            exchange: ExchangeName,
+            routingKey: RoutingKey,
+            basicProperties: props,
+            body: body
+        );
+    }
+
+    public void Dispose()
+    {
+        _channel?.Close();
+        _connection?.Close();
+    }
+}
+```
+
+#### 死信队列 + TTL 延迟队列
+
+```csharp
+// Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddSingleton<RabbitMqHelper>();
+builder.Services.AddHostedService<DelayedConsumer>();
+
+var app = builder.Build();
+app.MapControllers();
+app.Run();
+
+// appsettings.json
+{
+  "RabbitMQ": {
+    "Host": "localhost",
+    "User": "guest",
+    "Password": "guest"
+  }
+}
+
+// Helpers/RabbitMqHelper.cs
+using RabbitMQ.Client;
+using System.Text;
+using System.Text.Json;
+
+public class RabbitMqHelper
+{
+    private readonly IConnection _connection;
+    private readonly IModel _channel;
+
+    public RabbitMqHelper(IConfiguration config)
+    {
+        var factory = new ConnectionFactory
+        {
+            HostName = config["RabbitMQ:Host"],
+            UserName = config["RabbitMQ:User"],
+            Password = config["RabbitMQ:Password"]
+        };
+
+        _connection = factory.CreateConnection();
+        _channel = _connection.CreateModel();
+        SetupQueues();
+    }
+
+    private void SetupQueues()
+    {
+        _channel.ExchangeDeclare("real.exchange", ExchangeType.Direct, durable: true);
+        _channel.QueueDeclare("real.queue", durable: true, exclusive: false, autoDelete: false);
+        _channel.QueueBind("real.queue", "real.exchange", "real.key");
+
+        var args = new Dictionary<string, object>
+        {
+            { "x-dead-letter-exchange", "real.exchange" },
+            { "x-dead-letter-routing-key", "real.key" }
+        };
+        _channel.QueueDeclare("delay.queue", durable: true, exclusive: false, autoDelete: false, arguments: args);
+    }
+
+    public void PublishWithDelay<T>(T message, int delayMs)
+    {
+        var props = _channel.CreateBasicProperties();
+        props.DeliveryMode = 2;
+        props.Expiration = delayMs.ToString();
+
+        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+
+        _channel.BasicPublish(
+            exchange: "",
+            routingKey: "delay.queue",
+            basicProperties: props,
+            body: body
+        );
+    }
+}
+
+// Consumers/DelayedConsumer.cs
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+using System.Text;
+
+public class DelayedConsumer : BackgroundService
+{
+    private readonly IConfiguration _config;
+
+    public DelayedConsumer(IConfiguration config)
+    {
+        _config = config;
+    }
+
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var factory = new ConnectionFactory
+        {
+            HostName = _config["RabbitMQ:Host"],
+            UserName = _config["RabbitMQ:User"],
+            Password = _config["RabbitMQ:Password"]
+        };
+
+        var connection = factory.CreateConnection();
+        var channel = connection.CreateModel();
+
+        var consumer = new EventingBasicConsumer(channel);
+        consumer.Received += (model, ea) =>
+        {
+            var body = ea.Body.ToArray();
+            var message = Encoding.UTF8.GetString(body);
+            Console.WriteLine($"[Consumer] 接收到消息：{message} - 时间：{DateTime.Now:HH:mm:ss}");
+        };
+
+        channel.BasicConsume(queue: "real.queue", autoAck: true, consumer: consumer);
+        return Task.CompletedTask;
+    }
+}
+
+// Controllers/MessageController.cs
+using Microsoft.AspNetCore.Mvc;
+
+[ApiController]
+[Route("api/[controller]")]
+public class MessageController : ControllerBase
+{
+    private readonly RabbitMqHelper _mq;
+
+    public MessageController(RabbitMqHelper mq)
+    {
+        _mq = mq;
+    }
+
+    [HttpPost("send")]
+    public IActionResult Send(string content, int delaySeconds = 10)
+    {
+        var payload = new
+        {
+            Content = content,
+            CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+        };
+
+        _mq.PublishWithDelay(payload, delaySeconds * 1000);
+        return Ok($"消息将延迟 {delaySeconds} 秒后投递");
+    }
+}
+
+```
+
+### 优先级队列
+
+RabbitMQ 支持为队列和消息设置优先级。消息会根据优先级先入队，但只有在消费前才起效：
+
+队列要声明支持最大优先级（比如 10）
+
+每条消息可设置 priority 值（范围 0 ~ max，默认是 0）
+
+```csharp
+// 1️⃣ 声明支持优先级的队列
+var args = new Dictionary<string, object>
+{
+    { "x-max-priority", 10 } // 支持 0 ~ 10 级优先级
+};
+
+_channel.QueueDeclare(queue: "priority.queue",
+                      durable: true,
+                      exclusive: false,
+                      autoDelete: false,
+                      arguments: args);
+// 2️⃣ 发布消息时设置 priority
+var props = _channel.CreateBasicProperties();
+props.Priority = 9; // VIP = 高优先级（建议 5 以上）
+
+_channel.BasicPublish(
+    exchange: "", // 直连默认交换机
+    routingKey: "priority.queue",
+    basicProperties: props,
+    body: Encoding.UTF8.GetBytes("VIP message"));
+
+//   消费者按正常方式消费即可（RabbitMQ 会自动先投递高优先级消息）
+var consumer = new EventingBasicConsumer(_channel);
+consumer.Received += (model, ea) =>
+{
+    var body = ea.Body.ToArray();
+    var message = Encoding.UTF8.GetString(body);
+    Console.WriteLine($"收到消息：{message}");
+};
+
+_channel.BasicConsume("priority.queue", true, consumer);
+
+
+public void PublishWithPriority<T>(T message, int priority)
+{
+    var props = _channel.CreateBasicProperties();
+    props.Priority = (byte)Math.Clamp(priority, 0, 10);
+
+    var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+
+    _channel.BasicPublish(
+        exchange: "",
+        routingKey: "priority.queue",
+        basicProperties: props,
+        body: body
+    );
 }
 ```
 
@@ -402,13 +749,355 @@ public class OrderConsumerBackgroundService : BackgroundService
 ```csharp
 var app = builder.Build();
  builder.Services.AddHostedService<OrderConsumerBackgroundService>();
+ 
+```
+
+## 示例场景：定时推送
+
+```bash
+├── Controllers/
+│   └── ReminderController.cs     # 提供创建推送任务的接口
+├── Services/
+│   ├── RabbitMqHelper.cs        # 延迟消息发布封装
+│   ├── ReminderScheduler.cs     # 后台定时任务调度器
+│   └── SignalRHub.cs            # 推送 SignalR 通知
+├── Models/
+│   └── ScheduledMessage.cs      # 推送任务实体模型
+├── Data/
+│   └── ReminderDbContext.cs     # EF Core 数据库上下文
+├── appsettings.json             # 包含 RabbitMQ 配置
+└── Program.cs                   # 注册服务/配置/启动后台服务
+```
+
+流程
+
+```mermaid
+sequenceDiagram
+User ->> Reminder.API: 提交提醒任务（时间+内容）
+Reminder.API ->> DB: 保存 ScheduledMessage
+ReminderScheduler ->> DB: 每分钟查找近期待推送任务
+ReminderScheduler ->> RabbitMQ: 延迟发布消息（x-delay）
+RabbitMQ ->> ConsumerService: 时间到达后投递
+ConsumerService ->> SignalRHub: 推送消息给指定用户
+```
+
+package包
+
+```bash
+dotnet add package Pomelo.EntityFrameworkCore.MySql
+dotnet add package Microsoft.EntityFrameworkCore.Design
+dotnet add package RabbitMQ.Client
+```
+
+`program.cs`
+
+```csharp
+builder.Services.AddDbContext<ReminderDbContext>(options =>
+{
+    options.UseMySql(
+        builder.Configuration.GetConnectionString("MySQL"),
+        new MySqlServerVersion(new Version(8, 0, 34))
+    );
+});
+builder.Services.AddSingleton<RabbitMqHelper>();
+// appsettings.json
+{
+  "ConnectionStrings": {
+
+
+
+  }
+}
+```
+
+### Models
+
+`Models/ScheduledMessage.cs`
+
+```csharp
+public class ScheduledMessage
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public string UserId { get; set; } = null!;     // 接收用户
+    public string Content { get; set; } = null!;    // 消息内容
+
+    public DateTime ScheduledTime { get; set; }     // 计划推送时间（UTC）
+    public bool IsSent { get; set; } = false;       // 是否已发送
+}
+```
+
+`Models/CreateReminderRequest.cs`
+
+```csharp
+public class CreateReminderRequest
+{
+    public string UserId { get; set; } = null!;
+    public string Content { get; set; } = null!;
+    public DateTime ScheduledTime { get; set; }  // 请以 UTC 提交
+}
+```
+
+### Data
+
+`Data/ReminderDbContext.cs`
+
+```csharp
+using Microsoft.EntityFrameworkCore;
+using Reminder.API.Models;
+
+public class ReminderDbContext : DbContext
+{
+    public ReminderDbContext(DbContextOptions<ReminderDbContext> options)
+        : base(options) { }
+
+    public DbSet<ScheduledMessage> ScheduledMessages => Set<ScheduledMessage>();
+}
+```
+
+### Controllers
+
+`Controllers/ReminderController.cs`
+
+```csharp
+using Microsoft.AspNetCore.Mvc;
+using Reminder.API.Models;
+using Reminder.API.Data;
+
+[ApiController]
+[Route("api/[controller]")]
+public class ReminderController : ControllerBase
+{
+    private readonly ReminderDbContext _db;
+
+    public ReminderController(ReminderDbContext db)
+    {
+        _db = db;
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> CreateReminder([FromBody] CreateReminderRequest request)
+    {
+        var message = new ScheduledMessage
+        {
+            UserId = request.UserId,
+            Content = request.Content,
+            ScheduledTime = request.ScheduledTime.ToUniversalTime()
+        };
+
+        _db.ScheduledMessages.Add(message);
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message.Id, Status = "Scheduled" });
+    }
+}
+```
+
+### Services
+
+`Services/RabbitMqHelper.cs`
+
+```csharp
+using RabbitMQ.Client;
+using System.Text;
+using System.Text.Json;
+
+public class RabbitMqHelper : IDisposable
+{
+    private readonly IModel _channel;
+    private readonly IConnection _connection;
+
+    private const string ExchangeName = "reminder.delay.exchange";
+    private const string QueueName = "reminder.delay.queue";
+    private const string RoutingKey = "reminder";
+
+    public RabbitMqHelper(IConfiguration config)
+    {
+        var factory = new ConnectionFactory
+        {
+            HostName = config["RabbitMQ:Host"],
+            Port = int.Parse(config["RabbitMQ:Port"] ?? "5672"),
+            UserName = config["RabbitMQ:User"],
+            Password = config["RabbitMQ:Password"]
+        };
+
+        _connection = factory.CreateConnection();
+        _channel = _connection.CreateModel();
+
+        // 创建延迟交换机（需要启用 rabbitmq_delayed_message_exchange 插件）
+        _channel.ExchangeDeclare(ExchangeName, "x-delayed-message", durable: true, autoDelete: false, arguments: new Dictionary<string, object>
+        {
+            { "x-delayed-type", "direct" }
+        });
+
+        _channel.QueueDeclare(QueueName, durable: true, exclusive: false, autoDelete: false);
+        _channel.QueueBind(QueueName, ExchangeName, RoutingKey);
+    }
+
+    public void PublishDelayed<T>(T message, double delayMs)
+    {
+        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message));
+
+        var props = _channel.CreateBasicProperties();
+        props.Headers = new Dictionary<string, object>
+        {
+            { "x-delay", delayMs }
+        };
+
+        _channel.BasicPublish(
+            exchange: ExchangeName,
+            routingKey: RoutingKey,
+            basicProperties: props,
+            body: body
+        );
+    }
+
+    public void Dispose()
+    {
+        _channel?.Close();
+        _connection?.Close();
+    }
+}
+
+
+```
+
+`Services/ReminderScheduler.cs`
+
+```csharp
+using Microsoft.EntityFrameworkCore;
+using Reminder.API.Data;
+using Reminder.API.Models;
+
+public class ReminderScheduler : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly RabbitMqHelper _rabbitMqHelper;
+    private readonly ILogger<ReminderScheduler> _logger;
+
+    public ReminderScheduler(IServiceScopeFactory scopeFactory, RabbitMqHelper rabbitMqHelper, ILogger<ReminderScheduler> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _rabbitMqHelper = rabbitMqHelper;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("⏰ ReminderScheduler started");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<ReminderDbContext>();
+
+                var now = DateTime.UtcNow;
+
+                var upcomingMessages = await db.ScheduledMessages
+                    .Where(m => !m.IsSent && m.ScheduledTime <= now.AddMinutes(1))
+                    .ToListAsync(stoppingToken);
+
+                foreach (var msg in upcomingMessages)
+                {
+                    var delay = (msg.ScheduledTime - now).TotalMilliseconds;
+                    delay = Math.Max(0, delay);
+
+                    _rabbitMqHelper.PublishDelayed(msg, delay);
+                    msg.IsSent = true;
+                    _logger.LogInformation("📨 发布延迟提醒消息: {Id}, 延迟: {Delay}ms", msg.Id, delay);
+                }
+
+                await db.SaveChangesAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "后台调度失败");
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken); // 每 30 秒检查一次
+        }
+    }
+}
+// program
+
+builder.Services.AddHostedService<ReminderScheduler>();
+```
+
+`Services/ReminderConsumer.cs`
+
+```csharp
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+using System.Text;
+using System.Text.Json;
+using Reminder.API.Models;
+using Microsoft.AspNetCore.SignalR;
+
+public class ReminderConsumer : BackgroundService
+{
+    private readonly IHubContext<SignalRHub> _hub;
+    private readonly IConfiguration _config;
+    private IConnection? _connection;
+    private IModel? _channel;
+
+    private const string ExchangeName = "reminder.delay.exchange";
+    private const string QueueName = "reminder.delay.queue";
+    private const string RoutingKey = "reminder";
+
+    public ReminderConsumer(IHubContext<SignalRHub> hub, IConfiguration config)
+    {
+        _hub = hub;
+        _config = config;
+    }
+
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var factory = new ConnectionFactory
+        {
+            HostName = _config["RabbitMQ:Host"],
+            Port = int.Parse(_config["RabbitMQ:Port"] ?? "5672"),
+            UserName = _config["RabbitMQ:User"],
+            Password = _config["RabbitMQ:Password"]
+        };
+
+        _connection = factory.CreateConnection();
+        _channel = _connection.CreateModel();
+
+        _channel.QueueDeclare(QueueName, durable: true, exclusive: false, autoDelete: false);
+
+        var consumer = new EventingBasicConsumer(_channel);
+        consumer.Received += async (model, ea) =>
+        {
+            var body = ea.Body.ToArray();
+            var json = Encoding.UTF8.GetString(body);
+            var msg = JsonSerializer.Deserialize<ScheduledMessage>(json);
+
+            if (msg != null)
+            {
+                Console.WriteLine($"🔔 收到提醒消息: {msg.Content}");
+                await _hub.Clients.User(msg.UserId).SendAsync("ReceiveReminder", msg.Content);
+            }
+        };
+
+        _channel.BasicConsume(queue: QueueName, autoAck: true, consumer: consumer);
+
+        return Task.CompletedTask;
+    }
+
+    public override void Dispose()
+    {
+        _channel?.Close();
+        _connection?.Close();
+        base.Dispose();
+    }
+}
+
 ```
 
 ## 参考
 
 - [RabbitMQ超详细学习笔记（章节清晰+通俗易懂）](https://blog.csdn.net/qq_45173404/article/details/121687489)
 - [万字长文：从 C# 入门学会 RabbitMQ 消息队列编程](https://www.cnblogs.com/whuanle/p/17837034.html)
-
-# 消息丢失
-
-# 重复消费
+- [RabbitMQ是什么？架构是怎么样的？](https://www.bilibili.com/video/BV1oCwEeVEe4/?spm_id_from=333.337.search-card.all.click&vd_source=b4222cc2ad9f3adc653a4768dbfd9b95)
