@@ -34,7 +34,9 @@ category:
   <div class="list-place" :height="allHeight"></div>
 </div>
 ```
+
 监听滚动事件，获取滚动高度和列表元素
+
 ```js
 const scroll = (e) => {
   const scrollTop = e.target.scrollTop || 0
@@ -46,7 +48,6 @@ const scroll = (e) => {
   const startOffset = scrollTop - (scrollTop % height)
 }
 ```
-
 
 # 不固定列表
 
@@ -183,10 +184,10 @@ const getStartIndex = (value) => {
   return mid
 }
 ```
+
 # 参考
 
-https://codesandbox.io/p/sandbox/a-v-list-has-dynamic-inner-height-yh0r7?file=%2Fsrc%2FVList.tsx%3A129%2C31
-
+- <https://codesandbox.io/p/sandbox/a-v-list-has-dynamic-inner-height-yh0r7?file=%2Fsrc%2FVList.tsx%3A129%2C31>
 
 <script setup>
 import { reactive,ref,onMounted, onUpdated} from 'vue'
@@ -299,8 +300,6 @@ const updateCachedPositions = () => {
 
 }
 
-
-
 const waterScrollEvent = (e) => {
   const scrollTop = e.target.scrollTop || 0
   const startIndex = getStartIndex(scrollTop)
@@ -388,5 +387,3 @@ onMounted(() => {
   word-break: break-all;
 }
 </style>
-
-
