@@ -140,7 +140,7 @@ requestAnimationFrame(render);
 
 
 # 参考
-参考：<https://threejs.org/>
+- https://threejs.org
 
 <script setup>
 import * as THREE from 'three'

@@ -353,7 +353,6 @@ onMounted(() => {
 
 .list {
   position: relative;
-  width: 80%;
   margin: 20px auto;
   padding: 20px;
   border: 1px solid #ccc;
@@ -374,7 +373,6 @@ onMounted(() => {
 .water-list {
   height: 800px;
   overflow: auto;
-  width: 400px;
   position: relative;
 }
 

@@ -5,7 +5,8 @@ export const enNavbar = navbar([
   // "/timeline/",
   "/category/",
   "/tools/",
-  "/games/"
+  "/games/",
+  "/playground/"
   // {
   //   text: "Posts",
   //   icon: "pen-to-square",
