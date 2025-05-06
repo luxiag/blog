@@ -29,25 +29,28 @@ export default defineUserConfig({
   theme,
   alias,
   bundler: viteBundler({
-       viteOptions: {
-         css: {
-          postcss: {
-            plugins: [
-              autoprefixer(),
-              tailwindcss()
-            ]
-          }
-         }
-       }
+    viteOptions: {
+      css: {
+        postcss: {
+          plugins: [
+            autoprefixer(),
+            tailwindcss()
+          ]
+        }
+      },
+      ssr: {
+        noExternal: ['repl', "@vue/repl", '@vue/repl']
+      }
+    }
   }),
-  head:[
-    ["link",{
+  head: [
+    ["link", {
       rel: "preconnect",
       href: "https://rsms.me/"
 
     }],
-    ['link',{
-      rel:"stylesheet",
+    ['link', {
+      rel: "stylesheet",
       href: "https://rsms.me/inter/inter.css"
     }]
   ]
