@@ -1,5 +1,5 @@
 ---
-title: TypeScript 高级类型
+title: TypeScript中的一些高级类型
 date: 2025-02-04
 category:
   - TypeScript

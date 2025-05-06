@@ -1,5 +1,5 @@
 ---
-title: Axios取消请求 
+title: Axios如何取消请求源码分析 
 category:
   - NetWork
 tag:
@@ -7,7 +7,7 @@ tag:
 date: 2025-01-30  
 ---
 
-# AbortController
+## AbortController
 
 Axios 支持以 fetch API 方式—— AbortController 取消请求：
 
@@ -61,7 +61,7 @@ axios.get('/foo/bar', {
 controller.abort()
 ```
 
-# Cancel Token
+## Cancel Token
 
 **单个请求**
 
@@ -104,7 +104,7 @@ axios.post('/user/12345', {
 source.cancel('Operation canceled by the user.');
 ```
 
-## 原理
+### 原理
 
 ::: detail CancelToken
 
@@ -236,7 +236,7 @@ class CancelToken {
 
 :::
 
-### `CancelToken.source`
+#### `CancelToken.source`
 
 ```ts
 CancelToken.source = function source() {
@@ -277,7 +277,7 @@ class CancelToken {
 }
 ```
 
-### XHRAdapter
+#### XHRAdapter
 
 ```ts
 if (_config.cancelToken || _config.signal) {
@@ -298,7 +298,7 @@ if (_config.cancelToken || _config.signal) {
 }
 ```
 
-### 中断请求
+#### 中断请求
 
 ```ts
 const source = CancelToken.source();  
@@ -316,7 +316,7 @@ function cancel(message, config, request) {
 }
 ```
 
-### resolvePromise
+#### resolvePromise
 
 ```ts
 this.promise = new Promise(function promiseExecutor(resolve) {
@@ -340,7 +340,7 @@ this.promise.then = onfulfilled => {
 
 通过发布订阅模式实现的,将axios.CancelToken构造器的实例通过cancelToken传入,就会调用实例上的subscribe方法订阅取消消息,再根据需求执行cancel方法触发订阅器取消请求。
 
-### FetchAdapter
+#### FetchAdapter
 
 ```ts
 let composedSignal = composeSignals([signal, cancelToken && cancelToken.toAbortSignal()], timeout);
@@ -367,7 +367,7 @@ new Request(url,{
 
 ```
 
-### composeSignals
+#### composeSignals
 
 ```ts
 const composeSignals = (signals, timeout) => {

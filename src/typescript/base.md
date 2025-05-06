@@ -1,20 +1,20 @@
 ---
-title: TypeScript 基础
+title: TypeScript 入门基础
 category: 
   - TypeScript
 date: 2021-10-28
 ---
 
-# 简介
+## 简介
 
-# TypeScript
+## TypeScript
 
 - TypeScript 是 JavaScript 的超集，它可以编译成纯 JavaScript。
 - TypeScript 基于 ECMAScript 标准进行拓展，支持 ECMAScript 未来提案中的特性，如装饰器、异步功能等。
 - TypeScript 编译的 JavaScript 可以在任何浏览器运行，TypeScript 编译工具可以运行在任何操作系统上。
 - TypeScript 起源于开发较大规模 JavaScript 应用程序的需求。由微软在2012年发布了首个公开版本。
 
-# ECMAScript
+## ECMAScript
 
 `ECMA International`: 一个制定技术标准的组织。
 
@@ -28,9 +28,9 @@ date: 2021-10-28
 
 2019年6月，ECMA-262 第10版定义了 ECMAScript 2019 通用编程语言。
 
-# **类型系统**
+## **类型系统**
 
-## **类型安全---强类型、弱类型**
+### **类型安全---强类型、弱类型**
 
 强类型不允许随意的类型转换，弱类型允许
 
@@ -75,34 +75,34 @@ NaN
 > Math.floor(true)
 1`
 
-`# 这里无法进行隐式类型转换，会在语法层面上报类型错误
+`## 这里无法进行隐式类型转换，会在语法层面上报类型错误
 > '100' - 50
 TypeError: unsupported operand type(s) for -: 'str' and 'int'
 > abs('foo')
 TypeError: bad operand type for abs(): 'str'
 ```
 
-## **类型检查 --- 静态类型、动态类型**
+### **类型检查 --- 静态类型、动态类型**
 
 **静态类型 ：**一个变量声明时它的类型就是明确的，声明过后，类型不能修改。**动态类型 ：**运行阶段才可以明确变量的类型，而且变量的类型随时可以改变。所以动态类型语言中的变量没有类型，变量中存放的值时有类型的。
 
 **静态类型不能修改变量的类型，动态类型可以随时去修改变量的类型。**
 
-# **JavaScript 类型系统特征**
+## **JavaScript 类型系统特征**
 
 JavaScript 是弱类型且动态类型的语言，灵活多变，可以进行 **隐式转换** ，也可以进行 **类型推断** ，但是缺失了类型系统的可靠性。
 
-## **JS 是弱类型且动态类型**
+### **JS 是弱类型且动态类型**
 
 - 早前的 JavaScript 应用简单，所以并没有复杂的类型系统
 - JavaScript 是脚本语言，没有编译环节，所以设计成静态语言是没有意义的
 
-## **需要类型检测**
+### **需要类型检测**
 
 - 因为现在的 JavaScript 应用越来越复杂，开发周期也越来越长，越来越大的项目几百行代码已经不满足现状了，所以现在弱类型已经成为了 JavaScript 的短板。
 - 这些东西只能通过约定去规避问题，但是在大型项目中通过人为约定存在隐患
 
-## **弱类型的不足**
+### **弱类型的不足**
 
 只有在运行阶段才能发现代码的异常，代码没有执行的时候也无法发现代码异常，在隐藏比较深的情况下，测试不能百分百覆盖。
 
@@ -140,7 +140,7 @@ console.log(obj["true"]) // 100
 console.log(obj["[object Object]"]) // 1
 ```
 
-## **强类型的优势**
+### **强类型的优势**
 
 - 错误在开发阶段就会暴露，越早发现越好
 - 代码更智能，编码更准确（开发工具的智能提示因为有变量类型才有提示）
@@ -156,18 +156,18 @@ function sum(a, b) {
 }
 ```
 
-## **类型系统问题解决方案**
+### **类型系统问题解决方案**
 
 - Flow
 - TypeScript
 
-## **编译型语言和解释型语言**
+### **编译型语言和解释型语言**
 
 > **编译型语言**使用专门的编译器，针对特定的平台，将高级语言源代码一次性的编译成可被该平台硬件执行的机器码，并包装成该平台所能识别的可执行性程序的格式。编译型语言一次性的编译成平台相关的机器语言 文件，运行时脱离开发环境，与特定平台相关，一般无法移植到其他平台，现有的 C、C++、Objective 等都属于编译型语言。
 **解释型语言**使用专门的解释器对源程序逐行解释成特定平台的机器码并立即执行。是 代码在执行时才被解释器一行行动态翻译成机器语言和执行，而不是在执行之前就完成翻译。解释型语言每次运行都需要将源代码解释称机器码并执行，只要平台提供相应的解释器，就可以运行源代码，Python、Java、JavaScript 等属于解释型语言。
 >
 
-# 数据类型
+## 数据类型
 
 TypeScript 中的类型有：
 
@@ -188,7 +188,7 @@ TypeScript 中的类型有：
 - 数组 Array
 - 对象 object
 
-# array
+## array
 
 ```jsx
 //第一种，可以在元素类型后面接上 []，表示由此类型元素组成的一个数组：
@@ -197,7 +197,7 @@ let list: number[] = [1, 2, 3];
 let list: Array<number> = [1, 2, 3];
 ```
 
-# Tuple
+## Tuple
 
 表示一个已知元素数量和类型的数组，各元素的类型不必相同。
 
@@ -210,14 +210,14 @@ x = ['hello', 10]; // OK
 x = [10, 'hello']; // Error
 ```
 
-# enum
+## enum
 
 ```jsx
 enum Color {Red, Green, Blue}
 let c: Color = Color.Green;
 ```
 
-# any
+## any
 
 不希望类型检查器对这些值进行检查而是直接让它们通过编译阶段的检查
 
@@ -227,7 +227,7 @@ notSure = "maybe a string instead";
 notSure = false; // okay, definitely a boolean
 ```
 
-# never
+## never
 
 永不存在的值的类型
 
@@ -249,7 +249,7 @@ function infiniteLoop(): never {
 }
 ```
 
-# object
+## object
 
 `object`表示非原始类型，也就是除`number`，`string`，`boolean`，`symbol`，`null`或`undefined`之外的类型。
 
@@ -279,13 +279,13 @@ Object.create("oops");    // Error
 - bigint
 - symbol
 
-# boolean
+## boolean
 
 ```jsx
 let isDone: boolean = false;
 ```
 
-# number
+## number
 
 ```jsx
 let decLiteral: number = 6;
@@ -294,14 +294,14 @@ let binaryLiteral: number = 0b1010;
 let octalLiteral: number = 0o744;
 ```
 
-# string
+## string
 
 ```jsx
 let name: string = "bob";
 name = "smith";
 ```
 
-# void
+## void
 
 表示没有任何类型
 
@@ -317,19 +317,19 @@ function warnUser(): void {
 let unusable: void = undefined;
 ```
 
-# null
+## null
 
 ```jsx
 let n: null = null;
 ```
 
-# undefined
+## undefined
 
 ```jsx
 let u: undefined = undefined;
 ```
 
-# bigInt
+## bigInt
 
 ```jsx
 const theBiggestInt: bigint = 9007199254740991n
@@ -346,7 +346,7 @@ theBiggestInt === hugeString // true
 - `BigInt` 不能和任何 `Number` 实例混合运算，两者必须转换成同一种类型。
 - `BigInt` 变量在转换为 `Number` 变量时可能会丢失精度。
 
-# symbol
+## symbol
 
 Symbol() 函数会返回 symbol 类型的值。每个从 Symbol() 返回的 symbol 值都是唯一的。
 
@@ -454,7 +454,7 @@ console.log(Calculate.length)    // 5
 console.log(Calculate.plus)      // hello world
 ```
 
-# 枚举合并
+## 枚举合并
 
 分开声明名称相同的枚举类型，会自动合并：
 
@@ -479,7 +479,7 @@ never 类型表示那些永不存在的值的类型。
 
 unknown 类型是 any 类型对应的安全类型。
 
-# never类型
+## never类型
 
 never 类型是任何类型的子类型，也可以赋值给任何类型；
 
@@ -489,7 +489,7 @@ function error(message:string): never {
 }
 ```
 
-# unknown类型
+## unknown类型
 
 unknown 类型在被确定为某个类型之前，不能被进行诸如函数执行、实例化等操作，一定程度上对类型进行了保护。
 
@@ -533,9 +533,9 @@ let myClothes: Clothes = {
 getClothesInfo(myClothes)
 ```
 
-# 接口属性
+## 接口属性
 
-## 可选属性
+### 可选属性
 
 接口中的属性不全是必需的。可选属性的含义是该属性在被变量定义时可以不存在。
 
@@ -554,7 +554,7 @@ let myClothes: Clothes = {
 }
 ```
 
-## 只读属性
+### 只读属性
 
 属性名前用 `readonly` 来指定只读属性，比如价格是不能被修改的:
 
@@ -584,11 +584,11 @@ let arr: ReadonlyArray<number> = [1,2,3,4,5];
 arr[0] = 6; // Index signature in type 'readonly number[]' only permits reading
 ```
 
-# `readonly` vs `const`
+## `readonly` vs `const`
 
 最简单判断该用 `readonly` 还是 `const` 的方法是看要把它做为变量使用还是做为一个属性。做为 `变量` 使用的话用 const，若做为 `属性` 则使用 readonly。
 
-# 任意属性
+## 任意属性
 
 接口允许有任意的属性，语法是用 [] 将属性包裹起来：
 
@@ -609,7 +609,7 @@ let myClothes: Clothes = {
 }
 ```
 
-# 函数类型
+## 函数类型
 
 ```jsx
 interface SearchFunc {
@@ -623,7 +623,7 @@ mySearch = function(source: string, subString: string): boolean {
 }
 ```
 
-# 可索引类型
+## 可索引类型
 
 ```jsx
 // 正常的js代码
@@ -662,7 +662,7 @@ interface Bar {
 }
 ```
 
-# 类类型
+## 类类型
 
 类的实现必须遵循接口定义，那么可以使用 **`implements`** 关键字来确保兼容性。
 
@@ -706,7 +706,7 @@ class Dog implements AnimalInterface {
 }
 ```
 
-# 继承接口
+## 继承接口
 
 ```jsx
 interface Shape {
@@ -727,7 +727,7 @@ square.sideLength = 10;
 square.penWidth = 5.0;
 ```
 
-# 混合类型
+## 混合类型
 
 希望一个对象同时具有上面提到多种类型
 
@@ -779,9 +779,9 @@ let myClothes: Clothes = {
 getClothesInfo(myClothes)
 ```
 
-# 接口属性
+## 接口属性
 
-## 可选属性
+### 可选属性
 
 接口中的属性不全是必需的。可选属性的含义是该属性在被变量定义时可以不存在。
 
@@ -800,7 +800,7 @@ let myClothes: Clothes = {
 }
 ```
 
-## 只读属性
+### 只读属性
 
 属性名前用 `readonly` 来指定只读属性，比如价格是不能被修改的:
 
@@ -830,11 +830,11 @@ let arr: ReadonlyArray<number> = [1,2,3,4,5];
 arr[0] = 6; // Index signature in type 'readonly number[]' only permits reading
 ```
 
-# `readonly` vs `const`
+## `readonly` vs `const`
 
 最简单判断该用 `readonly` 还是 `const` 的方法是看要把它做为变量使用还是做为一个属性。做为 `变量` 使用的话用 const，若做为 `属性` 则使用 readonly。
 
-# 任意属性
+## 任意属性
 
 接口允许有任意的属性，语法是用 [] 将属性包裹起来：
 
@@ -855,7 +855,7 @@ let myClothes: Clothes = {
 }
 ```
 
-# 函数类型
+## 函数类型
 
 ```jsx
 interface SearchFunc {
@@ -869,7 +869,7 @@ mySearch = function(source: string, subString: string): boolean {
 }
 ```
 
-# 可索引类型
+## 可索引类型
 
 ```jsx
 // 正常的js代码
@@ -908,7 +908,7 @@ interface Bar {
 }
 ```
 
-# 类类型
+## 类类型
 
 类的实现必须遵循接口定义，那么可以使用 **`implements`** 关键字来确保兼容性。
 
@@ -952,7 +952,7 @@ class Dog implements AnimalInterface {
 }
 ```
 
-# 继承接口
+## 继承接口
 
 ```jsx
 interface Shape {
@@ -973,7 +973,7 @@ square.sideLength = 10;
 square.penWidth = 5.0;
 ```
 
-# 混合类型
+## 混合类型
 
 希望一个对象同时具有上面提到多种类型
 
@@ -1011,7 +1011,7 @@ TypeScript 又为 JavaScript 函数添加了一些额外的功能，让我们可
 3. 在函数执行时， `this` 关键字并不会指向正在运行的函数本身，而是 `指向调用函数的对象`。
 4. `arguments` 对象是所有（非箭头）函数中都可用的 `局部变量`。你可以使用 arguments 对象在函数中引用函数的参数。
 
-# 函数类型
+## 函数类型
 
 在 TypeScript 中编写函数，需要给形参和返回值指定类型：
 
@@ -1033,9 +1033,9 @@ const add = (x: number, y: number): string => (x + y).toString()
 const add: (a: number, b: number) => string = (x: number, y: number): string => (x + y).toString()
 ```
 
-# 函数的参数
+## 函数的参数
 
-## 参数个数保持一致
+### 参数个数保持一致
 
 TypeScript 中每个函数参数都是必须的。
 
@@ -1050,7 +1050,7 @@ let result3 = fullName('Sherlock')
 // Error, Expected 2 arguments, but got 1
 ```
 
-## 可选参数
+### 可选参数
 
 在 TypeScript 里我们可以在参数名旁使用 `?` 实现可选参数的功能，**可选参数必须跟在必须参数后面**
 
@@ -1062,7 +1062,7 @@ let result2 = fullName('Sherlock', 'Holmes', 'character') // Error, Expected 1-2
 let result3 = fullName('Sherlock')                        // OK
 ```
 
-## 默认参数
+### 默认参数
 
 **可选参数必须跟在必须参数后面**，而**带默认值的参数不需要放在必须参数的后面，可随意调整位置**：
 
@@ -1072,7 +1072,7 @@ const token = (expired = 60*60, secret: string): void  => {}
 const token1 = (secret: string, expired = 60*60 ): void => {}
 ```
 
-## 剩余参数
+### 剩余参数
 
 通过 `rest 参数` (形式为 `...变量名`)来获取函数的剩余参数，这样就不需要使用 `arguments` 对象了。
 
@@ -1086,7 +1086,7 @@ function assert(ok: boolean, ...args: string[]): void {
 assert(false, '上传文件过大', '只能上传jpg格式')
 ```
 
-## this参数
+### this参数
 
 默认情况下，`tsconfig.json` 中，编译选项 `compilerOptions` 的属性 `noImplicitThis` 为 `false`，我们在一个对象中使用的 this 时，它的类型是 any 类型。
 
@@ -1153,7 +1153,7 @@ const myArea = triangle.area()
 console.log(myArea())
 ```
 
-# 函数重载
+## 函数重载
 
 函数重载是指函数根据传入不同的参数，返回不同类型的数据。
 
@@ -1173,7 +1173,7 @@ console.log(reverse('imooc'))   // coomi
 console.log(reverse(23874800))  // 847832
 ```
 
-# 字符串字面量类型
+## 字符串字面量类型
 
 ```jsx
 let protagonist: 'Sherlock'
@@ -1182,7 +1182,7 @@ protagonist = 'Sherlock'
 protagonist = 'Watson' // Error, Type '"Watson"' is not assignable to type '"Sherlock"'
 ```
 
-# 布尔字面量类型
+## 布尔字面量类型
 
 ```jsx
 let success: true
@@ -1190,7 +1190,7 @@ let fail: false
 let value: true | false
 ```
 
-# 数字字面量类型
+## 数字字面量类型
 
 ```jsx
 let die: 1 | 2 | 3 | 4 | 5 | 6
@@ -1214,7 +1214,7 @@ function identity<T>(arg: T): T {
 }
 ```
 
-# 多个类型参数
+## 多个类型参数
 
 ```jsx
 function extend<T, U>(first: T, second: U): T & U {
@@ -1225,7 +1225,7 @@ function extend<T, U>(first: T, second: U): T & U {
 }
 ```
 
-# 泛型参数默认类型
+## 泛型参数默认类型
 
 ```jsx
 function min<T = number>(arr:T[]): T{
@@ -1240,7 +1240,7 @@ function min<T = number>(arr:T[]): T{
 console.log(min([20, 6, 8n])) // 6
 ```
 
-# 泛型类型与泛型接口
+## 泛型类型与泛型接口
 
 ```jsx
 //(x: number, y: number) => string 为函数类型。
@@ -1295,7 +1295,7 @@ function identity<T>(arg: T): T {
 let myIdentity: GenericIdentityFn<number> = identity
 ```
 
-# 泛型类
+## 泛型类
 
 ```jsx
 class MinClass {
@@ -1338,7 +1338,7 @@ m.add('generic')
 console.log(m.min()) // generic
 ```
 
-# 泛型约束
+## 泛型约束
 
 **通过 `extends` 关键字来实现泛型约束。**
 
@@ -1360,7 +1360,7 @@ class MinClass<T extends Args> {}
 const m = new MinClass<boolean>() // Error, 必须是 number | string 类型
 ```
 
-# 多重类型泛型约束
+## 多重类型泛型约束
 
 **通过 <T extends Interface1 & Interface2>**
 
@@ -1425,7 +1425,7 @@ interface User {
 type T = Admin & User
 ```
 
-# 接口 vs. 类型别名
+## 接口 vs. 类型别名
 
 类型别名看起来和接口非常类似，区别之处在于：
 
@@ -1435,7 +1435,7 @@ type T = Admin & User
 
 类型推断的含义是不需要指定变量类型或函数的返回值类型，TypeScript 可以根据一些简单的规则推断其的类型。
 
-# 基础类型推断
+## 基础类型推断
 
 ```jsx
 let x = 3             // let x: number
@@ -1468,7 +1468,7 @@ const obj = {
 let { protagonist } = obj
 ```
 
-# 最佳通用类型推断
+## 最佳通用类型推断
 
 ```jsx
 //为了推断 x 的类型，必须考虑所有的元素类型。
@@ -1477,7 +1477,7 @@ let { protagonist } = obj
 let x = [1, 'imooc', null]
 ```
 
-# 上下文类型推断
+## 上下文类型推断
 
 ```jsx
 class Animal {
@@ -1496,7 +1496,7 @@ TypeScript 允许你覆盖它的推断，毕竟作为开发者你比编译器更
 
 类型断言主要用于当 TypeScript 推断出来类型并不满足你的需求，你需要手动指定一个类型。
 
-# as
+## as
 
 ```jsx
 const user = {}
@@ -1521,7 +1521,7 @@ user.admin = true
 user.groups = [2, 6]
 ```
 
-# 首尾标签
+## 首尾标签
 
 类型断言还可以通过标签 `<>` 来实现：
 
@@ -1539,7 +1539,7 @@ user.admin = true
 user.groups = [2, 6]
 ```
 
-# 非空断言
+## 非空断言
 
 如果编译器不能够去除 null 或 undefined，可以使用非空断言 ! 手动去除。
 
@@ -1555,7 +1555,7 @@ function fixed(name: string | null): string {
 
 类型保护是指缩小类型的范围，在一定的块级作用域内由编译器推导其类型，提示并规避不合法的操作。
 
-# typeof
+## typeof
 
 ```jsx
 function doSome(x: number | string) {
@@ -1569,7 +1569,7 @@ function doSome(x: number | string) {
 }
 ```
 
-# instanceof
+## instanceof
 
 ```jsx
 class User {
@@ -1593,7 +1593,7 @@ function typeGuard(arg: User | Log) {
 }
 ```
 
-# in
+## in
 
 in 操作符用于确定属性是否存在于某个对象上，这也是一种缩小范围的类型保护。
 
@@ -1621,7 +1621,7 @@ function typeGuard(arg: User | Log) {
 }
 ```
 
-# 字面量类型保护
+## 字面量类型保护
 
 ```jsx
 type Success = {
@@ -1656,7 +1656,7 @@ let year: number = 2010
 address = year // Error
 ```
 
-# 结构化
+## 结构化
 
 TypeScript 类型兼容性是基于结构类型的；结构类型只使用其成员来描述类型。
 
@@ -1677,9 +1677,9 @@ let protagonist = {
 let user: User = protagonist // OK
 ```
 
-# 比较两个函数
+## 比较两个函数
 
-## 函数参数
+### 函数参数
 
 **判断两个函数是否兼容，首先要看参数是否兼容，第二个还要看返回值是否兼容。**
 
@@ -1700,7 +1700,7 @@ let fn2 = (c: number, d: string, e: boolean) => {}
 fn2 = fn1 // OK
 ```
 
-## 函数返回值
+### 函数返回值
 
 ```jsx
 let x = () => ({name: 'Alice'})
@@ -1719,7 +1719,7 @@ let y = () => 'imooc'
 x = y // OK
 ```
 
-# 枚举的类型兼容性
+## 枚举的类型兼容性
 
 枚举与数字类型相互兼容:
 
@@ -1747,7 +1747,7 @@ let current = Status.Pending
 current = Color.Red // Error
 ```
 
-# 类的类型兼容性
+## 类的类型兼容性
 
 **比较两个类类型数据时，只有实例成员会被比较，静态成员和构造函数不会比较**
 
@@ -1795,7 +1795,7 @@ let s: Size
 a = s! // Error
 ```
 
-# 泛型的类型兼容性
+## 泛型的类型兼容性
 
 泛型的类型兼容性根据其是否被成员使用而不同。
 
@@ -1903,7 +1903,7 @@ function pluck(o, names) {
 
 **索引类型可以让 TypeScript 编译器覆盖检测到使用了动态属性名的代码。**
 
-# keyof
+## keyof
 
 **keyof 可以获取对象的可访问索引字符串字面量类型。**
 
@@ -1925,7 +1925,7 @@ let user: keyof User // let user: "id" | "phone" | "nickname" | "department"
 type token = keyof Token // type token = "accessExp" | "refreshExp"
 ```
 
-# T[K]
+## T[K]
 
 ```jsx
 class Token{
@@ -1947,7 +1947,7 @@ function getProperty<T, K extends keyof T>(o: T, name: K): T[K] {
 
 **映射类型可以将已知类型的每个属性都变为可选的或者只读的。**
 
-# Readonly
+## Readonly
 
 ```jsx
 type Readonly<T> = {
@@ -1967,7 +1967,7 @@ type PersonReadonly = Readonly<Person>
 //}
 ```
 
-# Partial
+## Partial
 
 **`Partial`** 译为 部分的/局部的/不完全的, 作用是将一个接口的所有参数变为非必填
 
@@ -1991,7 +1991,7 @@ type PersonOptional = Partial<Person>
 //}
 ```
 
-# Required
+## Required
 
 **`Required`** 译为必须的, 作用是将一个接口中所有非必填参数 变为必填，**`Required<T>`** 的作用就是将某个类型里的属性全部变为必选项。
 
@@ -2021,7 +2021,7 @@ type PickUser = Required<PartialUser>;
 // }
 ```
 
-# Pick
+## Pick
 
 **`Pick`**译为挑选/选择, 作用是从一个复合类型中，取出几个想要的类型的组合一个新的类型
 
@@ -2046,7 +2046,7 @@ type PickB = Pick<B, "id" | "name">;
 // }
 ```
 
-# Record
+## Record
 
 **`Record`** 译为 记录/记载, 作用是将一个类型的所有属性值都映射到另一个类型上并创造一个新的类型
 
@@ -2166,7 +2166,7 @@ function toUpperCase(x: unknown) {
 }
 ```
 
-# 扩展函数
+## 扩展函数
 
 ```tsx
 const isNumber = (val: unknown): val is number => typeof val === 'number'
@@ -2267,7 +2267,7 @@ console.log(!!z)   // false
 
 当一个对象实现了[`Symbol.iterator`](https://www.tslang.cn/docs/handbook/symbols.html#symboliterator)属性时，我们认为它是可迭代的。
 
-# **`for..of` 语句**
+## **`for..of` 语句**
 
 `for..of`会遍历可迭代的对象，调用对象上的`Symbol.iterator`方法。
 
@@ -2279,7 +2279,7 @@ for (let entry of someArray) {
 }
 ```
 
-# **`*for..of` vs. `for..in` 语句***
+## **`*for..of` vs. `for..in` 语句***
 
 `for..of`和`for..in`均可迭代一个列表；但是用于迭代的值却不同，`for..in`迭代的是对象的 *键* 的列表，而`for..of`则迭代对象的键对应的值。
 
@@ -2295,7 +2295,7 @@ for (let i of list) {
 }
 ```
 
-# 使用
+## 使用
 
 ```tsx
 npm i reflect-metadata --save
@@ -2455,7 +2455,7 @@ function applyMixins(derivedCtor: any, baseCtors: any[]) {
 
 TypeScript 与 ECMAScript 2015 一样，任何包含顶级 `import` 或者 `export` 的文件都被当成一个模块。相反的，如果一个文件不带有顶级的 `import` 或者 `export` 声明，那么它的内容被视为全局可见的。
 
-# 全局模块
+## 全局模块
 
 在一个 TypeScript 工程创建一个 `test.ts` 文件，写入代码：
 
@@ -2482,9 +2482,9 @@ export const a = 1
 
 这样，两个 `a` 因处于不同的命名空间，就不会报错。
 
-# 导出语法
+## 导出语法
 
-# 使用export 导出声明
+## 使用export 导出声明
 
 任何声明（比如变量，函数，类，类型别名或接口）都能够通过添加 export 关键字来导出。
 
@@ -2504,7 +2504,7 @@ export class Employee implements User {
 export type used = true | false
 ```
 
-## 先声明，后导出
+### 先声明，后导出
 
 先进行声明操作，最终统一使用 export 关键字导出
 
@@ -2526,7 +2526,7 @@ type used = true | false
 export { a, add, Employee }
 ```
 
-## 导出时重命名
+### 导出时重命名
 
 ```tsx
 const a: number = 1
@@ -2547,7 +2547,7 @@ export { add }
 export { a as level, used as status, Employee }
 ```
 
-## 重新导出
+### 重新导出
 
 重新导出功能并不会在当前模块导入那个模块或定义一个新的局部变量。
 
@@ -2575,7 +2575,7 @@ export * from './ZipCodeValidator'
 export * from './ParseIntBasedZipCodeValidator'
 ```
 
-## 默认导出
+### 默认导出
 
 ```tsx
 export default class ZipCodeValidator {
@@ -2586,27 +2586,27 @@ export default class ZipCodeValidator {
 }
 ```
 
-# 导入语法
+## 导入语法
 
-## 使用import导入
+### 使用import导入
 
 ```tsx
 import { a, add, Employee } from './export'
 ```
 
-## 导入时重命名
+### 导入时重命名
 
 ```tsx
 import { a as level, used as status } from './export'
 ```
 
-## 将整个模块导入到一个变量
+### 将整个模块导入到一个变量
 
 ```tsx
 import * as TYPES from './export'
 ```
 
-## 直接导入
+### 直接导入
 
 ```tsx
 import './export'
@@ -2629,7 +2629,7 @@ TypeScript 中的声明会创建以下三种实体之一：命名空间、类型
 
 [类型声明](https://www.notion.so/3aa3e95cdf3848799c4f87a16b75e704?pvs=21)
 
-# 接口合并
+## 接口合并
 
 ```tsx
 interface Box {
@@ -2673,7 +2673,7 @@ interface Document {
 }
 ```
 
-# 命名空间合并
+## 命名空间合并
 
 合并多个具有相同名称的命名空间：
 
@@ -2699,9 +2699,9 @@ A.fn()      // OK
 A.fnOther() // OK
 ```
 
-# 命名空间与其他类型的合并
+## 命名空间与其他类型的合并
 
-## 命名空间与类的合并
+### 命名空间与类的合并
 
 合并名称相同的命名空间与类：
 
@@ -2721,7 +2721,7 @@ namespace Album {
 console.log(Album.num) // 10
 ```
 
-## 命名空间与函数的合并
+### 命名空间与函数的合并
 
 - 名称相同的命名空间与函数挂载同一个对象
 - 命名空间要放在函数的定义后面
@@ -2739,7 +2739,7 @@ namespace buildLabel {
 console.log(buildLabel('Mr.Pioneer')) // Hello, Mr.Pioneer.C
 ```
 
-## 命名空间与枚举的合并
+### 命名空间与枚举的合并
 
 ```tsx
 enum Color {

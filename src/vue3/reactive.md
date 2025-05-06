@@ -1,5 +1,5 @@
 ---
-title: Vue3.5 响应式原理
+title: Vue3.5响应式原理分析，及Reactive和Ref源码解析
 date: 2024-12-05
 category:
   - Vue
@@ -8,9 +8,109 @@ tag:
 ---
 
 
+Vue 最标志性的功能就是其低侵入性的响应式系统。组件状态都是由响应式的 JavaScript 对象组成的。当更改它们时，视图会随即自动更新。Vue 的响应式系统基本是基于运行时的。追踪和触发都是在浏览器中运行时进行的。运行时响应性的优点是，它可以在没有构建步骤的情况下工作，而且边界情况较少。
+
+## mini Reactive
+
+```vue
+<div class="customReactive"> </div>
+
+<script setup>
+
+
+const user = reactive({
+
+  name:'一号',
+  age:18
+})
+
+effect(() => {
+  document.querySelector('.customReactive').innerText = user.name + '今年' + user.age + '岁'
+})
+
+setTimeout(()=> {
+  user.name = '二号'
+  setTimeout(()=> {
+    user.age = 20
+  },2000)
+},2000)
+
+// reactive.js
+
+const reactive = (target) => {
+ return new Proxy(target, {
+    get(target,key,receiver) {
+      let res = Reflect.get(target,key,receiver)
+      track(target,key)
+      if(isObject(res)) {
+        return reactive(res)
+      }
+      return res;
+    }
+    set(target,key,value,receiver){
+      let res = Reflect.set(target,key,value,receiver)
+      trigger(target,key)
+      return res
+    }
+ }) 
+}
+let activeEffect
+// track.js
+const targetMap = new WeakMap()
+const track = (target,key) => {
+  let depsMap = targetMap.get(target)
+  if(!depsMap) {
+    depsMap = new Map()
+    targetMap.set(target,depsMap)
+  }
+  let deps = depsMap.get(key)
+  if(!deps) {
+    deps = new Set()
+    depsMap.set(key,deps)
+  }
+  deps.add(activeEffect)
+}
+// trigger.js
+const trigger = (target,key) => {
+  let depsMap = targetMap.get(target)
+  if(!depsMap) {
+    depsMap = new Map()
+    targetMap.set(target,depsMap)
+  }
+  let deps = depsMap.get(key)
+  if(!deps) {
+    deps = new Set()
+    depsMap.set(key,deps)
+  }
+  deps.forEach(effect => {
+    effect()
+  })
+}
+// effect.js
+const effect = (fn) => {
+  const _effect = () => {
+    activeEffect = _effect
+    fn();
+  }
+  _effect()
+}
+</script>
+
+
+
+
+```
+
+::: info Reflect
+Reflect 是一个内置的对象，它提供拦截 JavaScript 操作的方法。
+`Reflect.get` 获取对象身上某个属性的值，类似于 target[name]。
+`Reflect.set` 将值分配给属性的函数。
+:::
 
 ```js
 const state = reactive({
+
+
   name:'黎明',
   age:18
 })
@@ -26,8 +126,10 @@ state.age = 20
 
 ```
 
-# Proxy
+## Proxy
+
 Proxy 对象用于创建一个对象的代理，从而实现基本操作的拦截和自定义（如属性查找、赋值、枚举、函数调用等）。
+
 ```ts
 const handler = {
   get: function (obj, prop) {
@@ -44,7 +146,7 @@ console.log("c" in p, p.c); // false, 37
 
 ```
 
-## [Proxy Limitations](https://javascript.info/proxy#proxy-limitations)
+### [Proxy Limitations](https://javascript.info/proxy#proxy-limitations)
 
 ```js
 let map = new Map();
@@ -53,6 +155,7 @@ let proxy = new Proxy(map, {});
 
 proxy.set('test', 1); // Error
 ```
+
 Internally, a Map stores all data in its [[MapData]] internal slot. The proxy doesn’t have such a slot. The built-in method Map.prototype.set method tries to access the internal property this.[[MapData]], but because this=proxy, can’t find it in proxy and just fails.
 
 ```js
@@ -68,11 +171,6 @@ let proxy = new Proxy(map, {
 proxy.set('test', 1);
 alert(proxy.get('test')); // 1 (works!)
 ```
-
-
-
-
-
 
 ```html
 
@@ -114,9 +212,7 @@ alert(proxy.get('test')); // 1 (works!)
 
 ```
 
-
-
-# reactive
+## reactive
 
 ```ts
 function reactive(){
@@ -135,6 +231,7 @@ function reactive(){
 }
 
 ```
+
 ::: details reactive
 
 ```ts
@@ -239,17 +336,15 @@ function targetTypeMap(rawType: string) {
 
 :::
 
-
-## handler
+### handler
 
 ```ts
 new Proxy(target, handler)
 ```
+
 如果是`Map`,`Set`,`WeakMap`,`WeakSet`使用`collectionHandlers`，否则使用`baseHandlers`
 
-
-
-### baseHandlers
+#### baseHandlers
 
 代理对象是`object`,`Array`类型
 
@@ -325,7 +420,6 @@ const baseHandlers: ProxyHandler<object> = {
 }
 
 ```
-
 
 ::: details baseHandlers
 
@@ -503,11 +597,9 @@ class BaseReactiveHandler implements ProxyHandler<Target> {
 }
 ```
 
-::: 
+:::
 
-
-
-### collectionHandlers
+#### collectionHandlers
 
 `Map`,`Set`,`WeakMap`,`WeakSet`
 
@@ -516,7 +608,6 @@ class BaseReactiveHandler implements ProxyHandler<Target> {
 对于查询操作，插入收集依赖的逻辑，然后返回响应式数据
 对于修改操作，插入监听逻辑
 对于迭代操作，插入收集依赖的逻辑，迭代过程中将数据转换成响应式的数据
-
 
 ```js
 const collectionHandlers = {
@@ -846,9 +937,10 @@ function createIterableMethod(
 
 :::
 
-# ref
+## ref
 
 `Getters/setters`
+
 ```js
 class User {
 
@@ -876,7 +968,9 @@ alert(user.name); // John
 
 user = new User(""); // Name is too short.
 ```
+
 `ref`
+
 ```ts
 export function ref(value?: unknown) {
   return createRef(value, false)
@@ -915,6 +1009,7 @@ class RefImpl<T = any> {
 ```
 
 ::: details RefImpl
+
 ```ts
 class RefImpl<T = any> {
   _value: T
@@ -971,9 +1066,10 @@ class RefImpl<T = any> {
 
 
 ```
+
 :::
 
-# Effect
+## Effect
 
 ```ts
 it('should observe basic properties', () => {
@@ -986,9 +1082,8 @@ it('should observe basic properties', () => {
 })
 ```
 
-
-
 effect是 reactive 的核心，主要负责收集依赖，更新依赖
+
 ```ts
 function effect(fn){
   const e = new ReactiveEffect(fn)
@@ -1012,7 +1107,9 @@ class ReactiveEffect {
   }
 }
 ```
+
 访问reactive数据会触发get拦截进行track进行依赖收集
+
 ```ts
 function track(target,type,key) {
    if (shouldTrack && activeSub) { 
@@ -1038,7 +1135,9 @@ function addSub(link) {
     link.dep.subs = link
 }
 ```
+
 更改reactive属性数据，会触发set拦截，进行trigger触发依赖更新
+
 ```ts
 function trigger(target,type,key,newValue,oldValue,oldTarget) {
   const run = (dep) => {dep.trigger()}
@@ -1095,8 +1194,8 @@ function endBatch(){
 }
 ```
 
-
 ::: details effect
+
 ```ts
 export function effect<T = any>(
   fn: () => T,
@@ -1259,7 +1358,7 @@ export class ReactiveEffect<T = any>
 
 :::
 
-# Dep
+## Dep
 
 - `targetMap`:存储了每个 "响应性对象属性" 关联的依赖；类型是 WeakMap
 - `depsMap`: 存储了每个属性的依赖；类型是 Map
@@ -1322,8 +1421,6 @@ function trigger(target,type,key,newValue,oldValue,oldTarget) {
 
 ```
 
-
-
 ::: details track
 
 ```ts
@@ -1364,6 +1461,7 @@ export function track(target: object, type: TrackOpTypes, key: unknown): void {
 }
 
 ```
+
 :::
 
 ::: details trigger
@@ -1646,7 +1744,45 @@ function addSub(link: Link) {
 
 :::
 
-# summary
+::: details Link
+
+```ts
+export class Link {
+  /**
+   * - Before each effect run, all previous dep links' version are reset to -1
+   * - During the run, a link's version is synced with the source dep on access
+   * - After the run, links with version -1 (that were never used) are cleaned
+   *   up
+   */
+  version: number
+
+  /**
+   * Pointers for doubly-linked lists
+   */
+  nextDep?: Link
+  prevDep?: Link
+  nextSub?: Link
+  prevSub?: Link
+  prevActiveLink?: Link
+
+  constructor(
+    public sub: Subscriber,
+    public dep: Dep,
+  ) {
+    this.version = dep.version
+    this.nextDep =
+      this.prevDep =
+      this.nextSub =
+      this.prevSub =
+      this.prevActiveLink =
+        undefined
+  }
+}
+```
+
+:::
+
+## summary
 
 - `targetMap`:存储了每个 "响应性对象" 关联的依赖；类型是 WeakMap
 - `depsMap`: 存储了每个属性的依赖；类型是 Map
@@ -1683,5 +1819,36 @@ class Dep {
 
 ```
 
+响应式步骤
 
+```ts
+// 
+const obj = reactive({
+  name: 'zs',
+  age: 18
+})
+// reactive => Proxy
+function reactive() {
+  return new Proxy(obj,{
+    get(target,key){
+      //收集依赖
+      track(target,key)
+      return Reflect.get(target,key)
+    },
+    set(target,key,value){
+      // 触发依赖
+      trigger(target,key,value)
+      return Reflect.set(target,key,value)
+    }
+  })
+}
+// 获取obj.name时候触发track
+// track被handler处理过 对应type为获取方法
+function track(target,type,key){
 
+}
+```
+
+## 参考
+
+- [vue3的响应式原理简单实现](https://blog.csdn.net/qq_45331969/article/details/135953108)
