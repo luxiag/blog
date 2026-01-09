@@ -40,20 +40,30 @@ export default function TagFilter({ posts, onFilter }: TagFilterProps) {
   };
 
   return (
-    <div className="mb-8">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-gray-700 font-medium">筛选标签:</span>
+    <div style={{marginBottom: '32px'}}>
+      <div className="flex flex-wrap items-center" style={{gap: '8px'}}>
+        <span style={{fontWeight: 600, fontSize: '14px', color: 'var(--foreground)', fontFamily: 'var(--font-mono)'}}>筛选标签:</span>
         {allTags.length > 0 ? (
           <>
             {allTags.map((tag) => (
               <button
                 key={tag}
                 onClick={() => handleTagClick(tag)}
-                className={`px-3 py-1 rounded-full text-sm transition-colors ${
-                  selectedTag === tag
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
+                className="transition-colors"
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '4px',
+                  fontSize: '11px',
+                  fontFamily: 'var(--font-mono)',
+                  backgroundColor: selectedTag === tag 
+                    ? 'var(--foreground)' 
+                    : 'white',
+                  color: selectedTag === tag 
+                    ? 'white' 
+                    : 'var(--foreground)',
+                  border: '1px solid var(--border-color)',
+                  cursor: 'pointer'
+                }}
               >
                 {tag}
               </button>
@@ -61,14 +71,24 @@ export default function TagFilter({ posts, onFilter }: TagFilterProps) {
             {selectedTag && (
               <button
                 onClick={handleClearFilter}
-                className="px-3 py-1 rounded-full text-sm bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+                className="transition-colors"
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '4px',
+                  fontSize: '11px',
+                  fontFamily: 'var(--font-mono)',
+                  backgroundColor: 'white',
+                  color: 'var(--color-orange-800)',
+                  border: '1px solid var(--color-orange-800)',
+                  cursor: 'pointer'
+                }}
               >
                 清除筛选
               </button>
             )}
           </>
         ) : (
-          <span className="text-gray-500 text-sm">暂无标签</span>
+          <span style={{fontSize: '13px', color: 'var(--color-neutral-500)', fontFamily: 'var(--font-mono)'}}>暂无标签</span>
         )}
       </div>
     </div>

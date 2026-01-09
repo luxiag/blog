@@ -27,25 +27,49 @@ export function getAllPostSlugs() {
 // 根据 slug 获取博客文章数据
 export async function getPostData(slug: string): Promise<Post> {
   const fullPath = path.join(postsDirectory, `${slug}.md`);
-  const fileContents = fs.readFileSync(fullPath, 'utf8');
 
-  // 使用 gray-matter 解析 frontmatter 和内容
-  const { data, content } = matter(fileContents);
+  // 检查文件是否存在
+  if (!fs.existsSync(fullPath)) {
+    throw new Error(`Post with slug: ${slug} not found`);
+  }
 
-  // 组合 frontmatter 和内容
-  const frontMatter = data as PostFrontMatter;
+  try {
+    const fileContents = fs.readFileSync(fullPath, 'utf8');
 
-  return {
-    slug,
-    content,
-    title: frontMatter.title,
-    date: frontMatter.date,
-    excerpt: frontMatter.excerpt,
-    coverImage: frontMatter.coverImage,
-    author: frontMatter.author,
-    tags: frontMatter.tags,
-    readingTime: calculateReadingTime(content),
-  };
+    // 使用 gray-matter 解析 frontmatter 和内容
+    // 确保正确解析嵌套对象
+    const { data, content } = matter(fileContents, {
+      engines: {
+        yaml: (s: string) => {
+          // 使用简单的解析方法处理嵌套对象
+          try {
+            return require('js-yaml').load(s);
+          } catch (e) {
+            console.error('Error parsing YAML:', e);
+            return {};
+          }
+        }
+      }
+    });
+
+    // 组合 frontmatter 和内容
+    const frontMatter = data as PostFrontMatter;
+
+    return {
+      slug,
+      content,
+      title: frontMatter.title || '无标题',
+      date: frontMatter.date || new Date().toISOString().split('T')[0],
+      excerpt: frontMatter.excerpt || '',
+      coverImage: frontMatter.coverImage,
+      author: frontMatter.author,
+      tags: frontMatter.tags || [],
+      readingTime: calculateReadingTime(content),
+    };
+  } catch (error) {
+    console.error(`Error reading post ${slug}:`, error);
+    throw new Error(`Failed to read post with slug: ${slug}`);
+  }
 }
 
 // 获取所有博客文章的列表（按日期排序）

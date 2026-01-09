@@ -1,26 +1,183 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f5f5f5;
+  --foreground: oklch(0.145 0 0);
+  --color-orange-800: #ea580c;
+  --color-neutral-100: #f5f5f5;
+  --color-neutral-200: oklch(0.145 0 0);
+  --color-neutral-300: oklch(0.145 0 0);
+  --color-neutral-400: oklch(0.145 0 0);
+  --color-neutral-500: oklch(0.145 0 0);
+  --color-neutral-950: oklch(0.145 0 0);
+  --border-color: oklch(0.145 0 0);
+  
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 20px;
+  --spacing-2xl: 24px;
+  --spacing-3xl: 32px;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-ibm-plex-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-inter), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Typography */
+.features-title {
+  font-size: 100px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  background: repeating-linear-gradient(
+    0deg,
+    var(--foreground) 0px,
+    var(--foreground) 4px,
+    transparent 4px,
+    transparent 8px
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.feature-card-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--foreground);
+}
+
+.feature-card-desc {
+  font-size: 16px;
+  color: var(--color-neutral-500);
+  line-height: 1.5;
+}
+
+/* Cards */
+.card {
+  background: white;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.card-body {
+  padding: 24px;
+}
+
+/* Main Container */
+.main-card {
+  background: white;
+  border: 1px solid var(--color-neutral-200);
+  margin: 20px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.main-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--color-neutral-200);
+}
+
+.feature-block {
+  padding: 24px;
+  border-bottom: 1px solid var(--color-neutral-200);
+}
+
+/* Code Blocks */
+.code-file {
+  border: 1px solid var(--color-neutral-200);
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+}
+
+.code-file-header {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-neutral-200);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-neutral-500);
+  background: var(--color-neutral-100);
+}
+
+.code-file-content {
+  padding: 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Patterns */
+.pattern-dots {
+  background-image: radial-gradient(
+    circle, 
+    var(--color-neutral-400) 1px, 
+    transparent 1px
+  );
+  background-size: 6px 6px;
+}
+
+.pattern-lines {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 3px,
+    var(--color-neutral-200) 3px,
+    var(--color-neutral-200) 4px
+  );
+}
+
+/* Animations */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-neutral-200);
+  border-top-color: var(--foreground);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+  
+  * {
+    transition: none !important;
+  }
+}
+
+/* Responsive Typography */
+@media (max-width: 768px) {
+  .features-title {
+    font-size: 48px;
+  }
 }
