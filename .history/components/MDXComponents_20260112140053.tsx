@@ -53,13 +53,13 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeRaw, rehypeHighlight]}
-        style={{ fontFamily: 'var(--font-sans)', color: 'var(--foreground)', maxWidth: 'none', fontSize: '1.125rem', lineHeight: '1.75' }}
+        style={{fontFamily: 'var(--font-sans)', color: 'var(--foreground)', maxWidth: 'none', fontSize: '1.125rem', lineHeight: '1.75'}}
         components={{
           // 自定义标题渲染，添加锚点
           h1: ({ children, ...props }) => (
             <h1
               id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-              style={{ fontFamily: 'var(--font-sans)', color: 'var(--foreground)', borderBottom: '1px solid var(--border-color)', paddingBottom: 'var(--spacing-md)' }}
+              style={{fontFamily: 'var(--font-sans)', color: 'var(--foreground)', borderBottom: '1px solid var(--border-color)', paddingBottom: 'var(--spacing-md)'}}
               {...props}
             >
               {children}
@@ -68,7 +68,7 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
           h2: ({ children, ...props }) => (
             <h2
               id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-              style={{ fontFamily: 'var(--font-sans)', color: 'var(--foreground)', marginTop: 'var(--spacing-3xl)', borderBottom: '1px solid var(--border-color)', paddingBottom: 'var(--spacing-sm)' }}
+              style={{fontFamily: 'var(--font-sans)', color: 'var(--foreground)', marginTop: 'var(--spacing-3xl)', borderBottom: '1px solid var(--border-color)', paddingBottom: 'var(--spacing-sm)'}}
               {...props}
             >
               {children}
@@ -77,7 +77,7 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
           h3: ({ children, ...props }) => (
             <h3
               id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-              style={{ fontFamily: 'var(--font-sans)', color: 'var(--foreground)', marginTop: 'var(--spacing-2xl)' }}
+              style={{fontFamily: 'var(--font-sans)', color: 'var(--foreground)', marginTop: 'var(--spacing-2xl)'}}
               {...props}
             >
               {children}
@@ -85,14 +85,14 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
           ),
           // 自定义图片渲染
           img: ({ src, alt, ...props }) => (
-            <div style={{ margin: '1.5rem 0' }}>
+            <div style={{margin: '1.5rem 0'}}>
               <img
                 src={src}
                 alt={alt}
-                style={{ borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-subtle)', maxWidth: '100%', height: 'auto' }}
+                style={{borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-subtle)', maxWidth: '100%', height: 'auto'}}
                 {...props}
               />
-              {alt && <p style={{ textAlign: 'center', fontSize: '0.875rem', marginTop: '0.5rem', fontStyle: 'italic', color: 'var(--color-neutral-500)' }}>{alt}</p>}
+              {alt && <p style={{textAlign: 'center', fontSize: '0.875rem', marginTop: '0.5rem', fontStyle: 'italic', color: 'var(--color-neutral-500)'}}>{alt}</p>}
             </div>
           ),
           // 自定义代码块渲染
@@ -101,9 +101,9 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
             const codeText = String(children).replace(/\n$/, '');
 
             // 检查是否是可运行代码块
-            const isRunnable = props['data-runnable'] === 'true' ||
-              (match && codeText.includes('// 可运行')) ||
-              (match && codeText.includes('// runnable'));
+            const isRunnable = props['data-runnable'] === 'true' || 
+                             (match && codeText.includes('// 可运行')) || 
+                             (match && codeText.includes('// runnable'));
 
             if (!inline && match) {
               // 如果是可运行代码，使用CodeRunner组件
@@ -154,7 +154,7 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
               href={href}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: 'var(--color-orange-800)', textDecoration: 'underline' }}
+              style={{color: 'var(--color-orange-800)', textDecoration: 'underline'}}
               {...props}
             >
               {children}
@@ -178,14 +178,14 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
           ),
           // 自定义表格渲染
           table: ({ children, ...props }) => (
-            <div style={{ overflowX: 'auto', margin: 'var(--spacing-2xl) 0' }}>
-              <table style={{ minWidth: '100%', borderBottom: '1px solid var(--border-color)' }} {...props}>
+            <div style={{overflowX: 'auto', margin: 'var(--spacing-2xl) 0'}}>
+              <table style={{minWidth: '100%', borderBottom: '1px solid var(--border-color)'}} {...props}>
                 {children}
               </table>
             </div>
           ),
           thead: ({ children, ...props }) => (
-            <thead style={{ backgroundColor: 'var(--color-neutral-100)' }} {...props}>
+            <thead style={{backgroundColor: 'var(--color-neutral-100)'}} {...props}>
               {children}
             </thead>
           ),

@@ -2,21 +2,19 @@
 import { notFound } from 'next/navigation';
 import { getPostData, getAllPostSlugs } from '@/lib/markdown';
 import MDXComponents from '@/components/MDXComponents';
-import AIChatBox from '@/components/AIChatBox';
 import Link from 'next/link';
 import Image from 'next/image';
-import { logger } from '@/lib/logger';
 
 // 生成静态参数
 export async function generateStaticParams() {
   try {
     const slugs = getAllPostSlugs();
-    logger.info('Available slugs:', slugs);
+    console.log('Available slugs:', slugs);
     return slugs.map((item) => ({
       slug: item.params.slug,
     }));
   } catch (error) {
-    logger.error('Error generating static params:', error);
+    console.error('Error generating static params:', error);
     return [];
   }
 }
@@ -27,7 +25,7 @@ async function getPost(slug: string) {
     const post = await getPostData(slug);
     return post;
   } catch (error) {
-    logger.error(`Error fetching post ${slug}:`, error);
+    console.error(`Error fetching post ${slug}:`, error);
     return null;
   }
 }
@@ -38,16 +36,15 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
   const slug = resolvedParams?.slug;
 
   if (!slug) {
-    logger.error('Slug is undefined in params');
+    console.error('Slug is undefined in params');
     notFound();
   }
 
-  logger.info('Fetching post with slug:', slug);
+  console.log('Fetching post with slug:', slug);
   const post = await getPost(slug);
 
-  logger.debug('Post data:', post)
   if (!post) {
-    logger.error('Post not found for slug:', slug);
+    console.error('Post not found for slug:', slug);
     notFound();
   }
 
@@ -129,12 +126,6 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
           </div>
         </div>
       </div>
-      
-      {/* AI聊天框 */}
-      <AIChatBox 
-        articleTitle={post.title} 
-        articleContent={post.content} 
-      />
     </div>
   );
 }

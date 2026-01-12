@@ -4,6 +4,7 @@ import path from 'path';
 import matter from 'gray-matter';
 import { calculateReadingTime } from './reading-time';
 import { Post, PostFrontMatter } from '@/types/blog';
+import { logger } from './logger';
 
 // 博客文章目录
 const postsDirectory = path.join(process.cwd(), 'content/posts');
@@ -45,7 +46,7 @@ export async function getPostData(slug: string): Promise<Post> {
           try {
             return require('js-yaml').load(s);
           } catch (e) {
-            console.error('Error parsing YAML:', e);
+            logger.error('Error parsing YAML:', e);
             return {};
           }
         }
@@ -67,7 +68,7 @@ export async function getPostData(slug: string): Promise<Post> {
       readingTime: calculateReadingTime(content),
     };
   } catch (error) {
-    console.error(`Error reading post ${slug}:`, error);
+    logger.error(`Error reading post ${slug}:`, error);
     throw new Error(`Failed to read post with slug: ${slug}`);
   }
 }
