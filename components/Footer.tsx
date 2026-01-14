@@ -1,59 +1,55 @@
-
 import Link from 'next/link';
 
 export default function Footer() {
   const currentYear = new Date().getFullYear();
 
   return (
-    <footer className="bg-white" style={{borderTop: '1px solid var(--border-color)'}}>
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8" style={{padding: '48px 24px'}}>
-        <div className="grid grid-cols-1 md:grid-cols-3" style={{gap: '32px'}}>
-          {/* About section */}
+    <footer className="bg-white dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-800">
+      <div className="max-w-6xl mx-auto px-6 py-12">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           <div>
-            <h3 className="feature-card-title" style={{marginBottom: '16px'}}>关于博客</h3>
-            <p style={{fontSize: '14px', color: 'var(--color-neutral-500)', lineHeight: '1.6'}}>
+            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">关于博客</h3>
+            <p className="text-sm text-neutral-500 leading-relaxed">
               这是我的个人博客，分享技术、生活与思考。希望我的文章能够给你带来启发和帮助。
             </p>
           </div>
 
-          {/* Quick links */}
           <div>
-            <h3 className="feature-card-title" style={{marginBottom: '16px'}}>快速链接</h3>
-            <ul style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>
+            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">快速链接</h3>
+            <ul className="flex flex-col gap-2">
               <li>
-                <Link href="/" className="transition-colors" style={{fontSize: '14px', color: 'var(--color-neutral-500)'}}>
+                <Link href="/" className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">
                   首页
                 </Link>
               </li>
               <li>
-                <Link href="/blog" className="transition-colors" style={{fontSize: '14px', color: 'var(--color-neutral-500)'}}>
+                <Link href="/blog" className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">
                   博客文章
                 </Link>
               </li>
               <li>
-                <Link href="/about" className="transition-colors" style={{fontSize: '14px', color: 'var(--color-neutral-500)'}}>
+                <Link href="/about" className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">
                   关于我
                 </Link>
               </li>
             </ul>
           </div>
 
-          {/* Contact */}
           <div>
-            <h3 className="feature-card-title" style={{marginBottom: '16px'}}>联系方式</h3>
-            <ul style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>
+            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">联系方式</h3>
+            <ul className="flex flex-col gap-2">
               <li>
-                <a href="mailto:your.email@example.com" className="transition-colors" style={{fontSize: '14px', color: 'var(--color-neutral-500)'}}>
+                <a href="mailto:your.email@example.com" className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">
                   your.email@example.com
                 </a>
               </li>
               <li>
-                <a href="https://github.com/yourusername" target="_blank" rel="noopener noreferrer" className="transition-colors" style={{fontSize: '14px', color: 'var(--color-neutral-500)'}}>
+                <a href="https://github.com/yourusername" target="_blank" rel="noopener noreferrer" className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">
                   GitHub
                 </a>
               </li>
               <li>
-                <a href="https://twitter.com/yourusername" target="_blank" rel="noopener noreferrer" className="transition-colors" style={{fontSize: '14px', color: 'var(--color-neutral-500)'}}>
+                <a href="https://twitter.com/yourusername" target="_blank" rel="noopener noreferrer" className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">
                   Twitter
                 </a>
               </li>
@@ -61,9 +57,8 @@ export default function Footer() {
           </div>
         </div>
 
-        {/* Copyright */}
-        <div style={{marginTop: '32px', paddingTop: '32px', borderTop: '1px solid var(--border-color)'}}>
-          <p style={{textAlign: 'center', fontSize: '13px', color: 'var(--color-neutral-500)', fontFamily: 'var(--font-mono)'}}>
+        <div className="mt-8 pt-8 border-t border-neutral-200 dark:border-neutral-800">
+          <p className="text-center text-xs text-neutral-500 font-mono">
             &copy; {currentYear} 我的博客. 保留所有权利.
           </p>
         </div>

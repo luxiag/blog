@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -17,24 +16,20 @@ export default function InteractiveComponent({ html, script }: InteractiveCompon
     if (!containerRef.current || !script) return;
 
     try {
-      // 创建一个安全的执行环境
       const sandbox = {
         React,
         useState,
         useRef,
         useEffect,
         logger,
-        // 添加其他需要的全局对象
         document: {
           createElement: document.createElement.bind(document),
           getElementById: (id: string) => containerRef.current?.querySelector(`#${id}`) || null,
           querySelector: (selector: string) => containerRef.current?.querySelector(selector) || null,
           querySelectorAll: (selector: string) => containerRef.current?.querySelectorAll(selector) || [],
         },
-        // 其他安全的 DOM API
       };
 
-      // 创建一个函数来执行脚本
       const executeScript = new Function(
         ...Object.keys(sandbox),
         `
@@ -43,7 +38,6 @@ export default function InteractiveComponent({ html, script }: InteractiveCompon
         `
       );
 
-      // 执行脚本
       executeScript(...Object.values(sandbox));
     } catch (err) {
       logger.error('执行交互式组件脚本出错:', err);
@@ -53,40 +47,15 @@ export default function InteractiveComponent({ html, script }: InteractiveCompon
 
   if (error) {
     return (
-      <div style={{
-        padding: '1rem',
-        backgroundColor: '#fee',
-        border: '1px solid #fcc',
-        borderRadius: 'var(--radius-lg)',
-        color: '#c33',
-        fontFamily: 'var(--font-mono)',
-        fontSize: '0.875rem'
-      }}>
+      <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-600 dark:text-red-400 font-mono text-sm">
         <strong>组件执行错误:</strong> {error}
       </div>
     );
   }
 
   return (
-    <div className="interactive-component" style={{
-      border: '1px solid var(--border-color)',
-      borderRadius: 'var(--radius-lg)',
-      padding: '1rem',
-      margin: '1.5rem 0',
-      backgroundColor: 'var(--color-neutral-50)'
-    }}>
-      <div style={{
-        backgroundColor: 'var(--color-neutral-100)',
-        padding: '0.5rem 1rem',
-        margin: '-1rem -1rem 1rem -1rem',
-        borderBottom: '1px solid var(--border-color)',
-        borderTopLeftRadius: 'var(--radius-lg)',
-        borderTopRightRadius: 'var(--radius-lg)',
-        fontFamily: 'var(--font-mono)',
-        fontSize: '0.875rem',
-        fontWeight: '600',
-        color: 'var(--foreground)'
-      }}>
+    <div className="border border-neutral-200 dark:border-neutral-700 rounded-lg p-4 my-6 bg-neutral-50 dark:bg-neutral-800/50">
+      <div className="px-4 py-2 -m-4 mb-4 border-b border-neutral-200 dark:border-neutral-700 rounded-t-lg font-mono text-sm font-semibold text-neutral-900 dark:text-neutral-100 bg-neutral-100 dark:bg-neutral-800">
         交互式组件
       </div>
       <div 

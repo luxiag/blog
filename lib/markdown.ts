@@ -10,39 +10,63 @@ import { Post, PostFrontMatter } from '@/types/blog';
 import { logger } from './logger';
 
 // 博客文章目录
-const postsDirectory = path.join(process.cwd(), 'content/posts');
+const postsDirectory = path.join(process.cwd(), 'posts');
 
-// 获取所有博客文章的 slug
-export function getAllPostSlugs() {
-  if (!fs.existsSync(postsDirectory)) {
+interface PostFile {
+  slug: string;
+  filePath: string;
+  category?: string;
+}
+
+// 递归获取目录下所有 md/mdx 文件
+function getPostFiles(dir: string, category?: string): PostFile[] {
+  if (!fs.existsSync(dir)) {
     return [];
   }
 
-  const fileNames = fs.readdirSync(postsDirectory);
-  return fileNames
-    .filter((name) => name.endsWith('.md') || name.endsWith('.mdx'))
-    .map((name) => {
-      return {
-        params: {
-          slug: name.replace(/\.mdx?$/, ''),
-        },
-      };
-    });
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const files: PostFile[] = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    
+    if (entry.isDirectory()) {
+      // 子文件夹名称作为 category
+      const subFiles = getPostFiles(fullPath, entry.name);
+      files.push(...subFiles);
+    } else if (entry.isFile() && (entry.name.endsWith('.md') || entry.name.endsWith('.mdx'))) {
+      files.push({
+        slug: entry.name.replace(/\.mdx?$/, ''),
+        filePath: fullPath,
+        category,
+      });
+    }
+  }
+
+  return files;
+}
+
+// 获取所有博客文章的 slug
+export function getAllPostSlugs() {
+  const postFiles = getPostFiles(postsDirectory);
+  return postFiles.map((file) => ({
+    params: {
+      slug: file.slug,
+    },
+  }));
 }
 
 // 根据 slug 获取博客文章数据
 export async function getPostData(slug: string): Promise<Post> {
-  let fullPath = path.join(postsDirectory, `${slug}.mdx`);
-  let isMdx = true;
-  
-  if (!fs.existsSync(fullPath)) {
-    fullPath = path.join(postsDirectory, `${slug}.md`);
-    isMdx = false;
-  }
+  const postFiles = getPostFiles(postsDirectory);
+  const postFile = postFiles.find((f) => f.slug === slug);
 
-  if (!fs.existsSync(fullPath)) {
+  if (!postFile) {
     throw new Error(`Post with slug: ${slug} not found`);
   }
+
+  const fullPath = postFile.filePath;
+  const isMdx = fullPath.endsWith('.mdx');
 
   try {
     const fileContents = fs.readFileSync(fullPath, 'utf8');
@@ -85,6 +109,7 @@ export async function getPostData(slug: string): Promise<Post> {
       content: compiledContent,
       rawContent: content,
       isMdxCompiled,
+      category: postFile.category,
       title: frontMatter.title || '无标题',
       date: typeof frontMatter.date === 'object' && frontMatter.date !== null
         ? new Date(frontMatter.date as unknown as string).toISOString().split('T')[0]

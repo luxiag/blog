@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState } from 'react';
@@ -10,7 +9,6 @@ interface TagFilterProps {
 }
 
 export default function TagFilter({ posts, onFilter }: TagFilterProps) {
-  // 提取所有唯一标签
   const allTags = Array.from(
     new Set(
       posts.flatMap((post) => post.tags || [])
@@ -21,11 +19,9 @@ export default function TagFilter({ posts, onFilter }: TagFilterProps) {
 
   const handleTagClick = (tag: string) => {
     if (selectedTag === tag) {
-      // 如果点击已选中的标签，则清除筛选
       setSelectedTag('');
       onFilter(posts);
     } else {
-      // 否则按标签筛选
       setSelectedTag(tag);
       const filteredPosts = posts.filter((post) =>
         post.tags && post.tags.includes(tag)
@@ -40,30 +36,20 @@ export default function TagFilter({ posts, onFilter }: TagFilterProps) {
   };
 
   return (
-    <div style={{marginBottom: '32px'}}>
-      <div className="flex flex-wrap items-center" style={{gap: '8px'}}>
-        <span style={{fontWeight: 600, fontSize: '14px', color: 'var(--foreground)', fontFamily: 'var(--font-mono)'}}>筛选标签:</span>
+    <div className="mb-8">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-semibold font-mono text-neutral-900 dark:text-neutral-100">筛选标签:</span>
         {allTags.length > 0 ? (
           <>
             {allTags.map((tag) => (
               <button
                 key={tag}
                 onClick={() => handleTagClick(tag)}
-                className="transition-colors"
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: '4px',
-                  fontSize: '11px',
-                  fontFamily: 'var(--font-mono)',
-                  backgroundColor: selectedTag === tag 
-                    ? 'var(--foreground)' 
-                    : 'white',
-                  color: selectedTag === tag 
-                    ? 'white' 
-                    : 'var(--foreground)',
-                  border: '1px solid var(--border-color)',
-                  cursor: 'pointer'
-                }}
+                className={`px-3 py-1.5 text-xs font-mono rounded transition-colors cursor-pointer border ${
+                  selectedTag === tag
+                    ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 border-neutral-900 dark:border-neutral-100'
+                    : 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-700'
+                }`}
               >
                 {tag}
               </button>
@@ -71,24 +57,14 @@ export default function TagFilter({ posts, onFilter }: TagFilterProps) {
             {selectedTag && (
               <button
                 onClick={handleClearFilter}
-                className="transition-colors"
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: '4px',
-                  fontSize: '11px',
-                  fontFamily: 'var(--font-mono)',
-                  backgroundColor: 'white',
-                  color: 'var(--color-orange-800)',
-                  border: '1px solid var(--color-orange-800)',
-                  cursor: 'pointer'
-                }}
+                className="px-3 py-1.5 text-xs font-mono rounded bg-white dark:bg-neutral-800 text-orange-600 dark:text-orange-400 border border-orange-600 dark:border-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors cursor-pointer"
               >
                 清除筛选
               </button>
             )}
           </>
         ) : (
-          <span style={{fontSize: '13px', color: 'var(--color-neutral-500)', fontFamily: 'var(--font-mono)'}}>暂无标签</span>
+          <span className="text-xs font-mono text-neutral-500">暂无标签</span>
         )}
       </div>
     </div>

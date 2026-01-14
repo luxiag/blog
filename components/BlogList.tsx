@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import TagFilter from './TagFilter';
+import BorderedCard from './BorderedCard';
 import { Post } from '@/types/blog';
 
 const POSTS_PER_PAGE = 20;
@@ -36,110 +37,64 @@ export default function BlogList({ posts }: { posts: Post[] }) {
   };
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: 'var(--background)' }}>
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8" style={{ paddingTop: '48px', paddingBottom: '48px' }}>
-        <TagFilter posts={posts} onFilter={handleFilter} />
+    <div className="py-12 px-4">
+      <TagFilter posts={posts} onFilter={handleFilter} />
 
-        {postsByYear.length > 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '48px' }}>
-            {postsByYear.map(([year, yearPosts]) => (
-              <section key={year}>
-                {/* Year Header - Stacked Outline Effect */}
-                <div style={{ textAlign: 'center', marginBottom: '40px' }}>
-                  <span
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      lineHeight: 0.9,
-                      fontSize: 'clamp(120px, 20vw, 200px)',
-                      fontWeight: 900,
-                      fontFamily: 'var(--font-sans)',
-                      letterSpacing: '-0.02em',
-                    }}
-                  >
-                    {[...Array(5)].map((_, i) => (
-                      <span
-                        key={i}
-                        style={{
-                          WebkitTextStroke: '1px var(--foreground)',
-                          color: 'var(--background)',
-                          marginTop: i === 0 ? 0 : '-0.55em',
-                          userSelect: 'none',
-                        }}
-                        aria-hidden="true"
-                      >
-                        {year}
-                      </span>
-                    ))}
-                    <span style={{ marginTop: '-0.55em', color: 'var(--foreground)' }}>
+      {postsByYear.length > 0 ? (
+        <div className="flex flex-col gap-16">
+          {postsByYear.map(([year, yearPosts]) => (
+            <section key={year}>
+              <div className="text-center mb-10">
+                <span
+                  className="flex flex-col items-center leading-none font-black font-sans tracking-tight"
+                  style={{
+                    fontSize: 'clamp(100px, 18vw, 180px)',
+                  }}
+                >
+                  {[...Array(5)].map((_, i) => (
+                    <span
+                      key={i}
+                      className="text-transparent stroke-text"
+                      style={{
+                        WebkitTextStroke: '1px var(--foreground)',
+                        marginTop: i === 0 ? 0 : '-0.55em',
+                      }}
+                      aria-hidden="true"
+                    >
                       {year}
                     </span>
-                  </span>
-                </div>
+                  ))}
+                  <span className="text-neutral-900 dark:text-neutral-100 mt-0.5">{year}</span>
+                </span>
+              </div>
 
-                {/* Post Cards */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  {yearPosts.map((post) => (
-                    <Link
-                      key={post.slug}
-                      href={`/blog/${post.slug}`}
-                      style={{ textDecoration: 'none' }}
-                    >
+              <div className="flex flex-col gap-6">
+                {yearPosts.map((post) => (
+                  <Link
+                    key={post.slug}
+                    href={`/blog/${post.slug}`}
+                    className="no-underline"
+                  >
+                    <BorderedCard>
                       <article
-                        style={{
-                          background: 'white',
-                          border: '1px solid var(--border-color)',
-                          borderRadius: '8px',
-                          padding: '24px',
-                          transition: 'background-color 0.2s',
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--color-neutral-100)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = 'white';
-                        }}
+                        className="p-6 transition-colors duration-200 hover:bg-neutral-100 dark:hover:bg-neutral-800"
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '24px' }}>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <h3 style={{
-                              fontSize: '18px',
-                              fontWeight: 600,
-                              color: 'var(--foreground)',
-                              marginBottom: '8px',
-                              fontFamily: 'var(--font-sans)',
-                            }}>
+                        <div className="flex justify-between items-start gap-6">
+                          <div className="flex-1 min-w-0">
+                            <h3 className="text-lg font-semibold mb-2 font-sans text-neutral-900 dark:text-neutral-100">
                               {post.title}
                             </h3>
                             {post.excerpt && (
-                              <p style={{
-                                fontSize: '14px',
-                                color: 'var(--color-neutral-500)',
-                                lineHeight: 1.5,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                display: '-webkit-box',
-                                WebkitLineClamp: 2,
-                                WebkitBoxOrient: 'vertical',
-                              }}>
+                              <p className="text-sm text-neutral-500 leading-relaxed line-clamp-2 overflow-hidden text-ellipsis">
                                 {post.excerpt}
                               </p>
                             )}
                             {post.tags && post.tags.length > 0 && (
-                              <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
+                              <div className="flex gap-2 mt-3 flex-wrap">
                                 {post.tags.slice(0, 3).map((tag) => (
                                   <span
                                     key={tag}
-                                    style={{
-                                      padding: '4px 8px',
-                                      fontSize: '11px',
-                                      fontFamily: 'var(--font-mono)',
-                                      border: '1px solid var(--border-color)',
-                                      borderRadius: '4px',
-                                      color: 'var(--color-neutral-500)',
-                                      backgroundColor: 'white',
-                                    }}
+                                    className="px-2 py-1 text-xs font-mono border border-neutral-900 dark:border-neutral-100 text-neutral-900 dark:text-neutral-100 bg-white dark:bg-neutral-800"
                                   >
                                     {tag}
                                   </span>
@@ -147,70 +102,38 @@ export default function BlogList({ posts }: { posts: Post[] }) {
                               </div>
                             )}
                           </div>
-                          <div style={{
-                            fontSize: '13px',
-                            fontFamily: 'var(--font-mono)',
-                            color: 'var(--color-neutral-500)',
-                            whiteSpace: 'nowrap',
-                            paddingTop: '2px',
-                          }}>
+                          <div className="text-xs font-mono text-neutral-500 whitespace-nowrap pt-0.5">
                             {post.date}
                           </div>
                         </div>
                       </article>
-                    </Link>
-                  ))}
-                </div>
-              </section>
-            ))}
-
-            {/* Load More Button */}
-            {hasMore && (
-              <div style={{ textAlign: 'center', marginTop: '16px' }}>
-                <button
-                  onClick={loadMore}
-                  style={{
-                    padding: '16px 48px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: 'var(--foreground)',
-                    backgroundColor: 'white',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    fontFamily: 'var(--font-mono)',
-                    transition: 'background-color 0.2s',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = 'var(--color-neutral-100)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'white';
-                  }}
-                >
-                  ··· 加载更多 ({filteredPosts.length - visibleCount} 篇)
-                </button>
+                    </BorderedCard>
+                  </Link>
+                ))}
               </div>
-            )}
-          </div>
-        ) : (
-          <div style={{ 
-            textAlign: 'center', 
-            padding: '48px 24px',
-            background: 'white',
-            border: '1px solid var(--border-color)',
-            borderRadius: '8px',
-          }}>
-            <p style={{ 
-              fontSize: '14px', 
-              color: 'var(--color-neutral-500)', 
-              fontFamily: 'var(--font-mono)' 
-            }}>
+            </section>
+          ))}
+
+          {hasMore && (
+            <div className="text-center mt-4">
+              <button
+                onClick={loadMore}
+                className="px-12 py-4 text-sm font-medium font-mono text-neutral-900 dark:text-neutral-100 bg-white dark:bg-neutral-800 border border-neutral-900 dark:border-neutral-100 cursor-pointer transition-all duration-200 hover:bg-neutral-900 hover:text-white dark:hover:bg-neutral-100 dark:hover:text-neutral-900"
+              >
+                ··· 加载更多 ({filteredPosts.length - visibleCount} 篇)
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <BorderedCard>
+          <div className="text-center py-12 px-6">
+            <p className="text-sm text-neutral-500 font-mono">
               {posts.length > 0 ? '没有匹配的文章' : '暂无博客文章'}
             </p>
           </div>
-        )}
-      </div>
+        </BorderedCard>
+      )}
     </div>
   );
 }

@@ -24,7 +24,6 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 滚动到最新消息
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
@@ -33,7 +32,6 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
     scrollToBottom();
   }, [messages, isLoading]);
 
-  // SSE 流式发送消息
   const sendMessage = useCallback(async () => {
     if (!input.trim()) return;
 
@@ -48,7 +46,6 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
     setInput('');
     setIsLoading(true);
 
-    // 创建助手消息占位符
     const assistantMessageId = (Date.now() + 1).toString();
     setMessages(prev => [...prev, {
       id: assistantMessageId,
@@ -57,7 +54,6 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
       timestamp: new Date()
     }]);
 
-    // 准备发送给AI的消息，包括文章上下文
     const contextMessages = [
       {
         role: 'system' as const,
@@ -133,7 +129,6 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
                 });
               }
             } catch {
-              // 忽略解析错误
             }
           }
         }
@@ -141,7 +136,6 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
     } catch (error) {
       console.error('Error sending message:', error);
       
-      // 移除空的助手消息，添加错误消息
       setMessages(prev => {
         const withoutEmpty = prev.filter(msg => msg.id !== assistantMessageId);
         return [...withoutEmpty, {
@@ -180,92 +174,51 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
     <div className="fixed bottom-4 right-4 z-50">
       {isOpen && (
         <div
-          className={`bg-white w-96 flex flex-col ${
+          className={`bg-white w-96 flex flex-col border border-neutral-200 shadow-sm transition-all duration-200 rounded-xl ${
             isMinimized ? 'h-14' : 'h-[500px]'
-          } transition-all duration-200`}
-          style={{
-            borderRadius: '12px',
-            border: '1px solid oklch(0.145 0 0)',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
-          }}
+          }`}
         >
-          {/* Header */}
           <div
-            className="flex items-center justify-between"
-            style={{
-              padding: '12px 20px',
-              borderBottom: '1px solid oklch(0.145 0 0)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '13px',
-              color: 'oklch(0.145 0 0)'
-            }}
+            className="flex items-center justify-between px-5 py-3 border-b border-neutral-200 font-mono text-xs text-neutral-500"
           >
             <div className="flex items-center gap-2">
-              <Bot size={16} style={{ color: 'oklch(0.145 0 0)' }} />
+              <Bot size={16} className="text-neutral-500" />
               <span>AI 助手</span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={toggleMinimize}
-                className="p-1 rounded"
-                style={{
-                  borderRadius: '4px',
-                  transition: 'background-color 0.2s'
-                }}
+                className="p-1 rounded hover:bg-neutral-100 transition-colors"
               >
                 {isMinimized ? (
-                  <Maximize2 size={14} style={{ color: 'oklch(0.145 0 0)' }} />
+                  <Maximize2 size={14} className="text-neutral-500" />
                 ) : (
-                  <Minimize2 size={14} style={{ color: 'oklch(0.145 0 0)' }} />
+                  <Minimize2 size={14} className="text-neutral-500" />
                 )}
               </button>
               <button
                 onClick={toggleChat}
-                className="p-1 rounded"
-                style={{
-                  borderRadius: '4px',
-                  transition: 'background-color 0.2s'
-                }}
+                className="p-1 rounded hover:bg-neutral-100 transition-colors"
               >
-                <X size={14} style={{ color: 'oklch(0.145 0 0)' }} />
+                <X size={14} className="text-neutral-500" />
               </button>
             </div>
           </div>
 
-          {/* Messages */}
           {!isMinimized && (
             <>
               <div
-                className="flex-1 overflow-y-auto"
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  padding: '24px',
-                  gap: '16px',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '13px',
-                  lineHeight: '1.6',
-                  color: 'oklch(0.145 0 0)'
-                }}
+                className="flex-1 overflow-y-auto flex flex-col px-6 py-6 gap-4 font-mono text-xs leading-6 text-neutral-500"
               >
                 {messages.length === 0 ? (
                   <div className="text-center py-12">
                     <div
-                      className="mx-auto mb-4"
-                      style={{
-                        width: '48px',
-                        height: '48px',
-                        borderRadius: '50%',
-                        border: '1px dashed oklch(0.145 0 0)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                      }}
+                      className="mx-auto mb-4 w-12 h-12 rounded-full border border-dashed border-neutral-300 flex items-center justify-center"
                     >
-                      <Bot size={20} style={{ color: 'oklch(0.145 0 0)' }} />
+                      <Bot size={20} className="text-neutral-500" />
                     </div>
-                    <p style={{ color: 'oklch(0.145 0 0)', marginBottom: '4px' }}>你好！我是文章AI助手</p>
-                    <p className="text-sm" style={{ color: '#ea580c' }}>有什么关于这篇文章的问题吗？</p>
+                    <p className="text-neutral-500 mb-1">你好！我是文章AI助手</p>
+                    <p className="text-sm text-orange-600">有什么关于这篇文章的问题吗？</p>
                   </div>
                 ) : (
                   messages.map((message) => (
@@ -276,17 +229,11 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
                       }`}
                     >
                       <div
-                        style={{
-                          borderRadius: '8px',
-                          padding: '16px',
-                          fontFamily: 'var(--font-mono)',
-                          fontSize: '13px',
-                          lineHeight: '1.6'
-                        }}
+                        className="rounded-lg p-4 font-mono text-xs leading-6"
                       >
                         <div className="flex items-start gap-3">
                           {message.role === 'user' && (
-                            <User size={14} className="mt-0.5 flex-shrink-0" style={{ color: 'oklch(0.145 0 0)' }} />
+                            <User size={14} className="mt-0.5 flex-shrink-0 text-neutral-500" />
                           )}
                           <div className="flex-1">
                             {message.role === 'user' ? (
@@ -296,25 +243,17 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
                                 {message.content}
                                 {isLoading && message.id === messages[messages.length - 1]?.id && (
                                   <span
-                                    style={{
-                                      display: 'inline-block',
-                                      width: '8px',
-                                      height: '16px',
-                                      background: '#ea580c',
-                                      marginLeft: '2px',
-                                      animation: 'blink 1s infinite',
-                                      verticalAlign: 'text-bottom'
-                                    }}
+                                    className="inline-block w-2 h-4 bg-orange-600 ml-0.5 animate-bounce align-text-bottom"
                                   />
                                 )}
                               </div>
                             )}
-                            <p className="text-xs mt-2" style={{ color: '#ea580c' }}>
+                            <p className="text-xs mt-2 text-orange-600">
                               {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </p>
                           </div>
                           {message.role === 'assistant' && (
-                            <Bot size={14} className="mt-0.5 flex-shrink-0" style={{ color: 'oklch(0.145 0 0)' }} />
+                            <Bot size={14} className="mt-0.5 flex-shrink-0 text-neutral-500" />
                           )}
                         </div>
                       </div>
@@ -324,14 +263,10 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Input */}
               <div
-                style={{
-                  padding: '16px 20px',
-                  borderTop: '1px solid oklch(0.145 0 0)'
-                }}
+                className="px-5 py-4 border-t border-neutral-200"
               >
-                <div style={{ display: 'flex', gap: '12px' }}>
+                <div className="flex gap-3">
                   <input
                     ref={inputRef}
                     type="text"
@@ -339,31 +274,17 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
                     onChange={(e) => setInput(e.target.value)}
                     onKeyPress={handleKeyPress}
                     placeholder="输入你的问题..."
-                    style={{
-                      flex: 1,
-                      padding: '10px 12px',
-                      borderRadius: '8px',
-                      border: '1px solid oklch(0.145 0 0)',
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '13px',
-                      outline: 'none',
-                      transition: 'border-color 0.2s'
-                    }}
+                    className="flex-1 px-3 py-2.5 rounded-lg border border-neutral-200 font-mono text-xs outline-none transition-colors focus:border-neutral-400"
                     disabled={isLoading}
                   />
                   <button
                     onClick={sendMessage}
                     disabled={isLoading || !input.trim()}
-                    style={{
-                      padding: '10px 16px',
-                      borderRadius: '8px',
-                      border: '1px solid oklch(0.145 0 0)',
-                      background: isLoading || !input.trim() ? 'white' : '#ea580c',
-                      color: isLoading || !input.trim() ? 'oklch(0.145 0 0)' : 'white',
-                      cursor: isLoading || !input.trim() ? 'not-allowed' : 'pointer',
-                      transition: 'background-color 0.2s, opacity 0.2s',
-                      opacity: isLoading || !input.trim() ? 0.5 : 1
-                    }}
+                    className={`px-4 py-2.5 rounded-lg border transition-all cursor-pointer ${
+                      isLoading || !input.trim()
+                        ? 'bg-white border-neutral-200 text-neutral-400 cursor-not-allowed opacity-50'
+                        : 'bg-orange-600 border-orange-600 text-white cursor-pointer hover:opacity-90'
+                    }`}
                   >
                     <Send size={16} />
                   </button>
@@ -374,34 +295,14 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
         </div>
       )}
 
-      {/* Toggle Button */}
       {!isOpen && (
         <button
           onClick={toggleChat}
-          style={{
-            width: '48px',
-            height: '48px',
-            borderRadius: '50%',
-            border: '1px solid oklch(0.145 0 0)',
-            background: 'white',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-            transition: 'box-shadow 0.2s, transform 0.2s'
-          }}
+          className="w-12 h-12 rounded-full border border-neutral-200 bg-white flex items-center justify-center cursor-pointer shadow-sm hover:shadow-md transition-all"
         >
-          <Bot size={20} style={{ color: 'oklch(0.145 0 0)' }} />
+          <Bot size={20} className="text-neutral-500" />
         </button>
       )}
-
-      <style jsx global>{`
-        @keyframes blink {
-          0%, 50% { opacity: 1; }
-          51%, 100% { opacity: 0; }
-        }
-      `}</style>
     </div>
   );
 }

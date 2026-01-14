@@ -9,6 +9,7 @@ export interface Post {
   rawContent?: string;
   isMdxCompiled?: boolean;
   coverImage?: string;
+  category?: string;
   author?: {
     name: string;
     picture?: string;

@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState } from 'react';
@@ -19,83 +18,58 @@ export default function CodeRunner({ code, language = 'javascript' }: CodeRunner
     setError('');
 
     try {
-      // 创建一个安全的沙箱环境
       const sandbox = {
         console: {
-          log: (...args: any[]) => {
+          log: (...args: unknown[]) => {
             setOutput((prev) => prev + args.join(' ') + '\n');
           },
-          error: (...args: any[]) => {
+          error: (...args: unknown[]) => {
             setOutput((prev) => prev + 'ERROR: ' + args.join(' ') + '\n');
           },
-          warn: (...args: any[]) => {
+          warn: (...args: unknown[]) => {
             setOutput((prev) => prev + 'WARNING: ' + args.join(' ') + '\n');
           },
         },
-        // 可以添加更多安全的全局对象
       };
 
-      // 使用Function构造函数创建一个隔离的作用域
       const func = new Function(...Object.keys(sandbox), code);
       func(...Object.values(sandbox));
-    } catch (err: any) {
-      setError(err.message || '执行代码时出错');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : '执行代码时出错');
     } finally {
       setIsRunning(false);
     }
   };
 
   return (
-    <div className="code-runner" style={{ marginBottom: '1.5rem', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', overflow: 'hidden' }}>
-      <div style={{ backgroundColor: 'var(--color-neutral-100)', padding: '0.75rem 1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.875rem', fontWeight: '600' }}>
+    <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 overflow-hidden">
+      <div className="flex justify-between items-center px-4 py-3 bg-neutral-100 dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
+        <span className="font-mono text-sm font-semibold text-neutral-700 dark:text-neutral-300">
           {language === 'javascript' ? 'JavaScript' : language} 代码
         </span>
         <button
           onClick={runCode}
           disabled={isRunning}
-          style={{
-            backgroundColor: isRunning ? 'var(--color-neutral-300)' : 'var(--color-orange-800)',
-            color: 'white',
-            border: 'none',
-            borderRadius: 'var(--radius-sm)',
-            padding: '0.25rem 0.75rem',
-            fontSize: '0.875rem',
-            cursor: isRunning ? 'not-allowed' : 'pointer',
-            fontFamily: 'var(--font-mono)',
-            fontWeight: '500'
-          }}
+          className={`px-3 py-1 text-sm font-mono font-medium rounded transition-colors cursor-pointer ${
+            isRunning
+              ? 'bg-neutral-300 dark:bg-neutral-600 text-neutral-500 dark:text-neutral-400 cursor-not-allowed'
+              : 'bg-orange-600 text-white hover:bg-orange-700'
+          }`}
         >
           {isRunning ? '运行中...' : '运行代码'}
         </button>
       </div>
-      <pre style={{
-        backgroundColor: 'white',
-        padding: '1rem',
-        margin: 0,
-        overflowX: 'auto',
-        fontFamily: 'var(--font-mono)',
-        fontSize: '0.875rem',
-        lineHeight: '1.5'
-      }}>
+      <pre className="p-4 m-0 overflow-x-auto bg-white dark:bg-neutral-900 font-mono text-sm leading-6 text-neutral-800 dark:text-neutral-200">
         <code>{code}</code>
       </pre>
       {(output || error) && (
-        <div style={{ backgroundColor: 'var(--color-neutral-50)', borderTop: '1px solid var(--border-color)' }}>
-          <div style={{ backgroundColor: 'var(--color-neutral-100)', padding: '0.5rem 1rem', borderBottom: '1px solid var(--border-color)' }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.875rem', fontWeight: '600' }}>
+        <div className="border-t border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800">
+          <div className="px-4 py-2 bg-neutral-100 dark:bg-neutral-700 border-b border-neutral-200 dark:border-neutral-600">
+            <span className="font-mono text-sm font-semibold text-neutral-700 dark:text-neutral-300">
               输出结果
             </span>
           </div>
-          <pre style={{
-            padding: '1rem',
-            margin: 0,
-            color: error ? 'var(--color-red-600)' : 'var(--foreground)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: '0.875rem',
-            whiteSpace: 'pre-wrap',
-            overflowX: 'auto'
-          }}>
+          <pre className="p-4 m-0 whitespace-pre-wrap overflow-x-auto font-mono text-sm text-red-600 dark:text-red-400">
             {error || output}
           </pre>
         </div>
