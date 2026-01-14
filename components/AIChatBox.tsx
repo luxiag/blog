@@ -68,7 +68,7 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
         content: `文章内容摘要：${articleContent ? articleContent.substring(0, 2000) + '...' : '无内容'}`
       },
       ...messages.map(msg => ({
-        role: msg.role as const,
+        role: msg.role,
         content: msg.content
       })),
       {

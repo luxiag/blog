@@ -2,6 +2,9 @@
 import fs from 'fs';
 import path from 'path';
 import matter from 'gray-matter';
+import { compile } from '@mdx-js/mdx';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
 import { calculateReadingTime } from './reading-time';
 import { Post, PostFrontMatter } from '@/types/blog';
 import { logger } from './logger';
@@ -16,20 +19,27 @@ export function getAllPostSlugs() {
   }
 
   const fileNames = fs.readdirSync(postsDirectory);
-  return fileNames.map((name) => {
-    return {
-      params: {
-        slug: name.replace(/\.md$/, ''),
-      },
-    };
-  });
+  return fileNames
+    .filter((name) => name.endsWith('.md') || name.endsWith('.mdx'))
+    .map((name) => {
+      return {
+        params: {
+          slug: name.replace(/\.mdx?$/, ''),
+        },
+      };
+    });
 }
 
 // 根据 slug 获取博客文章数据
 export async function getPostData(slug: string): Promise<Post> {
-  const fullPath = path.join(postsDirectory, `${slug}.md`);
+  let fullPath = path.join(postsDirectory, `${slug}.mdx`);
+  let isMdx = true;
+  
+  if (!fs.existsSync(fullPath)) {
+    fullPath = path.join(postsDirectory, `${slug}.md`);
+    isMdx = false;
+  }
 
-  // 检查文件是否存在
   if (!fs.existsSync(fullPath)) {
     throw new Error(`Post with slug: ${slug} not found`);
   }
@@ -37,12 +47,9 @@ export async function getPostData(slug: string): Promise<Post> {
   try {
     const fileContents = fs.readFileSync(fullPath, 'utf8');
 
-    // 使用 gray-matter 解析 frontmatter 和内容
-    // 确保正确解析嵌套对象
     const { data, content } = matter(fileContents, {
       engines: {
         yaml: (s: string) => {
-          // 使用简单的解析方法处理嵌套对象
           try {
             return require('js-yaml').load(s);
           } catch (e) {
@@ -53,14 +60,35 @@ export async function getPostData(slug: string): Promise<Post> {
       }
     });
 
-    // 组合 frontmatter 和内容
     const frontMatter = data as PostFrontMatter;
+
+    let compiledContent = content;
+    let isMdxCompiled = false;
+    
+    if (isMdx) {
+      try {
+        const compiled = await compile(content, {
+          outputFormat: 'function-body',
+          remarkPlugins: [remarkGfm],
+          rehypePlugins: [rehypeHighlight],
+        });
+        compiledContent = String(compiled);
+        isMdxCompiled = true;
+      } catch (e) {
+        logger.error('Error compiling MDX:', e);
+        compiledContent = content;
+      }
+    }
 
     return {
       slug,
-      content,
+      content: compiledContent,
+      rawContent: content,
+      isMdxCompiled,
       title: frontMatter.title || '无标题',
-      date: frontMatter.date || new Date().toISOString().split('T')[0],
+      date: typeof frontMatter.date === 'object' && frontMatter.date !== null
+        ? new Date(frontMatter.date as unknown as string).toISOString().split('T')[0]
+        : (frontMatter.date || new Date().toISOString().split('T')[0]),
       excerpt: frontMatter.excerpt || '',
       coverImage: frontMatter.coverImage,
       author: frontMatter.author,

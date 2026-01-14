@@ -114,7 +114,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
           </header>
 
           <div style={{fontSize: '16px', lineHeight: '1.7', color: 'var(--foreground)'}}>
-            <MDXComponents content={post.content} />
+            <MDXComponents content={post.content} isMdxCompiled={post.isMdxCompiled} />
           </div>
         </article>
 
@@ -133,7 +133,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
       {/* AI聊天框 */}
       <AIChatBox 
         articleTitle={post.title} 
-        articleContent={post.content} 
+        articleContent={post.rawContent || post.content} 
       />
     </div>
   );

@@ -1,61 +1,54 @@
-
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeRaw from 'rehype-raw';
+import * as runtime from 'react/jsx-runtime';
+import { useMDXComponents } from '@/mdx-components';
 import CodeRunner from './CodeRunner';
-import InteractiveComponent from './InteractiveComponent';
-import { parseInteractiveMarkdown, processMarkdownContent } from '@/lib/mdxParser';
 import 'highlight.js/styles/github.css';
 
-interface MDXComponentsProps {
+interface MDXContentProps {
   content: string;
+  isMdxCompiled?: boolean;
 }
 
-export default function MDXComponents({ content }: MDXComponentsProps) {
-  const [processedContent, setProcessedContent] = useState(content);
-  const [interactiveComponents, setInteractiveComponents] = useState<Array<{ id: string; content: string }>>([]);
+export default function MDXContent({ content, isMdxCompiled }: MDXContentProps) {
+  const mdxComponents = useMDXComponents({});
 
-  useEffect(() => {
-    // 处理Markdown内容，提取交互式组件
-    const { processedContent: newContent, interactiveComponents: components } = processMarkdownContent(content);
-    setProcessedContent(newContent);
-    setInteractiveComponents(components);
-  }, [content]);
-
-  // 渲染交互式组件
-  const renderInteractiveComponent = (id: string) => {
-    const component = interactiveComponents.find(c => c.id === id);
-    if (!component) return null;
-
-    const parsed = parseInteractiveMarkdown(component.content);
-    if (!parsed) return null;
-
-    return <InteractiveComponent key={id} html={parsed.html} script={parsed.script} />;
-  };
-
-  // 自定义渲染函数，处理交互式组件占位符
-  const renderNode = (node: any, index: number) => {
-    // 检查是否是交互式组件占位符
-    if (node.type === 'comment' && node.value.startsWith('interactive-component-')) {
-      return renderInteractiveComponent(node.value);
+  const CompiledMDX = useMemo(() => {
+    if (!isMdxCompiled) return null;
+    
+    try {
+      const fn = new Function(content);
+      const result = fn.call(null, {
+        Fragment: (runtime as any).Fragment,
+        jsx: (runtime as any).jsx,
+        jsxs: (runtime as any).jsxs,
+      });
+      return result.default;
+    } catch (e) {
+      console.error('Error rendering MDX:', e);
+      return null;
     }
+  }, [content, isMdxCompiled]);
 
-    // 默认渲染
-    return null;
-  };
+  if (isMdxCompiled && CompiledMDX) {
+    return (
+      <div className="mdx-content">
+        <CompiledMDX components={mdxComponents} />
+      </div>
+    );
+  }
 
   return (
     <div className="mdx-content">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeRaw, rehypeHighlight]}
-        style={{ fontFamily: 'var(--font-sans)', color: 'var(--foreground)', maxWidth: 'none', fontSize: '1.125rem', lineHeight: '1.75' }}
         components={{
-          // 自定义标题渲染，添加锚点
           h1: ({ children, ...props }) => (
             <h1
               id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
@@ -83,7 +76,6 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
               {children}
             </h3>
           ),
-          // 自定义图片渲染
           img: ({ src, alt, ...props }) => (
             <div style={{ margin: '1.5rem 0' }}>
               <img
@@ -95,23 +87,19 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
               {alt && <p style={{ textAlign: 'center', fontSize: '0.875rem', marginTop: '0.5rem', fontStyle: 'italic', color: 'var(--color-neutral-500)' }}>{alt}</p>}
             </div>
           ),
-          // 自定义代码块渲染
-          code: ({ inline, className, children, ...props }) => {
+          code: ({ className, children, ...props }: any) => {
             const match = /language-(\w+)/.exec(className || '');
             const codeText = String(children).replace(/\n$/, '');
+            const isInline = !className;
 
-            // 检查是否是可运行代码块
-            const isRunnable = props['data-runnable'] === 'true' ||
-              (match && codeText.includes('// 可运行')) ||
+            const isRunnable = (match && codeText.includes('// 可运行')) ||
               (match && codeText.includes('// runnable'));
 
-            if (!inline && match) {
-              // 如果是可运行代码，使用CodeRunner组件
+            if (!isInline && match) {
               if (isRunnable && (match[1] === 'javascript' || match[1] === 'js')) {
                 return <CodeRunner code={codeText} language={match[1]} />;
               }
 
-              // 普通代码块
               return (
                 <pre
                   style={{
@@ -125,30 +113,26 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
                     lineHeight: '1.6'
                   }}
                 >
-                  <code {...props}>
-                    {children}
-                  </code>
+                  <code {...props}>{children}</code>
                 </pre>
               );
-            } else {
-              // 内联代码
-              return (
-                <code
-                  style={{
-                    backgroundColor: 'var(--color-neutral-100)',
-                    padding: '0.125em 0.25em',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '0.875em',
-                    fontFamily: 'var(--font-mono)'
-                  }}
-                  {...props}
-                >
-                  {children}
-                </code>
-              );
             }
+            
+            return (
+              <code
+                style={{
+                  backgroundColor: 'var(--color-neutral-100)',
+                  padding: '0.125em 0.25em',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.875em',
+                  fontFamily: 'var(--font-mono)'
+                }}
+                {...props}
+              >
+                {children}
+              </code>
+            );
           },
-          // 自定义链接渲染
           a: ({ href, children, ...props }) => (
             <a
               href={href}
@@ -160,7 +144,6 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
               {children}
             </a>
           ),
-          // 自定义引用块渲染
           blockquote: ({ children, ...props }) => (
             <blockquote
               style={{
@@ -176,7 +159,6 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
               {children}
             </blockquote>
           ),
-          // 自定义表格渲染
           table: ({ children, ...props }) => (
             <div style={{ overflowX: 'auto', margin: 'var(--spacing-2xl) 0' }}>
               <table style={{ minWidth: '100%', borderBottom: '1px solid var(--border-color)' }} {...props}>
@@ -220,7 +202,7 @@ export default function MDXComponents({ content }: MDXComponentsProps) {
           ),
         }}
       >
-        {processedContent}
+        {content}
       </ReactMarkdown>
     </div>
   );

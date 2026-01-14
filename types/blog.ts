@@ -6,6 +6,8 @@ export interface Post {
   date: string;
   excerpt: string;
   content: string;
+  rawContent?: string;
+  isMdxCompiled?: boolean;
   coverImage?: string;
   author?: {
     name: string;
