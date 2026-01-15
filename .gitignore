@@ -44,3 +44,4 @@ next-env.d.ts
 .history
 .contentlayer
 .STYLE_GUIDE.md
+logs

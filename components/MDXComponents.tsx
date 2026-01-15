@@ -53,8 +53,6 @@ interface MDXContentProps {
 export default function MDXContent({ content, isMdxCompiled, category }: MDXContentProps) {
   const mdxComponents = useMDXComponents({});
   const lightbox = useLightbox();
-  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
-  const [imageIndex, setImageIndex] = useState(0);
 
   const resolveImagePath = (src: string): string => {
     if (!src) return src;
@@ -78,19 +76,16 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     return src;
   };
 
-  const handleImageClick = (e: React.MouseEvent, src: string, alt?: string) => {
+  const handleImageClick = (e: React.MouseEvent, src: string) => {
     e.stopPropagation();
-    const allImages = document.querySelectorAll('.mdx-content img');
-    const index = Array.from(allImages).findIndex((img) => (img as HTMLImageElement).src === src);
-    const items: MediaItem[] = Array.from(allImages)
-      .filter((img) => img.tagName === 'IMG')
-      .map((img) => ({
-        src: (img as HTMLImageElement).src,
-        alt: (img as HTMLImageElement).alt,
-        type: 'image' as const,
-      }));
-    setMediaItems(items);
-    setImageIndex(index >= 0 ? index : 0);
+    const clickedSrc = src;
+    const allImages = document.querySelectorAll('.mdx-content img[data-full-src]');
+    const items: MediaItem[] = Array.from(allImages).map((img) => ({
+      src: (img as HTMLImageElement).dataset.fullSrc || (img as HTMLImageElement).src,
+      alt: (img as HTMLImageElement).alt,
+      type: 'image' as const,
+    }));
+    const index = Array.from(allImages).findIndex((img) => (img as HTMLImageElement).dataset.fullSrc === clickedSrc || (img as HTMLImageElement).src === clickedSrc);
     lightbox.openLightbox(items, index >= 0 ? index : 0);
   };
 
@@ -204,9 +199,10 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
               const resolvedSrc = resolveImagePath(imgSrc);
               return (
                 <span className="block my-6">
-                  <span className="relative group cursor-zoom-in inline-block" onClick={(e) => resolvedSrc && handleImageClick(e, resolvedSrc, alt)}>
+                  <span className="relative group cursor-zoom-in inline-block" onClick={(e) => resolvedSrc && handleImageClick(e, resolvedSrc)}>
                     <img
                       src={resolvedSrc}
+                      data-full-src={resolvedSrc}
                       alt={alt || ''}
                       title={title}
                       className="rounded-lg shadow-sm max-w-full h-auto transition-transform duration-200 group-hover:scale-[1.01]"
@@ -232,7 +228,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
                   >
                     {poster ? (
                       <span className="relative">
-                        <img src={poster} alt="" className="max-h-[400px] object-cover" />
+                        <img src={poster} alt="" data-full-src={poster} className="max-h-[400px] object-cover" />
                         <span className="absolute inset-0 bg-black/30 flex items-center justify-center group-hover:bg-black/40 transition-colors">
                           <span className="w-16 h-16 rounded-full bg-white/90 flex items-center justify-center">
                             <svg className="w-8 h-8 ml-1" fill="currentColor" viewBox="0 0 24 24">
