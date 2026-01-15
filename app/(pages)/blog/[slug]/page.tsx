@@ -1,8 +1,9 @@
 
 import { notFound } from 'next/navigation';
-import { getPostData, getAllPostSlugs } from '@/lib/markdown';
+import { getPostData, getAllPostSlugs, extractToc } from '@/lib/markdown';
 import MDXComponents from '@/components/MDXComponents';
 import AIChatBox from '@/components/AIChatBox';
+import TableOfContents from '@/components/TableOfContents';
 import Link from 'next/link';
 import Image from 'next/image';
 import { logger } from '@/lib/logger';
@@ -45,14 +46,20 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
   logger.info('Fetching post with slug:', slug);
   const post = await getPost(slug);
 
-  logger.debug('Post data:', post)
   if (!post) {
     logger.error('Post not found for slug:', slug);
     notFound();
+    return null;
   }
 
+  const toc = extractToc(post.rawContent || post.content);
+
+  logger.debug('Post data:', post)
+
   return (
-    <div className="min-h-screen" style={{backgroundColor: 'var(--background)'}}>
+    <>
+      <TableOfContents toc={toc} />
+      <div className="min-h-screen" style={{backgroundColor: 'var(--background)'}}>
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8" style={{padding: '48px 24px'}}>
         <div style={{marginBottom: '32px'}}>
           <Link href="/blog" className="inline-flex items-center transition-colors" style={{color: 'var(--color-orange-800)', fontSize: '14px', fontFamily: 'var(--font-mono)'}}>
@@ -135,6 +142,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
         articleTitle={post.title} 
         articleContent={post.rawContent || post.content} 
       />
-    </div>
+      </div>
+    </>
   );
 }

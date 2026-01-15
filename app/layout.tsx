@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import { Inter, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
-import Footer from "@/components/Footer";
-import RulerLayout from "@/components/RulerLayout";
+import BambooRuler from "@/components/BambooRuler";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -47,11 +46,10 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" className={`${inter.variable} ${ibmPlexMono.variable}`}>
       <body className="antialiased" style={{ backgroundColor: 'var(--background)' }}>
-        <RulerLayout>
+        <BambooRuler>
           <Header />
           <main>{children}</main>
-          {/* <Footer /> */}
-        </RulerLayout>
+        </BambooRuler>
       </body>
     </html>
   );
