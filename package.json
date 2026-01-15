@@ -4,9 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/copy-images.js && next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "copy:images": "node scripts/copy-images.js"
   },
   "dependencies": {
     "@mdx-js/loader": "^3.1.1",

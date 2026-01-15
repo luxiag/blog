@@ -15,16 +15,68 @@ import type { MediaItem } from './Lightbox';
 import 'highlight.js/styles/github.css';
 import 'katex/dist/katex.min.css';
 
+const detailsArrowStyles = `
+  .details-wrapper > summary:before {
+    content: "";
+    border-width: 4px;
+    border-style: solid;
+    border-color: transparent transparent transparent currentColor;
+    transition: transform 0.2s;
+    transform-origin: 4px 50%;
+    position: absolute;
+    top: 50%;
+    left: 8px;
+    transform: translateY(-50%) rotate(0);
+  }
+  .details-wrapper[open] > summary:before {
+    transform: translateY(-50%) rotate(90deg);
+  }
+  .details-wrapper > summary {
+    position: relative;
+    padding-left: 24px;
+    list-style: none;
+  }
+  .details-wrapper > summary::-webkit-details-marker {
+    display: none;
+  }
+  .details-wrapper > summary::marker {
+    display: none;
+  }
+`;
+
 interface MDXContentProps {
   content: string;
   isMdxCompiled?: boolean;
+  category?: string;
 }
 
-export default function MDXContent({ content, isMdxCompiled }: MDXContentProps) {
+export default function MDXContent({ content, isMdxCompiled, category }: MDXContentProps) {
   const mdxComponents = useMDXComponents({});
   const lightbox = useLightbox();
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [imageIndex, setImageIndex] = useState(0);
+
+  const resolveImagePath = (src: string): string => {
+    if (!src) return src;
+    if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
+      return src;
+    }
+    if (src.startsWith('/')) {
+      return src;
+    }
+    if (category && (src.startsWith('./') || !src.startsWith('/'))) {
+      let imageName = src.replace(/^\.\//, '');
+      if (imageName.startsWith('images/')) {
+        imageName = imageName.replace(/^images\//, '');
+      }
+      const isDev = process.env.NODE_ENV === 'development';
+      if (isDev) {
+        return `/api/posts/${category}/images/${imageName}`;
+      }
+      return `/posts/${category}/images/${imageName}`;
+    }
+    return src;
+  };
 
   const handleImageClick = (e: React.MouseEvent, src: string, alt?: string) => {
     e.stopPropagation();
@@ -68,6 +120,7 @@ export default function MDXContent({ content, isMdxCompiled }: MDXContentProps) 
     const MDXComponent = CompiledMDX as React.ComponentType<{ components: Record<string, React.ComponentType> }>;
     return (
       <>
+        <style>{detailsArrowStyles}</style>
         <div className="mdx-content">
           <MDXComponent components={mdxComponents as Record<string, React.ComponentType>} />
         </div>
@@ -83,6 +136,7 @@ export default function MDXContent({ content, isMdxCompiled }: MDXContentProps) 
 
   return (
     <>
+      <style>{detailsArrowStyles}</style>
       <div className="mdx-content">
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
@@ -124,64 +178,81 @@ export default function MDXContent({ content, isMdxCompiled }: MDXContentProps) 
                 {children}
               </h4>
             ),
-            p: ({ children, ...props }) => (
-              <p className="text-neutral-700 dark:text-neutral-300 leading-7 mb-4" {...props}>
-                {children}
-              </p>
-            ),
+            p: ({ children, ...props }) => {
+              const childArray = React.Children.toArray(children);
+              const hasBlockChild = childArray.some((child) => {
+                if (!React.isValidElement(child)) {
+                  return String(child).includes('<span class="block') || String(child).includes('<details');
+                }
+                const childType = (child.type as React.ElementType);
+                const displayName = (childType as { displayName?: string }).displayName || String(childType);
+                return displayName === 'img' || displayName.startsWith('details');
+              });
+
+              if (hasBlockChild) {
+                return <div {...props}>{children}</div>;
+              }
+
+              return (
+                <p className="text-neutral-700 dark:text-neutral-300 leading-7 mb-4" {...props}>
+                  {children}
+                </p>
+              );
+            },
             img: ({ src, alt, title, ...props }: React.ComponentPropsWithoutRef<'img'>) => {
               const imgSrc = typeof src === 'string' ? src : '';
+              const resolvedSrc = resolveImagePath(imgSrc);
               return (
-                <figure className="my-6">
-                  <div className="relative group cursor-zoom-in" onClick={(e) => imgSrc && handleImageClick(e, imgSrc, alt)}>
+                <span className="block my-6">
+                  <span className="relative group cursor-zoom-in inline-block" onClick={(e) => resolvedSrc && handleImageClick(e, resolvedSrc, alt)}>
                     <img
-                      src={imgSrc}
+                      src={resolvedSrc}
                       alt={alt || ''}
                       title={title}
                       className="rounded-lg shadow-sm max-w-full h-auto transition-transform duration-200 group-hover:scale-[1.01]"
                       {...props}
                     />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 rounded-lg transition-colors" />
-                  </div>
+                    <span className="absolute inset-0 bg-black/0 group-hover:bg-black/5 rounded-lg transition-colors" />
+                  </span>
                   {alt && (
-                    <figcaption className="text-center text-sm mt-3 italic text-neutral-500">
+                    <figcaption className="block text-center text-sm mt-3 italic text-neutral-500">
                       {alt}
                     </figcaption>
                   )}
-                </figure>
+                </span>
               );
             },
             video: ({ src, poster, controls, ...props }: React.ComponentPropsWithoutRef<'video'>) => {
               const videoSrc = typeof src === 'string' ? src : '';
               return (
-                <figure className="my-6">
-                  <div 
-                    className="relative group cursor-pointer rounded-lg overflow-hidden shadow-sm"
+                <span className="block my-6">
+                  <span 
+                    className="relative group cursor-pointer rounded-lg overflow-hidden shadow-sm inline-block"
                     onClick={(e) => videoSrc && handleVideoClick(e, videoSrc)}
                   >
                     {poster ? (
-                      <div className="relative">
-                        <img src={poster} alt="" className="w-full max-h-[400px] object-cover" />
-                        <div className="absolute inset-0 bg-black/30 flex items-center justify-center group-hover:bg-black/40 transition-colors">
-                          <div className="w-16 h-16 rounded-full bg-white/90 flex items-center justify-center">
+                      <span className="relative">
+                        <img src={poster} alt="" className="max-h-[400px] object-cover" />
+                        <span className="absolute inset-0 bg-black/30 flex items-center justify-center group-hover:bg-black/40 transition-colors">
+                          <span className="w-16 h-16 rounded-full bg-white/90 flex items-center justify-center">
                             <svg className="w-8 h-8 ml-1" fill="currentColor" viewBox="0 0 24 24">
                               <path d="M8 5v14l11-7z" />
                             </svg>
-                          </div>
-                        </div>
-                      </div>
+                          </span>
+                        </span>
+                      </span>
                     ) : (
-                      <div className="w-full h-48 bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center rounded-lg">
-                        <div className="w-16 h-16 rounded-full bg-neutral-200 dark:bg-neutral-700 flex items-center justify-center">
+                      <span className="w-full h-48 bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center rounded-lg">
+                        <span className="w-16 h-16 rounded-full bg-neutral-200 dark:bg-neutral-700 flex items-center justify-center">
                           <svg className="w-8 h-8 ml-1 text-neutral-500" fill="currentColor" viewBox="0 0 24 24">
                             <path d="M8 5v14l11-7z" />
                           </svg>
-                        </div>
-                      </div>
+                        </span>
+                      </span>
                     )}
-                  </div>
+                  </span>
                   {controls && <p className="text-sm text-neutral-500 mt-2 text-center">点击播放视频</p>}
-                </figure>
+                </span>
               );
             },
             code: ({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'>) => {
@@ -272,6 +343,44 @@ export default function MDXContent({ content, isMdxCompiled }: MDXContentProps) 
             hr: () => (
               <hr className="my-8 border-neutral-200 dark:border-neutral-700" />
             ),
+            details: ({ children, ...props }: React.ComponentPropsWithoutRef<'details'>) => {
+              const detailsProps = props as { 'data-details-title'?: string };
+              const titleFromAttr = detailsProps?.['data-details-title'];
+              
+              const getSummaryContent = () => {
+                if (Array.isArray(children) && children.length > 0) {
+                  const firstChild = children[0] as React.ReactElement<{ children?: React.ReactNode }>;
+                  if (firstChild?.props?.children) {
+                    return firstChild.props.children;
+                  }
+                }
+                return titleFromAttr || 'Details';
+              };
+
+              const getBodyContent = () => {
+                if (Array.isArray(children)) {
+                  return children.slice(1);
+                }
+                return children;
+              };
+
+              return (
+                <details
+                  className="details-wrapper border border-neutral-200 dark:border-neutral-700 rounded-lg overflow-hidden"
+                  {...props}
+                >
+                  <summary className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800 cursor-pointer font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors">
+                    {getSummaryContent()}
+                  </summary>
+                  <div className="p-4 bg-white dark:bg-neutral-900 [&>.my-4]:my-0">
+                    {getBodyContent()}
+                  </div>
+                </details>
+              );
+            },
+            summary: ({ children, ...props }: React.ComponentPropsWithoutRef<'summary'>) => {
+              return <div style={{ display: 'contents' }}>{children}</div>;
+            },
             strong: ({ children, ...props }) => (
               <strong className="font-semibold text-neutral-900 dark:text-neutral-100" {...props}>
                 {children}

@@ -114,7 +114,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
           </header>
 
           <div style={{fontSize: '16px', lineHeight: '1.7', color: 'var(--foreground)'}}>
-            <MDXComponents content={post.content} isMdxCompiled={post.isMdxCompiled} />
+            <MDXComponents content={post.content} isMdxCompiled={post.isMdxCompiled} category={post.category} />
           </div>
         </article>
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 构建脚本：先运行 Contentlayer，再运行 Next.js 构建
+// 构建脚本：先复制图片，再运行 Next.js 构建
 
 const { spawn } = require('child_process');
 
@@ -24,12 +24,12 @@ function runCommand(command, args, options) {
 }
 
 async function build() {
-  console.log('🏗️  Running Contentlayer build...');
+  console.log('📸 Copying blog images to public folder...');
   try {
-    await runCommand('npx', ['contentlayer', 'build']);
-    console.log('✅ Contentlayer build completed');
+    await runCommand('node', ['scripts/copy-images.js']);
+    console.log('✅ Images copied successfully');
   } catch (error) {
-    console.error('❌ Contentlayer build failed:', error);
+    console.error('❌ Image copy failed:', error);
     process.exit(1);
   }
 

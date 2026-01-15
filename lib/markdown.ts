@@ -4,12 +4,13 @@ import path from 'path';
 import matter from 'gray-matter';
 import { compile } from '@mdx-js/mdx';
 import remarkGfm from 'remark-gfm';
+import { remarkDetails } from './remark-details';
 import rehypeHighlight from 'rehype-highlight';
 import { calculateReadingTime } from './reading-time';
 import { Post, PostFrontMatter } from '@/types/blog';
 import { logger } from './logger';
+import jsYaml from 'js-yaml';
 
-// 博客文章目录
 const postsDirectory = path.join(process.cwd(), 'posts');
 
 interface PostFile {
@@ -18,7 +19,6 @@ interface PostFile {
   category?: string;
 }
 
-// 递归获取目录下所有 md/mdx 文件
 function getPostFiles(dir: string, category?: string): PostFile[] {
   if (!fs.existsSync(dir)) {
     return [];
@@ -31,7 +31,6 @@ function getPostFiles(dir: string, category?: string): PostFile[] {
     const fullPath = path.join(dir, entry.name);
     
     if (entry.isDirectory()) {
-      // 子文件夹名称作为 category
       const subFiles = getPostFiles(fullPath, entry.name);
       files.push(...subFiles);
     } else if (entry.isFile() && (entry.name.endsWith('.md') || entry.name.endsWith('.mdx'))) {
@@ -46,7 +45,6 @@ function getPostFiles(dir: string, category?: string): PostFile[] {
   return files;
 }
 
-// 获取所有博客文章的 slug
 export function getAllPostSlugs() {
   const postFiles = getPostFiles(postsDirectory);
   return postFiles.map((file) => ({
@@ -56,7 +54,40 @@ export function getAllPostSlugs() {
   }));
 }
 
-// 根据 slug 获取博客文章数据
+function transformMarkdownDetails(content: string): string {
+  const lines = content.split('\n');
+  const result: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line.trim().startsWith('::: details')) {
+      const titleMatch = line.match(/::: details\s+(.+)/);
+      const title = titleMatch ? titleMatch[1].trim() : 'Details';
+      result.push(`<details data-details-title="${title}">`);
+      result.push('<summary>');
+      result.push('</summary>');
+      i++;
+
+      while (i < lines.length) {
+        if (lines[i].trim() === ':::') {
+          result.push('</details>');
+          i++;
+          break;
+        }
+        result.push(lines[i]);
+        i++;
+      }
+    } else {
+      result.push(line);
+      i++;
+    }
+  }
+
+  return result.join('\n');
+}
+
 export async function getPostData(slug: string): Promise<Post> {
   const postFiles = getPostFiles(postsDirectory);
   const postFile = postFiles.find((f) => f.slug === slug);
@@ -73,9 +104,9 @@ export async function getPostData(slug: string): Promise<Post> {
 
     const { data, content } = matter(fileContents, {
       engines: {
-        yaml: (s: string) => {
+        yaml: (s: string): object => {
           try {
-            return require('js-yaml').load(s);
+            return jsYaml.load(s) as object;
           } catch (e) {
             logger.error('Error parsing YAML:', e);
             return {};
@@ -88,20 +119,24 @@ export async function getPostData(slug: string): Promise<Post> {
 
     let compiledContent = content;
     let isMdxCompiled = false;
-    
+
+    const processedContent = transformMarkdownDetails(content);
+
     if (isMdx) {
       try {
         const compiled = await compile(content, {
           outputFormat: 'function-body',
-          remarkPlugins: [remarkGfm],
+          remarkPlugins: [remarkGfm, remarkDetails],
           rehypePlugins: [rehypeHighlight],
         });
         compiledContent = String(compiled);
         isMdxCompiled = true;
       } catch (e) {
         logger.error('Error compiling MDX:', e);
-        compiledContent = content;
+        compiledContent = processedContent;
       }
+    } else {
+      compiledContent = processedContent;
     }
 
     return {
@@ -126,14 +161,12 @@ export async function getPostData(slug: string): Promise<Post> {
   }
 }
 
-// 获取所有博客文章的列表（按日期排序）
 export async function getAllPosts(): Promise<Post[]> {
   const slugs = getAllPostSlugs();
   const posts = await Promise.all(
     slugs.map(({ params }) => getPostData(params.slug))
   );
 
-  // 按日期降序排序
   return posts.sort((a, b) => {
     if (a.date < b.date) {
       return 1;
