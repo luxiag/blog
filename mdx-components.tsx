@@ -2,6 +2,8 @@ import type { MDXComponents } from "mdx/types";
 import CodeRunner from "@/components/CodeRunner";
 import InteractiveComponent from "@/components/InteractiveComponent";
 import ShaderPreview from "@/components/ShaderPreview";
+import ThreeBasicDemo from "@/components/ThreeBasicDemo";
+import CodePenDemo from "@/components/CodePenDemo";
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
@@ -189,6 +191,8 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     CodeRunner,
     InteractiveComponent,
     ShaderPreview,
+    ThreeBasicDemo,
+    CodePenDemo,
     ...components,
   };
 }

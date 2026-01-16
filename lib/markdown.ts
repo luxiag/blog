@@ -4,8 +4,10 @@ import path from 'path';
 import matter from 'gray-matter';
 import { compile } from '@mdx-js/mdx';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import { remarkDetails } from './remark-details';
 import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
 import { calculateReadingTime } from './reading-time';
 import { Post, PostFrontMatter } from '@/types/blog';
 import { logger } from './logger';
@@ -126,8 +128,8 @@ export async function getPostData(slug: string): Promise<Post> {
       try {
         const compiled = await compile(content, {
           outputFormat: 'function-body',
-          remarkPlugins: [remarkGfm, remarkDetails],
-          rehypePlugins: [rehypeHighlight],
+          remarkPlugins: [remarkGfm, remarkMath, remarkDetails],
+          rehypePlugins: [rehypeHighlight, rehypeKatex],
         });
         compiledContent = String(compiled);
         isMdxCompiled = true;

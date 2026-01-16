@@ -12,6 +12,7 @@ import { useMDXComponents } from '@/mdx-components';
 import CodeRunner from './CodeRunner';
 import Lightbox, { useLightbox } from './Lightbox';
 import type { MediaItem } from './Lightbox';
+import CodePenDemo from './CodePenDemo';
 import 'highlight.js/styles/github.css';
 import 'katex/dist/katex.min.css';
 
@@ -51,7 +52,9 @@ interface MDXContentProps {
 }
 
 export default function MDXContent({ content, isMdxCompiled, category }: MDXContentProps) {
-  const mdxComponents = useMDXComponents({});
+  const mdxComponents = useMDXComponents({
+    CodePenDemo,
+  });
   const lightbox = useLightbox();
 
   const resolveImagePath = (src: string): string => {
@@ -117,7 +120,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       <>
         <style>{detailsArrowStyles}</style>
         <div className="mdx-content">
-          <MDXComponent components={mdxComponents as Record<string, React.ComponentType>} />
+          <MDXComponent components={mdxComponents} />
         </div>
         <Lightbox
           isOpen={lightbox.isOpen}

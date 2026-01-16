@@ -1,0 +1,220 @@
+---
+title: 'Three.js 零基础入门指南：开启 Web 3D 之旅'
+date: '2024-01-16'
+description: '一篇通俗易懂的 Three.js 入门文章，带你了解 WebGL 的魔法，掌握 3D 开发的核心概念与设计原理，并上手 React Three Fiber。'
+tags: ['Three.js', 'WebGL', '3D', 'Frontend', 'React']
+---
+
+# Three.js 零基础入门指南：开启 Web 3D 之旅
+
+想象一下，你可以在网页上创造一个浩瀚的宇宙，或者展示一辆细节逼真的跑车，用户可以随意旋转、缩放，甚至进入车内查看内饰。这在过去可能需要安装笨重的插件，但现在，凭借 **Three.js**，这一切触手可及。
+
+## 什么是 Three.js？
+
+简单来说，Three.js 是一个基于 JavaScript 的 **3D 库**。
+
+在它的底层，使用的是浏览器原生的 **WebGL** 技术。WebGL 非常强大，能调用显卡（GPU）进行高性能渲染，但它的原生 API 非常复杂且晦涩（你需要写大量的样板代码和着色器语言 GLSL）。
+
+Three.js 就像是 WebGL 的“翻译官”和“管家”。它把复杂的 WebGL 指令封装成了简单易懂的 JavaScript 对象（如“场景”、“相机”、“立方体”），让你无需精通图形学底层，也能快速构建出炫酷的 3D 应用。
+
+---
+
+## 核心概念：搭建 3D 世界的“三大件”
+
+要用 Three.js 渲染出一个画面，你必须集齐三个核心要素：**场景 (Scene)**、**相机 (Camera)** 和 **渲染器 (Renderer)**。
+
+我们可以把这想象成**拍电影**：
+
+1.  **场景 (Scene)**：这就是你的**片场**。你可以往里面放置物体、灯光、背景等。所有的演员（3D 物体）都要在这个容器里表演。
+2.  **相机 (Camera)**：这就是你的**摄影机**。它决定了观众看到了什么。不同的相机参数（如广角、长焦）会带来不同的视觉效果。最常用的是**透视相机 (PerspectiveCamera)**，它模拟人眼“近大远小”的视觉效果。
+3.  **渲染器 (Renderer)**：这就是**放映机**（或者说胶卷冲洗师）。它负责把相机拍到的场景，计算并绘制成平面图像，最终显示在你的屏幕（`<canvas>`）上。
+
+### 原生 Three.js 代码初体验
+
+```javascript
+import * as THREE from 'three';
+
+// 1. 创建场景
+const scene = new THREE.Scene();
+
+// 2. 创建相机
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.z = 5; 
+
+// 3. 创建渲染器
+const renderer = new THREE.WebGLRenderer();
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement); 
+
+// 4. 创建物体
+const geometry = new THREE.BoxGeometry(1, 1, 1);
+const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+const cube = new THREE.Mesh(geometry, material);
+scene.add(cube);
+
+// 5. 渲染循环
+function animate() {
+    requestAnimationFrame(animate);
+    cube.rotation.x += 0.01;
+    cube.rotation.y += 0.01;
+    renderer.render(scene, camera);
+}
+animate();
+```
+
+---
+
+## 现代开发首选：React Three Fiber (R3F)
+
+虽然原生 Three.js 很强大，但在 React 项目中直接使用命令式 API（如 `scene.add`）会显得格格不入。我们习惯了声明式组件。
+
+于是，**React Three Fiber (R3F)** 诞生了。它不是一个简单的包装器，而是一个**渲染器**。它允许你用 JSX 写 Three.js，性能与原生无异，甚至更好（因为自动管理了实例复用和垃圾回收）。
+
+### 为什么选择 R3F？
+*   **声明式**：`<mesh />` 比 `new THREE.Mesh()` 更直观。
+*   **组件化**：可以把 3D 场景拆分成可复用的组件。
+*   **生态丰富**：拥有 `@react-three/drei`（提供现成的组件如轨道控制、环境贴图）和 `@react-three/cannon`（物理引擎）等强大生态。
+
+### R3F 示例代码
+
+这就是上面原生代码的 React 版本，是不是清晰了很多？
+
+```jsx
+import React, { useRef, useState } from 'react'
+import { Canvas, useFrame } from '@react-three/fiber'
+
+function Box(props) {
+  // 获取 Mesh 的引用，以便直接操作它（例如旋转）
+  const meshRef = useRef()
+  
+  // 设置交互状态
+  const [hovered, setHover] = useState(false)
+  const [active, setActive] = useState(false)
+  
+  // useFrame 钩子会在每一帧被调用（类似 animate 函数）
+  useFrame((state, delta) => {
+    meshRef.current.rotation.x += delta
+    meshRef.current.rotation.y += delta * 0.5
+  })
+
+  return (
+    <mesh
+      {...props}
+      ref={meshRef}
+      scale={active ? 1.5 : 1}
+      onClick={() => setActive(!active)}
+      onPointerOver={() => setHover(true)}
+      onPointerOut={() => setHover(false)}>
+      <boxGeometry args={[1, 1, 1]} />
+      <meshStandardMaterial color={hovered ? 'hotpink' : 'orange'} />
+    </mesh>
+  )
+}
+
+export default function App() {
+  return (
+    <Canvas>
+      <ambientLight intensity={Math.PI / 2} />
+      <spotLight position={[10, 10, 10]} angle={0.15} penumbra={1} decay={0} intensity={Math.PI} />
+      <pointLight position={[-10, -10, -10]} decay={0} intensity={Math.PI} />
+      <Box position={[-1.2, 0, 0]} />
+      <Box position={[1.2, 0, 0]} />
+    </Canvas>
+  )
+}
+```
+
+### 实时演示
+
+下面就是这段代码运行的真实结果。你可以尝试**点击**或**悬停**在立方体上，看看会发生什么！你可以直接在左侧修改代码（例如把 'hotpink' 改成 'cyan'），右侧会自动更新！
+
+<CodePenDemo title="R3F Interactive Demo" code={`
+function Box(props) {
+  // 获取 Mesh 的引用
+  const meshRef = useRef()
+  
+  // 设置交互状态
+  const [hovered, setHover] = useState(false)
+  const [active, setActive] = useState(false)
+  
+  // 每一帧旋转
+  useFrame((state, delta) => {
+    meshRef.current.rotation.x += delta
+    meshRef.current.rotation.y += delta * 0.5
+  })
+
+  return (
+    <mesh
+      {...props}
+      ref={meshRef}
+      scale={active ? 1.5 : 1}
+      onClick={() => setActive(!active)}
+      onPointerOver={() => setHover(true)}
+      onPointerOut={() => setHover(false)}>
+      <boxGeometry args={[1, 1, 1]} />
+      <meshStandardMaterial color={hovered ? 'hotpink' : 'orange'} />
+    </mesh>
+  )
+}
+
+function App() {
+  return (
+    <Canvas>
+      <ambientLight intensity={Math.PI / 2} />
+      <spotLight position={[10, 10, 10]} angle={0.15} penumbra={1} decay={0} intensity={Math.PI} />
+      <pointLight position={[-10, -10, -10]} decay={0} intensity={Math.PI} />
+      
+      <Box position={[-1.2, 0, 0]} />
+      <Box position={[1.2, 0, 0]} />
+      
+      {/* 允许鼠标控制视角 */}
+      <OrbitControls />
+    </Canvas>
+  )
+}
+
+render(<App />)
+`} />
+
+---
+
+## 深入理解：材质与光照
+
+在上面的 Demo 中，我们把 `MeshBasicMaterial` 换成了 `MeshStandardMaterial`，并添加了光源。这两者有什么区别？
+
+### 材质 (Material)
+
+*   **MeshBasicMaterial**：最基础的材质，不受光照影响。给它什么颜色它就显示什么颜色。常用于 HUD 或不需要光照的物体。
+*   **MeshStandardMaterial**：基于物理的渲染 (PBR) 材质。这是现代 3D 引擎的标准。它模拟了真实物体的光学特性，如**粗糙度 (Roughness)** 和 **金属度 (Metalness)**。
+    *   **Roughness**: 0 = 镜面般光滑，1 = 像砖头一样粗糙。
+    *   **Metalness**: 0 = 塑料/木头，1 = 金属。
+
+### 光照 (Light)
+
+*   **AmbientLight**: 基础环境光，确保阴影处不全是死黑。
+*   **SpotLight**: 聚光灯，能产生锥形光束和漂亮的阴影。
+*   **PointLight**: 点光源，向四周发散，像灯泡或萤火虫。
+
+---
+
+## Three.js 的能力边界
+
+Three.js 的能力远不止画几个几何体：
+
+1.  **加载外部模型**：你可以从 Blender、C4D 等软件导出模型（推荐 **glTF/glb** 格式），然后在 Three.js 中通过 `useGLTF` (R3F) 加载进来。
+2.  **粒子系统**：实现下雨、下雪、火焰、星空等效果。
+3.  **着色器 (Shaders)**：通过编写 GLSL 代码，直接控制 GPU 的像素渲染，实现像水流、波纹、全息投影等高级特效。
+4.  **物理引擎**：给物体加上重力、碰撞、弹性，模拟真实的物理世界。
+5.  **后期处理**：给整个画面添加滤镜，比如辉光 (Bloom)、景深 (Depth of Field)、马赛克等效果。
+
+## 总结与建议
+
+Three.js 是通往 Web 3D 世界的大门，而 React Three Fiber 则是这扇门上最顺手的钥匙。
+
+**新手建议的学习路径：**
+1.  **熟悉 R3F 基础**：理解 Canvas, Mesh, Material 的组件化写法。
+2.  **玩转 @react-three/drei**：这是一个官方的实用工具库，里面有 `OrbitControls` (相机控制), `Environment` (环境光), `useGLTF` (模型加载) 等神器。**不要重复造轮子**。
+3.  **理解 3D 数学**：当你开始做复杂的动画或交互时，你需要复习一下向量 (Vector) 和矩阵 (Matrix) 的知识。
+4.  **进阶 Shader**：这是从“调库侠”变成“图形学工程师”的关键一步。
+
+希望这篇文章能帮你推开 3D 编程的大门，去创造属于你的虚拟世界吧！

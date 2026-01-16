@@ -1,0 +1,208 @@
+---
+title: '坐标系与变换：构建 3D 世界的时空法则'
+date: '2026-01-16'
+description: '从局部到世界，从世界到屏幕。本文将系统剖析 3D 图形学中的坐标空间流转，详解 TRS 变换矩阵的数学推导，揭秘层级变换（父子关系）的底层逻辑，并对比 OpenGL 与 DirectX 的差异。'
+tags: ['Math', 'Matrix', 'Coordinates', 'Transformation']
+---
+
+# 坐标系与变换：构建 3D 世界的时空法则
+
+在 3D 图形学中，顶点不仅仅是三个数字 $(x, y, z)$。它们存在的意义，取决于它们身处哪个**坐标系**。
+把一个模型从美术软件里"搬"到你的屏幕上，本质上就是让顶点在不同的坐标系之间进行了一场漫长的旅行。
+
+本文将带你重走这条**渲染流水线**，并深入理解控制这一切的数学法则——**矩阵变换**。
+
+---
+
+## 一、 坐标系系统详解
+
+顶点在到达屏幕之前，通常要经过 5 个主要的空间变换。
+
+### 1. 局部空间 (Local / Object Space)
+*   **定义**：物体自己的小世界。原点 $(0,0,0)$ 通常在物体的中心或底部。
+*   **场景**：美术师在 Blender/Maya 里建模时，都是以局部原点为基准的。
+*   **例子**：一个士兵模型，无论他在世界的哪个角落，他的鼻尖相对于他的脚底的坐标永远是不变的。
+
+### 2. 世界空间 (World Space)
+*   **定义**：所有物体共存的全局参考系。
+*   **转换**：通过**模型矩阵 (Model Matrix)**。
+    $$ P_{world} = M_{model} \times P_{local} $$
+    这个矩阵包含了物体在世界中的位置、旋转和大小。
+
+### 3. 观察空间 (View / Camera Space)
+*   **定义**：以摄像机为原点，摄像机看向 $-Z$ 轴（OpenGL 标准）。
+*   **转换**：通过**视图矩阵 (View Matrix)**。
+    $$ P_{view} = M_{view} \times P_{world} $$
+    **直觉**：移动摄像机是不可能的。我们要移动的是**整个世界**。如果你想向后退，其实是把世界向前推。
+    $$ M_{view} = (M_{camera\_transform})^{-1} $$
+
+### 4. 裁剪空间 (Clip Space)
+*   **定义**：一个标准化的立方体盒子（Frustum 被压扁后的样子）。
+*   **转换**：通过**投影矩阵 (Projection Matrix)**。
+    $$ P_{clip} = M_{projection} \times P_{view} $$
+*   **透视除法 (Perspective Division)**：
+    此时坐标还是齐次坐标 $(x, y, z, w)$。GPU 会自动执行 $x/w, y/w, z/w$。
+    这一步让近处的物体变大，远处的变小（因为远处的 $w$ 值大）。
+
+### 5. 屏幕空间 (Screen Space)
+*   **范围**：$x: [0, width], y: [0, height]$。
+*   **视口变换 (Viewport Transform)**：将标准化设备坐标 (NDC) 映射到像素坐标。
+
+---
+
+## 二、 基础变换 TRS：矩阵的积木
+
+所有复杂的运动，都可以拆解为三种基础变换：**平移 (Translation)**、**旋转 (Rotation)**、**缩放 (Scale)**。
+
+为了能用矩阵乘法把它们串起来，我们需要引入**齐次坐标 (Homogeneous Coordinates)**，把 3D 向量 $(x,y,z)$ 扩展为 4D 向量 $(x,y,z,1)$。
+
+### 1. 平移变换 (Translation)
+$$
+\begin{bmatrix} 
+1 & 0 & 0 & T_x \\ 
+0 & 1 & 0 & T_y \\ 
+0 & 0 & 1 & T_z \\ 
+0 & 0 & 0 & 1 
+\end{bmatrix} 
+\cdot 
+\begin{bmatrix} x \\ y \\ z \\ 1 \end{bmatrix} 
+= 
+\begin{bmatrix} x + T_x \\ y + T_y \\ z + T_z \\ 1 \end{bmatrix}
+$$
+*   **注意**：只有 $w=1$ 时平移才生效。如果是方向向量 ($w=0$)，平移矩阵对它不起作用（方向没有位置）。
+
+### 2. 缩放变换 (Scale)
+$$
+\begin{bmatrix} 
+S_x & 0 & 0 & 0 \\ 
+0 & S_y & 0 & 0 \\ 
+0 & 0 & S_z & 0 \\ 
+0 & 0 & 0 & 1 
+\end{bmatrix}
+$$
+*   **陷阱**：**非均匀缩放 (Non-uniform Scale)**（比如只拉长 X 轴）会破坏法线。如果物体被压扁了，它的法线不再垂直于表面。
+*   **修复**：使用 **法线矩阵 (Normal Matrix)**，它是模型矩阵左上角 3x3 部分的**逆转置矩阵** $(M^{-1})^T$。
+
+### 3. 旋转变换 (Rotation)
+绕 Z 轴旋转 $\theta$：
+$$
+\begin{bmatrix} 
+\cos\theta & -\sin\theta & 0 & 0 \\ 
+\sin\theta & \cos\theta & 0 & 0 \\ 
+0 & 0 & 1 & 0 \\ 
+0 & 0 & 0 & 1 
+\end{bmatrix}
+$$
+
+*   **欧拉角 (Euler Angles)**：直观，但有**万向节锁 (Gimbal Lock)** 问题（当中间轴旋转 90 度时，另外两个轴重合，丢失一个自由度）。
+*   **四元数 (Quaternion)**：这是解决旋转问题的终极方案。
+
+---
+
+## 三、 变换组合与顺序
+
+矩阵乘法**不满足交换律**。
+$$ A \times B \neq B \times A $$
+
+### 先旋转还是先平移？
+*   **先旋转后平移 (Rotate -> Translate)**：物体绕着**自己的原点**旋转，然后移动到世界位置。这是大多数时候我们想要的（比如地球自转）。
+*   **先平移后旋转 (Translate -> Rotate)**：物体先移远，然后绕着**世界原点**旋转。这会产生公转效果（比如月球绕地球转）。
+
+### 推荐顺序：TRS
+在构建 Model Matrix 时，业界标准顺序是：**先缩放，再旋转，最后平移**。
+$$ M_{model} = M_{translate} \times M_{rotate} \times M_{scale} $$
+*(注：这是在列向量左乘的约定下，阅读顺序是从右向左：先 Scale，再 Rotate，再 Translate)*
+
+<ShaderPreview title="Matrix Order Visualizer" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 2D 旋转矩阵
+mat2 rot(float a) {
+    float s = sin(a);
+    float c = cos(a);
+    return mat2(c, -s, s, c);
+}
+
+// 矩形 SDF
+float sdBox(vec2 p, vec2 b) {
+    vec2 d = abs(p)-b;
+    return length(max(d,0.0)) + min(max(d.x,d.y),0.0);
+}
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    // 场景 1: 先旋转后平移 (Rotate then Translate)
+    // 自身旋转
+    vec2 p1 = uv - vec2(-0.5, 0.0); // 平移到左边
+    p1 = rot(uTime) * p1;           // 旋转
+    float box1 = 1.0 - step(0.0, sdBox(p1, vec2(0.2, 0.1)));
+    
+    // 场景 2: 先平移后旋转 (Translate then Rotate)
+    // 绕原点公转
+    vec2 p2 = uv;
+    p2 = rot(uTime) * p2;           // 先旋转坐标系
+    p2 -= vec2(0.5, 0.0);           // 再平移物体 (在旋转后的坐标系里)
+    float box2 = 1.0 - step(0.0, sdBox(p2, vec2(0.2, 0.1)));
+    
+    vec3 color = vec3(box1 * vec3(1.0, 0.5, 0.0) + box2 * vec3(0.0, 0.5, 1.0));
+    
+    // 绘制轴线辅助
+    if(abs(uv.y) < 0.01) color += 0.2;
+    if(abs(uv.x) < 0.01) color += 0.2;
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+---
+
+## 四、 层级变换系统 (Hierarchy)
+
+游戏里的骨骼动画、太阳系，都依赖于**父子关系**。
+核心公式：
+$$ M_{child\_world} = M_{parent\_world} \times M_{child\_local} $$
+
+### 太阳系案例推导
+假设：
+*   **太阳**：在世界原点。
+*   **地球**：是太阳的子节点。
+*   **月球**：是地球的子节点。
+
+1.  **太阳矩阵**：$M_{sun} = I$ (单位矩阵)
+2.  **地球矩阵**：
+    $$ M_{earth\_world} = M_{sun} \times T_{sun \to earth} \times R_{earth\_spin} $$
+3.  **月球矩阵**：
+    $$ M_{moon\_world} = M_{earth\_world} \times T_{earth \to moon} \times R_{moon\_spin} $$
+
+这一连串的乘法，保证了当太阳移动时，地球和月球会自动跟着移动。
+
+---
+
+## 五、 实现细节与深坑
+
+### 1. 左手系 vs 右手系 (Handedness)
+这是图形学最大的分裂。
+*   **OpenGL / WebGL**: 右手系 (Right-Handed)。拇指 X，食指 Y，中指 **Z 指向屏幕外**。
+*   **DirectX / Unity**: 左手系 (Left-Handed)。**Z 指向屏幕内**。
+*   **影响**：叉积的方向相反；摄像机的前方向量相反；矩阵推导中的 Z 轴符号相反。
+
+### 2. 列主序 vs 行主序 (Column-major vs Row-major)
+*   **数学/OpenGL**: 列主序。向量在右边：$M \times v$。
+*   **DirectX**: 行主序。向量在左边：$v \times M$。
+*   **内存布局**：在写 Shader 传递 `uniform matrix` 时，如果 CPU 和 GPU 的主序不一致，矩阵会转置（错乱）。
+
+### 3. 性能优化
+*   **Dirty Flag 模式**：不要每帧都重新计算矩阵。只有当 Position/Rotation/Scale 发生变化时，才标记 `needsUpdate = true`，重新计算矩阵乘法。
+*   **GPU Skinning**：骨骼动画的层级变换计算量巨大，通常把矩阵数组传给 Vertex Shader，在 GPU 上并行计算顶点的最终位置。
+
+## 总结
+
+坐标系与变换是图形学的骨架。
+
+1.  **五大空间**：Local -> World -> View -> Clip -> Screen。
+2.  **TRS 顺序**：Scale -> Rotate -> Translate。
+3.  **层级关系**：子矩阵 = 父矩阵 * 本地矩阵。
+
+理解了这些，你就理解了上帝如何在计算机里构建宇宙。
