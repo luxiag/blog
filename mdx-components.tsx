@@ -1,6 +1,7 @@
 import type { MDXComponents } from "mdx/types";
 import CodeRunner from "@/components/CodeRunner";
 import InteractiveComponent from "@/components/InteractiveComponent";
+import ShaderPreview from "@/components/ShaderPreview";
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
@@ -187,6 +188,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     ),
     CodeRunner,
     InteractiveComponent,
+    ShaderPreview,
     ...components,
   };
 }

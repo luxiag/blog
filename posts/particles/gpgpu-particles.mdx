@@ -1,0 +1,151 @@
+---
+title: 'GPGPU 粒子系统：用显卡控制百万大军'
+date: '2026-01-16'
+description: 'CPU 算不动 100 万个粒子？GPGPU 技术来拯救你。本文将揭秘如何利用纹理来存储粒子的位置与速度，通过 FBO Ping-Pong 技术实现纯 GPU 端的物理模拟，创造出令人惊叹的流体与魔法效果。'
+tags: ['WebGL', 'GPGPU', 'Particles', 'Simulation']
+---
+
+# GPGPU 粒子系统：用显卡控制百万大军
+
+在 CPU 上遍历 10,000 个粒子并更新它们的位置，JavaScript 可能就已经开始喘粗气了。
+但在 GPU 上，更新 1,000,000 个粒子，可能只需要几毫秒。
+
+这就是 **GPGPU (General-Purpose computing on Graphics Processing Units)** 的魔力。我们不画图，我们用显卡来**算数**。
+
+今天，我们将学习如何把 GPU 变成一台超级并行的物理计算器。
+
+## 一、 核心思想：纹理即数据
+
+GPU 最擅长处理什么？纹理 (Texture)。
+纹理本质上是一个二维数组 `vec4 data[width][height]`。通常它存的是 `r, g, b, a` 颜色。
+但我们可以存任何东西！
+
+*   **位置纹理 (Position Texture)**：
+    *   `r` -> `x` 坐标
+    *   `g` -> `y` 坐标
+    *   `b` -> `z` 坐标
+    *   `a` -> 粒子的生命值 / 质量
+*   **速度纹理 (Velocity Texture)**：
+    *   `r` -> `vx` 速度
+    *   `g` -> `vy` 速度
+    *   `b` -> `vz` 速度
+
+如果我们有一张 1024x1024 的纹理，我们就拥有了 **100 万个数据槽**。
+
+## 二、 模拟循环：Ping-Pong 技术
+
+在 Shader 中，我们不能既读取纹理又写入同一张纹理（读写冲突）。
+所以我们需要**两张**纹理，轮流倒手。这叫 **Ping-Pong**。
+
+### 步骤
+1.  **Frame 1**:
+    *   读取 `Texture_A` (旧位置)。
+    *   计算新位置：`New_Pos = Old_Pos + Velocity * dt`。
+    *   写入 `Texture_B`。
+2.  **Frame 2**:
+    *   读取 `Texture_B` (刚才算出的位置)。
+    *   计算新位置。
+    *   写入 `Texture_A`。
+
+如此循环往复。
+
+## 三、 渲染：从数据到屏幕
+
+模拟完了，数据都在纹理里。怎么画出来？
+我们创建一个包含 100 万个顶点的 Geometry。每个顶点只需要一个属性：**索引 (Index)**。
+
+在 Vertex Shader 中：
+1.  根据索引计算出采样坐标 `uv`。
+2.  用 `texture2D(uPositionTexture, uv)` 读取粒子的真实位置。
+3.  把顶点移动到那个位置。
+
+## 四、 实战：GPGPU 粒子模拟
+
+下面的示例用 Shader 模拟了 GPGPU 的**位置更新逻辑**。
+左边是"数据视图"（实际存储在纹理里的颜色），右边是"渲染视图"（粒子在空间中的样子）。
+
+*(注：由于 ShaderPreview 限制，我们无法真正进行跨帧 Ping-Pong，这里用 uTime 模拟单向流动)*
+
+<ShaderPreview title="GPGPU Logic Simulation" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 模拟 curl noise (旋度噪声) - 让粒子产生流体般的涡旋
+vec3 curlNoise(vec3 p) {
+    // 简化的伪代码，用 sin/cos 模拟涡旋
+    return vec3(
+        sin(p.y * 10.0 + uTime),
+        cos(p.z * 10.0 + uTime),
+        sin(p.x * 10.0)
+    ) * 0.1;
+}
+
+void main() {
+    // --- 1. 模拟 Simulation Shader (计算新位置) ---
+    // 假设 vUv 就是粒子在纹理中的索引 ID
+    
+    // 初始状态：根据 ID 排列成网格
+    vec3 initialPos = vec3(vUv.x, vUv.y, 0.0) * 2.0 - 1.0;
+    
+    // 施加力场 (模拟速度纹理的作用)
+    vec3 velocity = curlNoise(initialPos);
+    
+    // 更新位置 (Pos += Vel * Time)
+    vec3 currentPos = initialPos + velocity * sin(uTime) * 0.5;
+    
+    // 将位置编码为颜色 (r,g,b = x,y,z)
+    // 为了可视化，我们将坐标 (-1~1) 映射到颜色 (0~1)
+    vec3 dataColor = currentPos * 0.5 + 0.5;
+    
+    // --- 2. 可视化输出 ---
+    
+    // 左半屏：显示"数据纹理" (Data Texture)
+    if (vUv.x < 0.5) {
+        gl_FragColor = vec4(dataColor, 1.0);
+    } 
+    // 右半屏：模拟粒子的空间分布 (Render)
+    else {
+        // 这是一个 trick：我们在 Fragment Shader 里画点
+        // 实际上 GPGPU 是在 Vertex Shader 里移动点
+        
+        vec2 renderUV = (vUv - vec2(0.75, 0.5)) * 4.0; // 局部坐标
+        
+        float dist = 1.0;
+        // 采样几个点来代表粒子
+        for(float i=0.0; i<10.0; i++) {
+            // 模拟读取纹理中的位置
+            vec2 lookupUV = vec2(i/10.0, i/10.0);
+            vec3 pos = (vec3(lookupUV, 0.0) * 2.0 - 1.0) + curlNoise(vec3(lookupUV, 0.0)) * sin(uTime) * 0.5;
+            
+            // 画点
+            float d = length(renderUV - pos.xy);
+            dist = min(dist, d);
+        }
+        
+        float particle = 1.0 - smoothstep(0.05, 0.06, dist);
+        gl_FragColor = vec4(vec3(particle), 1.0);
+    }
+    
+    // 分割线
+    if (abs(vUv.x - 0.5) < 0.002) gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+}
+`} />
+
+## 五、 高级技巧：Curl Noise (旋度噪声)
+
+如果你直接用随机数移动粒子，它们会像苍蝇一样乱飞。
+如果你想模拟**烟雾、流体**那种丝滑的流动感，你需要 **Curl Noise**。
+
+原理很简单：对 Perlin Noise 场求旋度 (Curl)。
+数学上保证了：**旋度场的散度为零**。这意味着粒子流**不会压缩也不会膨胀**，就像不可压缩的流体一样。
+
+这是制作 3A 级魔法特效的标配算法。
+
+## 总结
+
+GPGPU 开发有点像"把大象装进冰箱"：
+1.  **准备数据**：把粒子初始位置填入纹理。
+2.  **模拟**：写一个 Fragment Shader，读取旧位置，算出新位置。
+3.  **渲染**：写一个 Vertex Shader，读取新位置，把顶点移过去。
+
+虽然配置繁琐，但当你看到 100 万个光点在屏幕上随着你的鼠标起舞时，一切都是值得的。

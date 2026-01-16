@@ -1,0 +1,157 @@
+---
+title: 'GLSL 语法速查手册：变量、函数与魔法'
+date: '2026-01-16'
+description: '工欲善其事，必先利其器。本文为你整理了 GLSL 最核心的语法特性，从基础数据类型到神奇的 Swizzling 操作，再到那些让你事半功倍的内置数学函数，一网打尽。'
+tags: ['WebGL', 'GLSL', 'Syntax', 'Cheatsheet']
+---
+
+# GLSL 语法速查手册：变量、函数与魔法
+
+写 Shader 的时候，你是否经常忘记：
+*   "那个混合颜色的函数叫什么来着？"
+*   "我能不能把 `vec3` 直接赋值给 `vec4`？"
+*   "`varying` 和 `uniform` 到底有什么区别？"
+
+这篇文章就是你的 GLSL 随身字典。我们不求面面俱到，只求**最实用**。
+
+## 一、 基础数据类型
+
+GLSL 是强类型语言，类型转换必须显式进行。
+
+### 1. 标量 (Scalars)
+*   `float`: 浮点数。**注意**：GLSL 对类型非常严格，`1` 是 int，`1.0` 才是 float。绝大多数时候我们只用 float。
+*   `int`: 整数。用于循环计数。
+*   `bool`: `true` 或 `false`。
+
+### 2. 向量 (Vectors) —— 核心角色
+*   `vec2`: 2个 float (x, y)
+*   `vec3`: 3个 float (x, y, z) 或 (r, g, b)
+*   `vec4`: 4个 float (x, y, z, w) 或 (r, g, b, a)
+
+**构造方式**：
+```glsl
+vec3 color = vec3(1.0, 0.0, 0.5);
+vec4 colorAlpha = vec4(color, 1.0); // 使用 vec3 构造 vec4
+vec2 same = vec2(0.5); // 等同于 vec2(0.5, 0.5)
+```
+
+### 3. 矩阵 (Matrices)
+*   `mat2`: 2x2 矩阵 (2D 旋转)
+*   `mat3`: 3x3 矩阵
+*   `mat4`: 4x4 矩阵 (3D 变换)
+
+## 二、 魔法特性：Swizzling (分量重组)
+
+这是 GLSL 最酷的特性。你可以通过 `.xyzw` 或 `.rgba` 随意组合向量的分量。
+
+```glsl
+vec4 color = vec4(1.0, 0.0, 0.0, 1.0); // 红色
+
+vec3 rgb = color.rgb; // 提取前三个分量
+vec2 xy = color.xy;   // 提取前两个
+
+// 甚至可以乱序和重复！
+vec3 bgr = color.bgr; // 蓝色
+vec3 rrr = color.rrr; // 变成 (1.0, 1.0, 1.0)
+```
+
+<ShaderPreview title="Swizzling Demo" code={`
+varying vec2 vUv;
+
+void main() {
+    vec3 color = vec3(vUv.x, vUv.y, 0.0);
+    
+    // 正常显示：红+绿
+    // gl_FragColor = vec4(color, 1.0);
+    
+    // Swizzling 魔法：交换红绿通道 (r <-> g)
+    // 现在的 x (红色) 变成了原来的 y (绿色)
+    gl_FragColor = vec4(color.grb, 1.0);
+}
+`} />
+
+## 三、 变量限定符 (Qualifiers)
+
+这三个关键字定义了变量的"来源"。
+
+1.  **`attribute`** (仅 Vertex Shader):
+    *   **来源**：从 JS 传给顶点的**每个点独有**的数据。
+    *   **例子**：`position` (位置), `uv` (纹理坐标), `normal` (法线)。
+2.  **`uniform`** (全局变量):
+    *   **来源**：从 JS 传给 Shader 的**所有点共享**的数据。
+    *   **例子**：`uTime` (时间), `uResolution` (屏幕尺寸), `uMouse` (鼠标位置)。
+3.  **`varying`** (传令兵):
+    *   **来源**：从 Vertex Shader 传给 Fragment Shader 的数据。
+    *   **特点**：会自动进行**插值**。如果在顶点 A 设为红色，顶点 B 设为绿色，那么 A 到 B 之间的像素会自动渐变成黄色。
+
+## 四、 必备内置函数 (Built-in Functions)
+
+这些函数是 GPU 硬件优化的，比你自己写的数学公式快得多。
+
+### 1. 数学运算
+*   `sin(x)`, `cos(x)`: 三角函数，制造波动。
+*   `pow(x, n)`: x 的 n 次方。
+*   `sqrt(x)`: 开根号。
+*   `abs(x)`: 绝对值。
+*   `mod(x, y)`: 取余数。`mod(x, 1.0)` 可以把无限增长的 x 变成 0-1 的循环。
+
+### 2. 限制与比较
+*   `clamp(x, min, max)`: 把 x 限制在 min 和 max 之间。**非常常用**。
+*   `min(a, b)`: 取较小值。
+*   `max(a, b)`: 取较大值。
+
+### 3. 插值与平滑 (最重要的三个)
+*   **`mix(a, b, t)`**: 线性插值。`a * (1-t) + b * t`。
+*   **`step(edge, x)`**: 硬切。`x < edge ? 0.0 : 1.0`。
+*   **`smoothstep(edge0, edge1, x)`**: 平滑切。在两个边缘间生成 S 型曲线。
+
+<ShaderPreview title="Function Visualizer" code={`
+varying vec2 vUv;
+
+// 绘制函数曲线的辅助函数
+float plot(vec2 st, float pct){
+  return  smoothstep( pct-0.02, pct, st.y) -
+          smoothstep( pct, pct+0.02, st.y);
+}
+
+void main() {
+    vec2 st = vUv;
+    
+    // 在这里尝试不同的函数！
+    // float y = st.x;         // 线性
+    // float y = pow(st.x, 5.0); // 指数 (弯曲)
+    // float y = step(0.5, st.x); // 阶梯
+    float y = smoothstep(0.1, 0.9, st.x); // S型曲线
+    
+    vec3 color = vec3(y);
+    
+    // 绘制绿色的函数线
+    float pct = plot(st, y);
+    color = (1.0-pct)*color + pct*vec3(0.0,1.0,0.0);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+### 4. 几何函数
+*   `length(v)`: 向量长度。
+*   `distance(a, b)`: 两点距离。等同于 `length(a - b)`。
+*   `dot(a, b)`: 点积 (方向一致性)。
+*   `cross(a, b)`: 叉积 (求法线)。
+*   `normalize(v)`: 归一化 (把长度变成 1，方向不变)。
+
+### 5. 纹理查找
+*   `texture2D(sampler2D, vec2)`: 从纹理中获取颜色。
+
+## 五、 调试技巧
+
+GLSL 没有 `console.log`。那怎么调试？
+**把数据变成颜色！**
+
+*   想知道 `x` 的值是多少？`gl_FragColor = vec4(vec3(x), 1.0);`
+    *   如果是黑色，说明 x <= 0。
+    *   如果是白色，说明 x >= 1。
+    *   如果是灰色，说明 0 < x < 1。
+*   想知道坐标在哪里？`gl_FragColor = vec4(vUv.x, vUv.y, 0.0, 1.0);`
+
+记住：**所见即所得**。在 Shader 的世界里，颜色就是数据，数据就是颜色。

@@ -1,0 +1,173 @@
+---
+title: '几何工坊：深入理解 BufferGeometry 与程序化生成'
+date: '2026-01-16'
+description: '告别内置的 Box 和 Sphere。本文将带你深入 WebGL 的底层，学习如何直接操作 BufferGeometry，利用索引绘制优化性能，并实现 LOD (多细节层次) 技术。这是通往高级图形开发的必经之路。'
+tags: ['WebGL', 'Three.js', 'Geometry', 'Optimization']
+---
+
+# 几何工坊：深入理解 BufferGeometry 与程序化生成
+
+在 Three.js 等图形库中，我们习惯了直接 `new THREE.BoxGeometry()`。但如果你想制作动态的粒子流、生成复杂的地形，或者仅仅是为了极致的性能，你就必须学会**手搓几何体**。
+
+本文将深入探讨几何体生成的三个核心支柱：
+1.  **BufferGeometry**：直接操作二进制数据。
+2.  **索引绘制 (Indexed Drawing)**：复用顶点的艺术。
+3.  **LOD (Level of Detail)**：动态调整模型精度的策略。
+
+---
+
+## 模块一：BufferGeometry —— 数据之源
+
+### 1. 概念定义
+`BufferGeometry` 是 WebGL 几何数据的直接映射。它不存储"对象"，它只存储**类型化数组 (Typed Array)**。
+所有的顶点位置、颜色、法线、UV，都被打平成一串长长的数字，直接传给 GPU。
+
+### 2. 基本原理
+GPU 不认识 `Vector3` 对象。它只认识 `Float32Array`。
+*   **Position Buffer**: `[x1, y1, z1, x2, y2, z2, ...]`
+*   **Color Buffer**: `[r1, g1, b1, r2, g2, b2, ...]`
+
+### 3. 实战：手动构建一个四面体
+不要用 `new THREE.TetrahedronGeometry`。我们来自己算坐标。
+
+*(注：这是一个概念演示，ShaderPreview 会自动把这些 buffer 组装成模型)*
+
+<ShaderPreview title="Custom BufferGeometry" code={`
+varying vec2 vUv;
+varying vec3 vColor;
+
+void main() {
+    // 简单的线框效果
+    // 边缘发光
+    float edge = step(0.98, vUv.x) + step(0.98, vUv.y) + step(vUv.x, 0.02) + step(vUv.y, 0.02);
+    vec3 color = mix(vColor, vec3(1.0), edge);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} vertexCode={`
+// 模拟 BufferGeometry 的输入
+// 在真实的 Three.js 中，这些是 attribute
+attribute vec3 position;
+attribute vec3 color;
+attribute vec2 uv;
+
+varying vec2 vUv;
+varying vec3 vColor;
+
+uniform float uTime;
+
+void main() {
+    vUv = uv;
+    vColor = color;
+    
+    vec3 pos = position;
+    // 让顶点动起来！
+    // 我们可以直接修改 Buffer 里的数据，或者在 Vertex Shader 里做动画
+    pos.y += sin(uTime + pos.x) * 0.2;
+    
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+}
+`} />
+
+### 4. 常见误区
+*   **误区**：每帧都 `new Float32Array`。
+*   **真相**：垃圾回收 (GC) 会杀死你的性能。应该创建一次，然后修改里面的值，并标记 `.needsUpdate = true`。
+
+---
+
+## 模块二：索引绘制 (Indexed Drawing) —— 内存魔法
+
+### 1. 概念定义
+假设你要画一个矩形（由两个三角形组成）。
+*   **非索引**：你需要 6 个顶点（每个三角形 3 个）。其中有 2 个顶点是重合的（对角线上的点）。
+*   **索引**：你只需要 4 个顶点。然后用一个**索引列表**告诉 GPU："先画第 0,1,2 个点，再画第 2,1,3 个点"。
+
+### 2. 基本原理
+*   **Vertex Buffer**: `[A, B, C, D]` (4 个点)
+*   **Index Buffer**: `[0, 1, 2,  2, 1, 3]` (6 个整数)
+
+### 3. 典型应用场景
+*   **网格 (Grid)**：大量的顶点是共享的。使用索引可以节省 30%~50% 的显存。
+*   **平滑法线**：如果两个三角形共享一个顶点，且你希望表面平滑，那么这个顶点必须是同一个（法线平均）。
+
+---
+
+## 模块三：LOD (Level of Detail) —— 视觉欺骗
+
+### 1. 概念定义
+**LOD** 技术的核心思想是：**离得越远，做得越糙。**
+当一个物体只有 10 个像素大时，你用 1 万个面去画它，纯属浪费 GPU。
+
+### 2. 基本原理
+我们需要准备多套模型：
+*   **LOD 0 (高模)**：10,000 面。距离 < 10米。
+*   **LOD 1 (中模)**：1,000 面。距离 10~50米。
+*   **LOD 2 (低模)**：100 面。距离 > 50米。
+
+每帧计算相机与物体的距离，自动切换显示的模型。
+
+### 3. 动态 LOD (Continuous LOD)
+对于地形，我们不能简单地切换模型（会闪烁）。我们需要**动态**减少顶点。
+一种常用的技术是 **Terrain Morphing**：在 Vertex Shader 中，根据距离把两个相邻的顶点"吸"到一起，从而平滑地减少面数。
+
+<ShaderPreview title="LOD Simulation" code={`
+varying vec2 vUv;
+varying float vDist; // 从顶点传来的距离
+
+void main() {
+    // 模拟 LOD 切换的可视化
+    // 红色 = 高模 (近)
+    // 绿色 = 中模 (中)
+    // 蓝色 = 低模 (远)
+    
+    vec3 color = vec3(0.0);
+    
+    if (vDist < 0.5) {
+        color = vec3(1.0, 0.0, 0.0); // High Detail
+        // 加点网格细节
+        float grid = step(0.95, fract(vUv.x * 20.0)) + step(0.95, fract(vUv.y * 20.0));
+        color += grid * 0.5;
+    } else if (vDist < 0.8) {
+        color = vec3(0.0, 1.0, 0.0); // Medium Detail
+        float grid = step(0.95, fract(vUv.x * 10.0)) + step(0.95, fract(vUv.y * 10.0));
+        color += grid * 0.5;
+    } else {
+        color = vec3(0.0, 0.0, 1.0); // Low Detail
+    }
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} vertexCode={`
+varying vec2 vUv;
+varying float vDist;
+uniform float uTime;
+
+void main() {
+    vUv = uv;
+    vec3 pos = position;
+    
+    // 模拟相机距离变化 (0 到 1)
+    float dist = (sin(uTime * 0.5) + 1.0) * 0.5;
+    vDist = dist;
+    
+    // 简单的透视投影
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+}
+`} />
+
+---
+
+## 总结与延伸
+
+| 模块 | 核心优势 | 适用场景 |
+| :--- | :--- | :--- |
+| **BufferGeometry** | 极致控制，高性能 | 粒子系统，程序化生成 |
+| **Indexed Drawing** | 节省显存 | 连续网格，复杂模型 |
+| **LOD** | 节省 GPU 算力 | 大场景，开放世界游戏 |
+
+掌握了这些，你就不再是简单的"调库工程师"，而是能够驾驭底层数据的**图形程序员**。
+
+### 参考资料
+*   [Three.js BufferGeometry Documentation](https://threejs.org/docs/#api/en/core/BufferGeometry)
+*   [OpenGL Indexed Drawing](https://learnopengl.com/Getting-started/Hello-Triangle)
+*   [Terrain LOD Algorithms](https://www.vterrain.org/LOD/)

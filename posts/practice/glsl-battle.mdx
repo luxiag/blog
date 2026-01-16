@@ -1,0 +1,303 @@
+---
+title: 'GLSL 实战演练：从入门到入土'
+date: '2026-01-16'
+description: '理论学得再多，不如动手写一行代码。本文精心设计了四个难度的 GLSL 实战挑战：从简单的雷达扫描，到中等的火焰特效，再到困难的分形地貌，最后挑战终极的光线追踪。你能闯到第几关？'
+tags: ['WebGL', 'GLSL', 'Practice', 'Tutorial']
+---
+
+# GLSL 实战演练：从入门到入土
+
+欢迎来到 GLSL 训练场。
+这里没有枯燥的理论，只有代码和像素。我们将通过四个循序渐进的案例，带你领略 Shader 编程的无限可能。
+
+## Level 1: 简单 —— 雷达扫描 (Radar Scan)
+
+**目标**：制作一个科幻风格的雷达扫描效果。
+**核心知识点**：极坐标、距离场、时间动画。
+
+<ShaderPreview title="Level 1: Radar" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+#define PI 3.14159265359
+
+void main() {
+    // 1. 转换坐标系：中心为 (0,0)
+    vec2 st = vUv - 0.5;
+    
+    // 2. 转换为极坐标
+    // 距离 r
+    float r = length(st) * 2.0;
+    // 角度 a (-PI 到 PI)
+    float a = atan(st.y, st.x);
+    
+    // 3. 扫描线逻辑
+    // 让扫描线随时间旋转
+    // 归一化角度到 0-1 范围
+    float angle = fract(a / (2.0 * PI) - uTime * 0.5);
+    
+    // 扫描拖尾效果：越接近 1.0 (扫描线位置) 越亮
+    float beam = smoothstep(0.8, 1.0, angle);
+    
+    // 4. 雷达圈
+    // 使用 fract 和 step 制作同心圆
+    float circles = 1.0 - step(0.02, fract(r * 5.0));
+    
+    // 5. 限制雷达范围
+    float mask = 1.0 - step(1.0, r);
+    
+    // 合成颜色
+    vec3 color = vec3(0.0, 1.0, 0.5) * (beam + circles * 0.3) * mask;
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## Level 2: 中等 —— 能量护盾 (Energy Shield)
+
+**目标**：制作一个流动的、带边缘发光的能量护盾。
+**核心知识点**：噪声纹理、UV 扭曲、边缘光 (Rim Light)。
+
+<ShaderPreview title="Level 2: Force Field" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 简单的 2D 噪声
+float noise(vec2 st) {
+    return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+}
+
+// 值噪声 (平滑版)
+float valueNoise(vec2 st) {
+    vec2 i = floor(st);
+    vec2 f = fract(st);
+    float a = noise(i);
+    float b = noise(i + vec2(1.0, 0.0));
+    float c = noise(i + vec2(0.0, 1.0));
+    float d = noise(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(a, b, u.x) + (c - a)* u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
+void main() {
+    // 1. 模拟球体法线 (用于边缘光)
+    vec2 p = vUv * 2.0 - 1.0;
+    float r = length(p);
+    if (r > 1.0) discard;
+    float z = sqrt(1.0 - r*r);
+    vec3 normal = vec3(p.x, p.y, z);
+    
+    // 2. 边缘光 (Fresnel)
+    // 视线方向是 (0,0,1)，点积越小说明越靠近边缘
+    float fresnel = 1.0 - dot(normal, vec3(0.0, 0.0, 1.0));
+    fresnel = pow(fresnel, 3.0); // 增强边缘对比度
+    
+    // 3. 流动纹理
+    // 使用两层噪声叠加，方向相反
+    float n1 = valueNoise(vUv * 10.0 + vec2(0.0, uTime));
+    float n2 = valueNoise(vUv * 15.0 - vec2(uTime * 0.5, 0.0));
+    float energy = n1 * n2;
+    
+    // 4. 合成
+    // 核心颜色 + 边缘高光
+    vec3 coreColor = vec3(0.2, 0.5, 1.0);
+    vec3 glow = coreColor * (energy * 2.0 + fresnel * 3.0);
+    
+    // 增加一点透明度变化
+    float alpha = energy * 0.5 + fresnel;
+    
+    gl_FragColor = vec4(glow, alpha);
+}
+`} />
+
+## Level 3: 困难 —— 分形地貌 (Fractal Terrain)
+
+**目标**：用纯数学公式生成一个俯视的群山地貌。
+**核心知识点**：FBM (分形布朗运动)、光照计算、颜色映射。
+
+<ShaderPreview title="Level 3: Fractal Land" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+float random(vec2 st) {
+    return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+}
+
+float noise(vec2 st) {
+    vec2 i = floor(st);
+    vec2 f = fract(st);
+    float a = random(i);
+    float b = random(i + vec2(1.0, 0.0));
+    float c = random(i + vec2(0.0, 1.0));
+    float d = random(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(a, b, u.x) + (c - a)* u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
+// FBM: 叠加多层噪声，模拟地形细节
+float fbm(vec2 st) {
+    float v = 0.0;
+    float a = 0.5;
+    mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
+    for (int i = 0; i < 5; i++) {
+        v += a * noise(st);
+        st = rot * st * 2.0 + vec2(100.0); // 旋转以减少网格感
+        a *= 0.5;
+    }
+    return v;
+}
+
+void main() {
+    vec2 st = vUv * 3.0 + vec2(uTime * 0.1, 0.0); // 缓慢飞行
+    
+    // 1. 生成高度图
+    float h = fbm(st);
+    
+    // 2. 颜色映射 (Color Grading)
+    vec3 col = vec3(0.0);
+    
+    // 水面 (深蓝)
+    vec3 water = vec3(0.0, 0.3, 0.6);
+    // 沙滩 (黄色)
+    vec3 sand = vec3(0.8, 0.7, 0.4);
+    // 森林 (绿色)
+    vec3 forest = vec3(0.1, 0.4, 0.1);
+    // 雪山 (白色)
+    vec3 snow = vec3(0.9, 0.9, 1.0);
+    
+    // 根据高度混合颜色
+    if (h < 0.45) col = water;
+    else if (h < 0.5) col = mix(water, sand, (h - 0.45) / 0.05);
+    else if (h < 0.7) col = mix(sand, forest, (h - 0.5) / 0.2);
+    else col = mix(forest, snow, (h - 0.7) / 0.3);
+    
+    // 3. 简单的假光照
+    // 计算导数来模拟法线
+    float d = 0.01;
+    float h_dx = fbm(st + vec2(d, 0.0)) - h;
+    float h_dy = fbm(st + vec2(0.0, d)) - h;
+    vec3 normal = normalize(vec3(-h_dx, -h_dy, d));
+    
+    vec3 lightDir = normalize(vec3(1.0, 1.0, 0.5));
+    float diff = max(dot(normal, lightDir), 0.0);
+    
+    // 阴影加深
+    col *= (0.5 + 0.5 * diff);
+    
+    gl_FragColor = vec4(col, 1.0);
+}
+`} />
+
+## Level 4: 入神 —— 光线追踪 (Ray Tracing)
+
+**目标**：在一个 Shader 里实现真正的光线反射。
+**核心知识点**：Ray Tracing 核心循环、反射、材质。
+
+这是一个极简的光线追踪器。它不是 Ray Marching，而是解析几何求交。
+
+<ShaderPreview title="Level 4: Ray Tracer" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 射线结构体
+struct Ray { vec3 ro; vec3 rd; };
+
+// 球体求交函数
+// 返回距离，如果没有击中返回 -1.0
+float iSphere(Ray ray, vec3 pos, float r) {
+    vec3 oc = ray.ro - pos;
+    float b = dot(oc, ray.rd);
+    float c = dot(oc, oc) - r*r;
+    float h = b*b - c;
+    if (h < 0.0) return -1.0;
+    return -b - sqrt(h);
+}
+
+void main() {
+    // 1. 相机设置
+    vec2 uv = vUv * 2.0 - 1.0;
+    vec3 ro = vec3(0.0, 0.0, 3.0); // 相机位置
+    vec3 rd = normalize(vec3(uv, -1.5)); // 射线方向
+    
+    vec3 col = vec3(0.0); // 最终颜色
+    vec3 ref = vec3(1.0); // 反射衰减系数
+    
+    // 场景定义：一个大球和一个移动的小球
+    vec3 sphere1 = vec3(0.0, -100.5, -1.0); // 地面(超大球)
+    float r1 = 100.0;
+    vec3 sphere2 = vec3(sin(uTime), 0.0, -1.0); // 浮动球
+    float r2 = 0.8;
+    
+    // 光源
+    vec3 light = normalize(vec3(0.5, 0.8, 0.5));
+    
+    // 2. 光线弹射循环 (最多弹射 3 次)
+    for(int i = 0; i < 3; i++) {
+        // 求交
+        float t1 = iSphere(Ray(ro, rd), sphere1, r1);
+        float t2 = iSphere(Ray(ro, rd), sphere2, r2);
+        
+        float t = 10000.0;
+        vec3 pos = vec3(0.0);
+        vec3 n = vec3(0.0);
+        vec3 matCol = vec3(0.0);
+        float id = -1.0;
+        
+        // 找到最近的交点
+        if(t1 > 0.0 && t1 < t) { t = t1; id = 1.0; }
+        if(t2 > 0.0 && t2 < t) { t = t2; id = 2.0; }
+        
+        // 如果没击中任何物体，渲染天空并退出
+        if(id < 0.0) {
+            vec3 sky = mix(vec3(0.5, 0.7, 1.0), vec3(0.1, 0.3, 0.6), rd.y*0.5+0.5);
+            col += ref * sky;
+            break;
+        }
+        
+        // 计算击中点信息
+        pos = ro + rd * t;
+        
+        if(id == 1.0) { // 地面
+            n = normalize(pos - sphere1);
+            // 棋盘格材质
+            float check = mod(floor(pos.x*2.0) + floor(pos.z*2.0), 2.0);
+            matCol = vec3(0.3 + check * 0.3);
+        } else { // 球体
+            n = normalize(pos - sphere2);
+            matCol = vec3(1.0, 0.2, 0.2); // 红色镜面球
+        }
+        
+        // 简单的漫反射光照
+        float diff = max(dot(n, light), 0.0);
+        vec3 color = matCol * diff;
+        
+        // 累加颜色
+        col += ref * color * 0.5; // 0.5 是因为物体也会吸收光
+        
+        // 准备下一次弹射
+        ref *= 0.5; // 每次反射能量减半 (如果是完美镜面则不减)
+        if(id == 2.0) ref *= vec3(1.0, 0.5, 0.5); // 红色球反射红光
+        
+        ro = pos + n * 0.001; // 防止自我遮挡
+        rd = reflect(rd, n); // 反射方向
+    }
+    
+    // Gamma 校正
+    col = pow(col, vec3(0.4545));
+    
+    gl_FragColor = vec4(col, 1.0);
+}
+`} />
+
+## 结语
+
+从画圆圈到模拟光线反弹，GLSL 的上限取决于你的数学想象力。
+这四个例子涵盖了 Shader 编程的四大流派：**2D 图形**、**特效/VFX**、**程序化生成**、**物理渲染**。
+
+你可以试着修改代码：
+1.  给雷达加上颜色渐变。
+2.  改变护盾的流动速度。
+3.  给地貌加上云层。
+4.  在光线追踪里加第三个球。
+
+祝你在代码的宇宙里玩得开心！
