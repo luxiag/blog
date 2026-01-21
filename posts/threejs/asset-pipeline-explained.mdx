@@ -1,0 +1,198 @@
+---
+title: 'Three.js 资产与内容管线：从 Blender 到 Web'
+date: '2026-01-16'
+description: '详解 glTF/GLB 工作流、Blender 导出规范、Draco/KTX2 压缩技术以及 AnimationMixer 动画管理。打造高效的 Web 3D 资源生产线。'
+tags: ['Three.js', 'WebGL', 'Pipeline', 'Blender', 'Performance']
+---
+
+# Three.js 资产与内容管线：从 Blender 到 Web
+
+在 Web 3D 开发中，代码往往只占工作量的一半，另一半则是**资产 (Assets)** 的生产与管理。
+
+一个丑陋、庞大、卡顿的模型，写再好的代码也救不回来。
+本文将带你打通从建模软件 (DCC) 到浏览器的全流程，建立一条标准化的**内容管线 (Content Pipeline)**。
+
+---
+
+## 一、 glTF/GLB：Web 3D 的 JPEG
+
+过去我们用 OBJ、FBX，但现在，**glTF (GL Transmission Format)** 是绝对的王者。
+*   **glTF**: JSON 格式，文件大，贴图分离。适合调试。
+*   **GLB**: 二进制格式，所有数据打包在一个文件里，体积小。**生产环境首选**。
+
+### 1. 加载模型 (GLTFLoader)
+在 R3F 中，我们使用 `useGLTF` 钩子，它比原生的 `GLTFLoader` 更简单，且支持 Suspense 异步加载。
+
+```jsx
+import { useGLTF } from '@react-three/drei'
+
+function Model() {
+  const { scene, nodes, materials, animations } = useGLTF('/model.glb')
+  return <primitive object={scene} />
+}
+```
+
+### 2. 场景遍历与材质替换
+很多时候，美术给的模型材质在 Web 上效果不好，我们需要手动替换，或者修改某些子节点。
+**关键技巧**: 所有的模型节点都在 `nodes` 对象里，所有的材质都在 `materials` 对象里。
+
+<CodePenDemo title="Model Manipulation" code={`
+/* 
+  这里我们使用一个简单的内置形状模拟加载的模型 
+  在真实项目中，你会使用 useGLTF('/duck.glb')
+*/
+function MockModel({ color, ...props }) {
+  const groupRef = useRef()
+  
+  // 模拟：假设这是从 GLB 加载出来的 nodes
+  // 真实代码: const { nodes } = useGLTF(url)
+  
+  return (
+    <group ref={groupRef} {...props}>
+      {/* 假设模型里有个叫 "Head" 的节点 */}
+      <mesh position={[0, 1, 0]}>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color={color} />
+      </mesh>
+      
+      {/* 假设模型里有个叫 "Body" 的节点 */}
+      <mesh position={[0, -0.5, 0]}>
+        <cylinderGeometry args={[0.5, 0.5, 2]} />
+        <meshStandardMaterial color="gray" />
+      </mesh>
+    </group>
+  )
+}
+
+function Scene() {
+  const [hovered, setHover] = useState(false)
+  
+  return (
+    <>
+      {/* 我们可以像原生组件一样控制模型 */}
+      <MockModel 
+        position={[0, 0, 0]} 
+        color={hovered ? "hotpink" : "orange"}
+        onPointerOver={() => setHover(true)}
+        onPointerOut={() => setHover(false)}
+        rotation={[0, Math.PI / 4, 0]}
+      />
+      
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[5, 5, 5]} />
+      <OrbitControls />
+    </>
+  )
+}
+
+render(
+  <Canvas>
+    <Scene />
+  </Canvas>
+)
+`} />
+
+---
+
+## 二、 动画系统：让模型动起来
+
+glTF 模型不仅包含形状，还包含骨骼动画 (Skeletal Animation)。
+Three.js 使用 `AnimationMixer` 来混合和播放动画。R3F 提供了 `useAnimations` 钩子来简化这一步。
+
+### 1. 播放与过渡
+不要直接切换动画，要用 `fadeIn` 和 `fadeOut` 实现平滑过渡。
+
+```javascript
+const { actions } = useAnimations(animations, groupRef)
+
+useEffect(() => {
+  // 播放 "Run" 动画
+  const action = actions['Run']
+  action.reset().fadeIn(0.5).play()
+  
+  return () => {
+    // 组件卸载或切换时，淡出动画
+    action.fadeOut(0.5)
+  }
+}, [actions])
+```
+
+### 2. 动画混合 (Blending)
+比如“边跑边开枪”，我们需要混合“下半身跑步”和“上半身射击”两个动画。这涉及到**骨骼遮罩 (Bone Masking)**，需要精细控制 `mixer`。
+
+---
+
+## 三、 DCC 工具规范 (Blender)
+
+好的模型是优化出来的。在 Blender 导出前，必须遵守以下规范：
+
+### 1. 建模规范
+*   **单位 (Unit)**: 设置为 **Meters (米)**。Three.js 中 1 unit = 1 meter。
+*   **轴向 (Axis)**: Blender 是 **Z-up**，Three.js 是 **Y-up**。导出时勾选 `Y Up` 转换，或者在 Blender 里就习惯 Z 朝上。
+*   **原点 (Origin)**: 确保模型的原点在 `(0,0,0)` 或脚底板，否则旋转时会乱飞。
+*   **应用变换 (Apply Transforms)**: **Ctrl+A -> All Transforms**。这是新手最常犯的错！如果缩放是负数或非 1，光照和物理都会错乱。
+
+### 2. 性能优化
+*   **LOD (Level of Detail)**: 制作高、中、低三种面数的模型。近处看高模，远处看低模。
+*   **贴图烘焙 (Baking)**: 把光影、AO、多重纹理合并成一张贴图。减少 Draw Call 和纹理采样次数。
+
+---
+
+## 四、 压缩技术：体积瘦身术
+
+Web 环境对带宽极其敏感。一个 50MB 的模型加载需要 10秒，用户早跑了。
+
+### 1. Draco 压缩 (几何体)
+Google 开发的算法，专门压缩顶点数据（位置、法线、UV）。
+*   **效果**: 模型体积能减少 **50%~90%**。
+*   **代价**: 解压需要 CPU 时间（但在 Worker 中运行，几乎无感）。
+*   **使用**:
+    ```bash
+    # 使用 gltf-pipeline 命令行工具
+    gltf-pipeline -i model.glb -o model-draco.glb -d
+    ```
+    ```jsx
+    // R3F 自动支持 Draco，只需要提供解码器路径 (通常 CDN 自带)
+    useGLTF('/model-draco.glb')
+    ```
+
+### 2. KTX2 / Basis (纹理)
+这是**终极武器**。普通的 JPG/PNG 在显存里是解压状态（RGBA 占用极大）。
+KTX2 是一种**GPU 友好**的格式，它在显存里也是压缩的！
+*   **效果**: 显存占用减少 **6-8倍**！加载速度极大提升。
+*   **代价**: 编码非常慢，画质有轻微损耗。
+*   **工具**: `gltf-transform` 或 `toktx`。
+
+---
+
+## 五、 资源版本与发布
+
+### 1. CDN 与 Hash
+永远不要让用户重新下载未修改的资源，也永远不要让用户用到旧的缓存资源。
+*   **文件名 Hash**: `model.a1b2c3d.glb`。
+*   **Cache-Control**: `max-age=31536000, immutable` (永久缓存)。
+
+### 2. 自动化管线
+不要手动拖拽文件。建立 CI/CD 脚本：
+1.  美术提交原始 `.blend` 或高模 `.glb` 到 Git/SVN。
+2.  脚本自动运行 `gltf-transform` 进行 Draco 压缩和 KTX2 转换。
+3.  脚本自动计算 Hash 重命名，上传到 OSS/S3 CDN。
+4.  生成资源清单 `manifest.json` 供前端引用。
+
+```json
+// manifest.json
+{
+  "models": {
+    "hero": "https://cdn.com/assets/hero.8f7a9d.glb",
+    "level1": "https://cdn.com/assets/level1.2b3c4d.glb"
+  }
+}
+```
+
+## 总结
+
+Web 3D 的性能瓶颈往往不在代码，而在资产。
+*   **GLB** 是你的传输格式。
+*   **Blender** 中要严格遵守单位和变换规范。
+*   **Draco + KTX2** 是移动端的必选组合。
+*   建立自动化的**压缩与发布管线**，是项目成熟的标志。

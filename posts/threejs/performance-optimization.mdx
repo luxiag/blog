@@ -1,0 +1,256 @@
+---
+title: 'Three.js 性能优化指南：榨干每一滴 GPU 算力'
+date: '2026-01-16'
+description: '从 Draw Call 优化到显存管理，从实例化渲染到纹理压缩。一套完整的 Three.js 性能调优手册，助你跑满 60FPS。'
+tags: ['Three.js', 'WebGL', 'Performance', 'Optimization']
+---
+
+# Three.js 性能优化指南：榨干每一滴 GPU 算力
+
+在 Web 3D 开发中，**“跑得动”比“画得好”更重要**。
+一个只有 10 FPS 的炫酷场景没有任何商业价值。
+
+性能优化不是最后一步，而是贯穿开发全周期的思维方式。本文将从 CPU、GPU、内存、网络四个维度，系统讲解 Three.js 的优化策略。
+
+---
+
+## 一、 渲染瓶颈之源：Draw Call
+
+WebGL 最昂贵的操作就是 CPU 告诉 GPU “我要画这个物体”。这被称为一次 **Draw Call**。
+如果你有 1000 个独立的立方体，就有 1000 次 Draw Call。CPU 会被累死，而 GPU 却在发呆。
+
+### 1. 实例化渲染 (InstancedMesh)
+这是**最重要**的优化手段。
+如果你有成千上万个**几何体相同、材质相同**，但位置、旋转、缩放不同的物体（如森林、草地、粒子），**必须**使用 `InstancedMesh`。
+它可以将 10,000 次 Draw Call 合并为 **1 次**。
+
+<CodePenDemo title="Instancing Performance" code={`
+function NaiveScene({ count = 500 }) {
+  // 错误示范：创建 500 个独立的 Mesh
+  return (
+    <group>
+      {Array.from({ length: count }).map((_, i) => (
+        <mesh key={i} position={[Math.random() * 10, Math.random() * 10, Math.random() * 10]}>
+          <boxGeometry args={[0.2, 0.2, 0.2]} />
+          <meshStandardMaterial color="red" />
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
+function InstancedScene({ count = 5000 }) {
+  // 正确示范：使用 InstancedMesh
+  const meshRef = useRef()
+  
+  useLayoutEffect(() => {
+    const tempObject = new THREE.Object3D()
+    for (let i = 0; i < count; i++) {
+      tempObject.position.set(
+        (Math.random() - 0.5) * 20,
+        (Math.random() - 0.5) * 20,
+        (Math.random() - 0.5) * 20
+      )
+      tempObject.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0)
+      tempObject.updateMatrix()
+      
+      // 设置第 i 个实例的矩阵
+      meshRef.current.setMatrixAt(i, tempObject.matrix)
+    }
+    // 必须手动通知更新
+    meshRef.current.instanceMatrix.needsUpdate = true
+  }, [])
+
+  return (
+    <instancedMesh ref={meshRef} args={[null, null, count]}>
+      <boxGeometry args={[0.2, 0.2, 0.2]} />
+      <meshStandardMaterial color="cyan" />
+    </instancedMesh>
+  )
+}
+
+function Scene() {
+  const [useInstancing, setUse] = useState(true)
+  
+  return (
+    <>
+      {useInstancing ? <InstancedScene /> : <NaiveScene />}
+      
+      <OrbitControls autoRotate />
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[10, 10, 5]} />
+      
+      <Html position={[0, 2, 0]} center>
+        <div className="bg-black/80 text-white p-4 rounded text-center w-64">
+          <p className="mb-2 font-bold">{useInstancing ? 'Instanced (5000个)' : 'Naive (500个)'}</p>
+          <button 
+            className="px-3 py-1 bg-blue-600 rounded text-sm"
+            onClick={() => setUse(!useInstancing)}
+          >
+            切换模式
+          </button>
+          <p className="text-xs text-gray-400 mt-2">
+            Instanced 即使数量多 10 倍，性能依然吊打 Naive 模式。
+          </p>
+        </div>
+      </Html>
+    </>
+  )
+}
+
+render(
+  <Canvas camera={{ position: [0, 0, 15] }}>
+    <Scene />
+    <Stats />
+  </Canvas>
+)
+`} />
+
+### 2. 几何体合并 (Geometry Merging)
+如果几何体**不同**（比如一堆桌子、椅子、杯子），但材质相同，可以使用 `BufferGeometryUtils.mergeGeometries` 将它们合并成一个大 Geometry。
+*   **缺点**: 失去对单个物体的独立控制（除非在 Shader 里做手脚）。
+
+---
+
+## 二、 材质与纹理优化
+
+### 1. 纹理压缩 (Texture Compression)
+JPG/PNG 是传输格式，不是显存格式。一张 1024x1024 的 PNG，在显存里可能占用 4MB (RGBA)。
+**KTX2 / Basis** 是显存压缩格式，能减少 6-8 倍的显存占用，且无需 CPU 解压。
+*   **工具**: `gltf-transform`
+*   **策略**: 移动端尽量用 1024 以下贴图，背景可用 2048。
+
+### 2. 材质共享
+千万不要在循环里创建材质！
+
+```javascript
+// ❌ 错误：每帧或每个物体都 new 一个材质
+<mesh>
+  <meshStandardMaterial color="red" />
+</mesh>
+
+// ✅ 正确：提取到组件外或使用 useMemo
+const redMaterial = new THREE.MeshStandardMaterial({ color: 'red' })
+// 或者
+const material = useMemo(() => new THREE.MeshStandardMaterial({ color: 'red' }), [])
+```
+
+### 3. 避免 Shader 编译卡顿
+Three.js 在第一次看到新材质时会编译 Shader，这会导致页面卡顿（掉帧）。
+*   **预编译 (Pre-compile)**: 在加载阶段就把场景里的材质 `renderer.compile(scene, camera)` 一遍。
+
+---
+
+## 三、 光照与阴影
+
+光照计算是 GPU 的重灾区。
+
+### 1. 烘焙 (Baking)
+这是性能优化的**核武器**。
+将复杂的光照、阴影、AO 提前在 Blender 里计算好，保存为一张“光照贴图 (Lightmap)”。
+*   **运行时**: 只需要一个 `MeshBasicMaterial` + `lightMap`。无需任何光源计算，性能极高，效果极好。
+*   **缺点**: 只能用于静态物体。
+
+### 2. 阴影优化
+如果必须用实时阴影：
+*   **范围控制**: 尽量减小 `shadow.camera` 的视锥体范围，范围越小，阴影越清晰。
+*   **分辨率**: 不要无脑设 `2048`，移动端 `512` 或 `1024` 足矣。
+*   **静态阴影**: 对于不动的物体，渲染一次阴影后，将 `light.autoUpdate = false`，不再每帧计算。
+
+---
+
+## 四、 渲染循环优化 (CPU)
+
+JavaScript 是单线程的，任何繁重的计算都会阻塞渲染。
+
+### 1. 避免垃圾回收 (GC)
+在 `useFrame` 循环里：
+*   **不要 new 对象**: `new Vector3()`, `new Matrix4()` 是大忌。
+*   **对象复用**: 在组件外定义一个全局的 `const tempVec = new Vector3()`，在循环里反复利用它。
+
+```javascript
+const tempVec = new THREE.Vector3()
+
+useFrame(() => {
+  // ❌ 坏习惯
+  // mesh.position.add(new THREE.Vector3(0, 1, 0))
+  
+  // ✅ 好习惯
+  tempVec.set(0, 1, 0)
+  mesh.position.add(tempVec)
+})
+```
+
+### 2. 按需渲染 (On-demand Rendering)
+如果画面是静止的（比如展示页面），没必要一直跑 60FPS。
+R3F 支持 `frameloop="demand"` 模式，只有当交互或 props 变化时才渲染一帧。
+
+```jsx
+<Canvas frameloop="demand">
+  <OrbitControls makeDefault />
+</Canvas>
+```
+这能让笔记本风扇瞬间安静下来，手机不再发烫。
+
+---
+
+## 五、 性能分析与调试工具
+
+不知道瓶颈在哪里，优化就是瞎忙活。
+
+### 1. Stats 性能面板
+这是最基础的工具，显示 FPS (帧率)、MS (帧时)、MB (内存)。
+```jsx
+import { Stats } from '@react-three/drei'
+<Stats />
+```
+
+### 2. Spector.js
+这是一个浏览器插件，可以捕获某一帧的所有 WebGL 命令。
+通过它，你可以看到：
+*   **Draw Calls**: 这一帧到底画了多少次？
+*   **Shaders**: 正在运行的 Shader 代码是什么？
+*   **Textures**: 这一帧用到了哪些纹理？
+
+### 3. Chrome Performance
+使用 Chrome 开发者工具的 Performance 面板录制一段。
+*   如果 **Scripting** 耗时高 -> CPU 瓶颈（JS 计算太多）。
+*   如果 **Rendering/Painting** 耗时高 -> GPU 瓶颈（面数太多、Shader 太复杂）。
+
+---
+
+## 六、 模型与加载体验
+
+### 1. 加载策略
+*   **分包**: 不要把整个场景打包成一个 100MB 的 GLB。拆分成 `map.glb`, `props.glb`, `characters.glb`。
+*   **懒加载 (Lazy Load)**: 看不见的房间先不加载。
+*   **LOD (Level of Detail)**: 远处的物体用低模，近处用高模。R3F 提供了 `<Detail>` 组件。
+
+### 2. LoadingManager
+Three.js 提供了 `LoadingManager` 来统一管理加载进度。在 R3F 中，我们可以使用 `<Loader />` 组件或 `useProgress` 钩子来制作进度条。
+
+```jsx
+import { useProgress } from '@react-three/drei'
+
+function LoadingScreen() {
+  const { progress } = useProgress()
+  return <div className="loading-bar" style={{ width: `${progress}%` }} />
+}
+```
+
+### 3. 显存管理 (Dispose)
+*   **原则**: 只要是不再需要的资源，必须调用 `dispose()`。
+*   **R3F**: 自动处理组件卸载时的 dispose。
+*   **手动**: 如果你是自己 `new THREE.Texture()` 的，记得在 `useEffect` 的 cleanup 函数里销毁它。
+
+## 总结：性能优化检查清单
+
+1.  [ ] **Draw Calls**: 是否用了 Instancing？
+2.  [ ] **纹理**: 是否用了 KTX2？尺寸是否合理？
+3.  [ ] **材质**: 是否共用了材质实例？
+4.  [ ] **光照**: 能烘焙吗？实时阴影范围够小吗？
+5.  [ ] **循环**: `useFrame` 里有没有 `new` 对象？
+6.  [ ] **加载**: 模型压缩了吗？用了 LOD 吗？
+7.  [ ] **策略**: 静态页面开启 `frameloop="demand"` 了吗？
+
+优化没有银弹，只有取舍。用 Stats 面板盯着 FPS 和 Memory，一步步榨干 GPU 的算力。

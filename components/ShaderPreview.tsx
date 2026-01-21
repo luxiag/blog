@@ -149,9 +149,9 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
                  </Canvas>
              </ErrorBoundary>
              
-             <div className="absolute bottom-2 right-2 text-[10px] text-white/50 font-mono pointer-events-none select-none">
+             {/* <div className="absolute bottom-2 right-2 text-[10px] text-white/50 font-mono pointer-events-none select-none">
                 Interactive Preview
-             </div>
+             </div> */}
           </div>
       </div>
     </div>

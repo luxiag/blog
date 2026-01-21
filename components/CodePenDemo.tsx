@@ -4,7 +4,8 @@ import React from 'react';
 import { LiveProvider, LiveEditor, LiveError, LivePreview } from 'react-live';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, OrthographicCamera, Html, Environment, ContactShadows } from '@react-three/drei';
+import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { themes } from 'prism-react-renderer';
 
 // Define the scope available to the code
@@ -17,6 +18,12 @@ const scope = {
   THREE,
   OrbitControls,
   PerspectiveCamera,
+  OrthographicCamera,
+  Html,
+  Environment,
+  ContactShadows,
+  EffectComposer,
+  Bloom,
 };
 
 interface CodePenDemoProps {
@@ -28,7 +35,16 @@ interface CodePenDemoProps {
 export default function CodePenDemo({ code, title = "Live Demo", height = "400px" }: CodePenDemoProps) {
   return (
     <div className="my-8 rounded-xl overflow-hidden border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-sm flex flex-col md:flex-row h-[600px] md:h-[500px]">
-      <LiveProvider code={code} scope={scope} theme={themes.vsDark} noInline={true}>
+      <LiveProvider 
+        code={code} 
+        scope={scope} 
+        theme={themes.vsDark} 
+        noInline={true}
+        transformCode={(code) => {
+          // Remove imports as they are not supported in react-live
+          return code.replace(/import\s+.*?from\s+['"].*?['"];?/g, '');
+        }}
+      >
         {/* Left/Top: Editor */}
         <div className="flex-1 flex flex-col min-h-[50%] md:min-h-0 border-b md:border-b-0 md:border-r border-neutral-200 dark:border-neutral-700 bg-[#1e1e1e]">
           <div className="px-4 py-2 bg-[#252526] border-b border-[#333] flex justify-between items-center">

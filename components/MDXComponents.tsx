@@ -8,11 +8,12 @@ import rehypeKatex from 'rehype-katex';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeRaw from 'rehype-raw';
 import * as runtime from 'react/jsx-runtime';
-import { useMDXComponents } from '@/mdx-components';
 import CodeRunner from './CodeRunner';
 import Lightbox, { useLightbox } from './Lightbox';
 import type { MediaItem } from './Lightbox';
 import CodePenDemo from './CodePenDemo';
+import InteractiveComponent from './InteractiveComponent';
+import ShaderPreview from './ShaderPreview';
 import 'highlight.js/styles/github.css';
 import 'katex/dist/katex.min.css';
 
@@ -51,10 +52,198 @@ interface MDXContentProps {
   category?: string;
 }
 
+// 定义默认的 MDX 组件映射
+const defaultComponents = {
+  h1: ({ children, ...props }: any) => (
+    <h1
+      id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
+      style={{
+        fontFamily: "var(--font-sans)",
+        color: "var(--foreground)",
+        borderBottom: "1px solid var(--border-color)",
+        paddingBottom: "var(--spacing-md)",
+      }}
+      {...props}
+    >
+      {children}
+    </h1>
+  ),
+  h2: ({ children, ...props }: any) => (
+    <h2
+      id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
+      style={{
+        fontFamily: "var(--font-sans)",
+        color: "var(--foreground)",
+        marginTop: "var(--spacing-3xl)",
+        borderBottom: "1px solid var(--border-color)",
+        paddingBottom: "var(--spacing-sm)",
+      }}
+      {...props}
+    >
+      {children}
+    </h2>
+  ),
+  h3: ({ children, ...props }: any) => (
+    <h3
+      id={children?.toString().replace(/\s+/g, "-").toLowerCase()}
+      style={{
+        fontFamily: "var(--font-sans)",
+        color: "var(--foreground)",
+        marginTop: "var(--spacing-2xl)",
+      }}
+      {...props}
+    >
+      {children}
+    </h3>
+  ),
+  img: ({ src, alt, ...props }: any) => (
+    <div style={{ margin: "1.5rem 0" }}>
+      <img
+        src={src}
+        alt={alt}
+        style={{
+          borderRadius: "var(--radius-lg)",
+          boxShadow: "var(--shadow-subtle)",
+          maxWidth: "100%",
+          height: "auto",
+        }}
+        {...props}
+      />
+      {alt && (
+        <p
+          style={{
+            textAlign: "center",
+            fontSize: "0.875rem",
+            marginTop: "0.5rem",
+            fontStyle: "italic",
+            color: "var(--color-neutral-500)",
+          }}
+        >
+          {alt}
+        </p>
+      )}
+    </div>
+  ),
+  pre: ({ children, ...props }: any) => (
+    <pre
+      style={{
+        backgroundColor: "white",
+        borderRadius: "var(--radius-lg)",
+        padding: "var(--spacing-lg)",
+        overflowX: "auto",
+        border: "1px solid var(--border-color)",
+        fontFamily: "var(--font-mono)",
+        fontSize: "13px",
+        lineHeight: "1.6",
+      }}
+      {...props}
+    >
+      {children}
+    </pre>
+  ),
+  code: ({ className, children, ...props }: any) => {
+    const isInline = !className;
+    if (isInline) {
+      return (
+        <code
+          style={{
+            backgroundColor: "var(--color-neutral-100)",
+            padding: "0.125em 0.25em",
+            borderRadius: "var(--radius-sm)",
+            fontSize: "0.875em",
+            fontFamily: "var(--font-mono)",
+          }}
+          {...props}
+        >
+          {children}
+        </code>
+      );
+    }
+    return (
+      <code className={className} {...props}>
+        {children}
+      </code>
+    );
+  },
+  a: ({ href, children, ...props }: any) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{ color: "var(--color-orange-800)", textDecoration: "underline" }}
+      {...props}
+    >
+      {children}
+    </a>
+  ),
+  blockquote: ({ children, ...props }: any) => (
+    <blockquote
+      style={{
+        borderLeft: "4px solid var(--color-orange-800)",
+        paddingLeft: "var(--spacing-lg)",
+        padding: "var(--spacing-lg)",
+        margin: "var(--spacing-lg) 0",
+        fontStyle: "italic",
+        backgroundColor: "var(--color-neutral-100)",
+      }}
+      {...props}
+    >
+      {children}
+    </blockquote>
+  ),
+  table: ({ children, ...props }: any) => (
+    <div style={{ overflowX: "auto", margin: "var(--spacing-2xl) 0" }}>
+      <table
+        style={{ minWidth: "100%", borderBottom: "1px solid var(--border-color)" }}
+        {...props}
+      >
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children, ...props }: any) => (
+    <thead style={{ backgroundColor: "var(--color-neutral-100)" }} {...props}>
+      {children}
+    </thead>
+  ),
+  th: ({ children, ...props }: any) => (
+    <th
+      style={{
+        padding: "var(--spacing-md) var(--spacing-lg)",
+        textAlign: "left",
+        fontSize: "0.75rem",
+        fontWeight: "600",
+        color: "var(--foreground)",
+        borderBottom: "1px solid var(--border-color)",
+      }}
+      {...props}
+    >
+      {children}
+    </th>
+  ),
+  td: ({ children, ...props }: any) => (
+    <td
+      style={{
+        padding: "var(--spacing-md) var(--spacing-lg)",
+        whiteSpace: "nowrap",
+        fontSize: "0.875rem",
+        color: "var(--color-neutral-500)",
+        borderBottom: "1px solid var(--border-color)",
+      }}
+      {...props}
+    >
+      {children}
+    </td>
+  ),
+  CodeRunner,
+  InteractiveComponent,
+  ShaderPreview,
+  CodePenDemo,
+};
+
 export default function MDXContent({ content, isMdxCompiled, category }: MDXContentProps) {
-  const mdxComponents = useMDXComponents({
-    CodePenDemo,
-  });
+  // 直接使用定义的 defaultComponents，不再依赖外部的 useMDXComponents
+  const mdxComponents = defaultComponents;
   const lightbox = useLightbox();
 
   const resolveImagePath = (src: string): string => {
@@ -140,63 +329,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           remarkPlugins={[remarkGfm, remarkMath]}
           rehypePlugins={[rehypeRaw, rehypeHighlight, rehypeKatex]}
           components={{
-            h1: ({ children, ...props }) => (
-              <h1
-                id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-                className="font-sans text-3xl font-bold text-neutral-900 dark:text-neutral-100 border-b border-neutral-200 dark:border-neutral-700 pb-4 mb-6 mt-8"
-                {...props}
-              >
-                {children}
-              </h1>
-            ),
-            h2: ({ children, ...props }) => (
-              <h2
-                id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-                className="font-sans text-2xl font-semibold text-neutral-900 dark:text-neutral-100 mt-12 mb-4 border-b border-neutral-200 dark:border-neutral-700 pb-2"
-                {...props}
-              >
-                {children}
-              </h2>
-            ),
-            h3: ({ children, ...props }) => (
-              <h3
-                id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-                className="font-sans text-xl font-semibold text-neutral-900 dark:text-neutral-100 mt-10 mb-3"
-                {...props}
-              >
-                {children}
-              </h3>
-            ),
-            h4: ({ children, ...props }) => (
-              <h4
-                id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-                className="font-sans text-lg font-semibold text-neutral-900 dark:text-neutral-100 mt-8 mb-2"
-                {...props}
-              >
-                {children}
-              </h4>
-            ),
-            p: ({ children, ...props }) => {
-              const childArray = React.Children.toArray(children);
-              const hasBlockChild = childArray.some((child) => {
-                if (!React.isValidElement(child)) {
-                  return String(child).includes('<span class="block') || String(child).includes('<details');
-                }
-                const childType = (child.type as React.ElementType);
-                const displayName = (childType as { displayName?: string }).displayName || String(childType);
-                return displayName === 'img' || displayName.startsWith('details');
-              });
-
-              if (hasBlockChild) {
-                return <div {...props}>{children}</div>;
-              }
-
-              return (
-                <p className="text-neutral-700 dark:text-neutral-300 leading-7 mb-4" {...props}>
-                  {children}
-                </p>
-              );
-            },
+            ...mdxComponents,
+            // 覆盖一些 ReactMarkdown 特有的或需要特殊处理的组件
             img: ({ src, alt, title, ...props }: React.ComponentPropsWithoutRef<'img'>) => {
               const imgSrc = typeof src === 'string' ? src : '';
               const resolvedSrc = resolveImagePath(imgSrc);
@@ -254,6 +388,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
                 </span>
               );
             },
+            // 保留 ReactMarkdown 特有的代码块处理逻辑（如果是内联代码则使用 code，如果是块级代码则使用 pre+code）
+            // 注意：这里我们复用了 defaultComponents 的样式，但逻辑稍有不同
             code: ({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'>) => {
               const match = /language-(\w+)/.exec(className || '');
               const codeText = String(children).replace(/\n$/, '');
@@ -279,7 +415,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
                 );
               }
 
-              return null;
+              return null; // 让 pre 处理块级代码
             },
             pre: ({ children, ...props }: React.ComponentPropsWithoutRef<'pre'>) => {
               const codeChild = children as React.ReactElement<{ className?: string; children?: React.ReactNode }>;
@@ -297,51 +433,6 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
                 </div>
               );
             },
-            a: ({ href, children, ...props }) => {
-              const isExternal = href?.startsWith('http');
-              return (
-                <a
-                  href={href}
-                  target={isExternal ? '_blank' : undefined}
-                  rel={isExternal ? 'noopener noreferrer' : undefined}
-                  className="text-orange-600 hover:text-orange-700 underline transition-colors"
-                  {...props}
-                >
-                  {children}
-                  {isExternal && (
-                    <svg className="inline-block w-3 h-3 ml-0.5 mb-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                    </svg>
-                  )}
-                </a>
-              );
-            },
-            blockquote: ({ children, ...props }) => (
-              <blockquote
-                className="border-l-4 border-orange-600 pl-4 py-3 my-4 italic bg-neutral-50 dark:bg-neutral-800/50 rounded-r-lg text-neutral-700 dark:text-neutral-300"
-                {...props}
-              >
-                {children}
-              </blockquote>
-            ),
-            ul: ({ children, ...props }) => (
-              <ul className="list-disc list-inside my-4 text-neutral-700 dark:text-neutral-300 space-y-2" {...props}>
-                {children}
-              </ul>
-            ),
-            ol: ({ children, ...props }) => (
-              <ol className="list-decimal list-inside my-4 text-neutral-700 dark:text-neutral-300 space-y-2" {...props}>
-                {children}
-              </ol>
-            ),
-            li: ({ children, ...props }) => (
-              <li className="leading-7" {...props}>
-                {children}
-              </li>
-            ),
-            hr: () => (
-              <hr className="my-8 border-neutral-200 dark:border-neutral-700" />
-            ),
             details: ({ children, ...props }: React.ComponentPropsWithoutRef<'details'>) => {
               const detailsProps = props as { 'data-details-title'?: string };
               const titleFromAttr = detailsProps?.['data-details-title'];
@@ -380,54 +471,6 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
             summary: ({ children, ...props }: React.ComponentPropsWithoutRef<'summary'>) => {
               return <div style={{ display: 'contents' }}>{children}</div>;
             },
-            strong: ({ children, ...props }) => (
-              <strong className="font-semibold text-neutral-900 dark:text-neutral-100" {...props}>
-                {children}
-              </strong>
-            ),
-            em: ({ children, ...props }) => (
-              <em className="italic text-neutral-700 dark:text-neutral-300" {...props}>
-                {children}
-              </em>
-            ),
-            del: ({ children, ...props }) => (
-              <del className="text-neutral-500 dark:text-neutral-400 line-through" {...props}>
-                {children}
-              </del>
-            ),
-            table: ({ children, ...props }) => (
-              <div className="overflow-x-auto my-8 rounded-lg border border-neutral-200 dark:border-neutral-700">
-                <table className="min-w-full" {...props}>
-                  {children}
-                </table>
-              </div>
-            ),
-            thead: ({ children, ...props }) => (
-              <thead className="bg-neutral-100 dark:bg-neutral-800" {...props}>
-                {children}
-              </thead>
-            ),
-            tbody: ({ children, ...props }) => (
-              <tbody className="divide-y divide-neutral-200 dark:divide-neutral-700" {...props}>
-                {children}
-              </tbody>
-            ),
-            th: ({ children, ...props }) => (
-              <th
-                className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-700 dark:text-neutral-300"
-                {...props}
-              >
-                {children}
-              </th>
-            ),
-            td: ({ children, ...props }) => (
-              <td
-                className="px-4 py-3 whitespace-nowrap text-sm text-neutral-600 dark:text-neutral-400"
-                {...props}
-              >
-                {children}
-              </td>
-            ),
           }}
         >
           {content}
