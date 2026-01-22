@@ -104,30 +104,33 @@ function formatMessage(message: string, data?: any): string {
 // 日志记录函数
 function log(level: LogLevel, levelName: string, message: string, data?: any) {
   if (level < logConfig.level) return;
-  console.log(level,levelName,message,data,'log');
-  const formattedMessage = formatMessage(message, data);
+  try {
+    const formattedMessage = formatMessage(message, data);
 
-  // 控制台输出
-  if (logConfig.enableConsole) {
-    switch (level) {
-      case LogLevel.DEBUG:
-        console.debug(formattedMessage);
-        break;
-      case LogLevel.INFO:
-        console.info(formattedMessage);
-        break;
-      case LogLevel.WARN:
-        console.warn(formattedMessage);
-        break;
-      case LogLevel.ERROR:
-        console.error(formattedMessage);
-        break;
+    // 控制台输出
+    if (logConfig.enableConsole) {
+      switch (level) {
+        case LogLevel.DEBUG:
+          console.debug(formattedMessage);
+          break;
+        case LogLevel.INFO:
+          console.info(formattedMessage);
+          break;
+        case LogLevel.WARN:
+          console.warn(formattedMessage);
+          break;
+        case LogLevel.ERROR:
+          console.error(formattedMessage);
+          break;
+      }
     }
-  }
 
-  // 文件输出
-  if (logConfig.enableFile) {
-    writeToFile(levelName, message, data);
+    // 文件输出
+    if (logConfig.enableFile) {
+      writeToFile(levelName, message, data);
+    }
+  } catch (error) {
+    console.error('日志记录失败:', error);
   }
 }
 
