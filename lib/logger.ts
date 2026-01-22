@@ -104,7 +104,7 @@ function formatMessage(message: string, data?: any): string {
 // 日志记录函数
 function log(level: LogLevel, levelName: string, message: string, data?: any) {
   if (level < logConfig.level) return;
-
+  console.log(level,levelName,message,data,'log');
   const formattedMessage = formatMessage(message, data);
 
   // 控制台输出

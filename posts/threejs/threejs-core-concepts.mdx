@@ -138,7 +138,6 @@ Three.js 使用 **Shadow Map** 技术。
 Three.js 使用 `PMREMGenerator` 对环境图进行预处理，生成不同粗糙度级别的辐射度数据。
 
 <CodePenDemo title="PBR & Environment" code={`
-import { Environment, ContactShadows } from '@react-three/drei'
 
 function Sphere(props) {
   return (
@@ -163,8 +162,8 @@ function Scene() {
       {/* 地面接触阴影 */}
       <ContactShadows position={[0, -0.6, 0]} opacity={0.5} scale={10} blur={2} far={1} />
       
-      {/* 演播室灯光环境 */}
-      <Environment preset="studio" />
+      {/* 演播室灯光环境 - 使用本地资源避免网络问题 */}
+      <Environment files="/hdr/studio_small_03_1k.hdr" />
       <OrbitControls />
     </>
   )
