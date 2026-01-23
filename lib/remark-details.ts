@@ -1,27 +1,49 @@
+type MdastNode = {
+  type: string;
+  value?: string;
+  name?: string;
+  children?: MdastNode[];
+  attributes?: Array<{ type: string; name: string; value?: unknown }>;
+};
+
+function getParagraphText(node: MdastNode): string | null {
+  if (node.type !== 'paragraph' || !Array.isArray(node.children)) return null;
+  const parts: string[] = [];
+  for (const child of node.children) {
+    if (child.type !== 'text' || typeof child.value !== 'string') return null;
+    parts.push(child.value);
+  }
+  return parts.join('');
+}
+
 function plugin() {
   return (tree: unknown) => {
-    const children = (tree as { children?: Array<unknown> }).children;
+    const root = tree as { children?: MdastNode[] };
+    const children = root.children;
     if (!children) return;
 
     const nodesToProcess: Array<{ start: number; end: number; title: string }> = [];
     let i = 0;
 
     while (i < children.length) {
-      const node = children[i] as { type: string; value?: string };
+      const node = children[i];
+      const text = node ? getParagraphText(node) : null;
+      const openMatch = text?.trim().match(/^:::\s*details(?:\s+(.+))?$/);
 
-      if (node.type === 'paragraph' && typeof node.value === 'string' && node.value.startsWith('::: details')) {
-        const titleMatch = node.value.match(/::: details\s+(.+)/);
-        const title = titleMatch ? titleMatch[1].trim() : 'Details';
+      if (openMatch) {
+        const title = (openMatch[1] ?? 'Details').trim();
         let depth = 1;
         let j = i + 1;
 
         while (j < children.length && depth > 0) {
-          const current = children[j] as { type: string; value?: string };
+          const current = children[j];
+          const currentText = current ? getParagraphText(current) : null;
+          const trimmed = currentText?.trim();
 
-          if (current.type === 'paragraph' && typeof current.value === 'string') {
-            if (current.value === '::: details') {
+          if (trimmed) {
+            if (/^:::\s*details(?:\s+.+)?$/.test(trimmed)) {
               depth++;
-            } else if (current.value === ':::') {
+            } else if (trimmed === ':::') {
               depth--;
               if (depth === 0) {
                 nodesToProcess.push({ start: i, end: j, title });
@@ -29,27 +51,39 @@ function plugin() {
               }
             }
           }
+
           j++;
         }
-        i = j;
+
+        i = j + 1;
       } else {
         i++;
       }
     }
 
-    for (let i = nodesToProcess.length - 1; i >= 0; i--) {
-      const { start, end, title } = nodesToProcess[i];
+    for (let k = nodesToProcess.length - 1; k >= 0; k--) {
+      const { start, end, title } = nodesToProcess[k];
       const detailsContent = children.slice(start + 1, end);
 
-      const detailsNode = {
-        type: 'html',
-        value: `<details data-details-title="${title}"><summary></summary>${detailsContent.map((c: unknown) => {
-          const node = c as { type: string; value?: string };
-          if (node.type === 'code') {
-            return `<pre><code>${node.value || ''}</code></pre>`;
-          }
-          return node.value || '';
-        }).join('\n')}</details>`,
+      const detailsNode: MdastNode = {
+        type: 'mdxJsxFlowElement',
+        name: 'details',
+        attributes: [
+          {
+            type: 'mdxJsxAttribute',
+            name: 'data-details-title',
+            value: title,
+          },
+        ],
+        children: [
+          {
+            type: 'mdxJsxFlowElement',
+            name: 'summary',
+            attributes: [],
+            children: [{ type: 'text', value: title }],
+          },
+          ...detailsContent,
+        ],
       };
 
       children.splice(start, end - start + 1, detailsNode);
@@ -58,3 +92,4 @@ function plugin() {
 }
 
 export const remarkDetails = plugin;
+

@@ -7,6 +7,7 @@ import rehypeHighlight from 'rehype-highlight';
 import rehypeRaw from 'rehype-raw';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import remarkAdmonitions from 'remark-admonitions';
 import * as runtime from 'react/jsx-runtime';
 import Lightbox, { useLightbox } from './Lightbox';
 import type { MediaItem } from './Lightbox';
@@ -389,22 +390,23 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     details: ({ children, ...props }: React.ComponentPropsWithoutRef<'details'>) => {
       const detailsProps = props as { 'data-details-title'?: string };
       const titleFromAttr = detailsProps?.['data-details-title'];
+      const childArray = React.Children.toArray(children);
+      const summaryIndex = childArray.findIndex(
+        (c) => React.isValidElement(c) && c.type === 'summary'
+      );
+
+      const summaryEl = summaryIndex >= 0 ? childArray[summaryIndex] : null;
+      const summaryChildren =
+        summaryEl && React.isValidElement(summaryEl) ? summaryEl.props.children : null;
       
       const getSummaryContent = () => {
-        if (Array.isArray(children) && children.length > 0) {
-          const firstChild = children[0] as React.ReactElement<{ children?: React.ReactNode }>;
-          if (firstChild?.props?.children) {
-            return firstChild.props.children;
-          }
-        }
-        return titleFromAttr || 'Details';
+        if (summaryChildren) return summaryChildren;
+        return titleFromAttr ?? 'Details';
       };
 
       const getBodyContent = () => {
-        if (Array.isArray(children)) {
-          return children.slice(1);
-        }
-        return children;
+        if (summaryIndex < 0) return children;
+        return childArray.filter((_, idx) => idx !== summaryIndex);
       };
 
       return (
@@ -415,14 +417,11 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           <summary className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800 cursor-pointer font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors list-none">
             {getSummaryContent()}
           </summary>
-          <div className="p-4 bg-white dark:bg-neutral-900 [&>.my-4]:my-0">
-            {getBodyContent()}
-          </div>
+           <div className="p-4 bg-white dark:bg-neutral-900 [&_pre]:my-0">
+             {getBodyContent()}
+           </div>
         </details>
       );
-    },
-    summary: ({ children, ...props }: React.ComponentPropsWithoutRef<'summary'>) => {
-      return <div style={{ display: 'contents' }}>{children}</div>;
     },
     CodeRunner,
     InteractiveComponent,
@@ -454,7 +453,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       <style>{detailsArrowStyles}</style>
       <div className="mdx-content">
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
+          remarkPlugins={[remarkGfm, remarkMath, [remarkAdmonitions, { keywords: ['details', 'note', 'warning', 'tip', 'important'] }]]}
           rehypePlugins={[rehypeRaw, rehypeHighlight, rehypeKatex]}
           components={mdxComponents}
         >

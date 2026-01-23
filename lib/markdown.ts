@@ -57,6 +57,14 @@ export function getAllPostSlugs() {
 }
 
 function transformMarkdownDetails(content: string): string {
+  const escapeHtml = (input: string) =>
+    input
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
   const lines = content.split('\n');
   const result: string[] = [];
   let i = 0;
@@ -64,12 +72,12 @@ function transformMarkdownDetails(content: string): string {
   while (i < lines.length) {
     const line = lines[i];
 
-    if (line.trim().startsWith('::: details')) {
-      const titleMatch = line.match(/::: details\s+(.+)/);
-      const title = titleMatch ? titleMatch[1].trim() : 'Details';
-      result.push(`<details data-details-title="${title}">`);
-      result.push('<summary>');
-      result.push('</summary>');
+    const openMatch = line.trim().match(/^:::\s*details(?:\s+(.+))?$/);
+    if (openMatch) {
+      const title = (openMatch[1] ?? 'Details').trim();
+      const escapedTitle = escapeHtml(title);
+      result.push(`<details data-details-title="${escapedTitle}">`);
+      result.push(`<summary>${escapedTitle}</summary>`);
       i++;
 
       while (i < lines.length) {
