@@ -14,6 +14,7 @@ import CodeRunner from './CodeRunner';
 import InteractiveComponent from './InteractiveComponent';
 import ShaderPreview from './ShaderPreview';
 import CodePenDemo from './CodePenDemo';
+import SqlSimulator from './SqlSimulator';
 import 'highlight.js/styles/github.css';
 import 'katex/dist/katex.min.css';
 
@@ -427,6 +428,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     InteractiveComponent,
     ShaderPreview,
     CodePenDemo,
+    SqlSimulator,
   };
 
   if (isMdxCompiled && CompiledMDX) {

@@ -1,0 +1,186 @@
+---
+title: 'SQL 实战练习：在线运行 + 实时验证'
+date: '2026-01-23'
+description: '无需安装数据库，直接在浏览器中运行 SQL。精选 10 道练习题，从基础查询到多表连接与聚合，配有实时执行环境与参考答案。'
+tags: ['SQL', 'Database', 'Interactive', 'Exercises']
+---
+
+# SQL 实战练习：在线运行 + 实时验证
+
+纸上得来终觉浅，绝知此事要躬行。
+
+本文内置了一个 **轻量级 SQL 模拟器**（基于 `sql.js`/SQLite），你可以在每一道题的编辑器中直接编写并运行 SQL，结果会实时显示。
+
+我们预置了两张表用于练习：
+
+**1. 用户表 (`users`)**
+
+| id | name | city | age |
+|----|------|------|-----|
+| 1 | Alice | Beijing | 25 |
+| 2 | Bob | Shanghai | 30 |
+| 3 | Charlie | Beijing | 22 |
+| 4 | David | Shenzhen | 28 |
+
+**2. 订单表 (`orders`)**
+
+| id | user_id | amount | status |
+|----|---------|--------|--------|
+| 101 | 1 | 100 | PAID |
+| 102 | 1 | 200 | PAID |
+| 103 | 2 | 50 | PENDING |
+| 104 | 3 | 300 | SHIPPED |
+| 105 | 99 | 500 | PAID |
+
+> 注意：订单表里有一条 `user_id = 99` 的数据，它在用户表里找不到对应的用户（脏数据/测试数据）。
+
+---
+
+export const initSql = `
+CREATE TABLE users (id INT, name TEXT, city TEXT, age INT);
+INSERT INTO users VALUES (1, 'Alice', 'Beijing', 25), (2, 'Bob', 'Shanghai', 30), (3, 'Charlie', 'Beijing', 22), (4, 'David', 'Shenzhen', 28);
+
+CREATE TABLE orders (id INT, user_id INT, amount INT, status TEXT);
+INSERT INTO orders VALUES (101, 1, 100, 'PAID'), (102, 1, 200, 'PAID'), (103, 2, 50, 'PENDING'), (104, 3, 300, 'SHIPPED'), (105, 99, 500, 'PAID');
+`;
+
+## 第一部分：基础查询 (Simple)
+
+### 练习 1：查出所有来自北京的用户
+
+请查询 `users` 表，找出所有 `city` 为 `'Beijing'` 的用户，返回所有字段。
+
+<SqlSimulator
+  initialSql={initSql}
+  defaultQuery="SELECT * FROM users WHERE ..."
+  answerSql="SELECT * FROM users WHERE city = 'Beijing'"
+  title="练习 1：条件过滤"
+  description="提示：使用 WHERE 子句。注意字符串需要用单引号包裹。"
+/>
+
+### 练习 2：排序与分页
+
+查询 `users` 表，按 `age` 从大到小排序，并只取前 2 名。
+
+<SqlSimulator
+  initialSql={initSql}
+  defaultQuery="SELECT * FROM users ..."
+  answerSql="SELECT * FROM users ORDER BY age DESC LIMIT 2"
+  title="练习 2：排序与限制"
+  description="提示：使用 ORDER BY ... DESC 和 LIMIT。"
+/>
+
+### 练习 3：简单的聚合
+
+查询 `orders` 表，计算所有订单的总金额（`amount` 之和）。
+
+<SqlSimulator
+  initialSql={initSql}
+  defaultQuery="SELECT ... FROM orders"
+  answerSql="SELECT SUM(amount) AS total_amount FROM orders"
+  title="练习 3：聚合函数"
+  description="提示：使用 SUM() 函数。"
+/>
+
+---
+
+## 第二部分：分组与多表连接 (Medium)
+
+### 练习 4：分组统计
+
+查询 `orders` 表，统计每种 `status`（状态）下的订单数量。
+
+<SqlSimulator
+  initialSql={initSql}
+  defaultQuery="SELECT status, ... FROM orders GROUP BY ..."
+  answerSql="SELECT status, COUNT(*) as cnt FROM orders GROUP BY status"
+  title="练习 4：GROUP BY 分组"
+/>
+
+### 练习 5：INNER JOIN
+
+查询所有 **已下过订单** 的用户，返回 `用户姓名(name)` 和 `订单金额(amount)`。
+(注意：`user_id=99` 的订单不应该出现，因为它没有对应的用户)
+
+<SqlSimulator
+  initialSql={initSql}
+  defaultQuery="SELECT u.name, o.amount FROM users u JOIN ..."
+  answerSql="SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id"
+  title="练习 5：内连接"
+  description="INNER JOIN 只返回两张表都有匹配的数据。"
+/>
+
+### 练习 6：LEFT JOIN
+
+查询 **所有用户** 的姓名，以及他们的订单金额（如果有的话）。如果用户没有订单，订单金额显示为 `NULL`。
+
+<SqlSimulator
+  initialSql={initSql}
+  defaultQuery="SELECT u.name, o.amount FROM users u ..."
+  answerSql="SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id"
+  title="练习 6：左连接"
+  description="LEFT JOIN 会保留左表（users）的所有行，即使右表（orders）没有匹配。"
+/>
+
+---
+
+## 第三部分：进阶挑战 (Hard)
+
+### 练习 7：分组后的过滤 (HAVING)
+
+查询 `users` 表，找出那些 **同名城市** 用户数量大于等于 2 的城市名称。（即：哪个城市住了 2 个或以上的人？）
+
+<SqlSimulator
+  initialSql={initSql}
+  defaultQuery="SELECT city, COUNT(*) FROM users GROUP BY city ..."
+  answerSql="SELECT city, COUNT(*) as cnt FROM users GROUP BY city HAVING cnt >= 2"
+  title="练习 7：HAVING 子句"
+  description="WHERE 过滤行，HAVING 过滤分组后的结果。"
+/>
+
+### 练习 8：子查询
+
+查询所有 **下过金额大于 200 的订单** 的用户姓名。
+(可以使用 `JOIN` 也可以使用 `IN` 子查询，这里尝试用子查询)
+
+<SqlSimulator
+  initialSql={initSql}
+  defaultQuery="SELECT name FROM users WHERE id IN (...)"
+  answerSql="SELECT name FROM users WHERE id IN (SELECT user_id FROM orders WHERE amount > 200)"
+  title="练习 8：IN 子查询"
+/>
+
+### 练习 9：每个用户的总消费
+
+查询每个用户的 `name` 和 `total_spent`（总消费金额）。如果用户没消费，显示 0 或 NULL 均可（高阶要求：显示 0）。
+
+<SqlSimulator
+  initialSql={initSql}
+  defaultQuery="SELECT u.name, SUM(o.amount) FROM ..."
+  answerSql="SELECT u.name, COALESCE(SUM(o.amount), 0) as total_spent FROM users u LEFT JOIN orders o ON u.id = o.user_id GROUP BY u.name"
+  title="练习 9：综合统计"
+  description="提示：结合 LEFT JOIN 和 GROUP BY。处理 NULL 可以用 COALESCE() 或 IFNULL()。"
+/>
+
+### 练习 10：找出没有下过单的用户
+
+<SqlSimulator
+  initialSql={initSql}
+  defaultQuery="SELECT name FROM users WHERE ..."
+  answerSql="SELECT name FROM users u WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id)"
+  title="练习 10：NOT EXISTS 或 LEFT JOIN ... IS NULL"
+  description="这是经典的 'Find Missing' 问题。"
+/>
+
+---
+
+## 总结
+
+通过这 10 道题，你已经覆盖了 SQL 中 90% 的日常使用场景：
+
+1. **基础**：`SELECT`, `WHERE`, `ORDER BY`, `LIMIT`
+2. **聚合**：`COUNT`, `SUM`, `GROUP BY`, `HAVING`
+3. **连接**：`INNER JOIN`, `LEFT JOIN`
+4. **子查询**：`IN`, `EXISTS`
+
+如果你能独立做完这些题，说明你已经具备了扎实的 SQL 基础。建议在真实数据库（MySQL/PostgreSQL）中继续深入学习索引优化与事务处理。
