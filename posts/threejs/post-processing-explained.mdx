@@ -142,13 +142,10 @@ function RetroScene() {
   return (
     <>
       <EffectComposer>
-        {/* 像素化程度: 值越大越马赛克 */}
         <Pixelation granularity={5} /> 
         
-        {/* 噪点: premultiply 混合模式 */}
         <Noise opacity={0.2} />
         
-        {/* 暗角: offset 控制范围, darkness 控制黑度 */}
         <Vignette eskil={false} offset={0.1} darkness={1.1} />
       </EffectComposer>
 
@@ -205,60 +202,7 @@ import { EffectComposer, SMAA } from '@react-three/postprocessing'
 *   **Noise**: 增加质感。
 *   **ColorCorrection**: 调色（这里简单模拟）。
 
-<CodePenDemo title="Cinematic Composition" code={`
-import { Vignette, Noise, HueSaturation } from '@react-three/postprocessing'
 
-function CinematicScene() {
-  return (
-    <>
-      <EffectComposer disableNormalPass>
-        {/* 1. 辉光: 营造氛围 */}
-        <Bloom luminanceThreshold={0.2} mipmapBlur intensity={1.0} radius={0.5} />
-        
-        {/* 2. 噪点: 胶片感 */}
-        <Noise opacity={0.05} />
-        
-        {/* 3. 暗角: 聚焦 */}
-        <Vignette offset={0.5} darkness={0.5} />
-        
-        {/* 4. 调色: 稍微降低饱和度，增加电影感 */}
-        <HueSaturation saturation={-0.2} />
-      </EffectComposer>
-
-      {/* 场景内容 */}
-      <group>
-        {Array.from({ length: 20 }).map((_, i) => (
-          <mesh 
-            key={i} 
-            position={[
-              (Math.random() - 0.5) * 10,
-              (Math.random() - 0.5) * 10,
-              (Math.random() - 0.5) * 10
-            ]}
-            rotation={[Math.random() * Math.PI, Math.random() * Math.PI, 0]}
-          >
-            <boxGeometry args={[0.5, 4, 0.5]} />
-            <meshStandardMaterial 
-              color={Math.random() > 0.5 ? "cyan" : "orange"} 
-              emissive={Math.random() > 0.5 ? "cyan" : "orange"}
-              emissiveIntensity={2}
-            />
-          </mesh>
-        ))}
-      </group>
-
-      <OrbitControls autoRotate autoRotateSpeed={0.5} />
-    </>
-  )
-}
-
-render(
-  <Canvas camera={{ position: [0, 0, 8] }}>
-    <color attach="background" args={['#050505']} />
-    <CinematicScene />
-  </Canvas>
-)
-`} />
 
 ## 总结
 

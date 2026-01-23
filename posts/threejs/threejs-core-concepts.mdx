@@ -62,7 +62,7 @@ function Scene() {
     <>
       <PerspectiveCamera makeDefault position={[0, 0, 5]} fov={50} />
       <OrbitControls 
-        enableDamping={true} // 启用阻尼，让动画更平滑
+        enableDamping={true} 
         dampingFactor={0.05} 
         minDistance={2}
         maxDistance={10}
@@ -223,11 +223,6 @@ function GlowingBox() {
   return (
     <mesh rotation={[0.5, 0.5, 0]}>
       <boxGeometry args={[1.5, 1.5, 1.5]} />
-      {/* 
-         emissive: 自发光颜色
-         emissiveIntensity: 发光强度 (超过 1 会触发 Bloom)
-         toneMapped: 关闭色调映射，保留高动态范围亮度
-      */}
       <meshStandardMaterial 
         color="black"
         emissive="orange"
@@ -245,7 +240,6 @@ function Scene() {
       <OrbitControls />
       
       <EffectComposer disableNormalPass>
-        {/* luminanceThreshold: 只有亮度超过 1 的像素才会发光 */}
         <Bloom luminanceThreshold={1} mipmapBlur intensity={1.5} radius={0.6} />
       </EffectComposer>
     </>
