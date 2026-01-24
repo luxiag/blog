@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -15,16 +15,30 @@ import InteractiveComponent from './InteractiveComponent';
 import ShaderPreview from './ShaderPreview';
 import CodePenDemo from './CodePenDemo';
 import SqlSimulator from './SqlSimulator';
+import { createLowlight } from 'lowlight';
+import sql from 'highlight.js/lib/languages/sql';
 import 'highlight.js/styles/github.css';
+import '../styles/code-highlight.css';
 import 'katex/dist/katex.min.css';
 
 const MAX_CODE_LINES = 15;
 
-function CodeBlock({ children, className, ...props }: { children: React.ReactNode; className?: string }) {
+// 创建 lowlight 实例
+const lowlight = createLowlight();
+// 注册 SQL 语言
+lowlight.register('sql', sql);
+
+function CodeBlock({ children, className, codeContent: propCodeContent, ...props }: { 
+  children?: React.ReactNode; 
+  className?: string;
+  codeContent?: string;
+}) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [highlightedCode, setHighlightedCode] = useState('');
   
   const codeChild = children as React.ReactElement<{ children?: React.ReactNode }>;
-  const codeContent = codeChild?.props?.children || '';
+  // 优先使用 propCodeContent，其次从 children 中提取
+  const codeContent = propCodeContent || codeChild?.props?.children || '';
   const codeString = typeof codeContent === 'string' ? codeContent : '';
   const lines = codeString.split('\n');
   const showGradient = lines.length > MAX_CODE_LINES && !isExpanded;
@@ -32,6 +46,47 @@ function CodeBlock({ children, className, ...props }: { children: React.ReactNod
   const displayLines = isExpanded ? lines : lines.slice(0, MAX_CODE_LINES);
   const displayContent = displayLines.join('\n');
 
+  // 代码高亮处理
+  useEffect(() => {
+    if (!displayContent) {
+      setHighlightedCode(displayContent);
+      return;
+    }
+
+    try {
+      // 提取语言
+      const match = /language-(\w+)/.exec(className || '');
+      const language = match ? match[1] : 'plaintext';
+
+      // 使用 lowlight 进行代码高亮
+      const result = lowlight.highlight(language, displayContent);
+
+      // 将 lowlight 的结果转换为 HTML
+      const html = result.children.map((node: any) => {
+        if (node.type === 'text') {
+          return node.value;
+        }
+        if (node.type === 'element') {
+          const className = node.properties?.className?.join(' ') || '';
+          const children = node.children.map((child: any) => {
+            if (child.type === 'text') {
+              return child.value;
+            }
+            return '';
+          }).join('');
+          return `<span class="${className}">${children}</span>`;
+        }
+        return '';
+      }).join('');
+
+      setHighlightedCode(html);
+    } catch (error) {
+      console.error('Error highlighting code:', error);
+      setHighlightedCode(displayContent);
+    }
+  }, [displayContent, className]);
+
+  // console.log(displayContent,'displayContent')
   const toggleExpand = useCallback(() => {
     setIsExpanded(prev => !prev);
   }, []);
@@ -43,7 +98,10 @@ function CodeBlock({ children, className, ...props }: { children: React.ReactNod
           className="p-4 overflow-x-auto font-mono text-sm leading-6 text-neutral-800 dark:text-neutral-200 m-0"
           {...props}
         >
-          <code className={className}>{displayContent}</code>
+          <code 
+            className={className}
+            dangerouslySetInnerHTML={{ __html: highlightedCode || displayContent }}
+          />
         </pre>
         {showGradient && (
           <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-white dark:from-neutral-900 to-transparent pointer-events-none" />
@@ -286,10 +344,34 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       const codeChild = children as React.ReactElement<{ className?: string; children?: React.ReactNode }>;
       const codeProps = codeChild?.props || {};
       const className = codeProps.className || '';
-      
+
+      // 提取代码内容 - 处理可能是数组或对象的情况
+      const rawCodeContent = codeProps.children || '';
+      let codeString = '';
+
+      if (typeof rawCodeContent === 'string') {
+        codeString = rawCodeContent;
+      } else if (Array.isArray(rawCodeContent)) {
+        // 如果是数组，尝试提取文本内容
+        codeString = rawCodeContent.map(item => {
+          if (typeof item === 'string') return item;
+          if (React.isValidElement(item)) {
+            // 如果是 React 元素，尝试获取其 children
+            const childProps = item.props as { children?: React.ReactNode };
+            if (typeof childProps?.children === 'string') {
+              return childProps.children;
+            }
+          }
+          return '';
+        }).join('');
+      }
+
+      // console.log('pre - rawCodeContent:', rawCodeContent);
+      // console.log('pre - codeString:', codeString);
+
       return (
-        <CodeBlock className={className} {...props}>
-          {children}
+        <CodeBlock className={className} codeContent={codeString} {...props}>
+          <code className={className}>{codeString}</code>
         </CodeBlock>
       );
     },

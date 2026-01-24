@@ -1,0 +1,164 @@
+:root {
+  --hljs-bg: #ffffff;
+  --hljs-fg: oklch(0.145 0 0);
+  --hljs-comment: #6b7280;
+  --hljs-keyword: #ea580c;
+  --hljs-string: #ea580c;
+  --hljs-number: #2563eb;
+  --hljs-function: #7c3aed;
+  --hljs-title: #7c3aed;
+  --hljs-params: #4b5563;
+  --hljs-built-in: #2563eb;
+  --hljs-literal: #2563eb;
+  --hljs-class: #7c3aed;
+  --hljs-variable: #4b5563;
+  --hljs-operator: #4b5563;
+  --hljs-tag: #ea580c;
+  --hljs-attribute: #2563eb;
+  --hljs-value: #ea580c;
+  --hljs-property: #4b5563;
+  --hljs-selector-tag: #ea580c;
+  --hljs-selector-id: #7c3aed;
+  --hljs-selector-class: #2563eb;
+  --hljs-selector-attr: #2563eb;
+  --hljs-selector-pseudo: #4b5563;
+  --hljs-link: #2563eb;
+  --hljs-symbol: #7c3aed;
+  --hljs-bullet: #4b5563;
+  --hljs-addition: #059669;
+  --hljs-deletion: #dc2626;
+  --hljs-meta: #6b7280;
+  --hljs-emphasis: #ea580c;
+  --hljs-strong: #ea580c;
+  --hljs-quote: #6b7280;
+  --hljs-doctag: #ea580c;
+  --hljs-section: #7c3aed;
+  --hljs-type: #7c3aed;
+  --hljs-name: #ea580c;
+  --hljs-regexp: #ea580c;
+}
+
+.dark {
+  --hljs-bg: #0a0a0a;
+  --hljs-fg: #f5f5f5;
+  --hljs-comment: #9ca3af;
+  --hljs-keyword: #fb923c;
+  --hljs-string: #fb923c;
+  --hljs-number: #60a5fa;
+  --hljs-function: #a78bfa;
+  --hljs-title: #a78bfa;
+  --hljs-params: #d1d5db;
+  --hljs-built-in: #60a5fa;
+  --hljs-literal: #60a5fa;
+  --hljs-class: #a78bfa;
+  --hljs-variable: #d1d5db;
+  --hljs-operator: #d1d5db;
+  --hljs-tag: #fb923c;
+  --hljs-attribute: #60a5fa;
+  --hljs-value: #fb923c;
+  --hljs-property: #d1d5db;
+  --hljs-selector-tag: #fb923c;
+  --hljs-selector-id: #a78bfa;
+  --hljs-selector-class: #60a5fa;
+  --hljs-selector-attr: #60a5fa;
+  --hljs-selector-pseudo: #d1d5db;
+  --hljs-link: #60a5fa;
+  --hljs-symbol: #a78bfa;
+  --hljs-bullet: #d1d5db;
+  --hljs-addition: #34d399;
+  --hljs-deletion: #f87171;
+  --hljs-meta: #9ca3af;
+  --hljs-emphasis: #fb923c;
+  --hljs-strong: #fb923c;
+  --hljs-quote: #9ca3af;
+  --hljs-doctag: #fb923c;
+  --hljs-section: #a78bfa;
+  --hljs-type: #a78bfa;
+  --hljs-name: #fb923c;
+  --hljs-regexp: #fb923c;
+}
+
+/* 代码块样式 */
+.hljs {
+  color: var(--hljs-fg);
+  background: var(--hljs-bg);
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-meta {
+  color: var(--hljs-comment);
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst {
+  color: var(--hljs-keyword);
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag .hljs-attr {
+  color: var(--hljs-number);
+}
+
+.hljs-string,
+.hljs-doctag {
+  color: var(--hljs-string);
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-selector-id {
+  color: var(--hljs-title);
+}
+
+.hljs-type,
+.hljs-class .hljs-title {
+  color: var(--hljs-type);
+}
+
+.hljs-tag,
+.hljs-name,
+.hljs-attribute {
+  color: var(--hljs-tag);
+}
+
+.hljs-regexp,
+.hljs-link {
+  color: var(--hljs-regexp);
+}
+
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--hljs-symbol);
+}
+
+.hljs-built_in,
+.hljs-builtin-name {
+  color: var(--hljs-built-in);
+}
+
+.hljs-meta {
+  color: var(--hljs-meta);
+}
+
+.hljs-deletion {
+  background: var(--hljs-deletion);
+  color: var(--hljs-bg);
+}
+
+.hljs-addition {
+  background: var(--hljs-addition);
+  color: var(--hljs-bg);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
