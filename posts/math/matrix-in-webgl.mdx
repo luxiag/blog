@@ -1,0 +1,185 @@
+---
+title: '矩阵革命：为什么图形学离不开矩阵？'
+date: '2026-01-16'
+description: '矩阵不仅仅是排列整齐的数字，它是空间的变换器。本文将用可视化的方式，带你理解矩阵是如何让图形在屏幕上旋转、缩放和移动的，让你不再畏惧 gl_Position 背后的数学魔法。'
+tags: ['WebGL', 'GLSL', 'Math', 'Matrix']
+---
+
+# 矩阵革命：为什么图形学离不开矩阵？
+
+如果说向量是图形学的砖块，那么**矩阵 (Matrix)** 就是图形学的水泥。
+
+只要涉及到"把一个东西从 A 处移动到 B 处"，或者"让它转个圈"，背后一定有一个矩阵在起作用。在 Vertex Shader 中，你可能见过这句神秘的代码：
+
+```glsl
+gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+```
+
+这行代码就是矩阵魔法的终极体现。今天，我们不谈复杂的线性代数证明，只谈**直觉**：矩阵到底对我们的坐标做了什么？
+
+## 一、 矩阵就是"变换器"
+
+想象你手里有一个向量 `v`（比如一个点的坐标）。
+当你用一个矩阵 `M` 去乘以它时：`M * v`，神奇的事情发生了：**这个向量被"改造"了。**
+
+矩阵可以把一个普通的坐标点：
+1.  **缩放 (Scale)**：变大变小。
+2.  **旋转 (Rotate)**：绕原点转圈。
+3.  **平移 (Translate)**：搬到另一个地方（需要 3x3 或 4x4 矩阵）。
+
+### 1. 缩放矩阵 (Scaling)
+
+最简单的矩阵。它只改变向量的长度，不改变方向（除非缩放系数是负数）。
+
+一个 2D 缩放矩阵长这样：
+$$
+\begin{bmatrix}
+s_x & 0 \\
+0 & s_y
+\end{bmatrix}
+$$
+
+如果 $s_x=2, s_y=2$，那么所有的点都会离原点远一倍，图形也就放大了 2 倍。
+
+<ShaderPreview title="Scale Matrix" code={`
+varying vec2 vUv;
+
+// 缩放矩阵函数
+mat2 scale(vec2 scale) {
+    return mat2(scale.x, 0.0,
+                0.0, scale.y);
+}
+
+// 画一个简单的盒子
+float box(vec2 st, vec2 size) {
+    size = vec2(0.5) - size * 0.5;
+    vec2 uv = smoothstep(size, size + vec2(0.001), st);
+    uv *= smoothstep(size, size + vec2(0.001), 1.0 - st);
+    return uv.x * uv.y;
+}
+
+void main() {
+    vec2 st = vUv;
+    vec3 color = vec3(0.0);
+    
+    // 1. 将坐标原点移到中心 (重要！矩阵变换通常是绕原点的)
+    st -= vec2(0.5);
+    
+    // 2. 应用缩放矩阵
+    // 我们把坐标系缩小 0.5 倍 -> 物体看起来放大了 2 倍？
+    // 不，我们是把 st (采样坐标) 缩小了。
+    // 比如原本要画在 (0.4, 0.4) 的像素，现在去采样 (0.2, 0.2) 的位置。
+    // 所以物体看起来变大了。
+    st = scale(vec2(2.0)) * st;
+    
+    // 3. 移回原点
+    st += vec2(0.5);
+    
+    // 绘制原始大小为 0.2 的盒子
+    // 经过矩阵变换后，它看起来会有 0.4 那么大
+    color += vec3(box(st, vec2(0.2)));
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+### 2. 旋转矩阵 (Rotation)
+
+这是最神奇的矩阵。它能让点绕着原点跳舞。
+2D 旋转矩阵公式（背下来，很有用）：
+
+$$
+\begin{bmatrix}
+\cos\theta & -\sin\theta \\
+\sin\theta & \cos\theta
+\end{bmatrix}
+$$
+
+<ShaderPreview title="Rotation Matrix" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+mat2 rotate2d(float angle) {
+    return mat2(cos(angle), -sin(angle),
+                sin(angle), cos(angle));
+}
+
+float box(vec2 st, vec2 size) {
+    size = vec2(0.5) - size * 0.5;
+    vec2 uv = smoothstep(size, size + vec2(0.001), st);
+    uv *= smoothstep(size, size + vec2(0.001), 1.0 - st);
+    return uv.x * uv.y;
+}
+
+void main() {
+    vec2 st = vUv;
+    vec3 color = vec3(0.0);
+    
+    st -= vec2(0.5);
+    
+    // 应用旋转矩阵
+    st = rotate2d(sin(uTime)) * st;
+    
+    st += vec2(0.5);
+    
+    color += vec3(box(st, vec2(0.3)));
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 二、 为什么要用 4x4 矩阵？(齐次坐标)
+
+你可能会问：2D 变换用 2x2 矩阵，3D 变换用 3x3 矩阵，那为什么 WebGL 里总是在用 `mat4` (4x4 矩阵)？
+
+因为 **平移 (Translation)** 是个异类。
+缩放和旋转都是线性变换（原点不动），但平移是把原点都挪走了。用 3x3 矩阵**无法**通过乘法来表示 3D 向量的平移。
+
+为了解决这个问题，聪明的数学家引入了**齐次坐标**：给 3D 向量 `(x, y, z)` 加上第四个分量 `w`，变成 `(x, y, z, 1.0)`。
+
+这就好比为了解决二维平面上的问题，我们把视角升到了三维空间。在 4D 空间里，3D 的平移变成了一种"切变"。
+
+这就是为什么 Vertex Shader 里总是有 `vec4(position, 1.0)`。那个 `1.0` 就是开启平移魔法的钥匙。
+
+## 三、 矩阵乘法：变换的叠加
+
+矩阵最强大的地方在于：**你可以把无数个变换压缩成一个矩阵。**
+
+假设你想：
+1.  先把模型放大 2 倍 (Scale Matrix `S`)
+2.  再绕 Y 轴旋转 90 度 (Rotation Matrix `R`)
+3.  再向右移动 5 米 (Translation Matrix `T`)
+
+你不需要分三步算。你可以直接算出一个总矩阵 `M = T * R * S`。
+然后对每个顶点 `v`，只需要算一次 `M * v`。
+
+**注意顺序！** 矩阵乘法不满足交换律。`T * R` (先转再移) 和 `R * T` (先移再转) 的结果完全不同！在 GLSL 中，通常是从右向左读：`M * v` 意味着先应用最右边的变换。
+
+## 四、 实战：MVP 矩阵
+
+回到文章开头的那行代码：
+
+```glsl
+gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+```
+
+这其实是三个矩阵的连乘：
+
+1.  **Model Matrix (模型矩阵)**: "我把自己放在世界的哪里？"
+    *   负责把模型从它自己的局部坐标系（比如以模型中心为原点）移动到世界坐标系（以世界中心为原点）。包含模型的缩放、旋转、位移。
+2.  **View Matrix (视图矩阵)**: "摄像机在哪里？"
+    *   负责把整个世界移动到摄像机面前。如果摄像机向右移，其实等于世界向左移。
+3.  **Projection Matrix (投影矩阵)**: "怎么拍成照片？"
+    *   负责把 3D 世界压扁成 2D 屏幕。
+    *   **透视投影 (Perspective)**: 近大远小。
+    *   **正交投影 (Orthographic)**: 远近一样大（工程制图）。
+
+## 总结
+
+矩阵是图形学的语言。
+
+*   **2x2 矩阵**：搞定 2D 旋转和缩放。
+*   **3x3 矩阵**：搞定 2D 平移（用齐次坐标）或 3D 旋转缩放。
+*   **4x4 矩阵**：搞定一切 3D 变换（包括平移）。
+
+下次当你看到一堆 `mat4` 时，不要把它看成枯燥的数字表格。把它看成是一组**指令**：它告诉显卡，要把这个点从这里，搬到那里，再转个圈。

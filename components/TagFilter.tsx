@@ -9,52 +9,52 @@ interface TagFilterProps {
 }
 
 export default function TagFilter({ posts, onFilter }: TagFilterProps) {
-  const allTags = Array.from(
+  const allCategories = Array.from(
     new Set(
-      posts.flatMap((post) => post.tags || [])
+      posts.flatMap((post) => post.category ? [post.category] : [])
     )
   ).sort();
 
-  const [selectedTag, setSelectedTag] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('');
 
-  const handleTagClick = (tag: string) => {
-    if (selectedTag === tag) {
-      setSelectedTag('');
+  const handleCategoryClick = (category: string) => {
+    if (selectedCategory === category) {
+      setSelectedCategory('');
       onFilter(posts);
     } else {
-      setSelectedTag(tag);
+      setSelectedCategory(category);
       const filteredPosts = posts.filter((post) =>
-        post.tags && post.tags.includes(tag)
+        post.category === category
       );
       onFilter(filteredPosts);
     }
   };
 
   const handleClearFilter = () => {
-    setSelectedTag('');
+    setSelectedCategory('');
     onFilter(posts);
   };
 
   return (
     <div className="mb-8">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-semibold font-mono text-neutral-900 dark:text-neutral-100">筛选标签:</span>
-        {allTags.length > 0 ? (
+        <span className="text-sm font-semibold font-mono text-neutral-900 dark:text-neutral-100">筛选分类:</span>
+        {allCategories.length > 0 ? (
           <>
-            {allTags.map((tag) => (
+            {allCategories.map((category) => (
               <button
-                key={tag}
-                onClick={() => handleTagClick(tag)}
+                key={category}
+                onClick={() => handleCategoryClick(category)}
                 className={`px-3 py-1.5 text-xs font-mono rounded transition-colors cursor-pointer border ${
-                  selectedTag === tag
+                  selectedCategory === category
                     ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 border-neutral-900 dark:border-neutral-100'
                     : 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-700'
                 }`}
               >
-                {tag}
+                {category}
               </button>
             ))}
-            {selectedTag && (
+            {selectedCategory && (
               <button
                 onClick={handleClearFilter}
                 className="px-3 py-1.5 text-xs font-mono rounded bg-white dark:bg-neutral-800 text-orange-600 dark:text-orange-400 border border-orange-600 dark:border-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors cursor-pointer"
@@ -64,7 +64,7 @@ export default function TagFilter({ posts, onFilter }: TagFilterProps) {
             )}
           </>
         ) : (
-          <span className="text-xs font-mono text-neutral-500">暂无标签</span>
+          <span className="text-xs font-mono text-neutral-500">暂无分类</span>
         )}
       </div>
     </div>

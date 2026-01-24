@@ -4,8 +4,10 @@ import path from 'path';
 import matter from 'gray-matter';
 import { compile } from '@mdx-js/mdx';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import { remarkDetails } from './remark-details';
 import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
 import { calculateReadingTime } from './reading-time';
 import { Post, PostFrontMatter } from '@/types/blog';
 import { logger } from './logger';
@@ -126,8 +128,8 @@ export async function getPostData(slug: string): Promise<Post> {
       try {
         const compiled = await compile(content, {
           outputFormat: 'function-body',
-          remarkPlugins: [remarkGfm, remarkDetails],
-          rehypePlugins: [rehypeHighlight],
+          remarkPlugins: [remarkGfm, remarkMath, remarkDetails],
+          rehypePlugins: [rehypeHighlight, rehypeKatex],
         });
         compiledContent = String(compiled);
         isMdxCompiled = true;
@@ -152,13 +154,26 @@ export async function getPostData(slug: string): Promise<Post> {
       excerpt: frontMatter.excerpt || '',
       coverImage: frontMatter.coverImage,
       author: frontMatter.author,
-      tags: frontMatter.tags || [],
+      tags: ensureCategoryInTags(frontMatter.tags || [], postFile.category),
       readingTime: calculateReadingTime(content),
     };
   } catch (error) {
     logger.error(`Error reading post ${slug}:`, error);
     throw new Error(`Failed to read post with slug: ${slug}`);
   }
+}
+
+function ensureCategoryInTags(tags: string[], category?: string): string[] {
+  if (!category) return tags;
+  
+  const normalizedCategory = category.toLowerCase();
+  const normalizedTags = tags.map(t => t.toLowerCase());
+  
+  if (normalizedTags.includes(normalizedCategory)) {
+    return tags;
+  }
+  
+  return [...tags, category];
 }
 
 export async function getAllPosts(): Promise<Post[]> {

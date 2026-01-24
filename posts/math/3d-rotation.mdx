@@ -1,0 +1,161 @@
+---
+title: '旋转的奥义：从欧拉角到四元数'
+date: '2026-01-16'
+description: '旋转是 3D 数学中最令人头秃的部分。为什么欧拉角会死锁？为什么四元数有四个数？轴角旋转又是怎么回事？本文将用通俗易懂的语言和可视化交互，带你彻底搞懂 3D 旋转的三种表达方式。'
+tags: ['Math', 'Rotation', 'Quaternion', 'Euler']
+---
+
+# 旋转的奥义：从欧拉角到四元数
+
+在 3D 世界里，移动（平移）很简单，把坐标加一下就行。
+但**旋转**，却是一个深坑。
+
+你是否遇到过：
+*   想让飞机抬头，结果它歪了？
+*   想做两个角度的平滑过渡，结果物体在中间乱滚？
+*   听到"四元数"这三个字就想关掉浏览器？
+
+别怕，今天我们把旋转这件事彻底揉碎了讲。
+
+---
+
+## 一、 欧拉角 (Euler Angles)：最直观的旋转
+
+这是人类最容易理解的方式。
+我们要描述一个旋转，只需要三个数字：
+*   **Pitch (俯仰)**：绕 X 轴转（点头）。
+*   **Yaw (偏航)**：绕 Y 轴转（摇头）。
+*   **Roll (翻滚)**：绕 Z 轴转（歪头）。
+
+写成代码就是 `rotation = { x: 0, y: 90, z: 0 }`。
+
+### 致命缺陷：万向节死锁 (Gimbal Lock)
+欧拉角有一个巨大的 Bug。
+假设你按顺序旋转：**先绕 X，再绕 Y，最后绕 Z**。
+
+1.  你先把头向上抬 90 度（绕 X 转 90）。此时你的脸朝向天空。
+2.  现在，你的"转头"（绕 Y 转）和"歪头"（绕 Z 转），在空间中变成了**同一个动作**（都是在原地转圈）。
+
+**你失去了一个自由度！** 这就是万向节死锁。在飞行模拟和机械臂控制中，这会导致灾难性的后果。
+
+---
+
+## 二、 轴角 (Axis-Angle)：最纯粹的旋转
+
+如果不按 X/Y/Z 轴转，而是**绕着任意一根轴转**呢？
+这就是轴角表示法。
+*   **轴 (Axis)**：一根单位向量 $\vec{n}$。
+*   **角 (Angle)**：一个标量 $\theta$。
+
+**罗德里格斯旋转公式 (Rodrigues' Rotation Formula)**：
+这是计算轴角旋转的魔法公式。
+$$ \vec{v}' = \vec{v} \cos\theta + (\vec{n} \times \vec{v}) \sin\theta + \vec{n} (\vec{n} \cdot \vec{v}) (1 - \cos\theta) $$
+
+虽然它没有死锁，但很难直接把两个轴角旋转叠加在一起（比如：先绕轴 A 转 30 度，再绕轴 B 转 40 度，结果是绕轴 C 转多少度？很难算）。
+
+---
+
+## 三、 四元数 (Quaternion)：上帝的旋转
+
+四元数是复数的扩展。它有 4 个分量：$(x, y, z, w)$。
+不要试图去想象四维空间。你只需要把四元数看作是 **轴角表示法的改良版**。
+
+### 1. 定义
+一个旋转角度 $\theta$，绕轴 $\vec{n} = (n_x, n_y, n_z)$ 转。
+对应的四元数是：
+$$
+w = \cos(\frac{\theta}{2}) \\
+x = n_x \sin(\frac{\theta}{2}) \\
+y = n_y \sin(\frac{\theta}{2}) \\
+z = n_z \sin(\frac{\theta}{2})
+$$
+
+### 2. 为什么它完美？
+*   **无死锁**：因为它不依赖顺序。
+*   **运算快**：比矩阵乘法快。
+*   **最平滑的插值 (Slerp)**：这是四元数的杀手锏。
+
+### 3. Slerp (Spherical Linear Interpolation)
+你想让摄像机从角度 A 平滑转到角度 B。
+*   用欧拉角插值：摄像机可能会走一条奇怪的弯路。
+*   用四元数 Slerp：摄像机会沿着**最短路径**匀速旋转。
+
+<ShaderPreview title="Rotation Logic Visualization" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 罗德里格斯旋转公式
+vec3 rotate(vec3 v, vec3 axis, float angle) {
+    // 确保轴是归一化的
+    vec3 k = normalize(axis);
+    return v * cos(angle) + cross(k, v) * sin(angle) + k * dot(k, v) * (1.0 - cos(angle));
+}
+
+// 2D SDF 绘制
+float sdLine(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    // 模拟 3D 旋转
+    // 原始点
+    vec3 p = vec3(uv, 0.0);
+    
+    // 旋转轴：一根斜着的轴
+    vec3 axis = normalize(vec3(1.0, 1.0, 0.0));
+    
+    // 旋转点
+    vec3 p_rotated = rotate(p, axis, uTime);
+    
+    // 简单的 3D -> 2D 投影 (正交)
+    vec2 projected = p_rotated.xy;
+    
+    // 绘制一个旋转的十字架
+    // 我们旋转了整个空间，所以只需要画静态的图形，它自然会转起来
+    // 但为了演示 rotate 函数，我们反过来：
+    // 我们保持 uv 不变，计算"如果这个点逆旋转回去，它原本在哪"
+    
+    vec3 p_inverse = rotate(p, axis, -uTime);
+    vec2 uv_inv = p_inverse.xy;
+    
+    // 在逆变换后的坐标系里画一个方块
+    float box = step(abs(uv_inv.x), 0.3) * step(abs(uv_inv.y), 0.3);
+    // 挖空中间
+    box *= 1.0 - step(abs(uv_inv.x), 0.2) * step(abs(uv_inv.y), 0.2);
+    
+    // 绘制旋转轴 (黄色)
+    // 轴在 2D 上的投影
+    float dAxis = abs(dot(uv, vec2(-axis.y, axis.x))); // 简单的点到直线距离
+    float drawAxis = 1.0 - step(0.01, dAxis);
+    
+    vec3 color = vec3(box);
+    color = mix(color, vec3(1.0, 1.0, 0.0), drawAxis * 0.5);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+---
+
+## 四、 旋转矩阵 (Rotation Matrix)
+
+无论你用欧拉角还是四元数，最终交给 GPU 的时候，通常都要转成一个 **4x4 矩阵**。
+因为 GPU 只有矩阵乘法电路，没有四元数电路。
+
+*   **欧拉角 -> 矩阵**：三次旋转矩阵相乘 ($R_z \cdot R_y \cdot R_x$)。
+*   **四元数 -> 矩阵**：有一套复杂的公式可以直接转换。
+
+## 五、 总结：该用哪个？
+
+| 方式 | 优点 | 缺点 | 适用场景 |
+| :--- | :--- | :--- | :--- |
+| **欧拉角** | 直观，容易编辑 (UI) | 万向节死锁，插值难看 | UI 面板，简单的 FPS 相机，设定初始值 |
+| **四元数** | 无死锁，插值完美，效率高 | 难以理解，无法直观编辑 | **所有内部逻辑**，骨骼动画，物理引擎 |
+| **矩阵** | GPU 直接支持，能组合缩放平移 | 数据冗余 (9个数存3个自由度)，难以插值 | **最终传输给 Shader** |
+
+**最佳实践**：
+在游戏引擎内部逻辑中，永远使用 **四元数** 存储旋转。只有在 Inspector 面板显示给美术看时，才转成欧拉角。

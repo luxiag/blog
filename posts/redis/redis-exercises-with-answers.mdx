@@ -1,0 +1,488 @@
+---
+title: 'Redis 练习题（含答案）：从入门到进阶，覆盖主流使用场景'
+date: '2026-01-22'
+description: '一份循序渐进的 Redis 练习题集合，难度从简单到困难，覆盖 String/Hash/List/Set/ZSet/Bitmap/HyperLogLog/Geo/Stream、缓存策略、分布式锁、Lua、性能与排障等，并提供参考答案。'
+tags: ['Redis', 'Cache', 'Database', 'Tutorial', 'Exercises']
+---
+
+# Redis 练习题（含答案）：从入门到进阶，覆盖主流使用场景
+
+说明：
+
+- 题目默认你使用 `redis-cli` 执行命令。
+- 为了便于重复练习，每一题都尽量使用独立的 key 前缀（例如 `ex01:`）。
+- “答案”是参考解法，真实项目中可能需要结合并发、容错与监控做增强。
+
+---
+
+## 0. 热身：清理练习空间（可选）
+
+不要在生产环境执行。
+
+**题目**：删除所有以 `ex` 开头的 key。
+
+**答案（推荐，不阻塞）**：
+
+```redis
+SCAN 0 MATCH ex* COUNT 100
+```
+
+对每批返回的 key 用 `DEL` 删除（脚本化执行）。
+
+> 不要用 `KEYS ex*`：数据大时会阻塞。
+
+---
+
+## 1. 基础（String / TTL / 计数器）
+
+### 1.1 SET/GET 与 TTL
+
+**题目**：写入验证码 `ex01:code:alice=123456`，5 分钟后过期，并查看剩余 TTL。
+
+**答案**：
+
+```redis
+SET ex01:code:alice 123456 EX 300
+TTL ex01:code:alice
+GET ex01:code:alice
+```
+
+### 1.2 INCR 计数器
+
+**题目**：实现页面 `home` 的 PV 计数，每访问一次加 1；再一次性加 10。
+
+**答案**：
+
+```redis
+INCR ex01:pv:home
+INCRBY ex01:pv:home 10
+GET ex01:pv:home
+```
+
+### 1.3 原子性：抢购库存（简化版）
+
+**题目**：商品 `ex01:stock:2001` 初始为 5。每次下单库存减 1，库存不足（<0）则回滚。
+
+**答案（简单但有边界）**：
+
+```redis
+SET ex01:stock:2001 5
+DECR ex01:stock:2001
+```
+
+如果结果为 `-1`，需要 `INCR` 回滚并提示售罄。
+
+> 这个解法在“售罄提示”层面可用，但更推荐用 Lua 把检查与修改做成一个原子脚本（见进阶题）。
+
+---
+
+## 2. Hash（对象存储与局部更新）
+
+### 2.1 存用户资料
+
+**题目**：用 Hash 存用户 1001 的资料：`name=Alice`、`age=18`、`city=Shanghai`。
+
+**答案**：
+
+```redis
+HSET ex02:user:1001 name Alice age 18 city Shanghai
+HGET ex02:user:1001 name
+HGETALL ex02:user:1001
+```
+
+### 2.2 局部更新与自增
+
+**题目**：用户 1001 的 `age` 加 1。
+
+**答案**：
+
+```redis
+HINCRBY ex02:user:1001 age 1
+HGET ex02:user:1001 age
+```
+
+### 2.3 字段过期怎么做？
+
+**题目**：Hash 的某个字段想过期，Redis 不支持字段级 TTL，你会怎么做？
+
+**答案（常见方案）**：
+
+- 方案 A：拆成独立 key：`ex02:user:1001:field:name` 单独设置 TTL
+- 方案 B：字段值带 `expiresAt`，读时判断是否过期（逻辑过期）
+- 方案 C：用一个 ZSET 维护字段过期时间（字段名作为 member），定期清理
+
+---
+
+## 3. List（队列 / 阻塞弹出）
+
+### 3.1 简单队列
+
+**题目**：往队列 `ex03:q` 依次放入 `job1/job2/job3`，然后按 FIFO 取出。
+
+**答案**：
+
+```redis
+LPUSH ex03:q job1 job2 job3
+RPOP ex03:q
+RPOP ex03:q
+RPOP ex03:q
+```
+
+> 这里用 `LPUSH + RPOP` 实现 FIFO。
+
+### 3.2 阻塞队列
+
+**题目**：消费者阻塞等待队列 `ex03:q2` 5 秒，若无数据返回空。
+
+**答案**：
+
+```redis
+BRPOP ex03:q2 5
+```
+
+---
+
+## 4. Set（去重 / 关系运算）
+
+### 4.1 去重：UV（独立访客）
+
+**题目**：把访问用户 ID 加入 `ex04:uv:2026-01-22`，并统计 UV。
+
+**答案**：
+
+```redis
+SADD ex04:uv:2026-01-22 1001 1002 1003
+SADD ex04:uv:2026-01-22 1002
+SCARD ex04:uv:2026-01-22
+```
+
+### 4.2 共同关注（交集）
+
+**题目**：A 关注集合 `ex04:follow:a`，B 关注集合 `ex04:follow:b`，求共同关注。
+
+**答案**：
+
+```redis
+SADD ex04:follow:a u1 u2 u3
+SADD ex04:follow:b u2 u3 u4
+SINTER ex04:follow:a ex04:follow:b
+```
+
+---
+
+## 5. ZSet（排行榜 / 延迟队列）
+
+### 5.1 TopN 排行榜
+
+**题目**：实现积分榜：Alice=100、Bob=95、Cindy=120；查询前 2 名。
+
+**答案**：
+
+```redis
+ZADD ex05:rank 100 Alice 95 Bob 120 Cindy
+ZREVRANGE ex05:rank 0 1 WITHSCORES
+```
+
+### 5.2 增量加分与排名
+
+**题目**：Bob 加 10 分，并查询 Bob 当前排名（从 1 开始）。
+
+**答案**：
+
+```redis
+ZINCRBY ex05:rank 10 Bob
+ZREVRANK ex05:rank Bob
+```
+
+`ZREVRANK` 返回从 0 开始的名次，显示给用户时要 `+1`。
+
+### 5.3 延迟队列（按时间戳执行）
+
+**题目**：把任务 `t1/t2` 按执行时间（Unix 时间戳秒）放入延迟队列，取出“到期任务”。
+
+**答案（参考实现思路）**：
+
+写入：
+
+```redis
+ZADD ex05:delay 1737500000 t1 1737500010 t2
+```
+
+取到期任务（假设现在是 `now`）：
+
+```redis
+ZRANGEBYSCORE ex05:delay -inf 1737500000 LIMIT 0 100
+```
+
+取出后要删除（避免重复消费），可以用 Lua 做“取并删”原子化（见进阶题）。
+
+---
+
+## 6. Bitmap / HyperLogLog（统计类）
+
+### 6.1 Bitmap：签到
+
+**题目**：用户 1001 在 1 月份每天签到记 1（第 1 天偏移 0）。用户在第 1、2、5 天签到；统计签到天数。
+
+**答案**：
+
+```redis
+SETBIT ex06:sign:1001:2026-01 0 1
+SETBIT ex06:sign:1001:2026-01 1 1
+SETBIT ex06:sign:1001:2026-01 4 1
+BITCOUNT ex06:sign:1001:2026-01
+```
+
+### 6.2 HyperLogLog：大规模 UV 近似计数
+
+**题目**：向 `ex06:hll:uv:2026-01-22` 写入大量 userId，估算 UV。
+
+**答案**：
+
+```redis
+PFADD ex06:hll:uv:2026-01-22 1001 1002 1003
+PFCOUNT ex06:hll:uv:2026-01-22
+```
+
+> HyperLogLog 是近似值：省内存但不是精确计数。
+
+---
+
+## 7. Geo（附近的人/店）
+
+### 7.1 添加店铺坐标并查询附近
+
+**题目**：添加三家店的经纬度到 `ex07:shops`，查询某个点 3km 内的店并按距离排序。
+
+**答案**：
+
+```redis
+GEOADD ex07:shops 121.4737 31.2304 shop_a 121.4800 31.2350 shop_b 121.4600 31.2200 shop_c
+GEOSEARCH ex07:shops FROMLONLAT 121.4737 31.2304 BYRADIUS 3 km WITHDIST SORT ASC
+```
+
+---
+
+## 8. 缓存场景综合（穿透/击穿/雪崩）
+
+### 8.1 缓存空对象防穿透
+
+**题目**：对不存在的用户也写缓存（例如值为 `__NULL__`，TTL 60 秒），避免每次都打到 DB。
+
+**答案（命令层面示例）**：
+
+```redis
+SET ex08:user:profile:404 __NULL__ EX 60
+GET ex08:user:profile:404
+```
+
+业务读取时如果读到 `__NULL__` 就当作不存在。
+
+### 8.2 TTL 抖动防雪崩
+
+**题目**：同类 key 的 TTL 在 10 分钟基础上加 0~60 秒随机值。
+
+**答案（思路）**：
+
+- 代码里：`ttl = 600 + random(0, 60)`
+- Redis 侧仍是普通 `SET ... EX ttl`
+
+### 8.3 热点击穿：互斥锁（单飞）
+
+**题目**：热点 key 失效时，只允许一个请求回源，其它等待/快速失败。
+
+**答案（核心命令）**：
+
+```redis
+SET ex08:lock:user:1001 <token> NX PX 3000
+```
+
+拿到锁的线程回源并回填缓存；没拿到锁的线程短暂 sleep 后重试读缓存。
+
+释放锁必须校验 token（见分布式锁题）。
+
+---
+
+## 9. 分布式锁（正确释放与续期）
+
+### 9.1 获取锁
+
+**题目**：获取锁 `ex09:lock:job`，锁 10 秒。
+
+**答案**：
+
+```redis
+SET ex09:lock:job 9f3c-token NX PX 10000
+```
+
+### 9.2 正确释放锁（防误删）
+
+**题目**：只允许“持锁者”释放锁。
+
+**答案（Lua，原子校验+删除）**：
+
+```redis
+EVAL "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end" 1 ex09:lock:job 9f3c-token
+```
+
+### 9.3 锁续期（看门狗）
+
+**题目**：业务可能执行 30 秒，锁只有 10 秒，如何避免锁过期被别人拿走？
+
+**答案（思路）**：
+
+- 启动续期定时任务（例如每 3 秒续到 10 秒）
+- 续期前必须校验 token，避免给别人的锁续期
+
+示例 Lua：
+
+```redis
+EVAL "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end" 1 ex09:lock:job 9f3c-token 10000
+```
+
+---
+
+## 10. Lua 原子脚本（库存扣减 + 失败不改）
+
+### 10.1 原子扣减库存
+
+**题目**：库存在 key `ex10:stock:2001`，若库存 >= 1 才扣减并返回新库存，否则返回 -1。
+
+**答案（Lua）**：
+
+```redis
+EVAL "local v = tonumber(redis.call('GET', KEYS[1]) or '0'); if v <= 0 then return -1 end; v = v - 1; redis.call('SET', KEYS[1], v); return v" 1 ex10:stock:2001
+```
+
+> 生产建议用 `DECR` 类命令与 Lua 结合，并设置合理过期/持久化策略。
+
+---
+
+## 11. Stream（可靠消息队列：生产者/消费者组）
+
+### 11.1 生产消息
+
+**题目**：向 `ex11:stream:mail` 写入 2 条消息（字段 `to`、`subject`）。
+
+**答案**：
+
+```redis
+XADD ex11:stream:mail * to alice@example.com subject "hi"
+XADD ex11:stream:mail * to bob@example.com subject "welcome"
+```
+
+### 11.2 创建消费者组并消费
+
+**题目**：创建消费者组 `g1`，消费者 `c1` 拉取 1 条消息。
+
+**答案**：
+
+```redis
+XGROUP CREATE ex11:stream:mail g1 $ MKSTREAM
+XREADGROUP GROUP g1 c1 COUNT 1 BLOCK 1000 STREAMS ex11:stream:mail >
+```
+
+### 11.3 ACK 确认
+
+**题目**：确认上一题消费到的消息。
+
+**答案**：
+
+```redis
+XACK ex11:stream:mail g1 <message-id>
+```
+
+把 `<message-id>` 替换为 `XREADGROUP` 返回的 id。
+
+### 11.4 处理 Pending（了解）
+
+**题目**：消费者挂了导致消息留在 Pending，怎么查看？
+
+**答案**：
+
+```redis
+XPENDING ex11:stream:mail g1
+```
+
+---
+
+## 12. 性能与排障（从容易到困难）
+
+### 12.1 找出大 key（思路题）
+
+**题目**：怀疑有大 key 导致阻塞，如何定位？
+
+**答案（思路）**：
+
+- 用 `SCAN` 找可疑 key
+- 对不同类型用对应命令取大小：
+  - String：`STRLEN key`
+  - Hash：`HLEN key`
+  - List：`LLEN key`
+  - Set：`SCARD key`
+  - ZSet：`ZCARD key`
+- 对可疑大 key 做“分批”处理，避免一次性全量遍历
+
+### 12.2 禁止线上用 KEYS（理解题）
+
+**题目**：为什么线上要避免 `KEYS pattern`？替代方案是什么？
+
+**答案**：
+
+- `KEYS` 会遍历全量 key，数据大时阻塞 Redis 单线程
+- 替代：`SCAN cursor MATCH pattern COUNT n` 分批扫描
+
+### 12.3 慢查询定位（了解题）
+
+**题目**：如何查看慢命令？
+
+**答案**：
+
+```redis
+SLOWLOG GET 10
+```
+
+---
+
+## 13. 综合大题（困难）：延迟队列“取并删”原子化
+
+**题目**：用 ZSET 实现延迟队列：到期取出最多 100 个任务，并从队列中删除，保证并发下不重复取。
+
+**答案（Lua 思路实现）**：
+
+```redis
+EVAL "local z=KEYS[1]; local now=tonumber(ARGV[1]); local limit=tonumber(ARGV[2]); local items=redis.call('ZRANGEBYSCORE', z, '-inf', now, 'LIMIT', 0, limit); if #items==0 then return items end; redis.call('ZREM', z, unpack(items)); return items" 1 ex05:delay 1737500000 100
+```
+
+> 注意：`unpack` 在不同 Lua/Redis 版本行为细节可能不同；实际生产会用更健壮的脚本与监控。
+
+---
+
+## 14. 综合大题（困难）：接口限流（滑动窗口近似）
+
+**题目**：对某个用户 `uid` 做限流：60 秒内最多 100 次请求。
+
+**答案（两种常见思路）**：
+
+### 14.1 简单计数（固定窗口，容易边界突刺）
+
+```redis
+INCR ex14:rl:uid:1001:202601221230
+EXPIRE ex14:rl:uid:1001:202601221230 60
+```
+
+窗口 key 用当前分钟/秒拼接。
+
+### 14.2 ZSET 滑动窗口（更精确）
+
+思路：member 用请求 id，score 用时间戳毫秒。
+
+```redis
+ZADD ex14:rl:uid:1001 1737500000123 req-1
+ZREMRANGEBYSCORE ex14:rl:uid:1001 -inf 1737499940123
+ZCARD ex14:rl:uid:1001
+EXPIRE ex14:rl:uid:1001 120
+```
+
+生产上通常用 Lua 把“添加 + 清理 + 计数 + 判断”做成一个原子脚本。
+

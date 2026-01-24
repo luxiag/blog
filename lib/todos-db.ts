@@ -183,39 +183,36 @@ export async function updateTodo(todo: Todo): Promise<void> {
 
 // 初始化默认数据
 export async function initializeData(): Promise<{ categories: Category[]; todos: Todo[] }> {
+  const defaultCategories: Category[] = [
+    { id: 'all', name: 'All', icon: 'grid' },
+    { id: 'personal', name: 'Personal', icon: 'user' },
+    { id: 'work', name: 'Work', icon: 'briefcase' },
+  ];
+  
+  const defaultTodos: Todo[] = [
+    { id: 1, title: 'Make UI design', category: 'personal', date: '2024-12-12', completed: false, isImportant: true },
+    { id: 2, title: 'Code prototype', category: 'work', date: '2024-12-13', completed: true, isImportant: true },
+    { id: 3, title: 'User testing', category: 'work', date: '2024-12-13', completed: true, isImportant: false },
+    { id: 4, title: 'Handover', category: 'work', date: '2024-12-15', completed: false, isImportant: true },
+    { id: 5, title: 'Team sync', category: 'work', date: '2024-12-16', completed: false, isImportant: false },
+    { id: 6, title: 'Read book', category: 'personal', date: '2024-12-14', completed: false, isImportant: false },
+    { id: 7, title: 'Exercise', category: 'personal', date: '2024-12-14', completed: false, isImportant: true },
+  ];
+
   const existingCategories = await getCategories();
   const existingTodos = await getTodos();
 
   // 如果没有数据，初始化默认数据
   if (existingCategories.length === 0) {
-    const defaultCategories: Category[] = [
-      { id: 'all', name: 'All', icon: 'grid' },
-      { id: 'personal', name: 'Personal', icon: 'user' },
-      { id: 'work', name: 'Work', icon: 'briefcase' },
-    ];
     await saveCategories(defaultCategories);
   }
 
   if (existingTodos.length === 0) {
-    const defaultTodos: Todo[] = [
-      { id: 1, title: 'Make UI design', category: 'personal', date: '2024-12-12', completed: false, isImportant: true },
-      { id: 2, title: 'Code prototype', category: 'work', date: '2024-12-13', completed: true, isImportant: true },
-      { id: 3, title: 'User testing', category: 'work', date: '2024-12-13', completed: true, isImportant: false },
-      { id: 4, title: 'Handover', category: 'work', date: '2024-12-15', completed: false, isImportant: true },
-      { id: 5, title: 'Team sync', category: 'work', date: '2024-12-16', completed: false, isImportant: false },
-      { id: 6, title: 'Read book', category: 'personal', date: '2024-12-14', completed: false, isImportant: false },
-      { id: 7, title: 'Exercise', category: 'personal', date: '2024-12-14', completed: false, isImportant: true },
-    ];
     await saveTodos(defaultTodos);
-    return { categories: defaultCategories, todos: defaultTodos };
   }
 
   return {
-    categories: existingCategories.length > 0 ? existingCategories : [
-      { id: 'all', name: 'All', icon: 'grid' },
-      { id: 'personal', name: 'Personal', icon: 'user' },
-      { id: 'work', name: 'Work', icon: 'briefcase' },
-    ],
-    todos: existingTodos,
+    categories: existingCategories.length > 0 ? existingCategories : defaultCategories,
+    todos: existingTodos.length > 0 ? existingTodos : defaultTodos,
   };
 }

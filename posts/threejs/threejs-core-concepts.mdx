@@ -1,0 +1,259 @@
+---
+title: 'Three.js 核心架构详解：从场景图到渲染管线'
+date: '2026-01-16'
+description: '深入剖析 Three.js 的七大核心模块：场景、相机、渲染器、材质光照、几何体、纹理及后期处理。包含大量底层原理图解与实战代码。'
+tags: ['Three.js', 'WebGL', 'Graphics', 'Frontend']
+---
+
+# Three.js 核心架构详解：从场景图到渲染管线
+
+Three.js 作为一个成熟的 3D 引擎，其架构设计精妙地平衡了易用性与灵活性。本文将自顶向下，深入剖析其七大核心子系统，帮助你建立完整的 3D 开发知识体系。
+
+---
+
+## 一、 场景系统 (Scene System)
+
+场景是 Three.js 的根容器，它本质上是一个特定的 `Object3D`。理解场景系统的关键在于理解 **场景图 (Scene Graph)** 和 **坐标系**。
+
+### 1. Object3D 与 Group
+Three.js 使用树状结构来管理物体。所有的 3D 物体（Mesh, Light, Camera, Group）都继承自 `Object3D` 基类。
+*   **Object3D**: 提供了位置 (`position`)、旋转 (`rotation`)、缩放 (`scale`) 等基础变换属性，以及 `add()` 和 `remove()` 方法来构建层级关系。
+*   **Group**: 这是一个纯粹的容器，没有几何体或材质。它的主要作用是将多个物体组合在一起，作为一个整体进行变换。比如一辆车，轮子是车身的子节点，车身移动，轮子自然跟随。
+
+### 2. 层级变换与矩阵
+当我们在场景图中建立父子关系时，子物体的变换是**相对于父物体**的。
+*   **局部矩阵 (Local Matrix)**: 描述物体相对于父物体的变换。由 `position`, `rotation`, `scale` 属性合成。
+*   **世界矩阵 (World Matrix)**: 描述物体相对于世界原点 (0,0,0) 的绝对变换。
+    $$ M_{world} = M_{parent\_world} \times M_{local} $$
+Three.js 会在每一帧渲染前自动更新矩阵（`updateMatrixWorld`），确保层级关系正确呈现。
+
+### 3. 坐标转换实战
+在开发中，经常需要把一个物体从局部坐标转换到世界坐标，或者反过来。
+
+```javascript
+// 获取物体的世界坐标
+const worldPosition = new THREE.Vector3();
+object.getWorldPosition(worldPosition);
+
+// 将世界坐标下的一个点转换到物体的局部空间
+const localPoint = object.worldToLocal(new THREE.Vector3(10, 0, 0));
+```
+
+---
+
+## 二、 相机体系 (Camera System)
+
+相机决定了 3D 世界如何投影到 2D 屏幕上。
+
+### 1. 透视 vs 正交
+*   **PerspectiveCamera (透视相机)**: 模拟人眼，**近大远小**。
+    *   **FOV (视场角)**: 垂直方向的可视角度。FOV 越大，看到的范围越广，畸变也越明显。
+    *   **Aspect (长宽比)**: 画布宽度 / 画布高度。
+    *   **Near/Far**: 视锥体的近/远裁剪面。只有在这个范围内的物体才会被渲染。
+*   **OrthographicCamera (正交相机)**: **远近一样大**。常用于工程制图、2D 游戏或 UI 渲染。
+
+### 2. 相机控制器
+Three.js 提供了多种控制器，最常用的是 `OrbitControls`（轨道控制器）。
+它通过监听鼠标事件，修改相机的位置 (`camera.position`) 和朝向 (`camera.lookAt`)，使其围绕一个目标点旋转。
+
+<CodePenDemo title="Camera & Controls Demo" code={`
+function Scene() {
+  return (
+    <>
+      <PerspectiveCamera makeDefault position={[0, 0, 5]} fov={50} />
+      <OrbitControls 
+        enableDamping={true} 
+        dampingFactor={0.05} 
+        minDistance={2}
+        maxDistance={10}
+      />
+      
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[10, 10, 5]} intensity={1} />
+      
+      <mesh>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color="orange" />
+      </mesh>
+      
+      <gridHelper args={[10, 10]} />
+    </>
+  )
+}
+
+render(
+  <Canvas>
+    <Scene />
+  </Canvas>
+)
+`} />
+
+---
+
+## 三、 渲染器核心 (Renderer Core)
+
+`WebGLRenderer` 是 Three.js 的心脏，负责将 Scene 和 Camera 结合，绘制出最终图像。
+
+### 1. 初始化与配置
+```javascript
+const renderer = new THREE.WebGLRenderer({ 
+    antialias: true, // 开启抗锯齿 (MSAA)
+    alpha: true,     // 允许背景透明
+    powerPreference: "high-performance" // 优先使用独显
+});
+```
+
+### 2. 关键优化配置
+*   **DevicePixelRatio**: 适配视网膜屏幕 (Retina)。
+    ```javascript
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 限制最高 2 倍，避免手机过热
+    ```
+*   **ToneMapping (色调映射)**: 将 HDR (高动态范围) 的颜色压缩到显示器能显示的 LDR (0-1) 范围。
+    ```javascript
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    ```
+*   **ColorSpace**: 确保物理正确的渲染。现在 Three.js 默认使用 `SRGBColorSpace`。
+
+---
+
+## 四、 材质与光照系统 (Materials & Lighting)
+
+这是决定画面“真实感”的关键。
+
+### 1. PBR 材质 (MeshStandardMaterial)
+基于物理的渲染 (Physically Based Rendering) 是现代图形学的标准。
+*   **Metalness (金属度)**: 1.0 为纯金属，0.0 为非金属（绝缘体）。
+*   **Roughness (粗糙度)**: 0.0 为极其光滑（镜面），1.0 为极其粗糙（漫反射）。
+*   **AO (环境光遮蔽)**: 模拟角落缝隙处的阴影，增加体积感。
+
+### 2. 阴影系统
+Three.js 使用 **Shadow Map** 技术。
+1.  **开启阴影**: `renderer.shadowMap.enabled = true`。
+2.  **光源投射**: `light.castShadow = true`。
+3.  **物体投射/接收**: `mesh.castShadow = true`, `mesh.receiveShadow = true`。
+
+### 3. IBL (基于图像的照明)
+仅靠几个点光源很难模拟真实世界的复杂光照。IBL 使用一张 360° 的 HDR 环境贴图作为光源，让物体反射周围的环境。
+Three.js 使用 `PMREMGenerator` 对环境图进行预处理，生成不同粗糙度级别的辐射度数据。
+
+<CodePenDemo title="PBR & Environment" code={`
+
+function Sphere(props) {
+  return (
+    <mesh {...props} castShadow receiveShadow>
+      <sphereGeometry args={[0.6, 32, 32]} />
+      <meshStandardMaterial 
+        color={props.color} 
+        metalness={0.8} 
+        roughness={0.1} 
+      />
+    </mesh>
+  )
+}
+
+function Scene() {
+  return (
+    <>
+      <Sphere position={[-1.5, 0, 0]} color="hotpink" />
+      <Sphere position={[0, 0, 0]} color="white" />
+      <Sphere position={[1.5, 0, 0]} color="teal" />
+      
+      {/* 地面接触阴影 */}
+      <ContactShadows position={[0, -0.6, 0]} opacity={0.5} scale={10} blur={2} far={1} />
+      
+      {/* 演播室灯光环境 - 使用本地资源避免网络问题 */}
+      <Environment files="/hdr/studio_small_03_1k.hdr" />
+      <OrbitControls />
+    </>
+  )
+}
+
+render(
+  <Canvas shadows camera={{ position: [0, 0, 4] }}>
+    <Scene />
+  </Canvas>
+)
+`} />
+
+---
+
+## 五、 几何体系统 (Geometry System)
+
+### 1. BufferGeometry
+在 Three.js 中，所有的几何体最终都会通过 `BufferGeometry` 存储。它直接对应 GPU 显存中的 Attribute Buffers。
+*   **position**: 顶点坐标 (vec3)
+*   **normal**: 法线向量 (vec3)，用于光照计算
+*   **uv**: 纹理坐标 (vec2)
+
+### 2. 性能优化：InstancedMesh
+如果你需要渲染 10,000 棵树，不要创建 10,000 个 Mesh。使用 `InstancedMesh`，它利用 GPU 的几何实例化技术，一次 Draw Call 就能画出所有物体，性能提升百倍。
+
+---
+
+## 六、 纹理系统 (Texture System)
+
+### 1. 纹理参数
+*   **Wrap**: 决定纹理坐标超出 [0,1] 范围时的行为。`RepeatWrapping` (重复), `ClampToEdgeWrapping` (拉伸)。
+*   **Filter**: 决定纹理被放大或缩小时的采样算法。
+    *   `NearestFilter`: 像素化，适合像素风游戏。
+    *   `LinearFilter`: 线性插值，平滑但模糊。
+*   **Anisotropy (各向异性)**: 当从侧面斜看纹理时（如地板），各向异性过滤能保持纹理清晰。
+
+### 2. 纹理压缩
+JPG/PNG 在显存中是解压后存储的，占用巨大。生产环境推荐使用 GPU 压缩纹理格式（如 **KTX2**, **Draco**），它们在显存中保持压缩状态，极大降低显存占用。
+
+---
+
+## 七、 后期处理管线 (Post-processing)
+
+渲染完成后，我们还可以对画面进行“PS”。这就是后期处理。
+Three.js 使用 `EffectComposer` 来管理后期处理链（Pass Chain）。
+
+### 常用效果
+1.  **Bloom (辉光)**: 提取画面中的高亮部分，进行模糊，再叠加回去。让霓虹灯、激光看起来发光。
+2.  **SSAO (屏幕空间环境光遮蔽)**: 基于深度图实时计算遮蔽，增强细节立体感。
+3.  **DOF (景深)**: 模拟相机焦距，让背景模糊。
+4.  **SMAA/FXAA**: 后期抗锯齿，比默认的 MSAA 更快或效果更好。
+
+<CodePenDemo title="Post-processing: Bloom" code={`
+import { EffectComposer, Bloom } from '@react-three/postprocessing'
+
+function GlowingBox() {
+  return (
+    <mesh rotation={[0.5, 0.5, 0]}>
+      <boxGeometry args={[1.5, 1.5, 1.5]} />
+      <meshStandardMaterial 
+        color="black"
+        emissive="orange"
+        emissiveIntensity={5}
+        toneMapped={false}
+      />
+    </mesh>
+  )
+}
+
+function Scene() {
+  return (
+    <>
+      <GlowingBox />
+      <OrbitControls />
+      
+      <EffectComposer disableNormalPass>
+        <Bloom luminanceThreshold={1} mipmapBlur intensity={1.5} radius={0.6} />
+      </EffectComposer>
+    </>
+  )
+}
+
+render(
+  <Canvas camera={{ position: [0, 0, 5] }}>
+    <color attach="background" args={['#111']} />
+    <Scene />
+  </Canvas>
+)
+`} />
+
+## 总结
+
+Three.js 的强大在于它不仅封装了 WebGL 的底层细节，还提供了一套符合直觉的场景图 API。掌握上述七大模块，你就能从“盲目复制粘贴”进阶到“知其所以然”，随心所欲地构建高性能的 Web 3D 应用。

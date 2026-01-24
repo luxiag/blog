@@ -1,0 +1,215 @@
+---
+title: 'Three.js 后期处理详解：给画面加个滤镜'
+date: '2026-01-16'
+description: '学会使用 EffectComposer 为你的 3D 场景添加电影级特效：辉光 (Bloom)、景深 (Depth of Field)、噪点 (Noise) 以及高性能抗锯齿。'
+tags: ['Three.js', 'WebGL', 'PostProcessing', 'Frontend']
+---
+
+# Three.js 后期处理详解：给画面加个滤镜
+
+刚渲染出来的 3D 画面往往看起来很“干”，缺乏氛围感。就像手机拍照后要修图一样，3D 渲染也需要**后期处理 (Post-processing)**。
+
+它的原理很简单：**先把场景渲染成一张图片（纹理），然后对这张图片进行像素级的处理（模糊、调色、加噪点），最后再显示到屏幕上。**
+
+在 React Three Fiber 中，我们主要使用 `@react-three/postprocessing` 这个库，它封装了 Three.js 官方的 `EffectComposer`，让加特效变得像堆积木一样简单。
+
+---
+
+## 一、 辉光效果 (Bloom)：赛博朋克的灵魂
+
+辉光是最常用的特效，能让高亮的物体产生光晕，营造出霓虹灯、激光、阳光的耀眼感。
+
+### 核心原理
+它会提取画面中亮度超过**阈值 (Threshold)** 的像素，对它们进行高斯模糊，然后叠加回原图。
+
+### 实战：霓虹灯效果
+调整 `threshold` 和 `intensity`，观察方块发光的变化。注意：材质的 `emissive` (自发光) 颜色必须足够亮，或者 `emissiveIntensity` 足够大，才能触发辉光。
+
+<CodePenDemo title="Bloom Effect" code={`
+function BloomScene() {
+  return (
+    <>
+      <EffectComposer disableNormalPass>
+        <Bloom 
+          luminanceThreshold={1} // 亮度超过 1 的像素才发光
+          mipmapBlur             // 使用 mipmap 模糊，性能更好且光晕更柔和
+          intensity={1.5}        // 发光强度
+          radius={0.6}           // 光晕半径
+        />
+      </EffectComposer>
+
+      <mesh rotation={[0.5, 0.5, 0]}>
+        <boxGeometry args={[1.5, 1.5, 1.5]} />
+        <meshStandardMaterial 
+          color="black"
+          emissive="orange"        // 自发光颜色
+          emissiveIntensity={4}    // 强度设为 4，远超阈值 1，所以会发光
+          toneMapped={false}       // 关闭色调映射，保留高动态范围亮度
+        />
+      </mesh>
+      
+      {/* 另一个不发光的物体作为对比 */}
+      <mesh position={[2, 0, -2]}>
+        <sphereGeometry args={[0.5]} />
+        <meshStandardMaterial color="white" />
+      </mesh>
+
+      <ambientLight intensity={0.5} />
+      <OrbitControls />
+    </>
+  )
+}
+
+render(
+  <Canvas camera={{ position: [0, 0, 5] }}>
+    <color attach="background" args={['#111']} />
+    <BloomScene />
+  </Canvas>
+)
+`} />
+
+---
+
+## 二、 景深 (Depth of Field)：模拟单反相机
+
+真实相机的镜头是有**焦距**的，只有焦平面上的物体清晰，前景和背景都会模糊。这就是景深。
+在 3D 中，我们利用**深度图 (Depth Buffer)** 来模拟这个效果。
+
+### 核心参数
+*   **`focusDistance`**: 对焦距离（0~1，相对于相机远近裁剪面）。
+*   **`focalLength`**: 焦距（0~1），决定虚化的程度。
+*   **`bokehScale`**: 散景大小，决定模糊光斑的大小。
+
+### 实战：微距摄影感
+在这个 Demo 中，鼠标移动会改变对焦点。你可以看到当鼠标悬停在近处物体时，远处背景变模糊；反之亦然。
+
+<CodePenDemo title="Depth of Field" code={`
+import { DepthOfField } from '@react-three/postprocessing'
+
+function DOFScene() {
+  return (
+    <>
+      <EffectComposer>
+        <DepthOfField 
+          focusDistance={0} // 初始对焦距离 (0 = 相机位置)
+          focalLength={0.02} // 焦距
+          bokehScale={2}    // 模糊程度
+          height={480}      // 分辨率 (影响模糊质量)
+        />
+      </EffectComposer>
+
+      {/* 放置一排物体，展示远近虚实变化 */}
+      {Array.from({ length: 8 }).map((_, i) => (
+        <mesh key={i} position={[0, 0, -i * 2]}>
+          <torusKnotGeometry args={[0.5, 0.2, 128, 16]} />
+          <meshStandardMaterial color={`hsl(${i * 40}, 100%, 50%)`} />
+        </mesh>
+      ))}
+
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[10, 10, 10]} />
+      <OrbitControls />
+    </>
+  )
+}
+
+render(
+  <Canvas camera={{ position: [2, 1, 5] }}>
+    <DOFScene />
+  </Canvas>
+)
+`} />
+
+---
+
+## 三、 风格化特效：像素风与噪点
+
+除了模拟真实，后期处理还能用来创造独特的艺术风格。
+
+### 1. Pixelation (像素化)
+把高分辨率的画面强制降低采样率，营造复古 8-bit 游戏的感觉。
+
+### 2. Noise (噪点)
+给画面叠加一层动态噪点。适量的噪点可以消除色彩断层 (Banding)，增加胶片质感，或者模拟老电视信号。
+
+### 3. Vignette (暗角)
+压暗画面四角，把观众的注意力集中在中心。
+
+<CodePenDemo title="Retro Style" code={`
+import { Pixelation, Noise, Vignette } from '@react-three/postprocessing'
+
+function RetroScene() {
+  return (
+    <>
+      <EffectComposer>
+        <Pixelation granularity={5} /> 
+        
+        <Noise opacity={0.2} />
+        
+        <Vignette eskil={false} offset={0.1} darkness={1.1} />
+      </EffectComposer>
+
+      <mesh rotation={[0.5, 0.5, 0]}>
+        <icosahedronGeometry args={[1, 0]} />
+        <meshNormalMaterial />
+      </mesh>
+      
+      <gridHelper args={[10, 10]} />
+      <OrbitControls />
+    </>
+  )
+}
+
+render(
+  <Canvas>
+    <RetroScene />
+  </Canvas>
+)
+`} />
+
+---
+
+## 四、 性能杀手：抗锯齿 (Antialiasing)
+
+当我们开启了 `EffectComposer`，Three.js 默认的 MSAA 抗锯齿**会失效**（因为此时我们在渲染到一个离屏纹理上）。
+如果不处理，画面边缘会充满锯齿。
+
+我们需要在后期处理链中手动添加抗锯齿 Pass。
+
+### 常见抗锯齿方案
+1.  **SMAA (Subpixel Morphological Antialiasing)**: **效果最好**，性能开销中等。推荐 PC 端使用。
+2.  **FXAA (Fast Approximate Antialiasing)**: **速度最快**，但会稍微让画面变糊。推荐移动端使用。
+
+### 自动选择
+`@react-three/postprocessing` 的 `EffectComposer` 组件默认支持 `multisampling` (MSAA)，只要显卡支持，它是最高效的。如果需要更强的效果，可以手动加 SMAA。
+
+```jsx
+import { EffectComposer, SMAA } from '@react-three/postprocessing'
+
+<EffectComposer multisampling={0}> {/* 关闭默认 MSAA */}
+  <SMAA />
+  <Bloom ... />
+</EffectComposer>
+```
+
+---
+
+## 五、 组合拳：打造电影级画面
+
+最后，我们将多种效果组合在一起，看看能产生什么样的化学反应。
+*   **Bloom**: 营造发光氛围。
+*   **Vignette**: 聚焦视线。
+*   **Noise**: 增加质感。
+*   **ColorCorrection**: 调色（这里简单模拟）。
+
+
+
+## 总结
+
+后期处理是 3D 渲染的化妆术。
+*   **EffectComposer** 是特效容器。
+*   **Bloom** 是最通用的美化手段。
+*   **SMAA/FXAA** 是抗锯齿的最后防线。
+*   **性能警告**：每一个 Pass 都是一次全屏渲染。不要叠加太多，尤其是在移动端！
+
+善用后期处理，你的 Web 3D 页面将瞬间提升一个档次。

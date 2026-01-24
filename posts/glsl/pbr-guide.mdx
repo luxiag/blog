@@ -1,0 +1,155 @@
+---
+title: 'PBR 指南：赋予虚拟世界真实的质感'
+date: '2026-01-16'
+description: '为什么现代游戏的画面如此逼真？答案就是 PBR (基于物理的渲染)。本文将带你深入了解微表面理论、能量守恒、菲涅尔效应，并详细拆解 Metallic-Roughness 工作流，教你如何用代码模拟真实的金属与塑料。'
+tags: ['WebGL', 'GLSL', 'PBR', 'Lighting', 'Advanced']
+---
+
+# PBR 指南：赋予虚拟世界真实的质感
+
+在早期的 3D 游戏中，为了让物体看起来像金属，美术师可能会把贴图画成蓝灰色。但如果换个角度、换个光照，它看起来就像一块蓝色的石头。
+
+现在，我们有了 **PBR (Physically Based Rendering，基于物理的渲染)**。
+PBR 不是一种单一的技术，而是一套**基于真实物理规律**的渲染理念。它保证了无论光照环境如何变化，物体的材质看起来总是"正确"的。
+
+本文将带你揭开 PBR 的物理面纱，并教你如何在 Shader 中实现它。
+
+## 一、 微表面理论 (Microfacet Theory)
+
+这是 PBR 的核心假设。
+PBR 认为：**所有表面在微观层面上都是粗糙的。**
+
+*   **光滑表面**（如镜子）：微表面排列整齐，光线向同一个方向反射（产生清晰的高光）。
+*   **粗糙表面**（如水泥）：微表面杂乱无章，光线向四面八方散射（产生模糊的漫反射）。
+
+我们在 Shader 中用 **粗糙度 (Roughness)** 来描述这种微观的不平整程度。
+
+## 二、 能量守恒 (Energy Conservation)
+
+光线打到物体上，不会凭空产生，也不会凭空消失（除了转化为热能）。
+**入射光 = 反射光 (Specular) + 折射光 (Diffuse)**
+
+*   **金属**：几乎所有的光都被反射了，没有光进入内部（没有漫反射）。
+*   **非金属**：一部分光反射（产生高光），一部分光进入内部散射出来（产生颜色）。
+
+这意味着：**一个物体不可能既有超强的漫反射，又有超强的镜面反射。** PBR 系统会自动平衡这两者，防止画面过曝。
+
+## 三、 菲涅尔效应 (Fresnel Effect)
+
+你观察过平静的湖面吗？
+*   当你**垂直**向下看时，你能看清湖底的石头（反射弱，折射强）。
+*   当你**平视**远处湖面时，水面像镜子一样反光（反射强）。
+
+这就是菲涅尔效应：**视线与表面夹角越小，反射越强。**
+所有物体（包括你的皮肤、桌子）都有菲涅尔效应，只是强弱不同。
+
+## 四、 PBR 工作流：Metallic-Roughness
+
+在工业界（如 Unity, Unreal, Three.js），最主流的 PBR 参数组合是 **金属度-粗糙度 (Metallic-Roughness)** 工作流。
+
+我们需要两张核心贴图：
+1.  **Metallic (金属度)**：0.0 是非金属（塑料、木头），1.0 是金属（金、银）。通常非黑即白。
+2.  **Roughness (粗糙度)**：0.0 是镜面，1.0 是磨砂。
+
+### 实战：模拟材质
+
+下面的 Shader 模拟了一个 PBR 材质球。你可以调整参数观察光影变化。
+
+*(注：这是一个简化的 PBR 模型，仅用于演示核心概念)*
+
+<ShaderPreview title="Simple PBR Sphere" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// PBR 参数 (尝试修改它们！)
+float uRoughness = 0.2; // 0.0 (光滑) ~ 1.0 (粗糙)
+float uMetallic = 1.0;  // 0.0 (塑料) ~ 1.0 (金属)
+vec3 uBaseColor = vec3(1.0, 0.8, 0.6); // 黄金色
+
+// 简单的环境光模拟 (IBL 替代品)
+vec3 getEnvironment(vec3 dir, float rough) {
+    // 天空颜色渐变
+    vec3 sky = mix(vec3(0.1, 0.2, 0.4), vec3(0.6, 0.8, 1.0), dir.y * 0.5 + 0.5);
+    // 粗糙度越高，环境反射越模糊(暗淡)
+    return sky * (1.0 - rough * 0.8);
+}
+
+void main() {
+    vec2 p = vUv * 2.0 - 1.0;
+    float r = length(p);
+    if (r > 1.0) discard;
+    
+    float z = sqrt(1.0 - r*r);
+    vec3 N = vec3(p.x, p.y, z); // 法线
+    vec3 V = vec3(0.0, 0.0, 1.0); // 视线 (假设正对屏幕)
+    vec3 L = normalize(vec3(sin(uTime), 1.0, cos(uTime))); // 旋转光源
+    vec3 H = normalize(V + L); // 半程向量
+    
+    // --- 1. 计算 Diffuse & Specular 比例 ---
+    // 菲涅尔基础反射率 (F0)
+    // 非金属 F0 通常是 0.04，金属 F0 就是它本身的颜色
+    vec3 F0 = mix(vec3(0.04), uBaseColor, uMetallic);
+    
+    // 菲涅尔公式 (Schlick近似)
+    float NdotV = max(dot(N, V), 0.0);
+    vec3 F = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
+    
+    // 能量守恒：反射多了，漫反射就少
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
+    kD *= (1.0 - uMetallic); // 金属没有漫反射
+    
+    // --- 2. 计算光照 (Cook-Torrance BRDF 简化版) ---
+    
+    // 漫反射 (Lambert)
+    float NdotL = max(dot(N, L), 0.0);
+    vec3 diffuse = kD * uBaseColor * NdotL;
+    
+    // 镜面反射 (Specular)
+    float NdotH = max(dot(N, H), 0.0);
+    // NDF (法线分布函数 - 决定高光大小)
+    float alpha = uRoughness * uRoughness;
+    float alpha2 = alpha * alpha;
+    float denom = (NdotH * NdotH * (alpha2 - 1.0) + 1.0);
+    float D = alpha2 / (3.14159 * denom * denom);
+    
+    // 几何遮蔽 (G) 省略... 假设为 1
+    
+    vec3 specular = (D * F) / 4.0; // 简化的 BRDF
+    
+    // --- 3. 环境光照 (IBL) ---
+    // 模拟金属反射环境
+    vec3 reflectionDir = reflect(-V, N);
+    vec3 envColor = getEnvironment(reflectionDir, uRoughness);
+    vec3 ambient = envColor * (kD * uBaseColor + F); 
+    
+    // 最终合成
+    vec3 color = ambient * 0.3 + diffuse + specular * 2.0;
+    
+    // Tone mapping (简单的 Reinhard)
+    color = color / (color + vec3(1.0));
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 五、 高级光照：IBL (Image Based Lighting)
+
+PBR 如果没有环境光，效果会大打折扣。
+现实中，物体不仅仅被灯泡照亮，它是被**周围环境**照亮的。
+
+**IBL** 技术就是把一张全景图（HDR 环境贴图）当作光源。
+*   对于漫反射：我们对环境图进行模糊处理（Irradiance Map）。
+*   对于镜面反射：我们根据粗糙度，读取环境图不同模糊程度的版本（Prefiltered Map）。
+
+这就是为什么在 Three.js 中，只要加载一张 `envMap`，模型瞬间就变得真实起来。
+
+## 总结
+
+PBR 是一套庞大的理论体系，但核心只有几点：
+1.  **微表面**决定粗糙度。
+2.  **能量守恒**平衡漫反射与镜面反射。
+3.  **菲涅尔**让边缘反光更强。
+4.  **Metallic-Roughness** 是最通用的控制参数。
+
+掌握了 PBR，你就掌握了通往真实世界的钥匙。

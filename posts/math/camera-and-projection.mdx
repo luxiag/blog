@@ -1,0 +1,171 @@
+---
+title: '把世界装进盒子：相机与投影矩阵的数学推导'
+date: '2026-01-16'
+description: '为什么 3D 游戏里的铁轨会汇聚成一点？透视投影矩阵到底对 z 轴做了什么？本文将手推 View 矩阵（LookAt）和 Projection 矩阵，揭开 GPU 渲染管线中最神秘的坐标变换。'
+tags: ['Math', 'Matrix', 'Camera', 'Projection']
+---
+
+# 把世界装进盒子：相机与投影矩阵的数学推导
+
+我们生活在 3D 空间，但屏幕是 2D 的。
+图形学的核心任务，就是把一个无限广阔的 3D 世界，压缩进一个 $[ -1, 1 ]^3$ 的标准立方体里（NDC），然后再拍扁到屏幕上。
+
+这个过程由两个矩阵主宰：**View Matrix (视图矩阵)** 和 **Projection Matrix (投影矩阵)**。
+
+---
+
+## 一、 View Matrix：我就是世界中心
+
+在渲染管线中，并没有"摄像机"这个实体。
+所谓的"摄像机看到物体"，其实是**把整个世界搬到了摄像机面前**。
+如果摄像机在 $(0,0,10)$，我们就把所有物体向 $Z$ 轴负方向移动 10。
+
+### LookAt 矩阵推导
+给定摄像机位置 $Eye$、目标点 $Target$ 和上方向 $Up$。如何构建 View 矩阵？
+
+1.  **确定 Z 轴 (Forward)**：
+    摄像机看向 $Target$，但在 OpenGL 中，摄像机看向 $-Z$。所以 $Z$ 轴实际上是指向**背后**的。
+    $$ \vec{z} = \text{normalize}(Eye - Target) $$
+
+2.  **确定 X 轴 (Right)**：
+    右边 = 上边 $\times$ 前边。
+    $$ \vec{x} = \text{normalize}(\text{cross}(Up, \vec{z})) $$
+
+3.  **确定 Y 轴 (New Up)**：
+    重新计算上方向，确保三个轴互相垂直。
+    $$ \vec{y} = \text{cross}(\vec{z}, \vec{x}) $$
+
+4.  **构建矩阵**：
+    View 矩阵 = **旋转** $\times$ **平移**。
+    我们要把摄像机的坐标轴旋转到与世界坐标轴重合，并把摄像机移回原点。
+    
+    $$
+    M_{view} = 
+    \begin{bmatrix} 
+    x_x & x_y & x_z & -\vec{x}\cdot Eye \\ 
+    y_x & y_y & y_z & -\vec{y}\cdot Eye \\ 
+    z_x & z_y & z_z & -\vec{z}\cdot Eye \\ 
+    0 & 0 & 0 & 1 
+    \end{bmatrix}
+    $$
+
+---
+
+## 二、 投影矩阵：近大远小的魔法
+
+现在的坐标都在摄像机空间了（Eye 是原点）。
+接下来，我们要把视锥体（Frustum）里的东西，压缩进一个标准立方体（NDC）。
+
+### 1. 正交投影 (Orthographic Projection)
+这很简单。把一个长方体盒子压扁。
+不管物体多远，大小都不变。常用于 UI、2D 游戏或工程制图。
+
+矩阵核心思想：**平移中心到原点，然后缩放到 [-1, 1]**。
+$$ x_{ndc} = \frac{x - center}{width/2} $$
+
+### 2. 透视投影 (Perspective Projection)
+这就是 3D 游戏的灵魂。**近大远小**。
+原理：利用相似三角形。
+$$ x_{screen} = x_{view} \cdot \frac{near}{z_{view}} $$
+
+这就引出了一个惊人的事实：**投影矩阵并没有做除法！**
+矩阵乘法是线性的，做不了 $x/z$ 这种非线性操作。
+
+**透视除法 (Perspective Division)** 的秘密：
+投影矩阵把 $-z$ 写入了结果的 $w$ 分量中。
+$$ P_{clip} = M_{proj} \times P_{view} = \begin{bmatrix} x' \\ y' \\ z' \\ -z_{view} \end{bmatrix} $$
+
+然后，**GPU 硬件**会自动执行 $xyz / w$。
+因为 $w = -z$，所以实际上就是除以了深度。越远的东西 ($z$ 大)，除完之后就越小！
+
+### 透视投影矩阵公式 (OpenGL 标准)
+给定 FOV (视野角度)、Aspect (宽高比)、Near/Far (近远裁剪面)：
+
+$$
+M_{persp} = 
+\begin{bmatrix} 
+\frac{1}{aspect \cdot \tan(fov/2)} & 0 & 0 & 0 \\ 
+0 & \frac{1}{\tan(fov/2)} & 0 & 0 \\ 
+0 & 0 & \frac{-(Far+Near)}{Far-Near} & \frac{-2 \cdot Far \cdot Near}{Far-Near} \\ 
+0 & 0 & -1 & 0 
+\end{bmatrix}
+$$
+
+*   **最后一行 [0, 0, -1, 0]**：这就是把 $w$ 变成 $-z$ 的关键。
+
+---
+
+## 三、 深度缓冲 (Z-Buffer) 的非线性
+
+经过透视投影后，Z 轴的值也被改变了。
+但是！**Z 的变换不是线性的。**
+
+$$ z_{ndc} = \frac{A \cdot z + B}{-z} = -A - \frac{B}{z} $$
+
+这意味着：
+*   **在近处**，Z 的精度非常高（浮点数分布密集）。
+*   **在远处**，Z 的精度非常低。
+
+**Z-Fighting (闪烁)** 现象通常发生在远处，就是因为远处的深度精度不够，两个靠得近的物体分不清谁前谁后了。
+**反向 Z (Reversed-Z)** 技术就是为了解决这个问题（让远处精度高，近处精度低）。
+
+<ShaderPreview title="Projection Visualizer" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    // 模拟 3D 空间中的一系列柱子
+    vec3 col = vec3(0.0);
+    
+    // 1. 正交投影视图 (左边)
+    if (uv.x < 0.0) {
+        vec2 p = uv;
+        p.x += 0.5; // 居中
+        
+        // 画几根柱子，大小一样
+        float d = 1.0;
+        for(float z = 1.0; z <= 5.0; z+=1.0) {
+            // 在正交投影中，物体只会平移，不会缩放
+            vec2 pos = vec2(sin(uTime + z)*0.2, 0.4 - z * 0.15);
+            float dist = length(p - pos) - 0.05; // 半径固定
+            d = min(d, dist);
+        }
+        col += (1.0 - step(0.0, d)) * vec3(0.5, 0.8, 1.0);
+    } 
+    // 2. 透视投影视图 (右边)
+    else {
+        vec2 p = uv;
+        p.x -= 0.5; // 居中
+        
+        float d = 1.0;
+        for(float z = 1.0; z <= 5.0; z+=1.0) {
+            // 在透视投影中，物体要做透视除法
+            float scale = 1.0 / z; // 近大远小
+            
+            vec2 pos = vec2(sin(uTime + z)*0.2, 0.0);
+            pos *= scale; // 位置也要缩放
+            
+            float dist = length(p - pos) - 0.05 * scale; // 半径随深度变小
+            d = min(d, dist);
+        }
+        col += (1.0 - step(0.0, d)) * vec3(1.0, 0.5, 0.0);
+    }
+    
+    // 分割线
+    if(abs(uv.x) < 0.01) col = vec3(1.0);
+    
+    gl_FragColor = vec4(col, 1.0);
+}
+`} />
+
+## 总结
+
+1.  **View 矩阵**：LookAt 的本质是构建一个新的坐标系，并把世界移过去。
+2.  **Projection 矩阵**：
+    *   **正交**：简单的缩放平移。
+    *   **透视**：利用 $w$ 分量存储深度 $-z$，等待 GPU 做透视除法。
+3.  **深度精度**：透视投影导致 Z 轴分布不均匀，越远精度越低。
+
+理解了这些，你就知道为什么调节 `Near` 和 `Far` 裁剪面会影响画质，以及为什么 3D 游戏里的远处物体容易闪烁了。

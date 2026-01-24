@@ -2,11 +2,8 @@
 title: "使用Node.js和JavaScript实现实时直播系统"
 date: "2024-01-20"
 excerpt: "本文将详细介绍如何使用Node.js和JavaScript构建一个实时直播系统，包括服务端和客户端的实现，以及媒体流处理、WebRTC集成等关键技术。"
-coverImage: "/images/live-streaming-cover.jpg"
-author: {
-  name: "您的名字",
-  picture: "/images/author-avatar.jpg"
-}
+
+
 tags: ["Node.js", "JavaScript", "WebRTC", "实时直播", "流媒体"]
 ---
 

@@ -1,0 +1,192 @@
+---
+title: '纹理大师：GLSL 中的贴图艺术与未来之路'
+date: '2026-01-16'
+description: '纹理不仅仅是贴在模型上的图片。它是数据的载体，是特效的源泉。本文将系统讲解纹理采样的核心技术，展示如何扭曲、混合纹理，并为你规划一条从入门到精通的图形学学习路径。'
+tags: ['WebGL', 'GLSL', 'Texture', 'Roadmap']
+---
+
+# 纹理大师：GLSL 中的贴图艺术与未来之路
+
+在 3D 渲染中，**纹理 (Texture)** 是让模型从"灰模"变得栩栩如生的关键。
+但对于 Shader 程序员来说，纹理不仅仅是一张 JPG 图片，它是一个**只读的二维数组**。你可以用它来存储颜色，也可以用它来存储高度、法线，甚至是任何数据。
+
+本文将带你深入理解纹理的本质，并以此为终点，为你总结一条完整的图形学进阶路线。
+
+## 一、 纹理采样：把图片贴上去
+
+在 GLSL 中，读取纹理颜色的过程叫**采样 (Sampling)**。
+我们需要两个东西：
+1.  `uniform sampler2D uTexture;`：纹理数据本身。
+2.  `varying vec2 vUv;`：告诉 GPU 去纹理的哪个位置取色（坐标 0.0 到 1.0）。
+
+函数：`texture2D(uTexture, vUv)`。
+
+*(注：由于 ShaderPreview 环境限制，我们用程序生成的图案来模拟一张"图片纹理")*
+
+<ShaderPreview title="Texture Simulation" code={`
+varying vec2 vUv;
+
+// 模拟一张方格纹理图片
+vec3 getTexture(vec2 uv) {
+    vec2 grid = step(0.5, fract(uv * 10.0));
+    // 棋盘格逻辑
+    float check = mod(grid.x + grid.y, 2.0);
+    return vec3(check);
+}
+
+void main() {
+    // 正常采样：直接用 UV 坐标
+    vec3 color = getTexture(vUv);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 二、 纹理坐标变换：扭曲与特效
+
+既然纹理采样依赖于 UV 坐标，那么如果我们**修改 UV 坐标**，会发生什么？
+答案是：**纹理会变形。**
+
+这是所有水波纹、热浪扭曲、马赛克特效的原理。
+
+### 1. 马赛克 (Pixelation)
+原理：把连续的 UV 坐标变成离散的阶梯状。
+
+<ShaderPreview title="Pixelation" code={`
+varying vec2 vUv;
+
+vec3 getTexture(vec2 uv) {
+    // 这里我们用一个彩色的图案代表图片
+    return vec3(uv.x, uv.y, 0.5 + 0.5 * sin(uv.x * 10.0));
+}
+
+void main() {
+    float pixels = 20.0; // 把它分成 20x20 个格子
+    
+    // 核心算法：floor 取整后再除回去
+    vec2 pixelUV = floor(vUv * pixels) / pixels;
+    
+    vec3 color = getTexture(pixelUV);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+### 2. 水波扭曲 (Distortion)
+原理：用 `sin` 函数让 UV 坐标产生偏移。
+
+<ShaderPreview title="Water Ripple" code={`
+uniform float uTime;
+varying vec2 vUv;
+
+vec3 getTexture(vec2 uv) {
+    // 生成同心圆图案
+    float d = length(uv - 0.5);
+    float circles = step(0.5, sin(d * 40.0));
+    return vec3(circles);
+}
+
+void main() {
+    vec2 uv = vUv;
+    
+    // 核心：给 UV 加上波浪偏移
+    uv.x += sin(uv.y * 10.0 + uTime) * 0.05;
+    uv.y += cos(uv.x * 10.0 + uTime) * 0.05;
+    
+    vec3 color = getTexture(uv);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 三、 程序化纹理 (Procedural Texture)
+
+除了加载图片，我们还可以完全用代码生成纹理。
+这种纹理无限分辨率，不占显存，而且可以动态变化。
+
+最经典的就是 **FBM (分形噪声)** 纹理，它可以模拟云层、大理石、火焰。
+
+<ShaderPreview title="Procedural Cloud" code={`
+uniform float uTime;
+varying vec2 vUv;
+
+// 随机函数
+float random(vec2 st) {
+    return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+}
+
+// 噪声函数
+float noise(vec2 st) {
+    vec2 i = floor(st);
+    vec2 f = fract(st);
+    float a = random(i);
+    float b = random(i + vec2(1.0, 0.0));
+    float c = random(i + vec2(0.0, 1.0));
+    float d = random(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(a, b, u.x) + (c - a)* u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
+// FBM: 叠加多层噪声
+float fbm(vec2 st) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    for (int i = 0; i < 5; i++) {
+        value += amplitude * noise(st);
+        st *= 2.0;
+        amplitude *= 0.5;
+    }
+    return value;
+}
+
+void main() {
+    vec2 st = vUv * 3.0;
+    
+    // 让云层流动
+    float n = fbm(st + vec2(uTime * 0.2, 0.0));
+    
+    // 混合颜色：深蓝天空 -> 白色云朵
+    vec3 color = mix(vec3(0.0, 0.4, 0.8), vec3(1.0), n);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+---
+
+## 四、 你的图形学进阶之路 (Roadmap)
+
+读完这系列文章，你已经跨过了图形学最高的门槛——**入门**。
+接下来的路该怎么走？这里有一份建议的学习路线图：
+
+### 阶段 1：巩固基础 (Current Level)
+*   **掌握**: 向量、矩阵、GLSL 语法、基础光照。
+*   **练习**: 在 ShaderToy 上复刻简单的 2D 图案。
+*   **目标**: 能看懂别人的简单 Shader 代码。
+
+### 阶段 2：3D 渲染与 WebGL
+*   **工具**: Three.js / React Three Fiber。
+*   **内容**:
+    *   理解 Mesh, Material, Light, Camera 的关系。
+    *   学习加载模型 (glTF) 并编写自定义 Shader 材质。
+    *   学习**粒子系统 (Particles)**：用 GPU 控制成千上万个点。
+*   **目标**: 做出一个酷炫的 3D 网页 Demo。
+
+### 阶段 3：高级图形学技术
+*   **内容**:
+    *   **PBR (Physically Based Rendering)**: 学习物理真实感渲染原理（Disney BSDF）。
+    *   **Post-Processing**: 深入学习 Bloom, DOF, SSAO 等后期特效。
+    *   **GPGPU**: 利用 GPU 进行非图形计算（如流体模拟、群聚行为）。
+*   **目标**: 实现电影级的实时渲染效果。
+
+### 阶段 4：底层原理 (Hardcore Mode)
+*   **工具**: 原生 WebGL 2.0 / WebGPU。
+*   **内容**: 手写渲染管线，管理 Buffer，理解图形 API 的底层架构。
+*   **目标**: 成为图形学工程师，编写自己的渲染引擎。
+
+## 结语
+
+图形学是一个深不见底的兔子洞，但也是编程领域最能带来视觉反馈和成就感的领域。
+不要被数学吓倒，保持好奇心。每一次屏幕上的像素闪烁，都是你逻辑与创意的结晶。
+
+祝你在 Shader 的世界里玩得开心！

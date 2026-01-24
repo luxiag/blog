@@ -1,0 +1,272 @@
+---
+title: '赋予数字生命：动画算法与数值计算'
+date: '2026-01-16'
+description: '动画不仅仅是改变位置，它是关于时间的艺术。本文将深入探讨 deltaTime 的核心作用，揭秘 Lerp 和 Easing 的数学原理，构建丝滑的物理弹簧系统，并学习如何用贝塞尔曲线绘制优雅的运动轨迹。'
+tags: ['Math', 'Animation', 'Physics', 'Interpolation']
+---
+
+# 赋予数字生命：动画算法与数值计算
+
+一个静止的方块是数据，一个会呼吸、会弹跳的方块就是生命。
+在游戏和交互开发中，动画的质量直接决定了"手感"。
+本文将带你深入动画背后的数值计算世界。
+
+---
+
+## 一、 时间步长 (deltaTime)：帧率无关性
+
+如果你的游戏在 60fps 下跑得很快，在 30fps 下跑得很慢，那就是灾难。
+解决这个问题的核心是 **deltaTime (dt)**：上一帧到这一帧经过的时间（秒）。
+
+### 1. 错误写法
+```javascript
+// ❌ 错误：依赖帧率
+function update() {
+    // 假设这是 60fps
+    // 每帧移动 5px -> 300px/s
+    // 如果掉帧到 30fps -> 150px/s (变慢了！)
+    player.x += 5; 
+}
+```
+
+### 2. 正确写法
+```javascript
+// ✅ 正确：依赖时间
+function update(dt) {
+    // dt = deltaTime (秒)
+    // 无论 60fps (dt=0.016) 还是 30fps (dt=0.033)
+    // 结果都是 300 * dt
+    player.x += 300 * dt; 
+}
+
+// 游戏循环示例
+let lastTime = performance.now();
+function loop() {
+    const currentTime = performance.now();
+    const dt = (currentTime - lastTime) / 1000; // 毫秒转秒
+    lastTime = currentTime;
+    
+    update(dt);
+    requestAnimationFrame(loop);
+}
+```
+
+### 3. 陷阱：物理模拟的不稳定性
+对于简单的移动，可变 `dt` 没问题。但在复杂的物理积分（如弹簧、引力）中，`dt` 的波动会导致系统爆炸。
+**最佳实践**：使用 **Fixed Update**。即使渲染帧率波动，物理计算始终以固定的 `0.02s` 步长运行。
+
+```javascript
+// 固定步长物理循环
+const FIXED_STEP = 1 / 60; // 0.016s
+let accumulator = 0;
+
+function loop(dt) {
+    accumulator += dt;
+    // 如果这一帧卡了，累积了很多时间，就多跑几次物理
+    while (accumulator >= FIXED_STEP) {
+        physicsUpdate(FIXED_STEP);
+        accumulator -= FIXED_STEP;
+    }
+    render();
+}
+```
+
+---
+
+## 二、 插值技术：从 Lerp 到 Easing
+
+### 1. 线性插值 (Lerp)
+这是动画的原子操作。
+公式：$V = A + (B - A) \times t$
+
+```javascript
+// 基础 Lerp 函数
+function lerp(start, end, t) {
+    return start + (end - start) * t;
+}
+
+// 用法：在 1 秒内从 0 走到 100
+let t = 0;
+function update(dt) {
+    t += dt; // t 从 0 增加到 1
+    if (t > 1) t = 1;
+    
+    player.x = lerp(0, 100, t);
+}
+```
+
+*   **陷阱**：很多人喜欢用 `current = lerp(current, target, 0.1)` 来做平滑跟随。
+    *   这叫 **Damp** (阻尼)，不是标准的 Lerp。
+    *   缺点：永远到不了终点（无限逼近），且速度依赖帧率。
+    *   修正：使用 `dt` 相关的阻尼公式。
+
+```javascript
+// ✅ 正确的平滑阻尼 (帧率无关)
+// decay: 衰减系数 (比如 10.0，值越大越快)
+function damp(current, target, decay, dt) {
+    return lerp(current, target, 1.0 - Math.exp(-decay * dt));
+}
+```
+
+### 2. 缓动函数 (Easing)
+线性移动看起来很机械。为了让动画有"灵魂"，我们需要让 $t$ 非线性变化。
+比如 **EaseOutQuad** (快进慢出)：
+
+```javascript
+// t: 0~1 的进度
+function easeOutQuad(t) {
+    return 1 - (1 - t) * (1 - t);
+}
+
+// 使用缓动
+player.x = lerp(0, 100, easeOutQuad(t));
+```
+
+---
+
+## 三、 弹簧系统 (Spring Physics)：交互的黄金标准
+
+Apple 的滑动效果为什么那么舒服？因为它不是简单的 Easing，而是基于物理的**弹簧系统**。
+
+### 1. 胡克定律 (Hooke's Law)
+$$ F = -k \cdot x - c \cdot v $$
+
+```javascript
+class Spring {
+    constructor() {
+        this.x = 0;      // 当前位置
+        this.v = 0;      // 当前速度
+        this.target = 0; // 目标位置
+        this.k = 100;    // 刚度 (Stiffness): 拉力，越大越硬
+        this.c = 10;     // 阻尼 (Damping): 阻力，越小越弹
+    }
+    
+    update(dt) {
+        const dx = this.x - this.target; // 位移
+        const force = -this.k * dx - this.c * this.v; // F = -kx - cv
+        
+        const a = force; // 假设质量 m=1, F=ma -> a=F
+        this.v += a * dt;
+        this.x += this.v * dt;
+    }
+}
+```
+
+### 2. 为什么用弹簧？
+*   **响应式**：如果你在动画播放中途打断它（比如用户突然按住滑块），Lerp/Easing 会出现跳变，而弹簧会自然地继承当前速度，无缝过渡。
+*   **自然感**：它模拟了真实世界的惯性。
+
+<ShaderPreview title="Animation Physics Lab" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 1. 缓动函数
+float easeOutElastic(float x) {
+    float c4 = (2.0 * 3.14159) / 3.0;
+    return x == 0.0 ? 0.0 : x == 1.0 ? 1.0 : pow(2.0, -10.0 * x) * sin((x * 10.0 - 0.75) * c4) + 1.0;
+}
+
+float easeOutBounce(float x) {
+    float n1 = 7.5625;
+    float d1 = 2.75;
+    if (x < 1.0 / d1) {
+        return n1 * x * x;
+    } else if (x < 2.0 / d1) {
+        return n1 * (x -= 1.5 / d1) * x + 0.75;
+    } else if (x < 2.5 / d1) {
+        return n1 * (x -= 2.25 / d1) * x + 0.9375;
+    } else {
+        return n1 * (x -= 2.625 / d1) * x + 0.984375;
+    }
+}
+
+// 2. 弹簧模拟 (简化的显式积分)
+// 这是一个非常 hacky 的 Shader 模拟，因为 Shader 没有状态记忆
+// 我们用数学函数模拟一个欠阻尼震荡
+float spring(float t) {
+    // exp(-t) 是阻尼，cos 是震荡
+    return 1.0 - exp(-3.0 * t) * cos(15.0 * t);
+}
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    // 时间循环 0~2秒
+    float t = fract(uTime * 0.5);
+    
+    // 计算三个球的位置
+    float x1 = -0.5 + easeOutElastic(t); // 弹性
+    float x2 = -0.5 + easeOutBounce(t);  // 弹跳
+    float x3 = -0.5 + spring(t * 2.0);   // 物理弹簧 (稍微快一点)
+    
+    vec3 col = vec3(0.0);
+    
+    // 绘制球体
+    // 1. 红色：Elastic
+    if(length(uv - vec2(x1, 0.6)) < 0.1) col = vec3(1.0, 0.2, 0.2);
+    
+    // 2. 绿色：Bounce
+    if(length(uv - vec2(x2, 0.0)) < 0.1) col = vec3(0.2, 1.0, 0.2);
+    
+    // 3. 蓝色：Spring Physics
+    if(length(uv - vec2(x3, -0.6)) < 0.1) col = vec3(0.2, 0.5, 1.0);
+    
+    // 绘制轨道线
+    if(abs(uv.y - 0.6) < 0.01) col += 0.1;
+    if(abs(uv.y - 0.0) < 0.01) col += 0.1;
+    if(abs(uv.y + 0.6) < 0.01) col += 0.1;
+    
+    gl_FragColor = vec4(col, 1.0);
+}
+`} />
+
+---
+
+## 四、 曲线动画路径
+
+物体不总是走直线。
+
+### 1. 贝塞尔曲线 (Bézier Curve)
+*   **二次贝塞尔**：需要 3 个点（起点、控制点、终点）。
+    $$ P = (1-t)^2 P_0 + 2(1-t)t P_1 + t^2 P_2 $$
+*   **三次贝塞尔**：需要 4 个点（起点、控制点1、控制点2、终点）。
+
+```javascript
+// 二次贝塞尔插值
+function quadraticBezier(p0, p1, p2, t) {
+    const t1 = 1 - t;
+    return t1 * t1 * p0 + 2 * t1 * t * p1 + t * t * p2;
+}
+```
+
+### 2. Catmull-Rom 样条
+贝塞尔的问题是：曲线**不经过**控制点。
+如果你有一串路径点，想让物体依次穿过它们，用 **Catmull-Rom**。
+它能自动计算平滑的切线，保证曲线穿过所有路点。
+
+```javascript
+// Catmull-Rom 插值 (简化版)
+// p0, p1, p2, p3 是连续的四个点
+// t 是 p1 到 p2 之间的进度 (0~1)
+function catmullRom(p0, p1, p2, p3, t) {
+    const v0 = (p2 - p0) * 0.5;
+    const v1 = (p3 - p1) * 0.5;
+    const t2 = t * t;
+    const t3 = t * t * t;
+    
+    return (2 * p1 - 2 * p2 + v0 + v1) * t3 + 
+           (-3 * p1 + 3 * p2 - 2 * v0 - v1) * t2 + 
+           v0 * t + p1;
+}
+```
+
+*   **应用**：摄像机漫游路径、赛车游戏 AI 路径。
+
+## 总结
+
+1.  **基础**：用 `dt` 保证动画在任何帧率下一致。
+2.  **手感**：用 **Lerp** 做平滑，用 **Easing** 做表现。
+3.  **高级交互**：用 **弹簧系统** 处理用户输入，因为它能记忆速度。
+4.  **路径**：用 **贝塞尔** 做设计，用 **Catmull-Rom** 做穿梭。
+
+掌握了这些，你的数字世界就不再是生硬的代码，而是流动的艺术。

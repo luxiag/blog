@@ -1,0 +1,281 @@
+---
+title: 'Three.js 场景系统详解：搭建你的 3D 舞台'
+date: '2026-01-16'
+description: '深入浅出地讲解 Three.js 场景系统的核心概念，包括场景图、坐标系变换、父子关系以及如何优雅地管理复杂的 3D 世界。'
+tags: ['Three.js', 'WebGL', 'Scene Graph', 'Frontend']
+---
+
+# Three.js 场景系统详解：搭建你的 3D 舞台
+
+如果说渲染器是**放映机**，相机是**摄影机**，那么**场景 (Scene)** 就是你的**大舞台**。
+
+所有的演员（物体）、灯光、道具，都必须在这个舞台上才有意义。在 Three.js 中，场景不仅仅是一个容器，它还通过一套严密的**层级系统**（Scene Graph）来管理万物的位置关系。
+
+今天我们就来彻底搞懂这个系统，学会像导演一样调度你的 3D 世界。
+
+---
+
+## 一、 场景图 (Scene Graph)：父子连心
+
+Three.js 的核心设计思想是**树状结构**。
+
+想象一辆行驶的汽车：
+*   **车身**是主角。
+*   **轮子**是装在车身上的。
+*   **车灯**也是装在车身上的。
+
+当车往前开时，轮子和车灯必须**自动**跟着走，而不需要你分别去告诉轮子和车灯"往前走"。这就是**父子关系**的魔力。
+
+### 1. 核心基类：Object3D
+几乎所有能放在场景里的东西（Mesh, Light, Group, Camera, Scene 本身）都继承自一个共同的祖先 —— **`Object3D`**。
+
+它赋予了所有物体三个灵魂属性：
+*   **`.position` (位置)**: `(x, y, z)`
+*   **`.rotation` (旋转)**: `(x, y, z)`
+*   **`.scale` (缩放)**: `(x, y, z)`
+
+以及两个核心方法：
+*   **`.add(child)`**: 收养一个孩子。
+*   **`.remove(child)`**: 踢出一个孩子。
+
+### 2. 实战：构建太阳系
+让我们用代码来模拟一个简单的太阳系：**地球绕着太阳转，月球绕着地球转**。
+
+如果没有场景图，你需要复杂的数学公式来计算月球的轨迹（螺旋线）。
+有了场景图，你只需要：
+1.  把地球放到太阳里。
+2.  把月球放到地球里。
+3.  让太阳自转，地球就跟着转了。让地球自转，月球就跟着转了。
+
+<CodePenDemo title="Solar System Scene Graph" code={`
+function SolarSystem() {
+  const sunRef = useRef()
+  const earthRef = useRef()
+  
+  useFrame((state, delta) => {
+    // 1. 太阳自转 -> 带动地球公转
+    if (sunRef.current) sunRef.current.rotation.y += delta * 0.5
+    
+    // 2. 地球自转 -> 带动月球公转
+    if (earthRef.current) earthRef.current.rotation.y += delta * 2
+  })
+
+  return (
+    // 太阳 (父节点)
+    <mesh ref={sunRef}>
+      <sphereGeometry args={[1, 16, 16]} />
+      <meshStandardMaterial color="orange" emissive="orange" emissiveIntensity={2} />
+      
+      <mesh ref={earthRef} position={[3, 0, 0]} scale={0.5}>
+        <sphereGeometry args={[1, 16, 16]} />
+        <meshStandardMaterial color="blue" />
+        
+        <mesh position={[2, 0, 0]} scale={0.5}>
+          <sphereGeometry args={[1, 16, 16]} />
+          <meshStandardMaterial color="gray" />
+        </mesh>
+      </mesh>
+    </mesh>
+  )
+}
+
+render(
+  <Canvas camera={{ position: [0, 5, 8] }}>
+    <pointLight intensity={2} />
+    <ambientLight intensity={0.1} />
+    <SolarSystem />
+    <OrbitControls />
+  </Canvas>
+)
+`} />
+
+**代码解析：**
+*   我们不需要写一行代码来计算月球的世界坐标。
+*   只要嵌套了 `<mesh><mesh>...</mesh></mesh>`，Three.js 就会自动建立父子连接。
+*   移动父物体，子物体会保持**相对位置**跟随移动。
+*   旋转父物体，子物体会围绕父物体的中心公转。
+
+---
+
+## 二、 坐标系：相对论的艺术
+
+理解场景系统，必须区分两种坐标：
+
+### 1. 局部坐标 (Local Space)
+这是物体**相对于它的父物体**的位置。
+*   你在车里，相对于驾驶座，你的位置是 `(0, 0, 0)`。无论车开多快，你的局部坐标不变。
+*   代码中的 `position`、`rotation`、`scale` 指的**永远是局部空间**。
+
+### 2. 世界坐标 (World Space)
+这是物体**相对于场景原点 (0,0,0)** 的绝对位置。
+*   相对于地球，车可能在 `(1000, 500, 0)` 的位置飞驰。你的世界坐标也在飞速变化。
+
+### 3. 坐标转换实战
+有时候我们需要知道："月球现在到底在宇宙的哪个角落？"（获取世界坐标）。
+或者："我想把一个东西放到月球正上方 5 米处，不管月球转到哪。"（世界转局部）。
+
+<CodePenDemo title="Coordinate Conversion" code={`
+function Tracker() {
+  const earthRef = useRef()
+  const moonRef = useRef()
+  const textRef = useRef()
+  
+  // 用于存储计算结果的临时向量 (避免在循环中 new Vector3)
+  const worldPos = new THREE.Vector3()
+  
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime()
+    
+    // 让地球动起来
+    earthRef.current.position.x = Math.sin(t) * 3
+    earthRef.current.position.z = Math.cos(t) * 3
+    
+    // 1. 获取月球的世界坐标
+    // getWorldPosition 会把结果写入传入的向量中
+    moonRef.current.getWorldPosition(worldPos)
+    
+    // 2. 让文字标签始终跟随月球的世界坐标，并悬浮在上方
+    textRef.current.position.copy(worldPos)
+    textRef.current.position.y += 1.5
+    textRef.current.lookAt(0, 5, 8) // 让文字面向相机
+  })
+
+  return (
+    <>
+      <group ref={earthRef}>
+        <mesh>
+          <sphereGeometry args={[0.5, 16, 16]} />
+          <meshStandardMaterial color="blue" />
+        </mesh>
+        
+        {/* 月球是地球的子节点 */}
+        <mesh ref={moonRef} position={[1.5, 0, 0]} scale={0.3}>
+          <sphereGeometry args={[1, 16, 16]} />
+          <meshStandardMaterial color="gray" />
+        </mesh>
+      </group>
+
+      {/* 文字标签是世界坐标系下的自由物体 */}
+      <mesh ref={textRef}>
+        <boxGeometry args={[0.5, 0.2, 0.1]} />
+        <meshBasicMaterial color="red" />
+      </mesh>
+      
+      <gridHelper args={[10, 10]} />
+    </>
+  )
+}
+
+render(
+  <Canvas camera={{ position: [0, 5, 8] }}>
+    <ambientLight intensity={0.5} />
+    <pointLight position={[10, 10, 10]} />
+    <Tracker />
+    <OrbitControls />
+  </Canvas>
+)
+`} />
+
+**关键 API：**
+*   **`object.getWorldPosition(targetVector)`**: 计算物体的世界坐标。
+*   **`object.getWorldQuaternion(targetQuaternion)`**: 计算物体的世界旋转。
+*   **`object.getWorldScale(targetVector)`**: 计算物体的世界缩放。
+*   **`object.localToWorld(vector)`**: 将局部点转为世界点。
+*   **`object.worldToLocal(vector)`**: 将世界点转为局部点。
+
+---
+
+## 三、 Group：隐形的容器
+
+很多时候，我们需要把一堆杂乱的物体打个包，一起移动，但又不想创建一个多余的几何体（比如不想在外面套个透明的大盒子）。
+
+这时候 **`Group`** 就派上用场了。
+`Group` 也是 `Object3D`，它没有样子，只有变换属性。它是最完美的**文件夹**。
+
+### 实战：构建一辆坦克
+坦克由底盘、炮塔、炮管组成。
+*   **Tank Group** (整体移动)
+    *   **Body Mesh** (底盘)
+    *   **Turret Group** (炮塔旋转)
+        *   **Turret Mesh** (炮塔头)
+        *   **Canon Mesh** (炮管，还能自己上下抬起)
+
+<CodePenDemo title="Tank Group Hierarchy" code={`
+function Tank() {
+  const tankRef = useRef()
+  const turretRef = useRef()
+  const canonRef = useRef()
+  
+  useFrame(({ mouse }) => {
+    // 1. 坦克整体跟随鼠标水平移动
+    tankRef.current.position.x = mouse.x * 5
+    
+    // 2. 炮塔跟随鼠标旋转 (左右)
+    turretRef.current.rotation.y = -mouse.x * 2
+    
+    // 3. 炮管自动上下摆动
+    canonRef.current.rotation.x = Math.sin(Date.now() / 500) * 0.5
+  })
+
+  return (
+    <group ref={tankRef}>
+      <mesh position={[0, 0.5, 0]}>
+        <boxGeometry args={[2, 1, 3]} />
+        <meshStandardMaterial color="darkgreen" />
+      </mesh>
+      
+      <group ref={turretRef} position={[0, 1, 0]}>
+        <mesh position={[0, 0.5, 0]}>
+          <sphereGeometry args={[0.8, 32, 32]} />
+          <meshStandardMaterial color="green" />
+        </mesh>
+        
+        <mesh ref={canonRef} position={[0, 0.5, 1.2]} rotation={[0, 0, 0]}>
+          <cylinderGeometry args={[0.1, 0.1, 2]} rotation={[Math.PI / 2, 0, 0]} />
+          <meshStandardMaterial color="black" />
+        </mesh>
+      </group>
+    </group>
+  )
+}
+
+render(
+  <Canvas camera={{ position: [5, 5, 5] }}>
+    <ambientLight intensity={0.5} />
+    <directionalLight position={[5, 10, 5]} intensity={1} />
+    <Tank />
+    <gridHelper args={[20, 20]} />
+    <OrbitControls />
+  </Canvas>
+)
+`} />
+
+---
+
+## 四、 常见坑与最佳实践
+
+### 1. 缩放的陷阱
+**尽量不要修改父物体的 `scale`！**
+如果父物体缩放了 `(2, 1, 1)`，子物体旋转时会发生**剪切变形 (Shear)**，变得歪七扭八。
+*   **规则**：只在最底层的 Mesh 上做缩放，或者确保 Group 的缩放永远是均匀的 `(s, s, s)`。
+
+### 2. 轴心点 (Pivot Point)
+Three.js 的物体默认是绕着中心旋转的。如果你想让门绕着门轴转，而不是绕着门板中心转，怎么办？
+*   **方法一**：在建模软件（Blender）里把原点移到门轴处（推荐）。
+*   **方法二**：用一个 `Group` 作为门轴，把门板 Mesh `position` 偏移一下放进去。旋转 `Group` 即可。
+
+### 3. 性能优化
+场景图虽然好用，但层级太深会影响性能（CPU 需要遍历树来计算矩阵）。
+*   **扁平化**：如果不需要动态的父子联动，尽量让物体直接挂在 Scene 下面，计算好世界坐标。
+*   **updateMatrixWorld**：Three.js 默认每帧自动更新所有矩阵。如果你有几千个静态物体，可以设置 `matrixAutoUpdate = false`，手动更新一次即可。
+
+## 总结
+
+Three.js 的场景系统就是一个**乐高积木**的世界。
+*   **Scene** 是底板。
+*   **Object3D** 是积木块。
+*   **Group** 是把积木块粘在一起的胶水。
+*   **Local Space** 是积木块自己的视角。
+*   **World Space** 是你看积木的视角。
+
+掌握了这些，你就掌握了构建复杂 3D 世界的基石。去试着搭建一个个层级分明的 3D 模型吧！

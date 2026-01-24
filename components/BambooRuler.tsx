@@ -459,7 +459,7 @@ export default function BambooRuler({ children }: { children: React.ReactNode })
       
       const dpr = window.devicePixelRatio || 1;
       
-      const render = (ref: React.RefObject<HTMLCanvasElement>, list: Bamboo[]) => {
+      const render = (ref: React.RefObject<HTMLCanvasElement | null>, list: Bamboo[]) => {
         if (!ref.current) return;
         const cvs = ref.current;
         const ctx = cvs.getContext('2d');
@@ -474,15 +474,15 @@ export default function BambooRuler({ children }: { children: React.ReactNode })
         });
       };
       
-      render(leftCanvasRef, leftBamboosRef.current);
-      render(rightCanvasRef, rightBamboosRef.current);
+      if (leftCanvasRef.current) render(leftCanvasRef, leftBamboosRef.current);
+      if (rightCanvasRef.current) render(rightCanvasRef, rightBamboosRef.current);
       
       animationRef.current = requestAnimationFrame(animate);
     };
 
     const setup = () => {
        const dpr = window.devicePixelRatio || 1;
-       const configCanvas = (ref: React.RefObject<HTMLCanvasElement>, side: 'left' | 'right') => {
+        const configCanvas = (ref: React.RefObject<HTMLCanvasElement | null>, side: 'left' | 'right') => {
          if (!ref.current) return [];
          const r = ref.current.getBoundingClientRect();
          ref.current.width = r.width * dpr;

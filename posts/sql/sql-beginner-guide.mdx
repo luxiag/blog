@@ -1,0 +1,612 @@
+---
+title: 'SQL 入门：从零到能写出好查询的系统指南'
+date: '2026-01-22'
+description: '一篇系统全面、通俗易懂的 SQL 入门文章：从查询、聚合、连接到事务、索引与性能调优，并覆盖常见坑与不同数据库方言差异。'
+tags: ['SQL', 'Database', 'Tutorial', 'Backend']
+---
+
+# SQL 入门：从零到能写出好查询的系统指南
+
+SQL（Structured Query Language）是**关系型数据库**的通用语言。你可以用它：
+
+- 查数据（查询、筛选、排序、统计）
+- 改数据（插入、更新、删除）
+- 管数据（建表、加约束、建索引、事务控制、权限）
+
+本文目标：让你在读完后能把 SQL 当成一门“表达数据问题”的语言，写出**正确、可读、可维护、可优化**的查询。
+
+> 说明：不同数据库（MySQL / PostgreSQL / SQL Server / SQLite）在语法细节上有差异。本文以“通用 SQL 思维”为主，关键差异会单独标注。
+
+---
+
+## 1. 先建立 SQL 的整体认知
+
+### 1.1 关系型数据库在解决什么问题？
+
+关系型数据库（RDBMS）把数据组织成“表（Table）”，表由“行（Row）”和“列（Column）”组成。
+
+- 列：字段含义与类型（例如 `price` 是数值）
+- 行：一条记录（例如一笔订单）
+- 主键：唯一标识一行（例如 `id`）
+- 外键：建立表与表之间关系（例如 `orders.user_id -> users.id`）
+
+SQL 的核心是：**用集合（set）的方式处理数据**。
+
+### 1.2 SQL 的两大类工作
+
+- **DQL**（查询）：`SELECT`
+- **DML**（写入/修改/删除）：`INSERT` / `UPDATE` / `DELETE`
+- **DDL**（定义结构）：`CREATE` / `ALTER` / `DROP`
+- **TCL**（事务控制）：`BEGIN` / `COMMIT` / `ROLLBACK`
+
+---
+
+## 2. 我们用一套示例数据贯穿全文
+
+为方便演示，假设你有以下表：
+
+```sql
+CREATE TABLE users (
+  id        BIGINT PRIMARY KEY,
+  name      VARCHAR(50) NOT NULL,
+  email     VARCHAR(200) NOT NULL,
+  created_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE products (
+  id    BIGINT PRIMARY KEY,
+  name  VARCHAR(100) NOT NULL,
+  price DECIMAL(10,2) NOT NULL
+);
+
+CREATE TABLE orders (
+  id         BIGINT PRIMARY KEY,
+  user_id    BIGINT NOT NULL,
+  status     VARCHAR(20) NOT NULL,
+  created_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE order_items (
+  order_id   BIGINT NOT NULL,
+  product_id BIGINT NOT NULL,
+  quantity   INT NOT NULL,
+  unit_price DECIMAL(10,2) NOT NULL,
+  PRIMARY KEY (order_id, product_id)
+);
+```
+
+你不需要立刻跑起来，先理解结构：
+
+- `users` 一对多 `orders`
+- `orders` 一对多 `order_items`
+- `products` 一对多 `order_items`
+
+---
+
+## 3. 最重要的语句：SELECT 查询
+
+### 3.1 SELECT 的基本结构
+
+```sql
+SELECT 列1, 列2
+FROM 表
+WHERE 条件
+ORDER BY 排序列
+LIMIT n;
+```
+
+一个常见的顺序认知：
+
+- 你写的时候通常是 `SELECT -> FROM -> WHERE ...`
+- 数据库执行时的逻辑顺序更像 `FROM -> WHERE -> GROUP BY -> HAVING -> SELECT -> ORDER BY -> LIMIT`
+
+理解逻辑顺序可以帮你解释很多“为什么不能在 WHERE 里用别名”等问题。
+
+### 3.2 选择列、别名与去重
+
+```sql
+SELECT id, name, email
+FROM users;
+
+SELECT name AS user_name
+FROM users;
+
+SELECT DISTINCT status
+FROM orders;
+```
+
+建议：除非你明确需要全部列，否则不要用 `SELECT *`。
+
+### 3.3 WHERE：过滤条件
+
+常见比较：`=`、`<>`（或 `!=`）、`>`、`>=`、`<`、`<=`。
+
+```sql
+SELECT id, status
+FROM orders
+WHERE status = 'PAID';
+```
+
+范围与集合：
+
+```sql
+SELECT id
+FROM products
+WHERE price BETWEEN 10 AND 100;
+
+SELECT id
+FROM orders
+WHERE status IN ('PAID', 'SHIPPED');
+```
+
+模糊匹配：
+
+```sql
+SELECT id, email
+FROM users
+WHERE email LIKE '%@example.com';
+```
+
+逻辑组合：
+
+```sql
+SELECT id
+FROM orders
+WHERE status = 'PAID'
+  AND created_at >= '2026-01-01'
+  AND created_at <  '2026-02-01';
+```
+
+#### NULL 的坑：必须用 IS NULL / IS NOT NULL
+
+```sql
+SELECT id
+FROM users
+WHERE email IS NULL;
+```
+
+原因：`NULL` 表示“未知”，`email = NULL` 不是 true，而是 unknown。
+
+### 3.4 ORDER BY 与分页
+
+```sql
+SELECT id, created_at
+FROM orders
+ORDER BY created_at DESC;
+```
+
+分页：
+
+- MySQL / PostgreSQL：`LIMIT 20 OFFSET 40`
+- SQL Server：`OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY`
+
+```sql
+SELECT id
+FROM orders
+ORDER BY created_at DESC
+LIMIT 20 OFFSET 40;
+```
+
+提示：真实业务里深分页成本很高，常用“基于游标”的方式（例如 `WHERE created_at < ?`）。
+
+---
+
+## 4. 聚合统计：GROUP BY 与 HAVING
+
+### 4.1 聚合函数
+
+`COUNT`、`SUM`、`AVG`、`MIN`、`MAX`。
+
+```sql
+SELECT COUNT(*) AS order_count
+FROM orders;
+
+SELECT user_id, COUNT(*) AS order_count
+FROM orders
+GROUP BY user_id;
+```
+
+### 4.2 GROUP BY 的规则（非常重要）
+
+当你写 `GROUP BY` 时：
+
+- `SELECT` 里的非聚合列必须出现在 `GROUP BY` 里（严格 SQL）
+- 某些数据库（如 MySQL 在特定模式）可能“放宽”，但结果不可预测，不建议依赖
+
+### 4.3 HAVING：对分组后的结果再过滤
+
+```sql
+SELECT user_id, COUNT(*) AS order_count
+FROM orders
+GROUP BY user_id
+HAVING COUNT(*) >= 3;
+```
+
+区别：
+
+- `WHERE` 过滤“行”
+- `HAVING` 过滤“分组后的结果”
+
+---
+
+## 5. 多表查询：JOIN 连接
+
+JOIN 是 SQL 的核心能力之一：把分散在不同表的数据拼成你需要的结果。
+
+### 5.1 INNER JOIN（只保留匹配到的）
+
+```sql
+SELECT o.id, o.status, u.name
+FROM orders o
+JOIN users u ON u.id = o.user_id;
+```
+
+### 5.2 LEFT JOIN（主表全保留）
+
+```sql
+SELECT u.id, u.name, o.id AS order_id
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id;
+```
+
+这能查出“没有订单的用户”（`order_id` 会是 `NULL`）。
+
+### 5.3 JOIN 常见坑：把条件写错位置
+
+如果你想查“所有用户及其已支付订单（没有也要出现）”，这两句不等价：
+
+```sql
+SELECT u.id, u.name, o.id AS order_id
+FROM users u
+LEFT JOIN orders o
+  ON o.user_id = u.id
+ AND o.status = 'PAID';
+```
+
+```sql
+SELECT u.id, u.name, o.id AS order_id
+FROM users u
+LEFT JOIN orders o
+  ON o.user_id = u.id
+WHERE o.status = 'PAID';
+```
+
+第二句会把 `LEFT JOIN` 变得更像 `INNER JOIN`（因为 `WHERE o.status='PAID'` 会过滤掉 `NULL` 行）。
+
+### 5.4 一条更完整的“业务查询”示例
+
+查询每个订单的明细与总价：
+
+```sql
+SELECT
+  o.id AS order_id,
+  u.name AS user_name,
+  SUM(oi.quantity * oi.unit_price) AS total_amount
+FROM orders o
+JOIN users u ON u.id = o.user_id
+JOIN order_items oi ON oi.order_id = o.id
+GROUP BY o.id, u.name;
+```
+
+---
+
+## 6. 子查询：把一个查询当成条件或表
+
+### 6.1 IN 子查询
+
+查“下过单的用户”：
+
+```sql
+SELECT id, name
+FROM users
+WHERE id IN (
+  SELECT DISTINCT user_id
+  FROM orders
+);
+```
+
+### 6.2 EXISTS：经常更高效的写法
+
+```sql
+SELECT u.id, u.name
+FROM users u
+WHERE EXISTS (
+  SELECT 1
+  FROM orders o
+  WHERE o.user_id = u.id
+);
+```
+
+经验法则：
+
+- `IN` 更像“把一堆值拿来比对”
+- `EXISTS` 更像“对每个外层行判断是否存在匹配”
+
+数据库优化器会做很多优化，但 `EXISTS` 常更稳健。
+
+---
+
+## 7. 集合运算：UNION / INTERSECT / EXCEPT
+
+把两个查询结果“拼接/取交集/取差集”。
+
+```sql
+SELECT id FROM orders WHERE status = 'PAID'
+UNION
+SELECT id FROM orders WHERE status = 'SHIPPED';
+```
+
+- `UNION` 会去重
+- `UNION ALL` 不去重，通常更快
+
+`INTERSECT`、`EXCEPT` 在 PostgreSQL / SQL Server 更常见；MySQL 对它们支持有限或需要替代写法。
+
+---
+
+## 8. CTE：WITH 让复杂 SQL 更可读
+
+CTE（Common Table Expression）可以把查询拆成“可命名的步骤”。
+
+```sql
+WITH paid_orders AS (
+  SELECT id, user_id
+  FROM orders
+  WHERE status = 'PAID'
+)
+SELECT u.id, u.name, COUNT(*) AS paid_count
+FROM users u
+JOIN paid_orders po ON po.user_id = u.id
+GROUP BY u.id, u.name;
+```
+
+很多场景下 CTE 主要提升可读性；不同数据库对 CTE 的优化策略不同。
+
+---
+
+## 9. 窗口函数：统计但不“折叠”行
+
+窗口函数适合做排名、累计、环比等分析需求。
+
+### 9.1 ROW_NUMBER：在分组内编号
+
+比如：每个用户的最近一笔订单。
+
+```sql
+WITH ranked AS (
+  SELECT
+    o.*,
+    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
+  FROM orders o
+)
+SELECT id, user_id, status, created_at
+FROM ranked
+WHERE rn = 1;
+```
+
+### 9.2 SUM OVER：累计求和
+
+```sql
+SELECT
+  o.user_id,
+  o.created_at,
+  SUM(1) OVER (PARTITION BY o.user_id ORDER BY o.created_at) AS cumulative_orders
+FROM orders o;
+```
+
+窗口函数是从“会写查询”到“写得很强”的分水岭，建议专门练。
+
+---
+
+## 10. 写数据：INSERT / UPDATE / DELETE
+
+### 10.1 INSERT
+
+```sql
+INSERT INTO users (id, name, email, created_at)
+VALUES (1, 'Alice', 'alice@example.com', '2026-01-01');
+```
+
+### 10.2 UPDATE
+
+```sql
+UPDATE orders
+SET status = 'SHIPPED'
+WHERE id = 1001;
+```
+
+强烈建议：写 `UPDATE/DELETE` 之前先把 `WHERE` 拿去跑一遍 `SELECT`，确认影响范围。
+
+### 10.3 DELETE
+
+```sql
+DELETE FROM orders
+WHERE id = 1001;
+```
+
+### 10.4 UPSERT（插入或更新）
+
+- PostgreSQL：`INSERT ... ON CONFLICT ... DO UPDATE`
+- MySQL：`INSERT ... ON DUPLICATE KEY UPDATE`
+- SQL Server：常用 `MERGE`（需谨慎）
+
+这是典型的“方言差异”，写文章/做项目时要确认你的数据库。
+
+---
+
+## 11. 建表与约束：把规则写进数据库
+
+### 11.1 常见约束
+
+- `PRIMARY KEY`：唯一且不为空
+- `UNIQUE`：唯一（允许多个 `NULL` 的行为因数据库而异）
+- `NOT NULL`：不允许为空
+- `FOREIGN KEY`：引用完整性
+- `CHECK`：检查约束（部分数据库支持程度不同）
+
+示例：
+
+```sql
+CREATE TABLE payments (
+  id       BIGINT PRIMARY KEY,
+  order_id BIGINT NOT NULL,
+  amount   DECIMAL(10,2) NOT NULL,
+  status   VARCHAR(20) NOT NULL,
+  CONSTRAINT fk_payments_order
+    FOREIGN KEY (order_id) REFERENCES orders(id),
+  CONSTRAINT chk_amount_positive
+    CHECK (amount > 0)
+);
+```
+
+把规则写在数据库里能减少“脏数据”出现的概率。
+
+---
+
+## 12. 事务：保证数据一致性的基础
+
+事务让一组操作“要么全部成功，要么全部失败”。
+
+```sql
+BEGIN;
+
+UPDATE products
+SET price = price * 0.9
+WHERE id = 2001;
+
+INSERT INTO orders (id, user_id, status, created_at)
+VALUES (3001, 1, 'PAID', '2026-01-10');
+
+COMMIT;
+```
+
+如果中途出错，可以：
+
+```sql
+ROLLBACK;
+```
+
+### 12.1 ACID 四个字母代表什么
+
+- 原子性：一个事务不可分割
+- 一致性：事务前后约束不被破坏
+- 隔离性：并发事务互不干扰（程度可调）
+- 持久性：提交后数据可靠落盘
+
+### 12.2 隔离级别（知道概念即可）
+
+不同隔离级别权衡“性能 vs 一致性”，会影响脏读、不可重复读、幻读等现象。
+
+---
+
+## 13. 索引：让查询快起来
+
+索引像书的目录：用空间换时间。
+
+### 13.1 什么时候索引有效？
+
+- `WHERE` 过滤列、`JOIN` 连接列、`ORDER BY` 排序列经常是索引候选
+- 索引不是越多越好：写入会变慢，维护成本会上升
+
+### 13.2 复合索引与最左前缀（通用规律）
+
+如果有复合索引 `(user_id, created_at)`，那么：
+
+- `WHERE user_id = ?` 常能用到
+- `WHERE user_id = ? AND created_at >= ?` 常能用到
+- `WHERE created_at >= ?` 通常用不到（因为缺少最左列）
+
+### 13.3 用执行计划定位瓶颈
+
+不同数据库命令不同：
+
+- PostgreSQL：`EXPLAIN (ANALYZE, BUFFERS) ...`
+- MySQL：`EXPLAIN ...`
+
+执行计划能告诉你是否走索引、预估行数、连接方式等。
+
+---
+
+## 14. 设计思维：写出更“好用”的表
+
+### 14.1 规范化的直觉（不追概念也能做对）
+
+- 一列只表达一件事（避免把多个值用逗号塞进一列）
+- 可变集合用子表表达（例如订单项用 `order_items`）
+- 不重复存储能推导的数据（减少一致性风险）
+
+### 14.2 命名与字段建议
+
+- 主键统一用 `id`
+- 外键用 `xxx_id`
+- 时间用 `created_at/updated_at`
+- 状态字段明确枚举范围（配合约束或业务层校验）
+
+---
+
+## 15. 常见错误与排查清单
+
+### 15.1 结果行数“异常多”
+
+通常是 JOIN 条件不完整导致“倍增”。做法：
+
+- 先单表 `SELECT COUNT(*)` 看规模
+- 再逐步加入 JOIN，每一步都检查行数变化
+- 确认连接键是否唯一/是否应该先聚合再 JOIN
+
+### 15.2 WHERE 条件写了但没命中索引
+
+常见原因：
+
+- 对列做了函数变换（例如 `WHERE DATE(created_at) = ...`）
+- 隐式类型转换（字符串和数字混用）
+- 条件选择性太差（过滤不掉多少行）
+
+### 15.3 NULL 引发的逻辑问题
+
+- `NOT IN` 遇到 `NULL` 容易出问题，很多场景用 `NOT EXISTS` 更可靠
+
+---
+
+## 16. 安全：永远不要拼接 SQL 字符串
+
+SQL 注入是最常见也最危险的问题之一。
+
+- 应用层使用参数化查询（Prepared Statement）
+- 数据库权限最小化（只给必要的读写权限）
+- 对输入做合理校验，但不要把“校验”当成注入防护的唯一手段
+
+---
+
+## 17. 方言差异速览（写 SQL 时要有意识）
+
+- 字符串/标识符引用：有的用单引号/双引号/反引号
+- 分页语法：`LIMIT/OFFSET` vs `TOP` vs `FETCH`
+- 日期函数：`NOW()`、`CURRENT_TIMESTAMP`、`DATEADD` 等
+- 布尔类型：有的是真布尔，有的是 `0/1`
+- `AUTO_INCREMENT` / `SERIAL` / `IDENTITY`
+
+当你从教程复制 SQL 到项目里跑不通，先问自己：**我用的数据库是哪种？**
+
+---
+
+## 18. 一页速查：从需求到 SQL 的思考路径
+
+- 需求要什么列：先写 `SELECT` 的输出形状
+- 数据在哪些表：写 `FROM` 并画关系
+- 如何过滤：写 `WHERE`（先行过滤通常更省）
+- 是否要汇总：需要就加 `GROUP BY` + 聚合
+- 是否要筛选汇总：用 `HAVING`
+- 是否要排序分页：`ORDER BY` + 分页
+- 性能不行：看执行计划，调整索引/改写查询
+
+---
+
+## 19. 练习题（建议动手写）
+
+1. 查最近 30 天下单用户的数量
+2. 查每个用户的订单总金额（没有订单也要显示 0）
+3. 查每个用户最近一笔订单的状态
+4. 查销量最高的前 10 个商品
+
+把这些题写熟，你就已经超过“只会 SELECT *”的阶段了。
+
