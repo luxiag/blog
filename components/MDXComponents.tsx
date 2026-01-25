@@ -120,13 +120,14 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
 
   const mdxComponents: Record<string, React.ComponentType<any>> = {
     h1: ({ children, ...props }: React.ComponentPropsWithoutRef<'h1'>) => (
-      <h1
-        id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-        className="font-sans text-3xl font-bold text-neutral-900 dark:text-neutral-100 border-b border-neutral-200 dark:border-neutral-700 pb-4 mb-6 mt-8"
-        {...props}
-      >
-        {children}
-      </h1>
+      // <h1
+      //   id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
+      //   className="font-sans text-3xl font-bold text-neutral-900 dark:text-neutral-100 border-b border-neutral-200 dark:border-neutral-700 pb-4 mb-6 mt-8"
+      //   {...props}
+      // >
+      //   {children}
+      // </h1>
+      null
     ),
     h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => (
       <h2

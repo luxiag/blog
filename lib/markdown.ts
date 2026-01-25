@@ -8,6 +8,7 @@ import remarkMath from 'remark-math';
 import { remarkDetails } from './remark-details';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
+import rehypeSlug from 'rehype-slug';
 import { calculateReadingTime } from './reading-time';
 import { Post, PostFrontMatter } from '@/types/blog';
 import { logger } from './logger';
@@ -31,7 +32,7 @@ function getPostFiles(dir: string, category?: string): PostFile[] {
 
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
-    
+
     if (entry.isDirectory()) {
       const subFiles = getPostFiles(fullPath, entry.name);
       files.push(...subFiles);
@@ -129,7 +130,7 @@ export async function getPostData(slug: string): Promise<Post> {
         const compiled = await compile(content, {
           outputFormat: 'function-body',
           remarkPlugins: [remarkGfm, remarkMath, remarkDetails],
-          rehypePlugins: [rehypeHighlight, rehypeKatex],
+          rehypePlugins: [rehypeSlug, rehypeHighlight, rehypeKatex],
         });
         compiledContent = String(compiled);
         isMdxCompiled = true;
@@ -165,14 +166,14 @@ export async function getPostData(slug: string): Promise<Post> {
 
 function ensureCategoryInTags(tags: string[], category?: string): string[] {
   if (!category) return tags;
-  
+
   const normalizedCategory = category.toLowerCase();
   const normalizedTags = tags.map(t => t.toLowerCase());
-  
+
   if (normalizedTags.includes(normalizedCategory)) {
     return tags;
   }
-  
+
   return [...tags, category];
 }
 
@@ -202,11 +203,33 @@ export function extractToc(content: string): TocItem[] {
   const headingRegex = /^(#{2,3})\s+(.+)$/gm;
   let match;
 
+  // 用于追踪 ID 出现的次数
+  const idCounts = new Map<string, number>();
+
   while ((match = headingRegex.exec(content)) !== null) {
     const level = match[1].length;
     const text = match[2].trim();
-    const id = text.toLowerCase().replace(/[^\u4e00-\u9fa5a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-    toc.push({ id, text, level });
+
+    // 基础 ID 生成逻辑
+    let baseId = text
+      .toLowerCase()
+      .replace(/[^\u4e00-\u9fa5a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    // 如果 ID 为空（例如标题全是特殊符号），给个默认值
+    if (!baseId) baseId = 'section';
+
+    // 关键：处理重复逻辑
+    let finalId = baseId;
+    const count = idCounts.get(baseId) || 0;
+
+    if (count > 0) {
+      finalId = `${baseId}-${count}`;
+    }
+
+    idCounts.set(baseId, count + 1);
+
+    toc.push({ id: finalId, text, level });
   }
 
   return toc;
