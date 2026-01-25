@@ -44,40 +44,29 @@ Draw Call 的开销在于 **CPU**。每次调用，CPU 都要检查状态、绑�
 ### 实战：Instancing 演示
 下面的示例模拟了实例化渲染。虽然 ShaderPreview 本身不支持真正的 Instancing API 调用，但我们可以通过 Shader 模拟这个过程：根据 `Instance ID` 计算偏移。
 
-<ShaderPreview title="Instancing Simulation" vertexCode={`
-// 模拟 Instancing：每个顶点都有一个 instanceID (这里用 uTime 模拟动态变化)
-attribute vec3 position;
-attribute vec2 uv;
+<ShaderPreview title="Grid Simulation" vertexCode={`
 varying vec2 vUv;
 varying vec3 vColor;
 uniform float uTime;
 
-// 伪随机函数
 float random(float n) { return fract(sin(n) * 43758.5453123); }
 
 void main() {
     vUv = uv;
     
-    // 假设我们要画 10x10 = 100 个实例
-    // 我们手动计算当前顶点属于哪个实例
-    // (在真实的 Instancing 中，这是通过 attribute 自动传入的)
+    // 1. 获取网格 ID：将 UV 分成 10x10 的整数格子
+    vec2 gridId = floor(uv * 10.0);
+    float id = gridId.x + gridId.y * 10.0;
     
-    vec3 pos = position * 0.1; // 缩小模型
+    vec3 pos = position;
     
-    // 模拟 100 个位置
-    float id = floor(uv.x * 10.0) + floor(uv.y * 10.0) * 10.0; 
+    // 2. 模拟动画：每个格子基于 ID 有不同的偏移
+    // 注意：在单个 Plane 上做模拟，我们其实是在“扭曲”整个平面
+    // 如果想要 100 个独立的点，通常需要真正的 InstancedBufferGeometry
+    pos.y += sin(uTime + id) * 0.1;
     
-    // 给每个实例一个随机偏移
-    float offsetX = random(id) * 2.0 - 1.0;
-    float offsetY = random(id + 1.0) * 2.0 - 1.0;
-    
-    // 简单的动画：随时间浮动
-    offsetY += sin(uTime + id) * 0.1;
-    
-    pos += vec3(offsetX, offsetY, 0.0);
-    
-    // 给每个实例不同的颜色
-    vColor = vec3(random(id), random(id+2.0), random(id+3.0));
+    // 生成随机颜色传给 Fragment
+    vColor = vec3(random(id), random(id + 1.0), random(id + 2.0));
     
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 }
@@ -86,14 +75,20 @@ varying vec2 vUv;
 varying vec3 vColor;
 
 void main() {
-    // 简单的圆形
-    float d = length(fract(vUv * 10.0) - 0.5);
-    if (d > 0.4) discard;
+    // 1. 在每个格子内部建立 0.0 - 1.0 的本地坐标
+    vec2 localUv = fract(vUv * 10.0);
     
-    gl_FragColor = vec4(vColor, 1.0);
+    // 2. 画圆：计算到格子中心的距离
+    float dist = length(localUv - 0.5);
+    
+    // 3. 边缘平滑处理 (比 discard 效果更好)
+    float mask = smoothstep(0.4, 0.38, dist);
+    
+    if (mask < 0.1) discard;
+    
+    gl_FragColor = vec4(vColor * mask, 1.0);
 }
 `} />
-
 ## 三、 纹理压缩：JPG 的谎言
 
 你有一张 1024x1024 的 JPG 图片，文件大小只有 100KB。你觉得它占多少显存？

@@ -103,7 +103,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
 
   const CompiledMDX = useMemo(() => {
     if (!isMdxCompiled) return null;
-    
+
     try {
       const fn = new Function(content);
       const result = fn.call(null, {
@@ -117,7 +117,15 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       return null;
     }
   }, [content, isMdxCompiled]);
-
+  const extractText = (node: React.ReactNode): string => {
+    if (node == null) return '';
+    if (typeof node === 'string' || typeof node === 'number') return String(node);
+    if (Array.isArray(node)) return node.map(extractText).join('');
+    if (React.isValidElement(node)) {
+      return extractText(node.props.children);
+    }
+    return '';
+  };
   const mdxComponents: Record<string, React.ComponentType<any>> = {
     h1: ({ children, ...props }: React.ComponentPropsWithoutRef<'h1'>) => (
       // <h1
@@ -189,7 +197,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       const videoSrc = typeof src === 'string' ? src : '';
       return (
         <figure className="my-6">
-          <div 
+          <div
             className="relative group cursor-pointer rounded-lg overflow-hidden shadow-sm inline-block"
             onClick={(e) => videoSrc && handleVideoClick(e, videoSrc)}
           >
@@ -231,7 +239,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           return <CodeRunner code={codeText} language={match[1]} />;
         }
       }
-      
+
       if (isInline) {
         return (
           <code
@@ -246,39 +254,19 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       return null;
     },
     pre: ({ children, ...props }: React.ComponentPropsWithoutRef<'pre'>) => {
-      const codeChild = children as React.ReactElement<{ className?: string; children?: React.ReactNode }>;
+      const codeChild = React.Children.only(children) as React.ReactElement;
       const codeProps = codeChild?.props || {};
-      const className = codeProps.className || '';
+      const className = codeProps?.className || '';
 
-      // 提取代码内容 - 处理可能是数组或对象的情况
-      const rawCodeContent = codeProps.children || '';
-      let codeString = '';
-
-      if (typeof rawCodeContent === 'string') {
-        codeString = rawCodeContent;
-      } else if (Array.isArray(rawCodeContent)) {
-        // 如果是数组，尝试提取文本内容
-        codeString = rawCodeContent.map(item => {
-          if (typeof item === 'string') return item;
-          if (React.isValidElement(item)) {
-            // 如果是 React 元素，尝试获取其 children
-            const childProps = item.props as { children?: React.ReactNode };
-            if (typeof childProps?.children === 'string') {
-              return childProps.children;
-            }
-          }
-          return '';
-        }).join('');
-      }
-
-      // console.log('pre - rawCodeContent:', rawCodeContent);
-      // console.log('pre - codeString:', codeString);
+      // 使用递归函数提取完整代码字符串
+      const codeString = extractText(codeProps.children).trimEnd();
 
       return (
         <CodeBlock className={className} codeContent={codeString} {...props}>
-          <code className={className}>{codeString}</code>
+          <code className={className}>{codeProps.children}</code>
         </CodeBlock>
       );
+
     },
     a: ({ href, children, ...props }: React.ComponentPropsWithoutRef<'a'>) => {
       const isExternal = href?.startsWith('http');
@@ -376,7 +364,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     details: ({ children, ...props }: React.ComponentPropsWithoutRef<'details'>) => {
       const detailsProps = props as { 'data-details-title'?: string; title?: string };
       const titleFromAttr = detailsProps?.['data-details-title'] || detailsProps?.title;
-      
+
       const getSummaryContent = () => {
         // 优先使用属性中的标题
         if (titleFromAttr) {

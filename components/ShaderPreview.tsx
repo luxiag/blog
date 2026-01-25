@@ -4,6 +4,7 @@ import React, { useRef, useMemo, useState, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { RefreshCw, Play, Pause } from 'lucide-react';
+import { Editor } from 'react-live';
 
 const DEFAULT_VERTEX_SHADER = `
 varying vec2 vUv;
@@ -50,6 +51,45 @@ function ShaderPlane({ fragmentShader, vertexShader = DEFAULT_VERTEX_SHADER, onE
   );
 }
 
+const cssVariableTheme = {
+  plain: {
+    color: 'var(--hljs-fg)',
+    backgroundColor: 'var(--hljs-bg)',
+  },
+  styles: [
+    { types: ['comment', 'prolog', 'doctype', 'cdata'], style: { color: 'var(--hljs-comment)' } },
+    { types: ['punctuation'], style: { color: 'var(--hljs-fg)', opacity: 0.7 } },
+    { types: ['namespace'], style: { opacity: 0.7 } },
+    { types: ['property', 'tag', 'boolean', 'number', 'constant', 'symbol', 'deleted'], style: { color: 'var(--hljs-number)' } },
+    { types: ['selector', 'attr-name', 'string', 'char', 'builtin', 'inserted'], style: { color: 'var(--hljs-string)' } },
+    { types: ['operator', 'entity', 'url', 'variable'], style: { color: 'var(--hljs-variable)' } },
+    { types: ['atrule', 'attr-value', 'keyword'], style: { color: 'var(--hljs-keyword)' } },
+    { types: ['function', 'class-name'], style: { color: 'var(--hljs-function)' } },
+    { types: ['regex', 'important'], style: { color: 'var(--hljs-regexp)' } },
+  ],
+};
+export function ShaderEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="w-full h-[300px]     overflow-hidden  relative">
+      <Editor
+        code={value}
+        onChange={onChange}
+        language="clike"
+        theme={cssVariableTheme}
+        className="overflow-auto"
+        style={{
+          fontFamily: '"Fira code", "Fira Mono", monospace',
+          fontSize: '14px',
+          height: '100%',
+          backgroundColor: 'transparent',
+        }}
+      />
+    </div>
+  );
+}
+
+
+
 interface ShaderPreviewProps {
   code: string; // The initial fragment shader code
   vertexCode?: string;
@@ -57,6 +97,12 @@ interface ShaderPreviewProps {
   editable?: boolean;
 }
 
+
+
+/**
+ * ShaderPreview 组件用于预览和编辑 GLSL 着色器代码
+ * 提供了代码编辑区和预览区，支持运行、重置等功能
+ */
 export default function ShaderPreview({ code: initialCode, vertexCode, title = "GLSL Preview", editable = true }: ShaderPreviewProps) {
   const [code, setCode] = useState(initialCode);
   const [activeCode, setActiveCode] = useState(initialCode); // Code actually running
@@ -109,12 +155,10 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
         {/* Code Editor Area */}
         <div className="relative group min-h-[300px] border-b md:border-b-0 md:border-r border-neutral-200 dark:border-neutral-700">
           {editable ? (
-            <textarea
+            <ShaderEditor
               value={code}
-              onChange={(e) => setCode(e.target.value)}
-              className="w-full h-full min-h-[300px] p-4 font-mono text-sm bg-neutral-50 dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 resize-none focus:outline-none focus:ring-inset focus:ring-2 focus:ring-orange-500/50"
-              spellCheck={false}
-              placeholder="Enter GLSL code..."
+              onChange={setCode}
+
             />
           ) : (
             <pre className="w-full h-full min-h-[300px] p-4 m-0 overflow-x-auto bg-neutral-50 dark:bg-neutral-900 font-mono text-sm text-neutral-800 dark:text-neutral-200">

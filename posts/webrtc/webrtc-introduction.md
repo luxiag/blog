@@ -2,11 +2,7 @@
 title: "WebRTC 入门指南：实现浏览器间的实时通信"
 date: "2024-01-15"
 excerpt: "WebRTC(Web Real-Time Communication)是一个开源项目，旨在通过浏览器实现实时音视频通信和数据传输。本文将介绍WebRTC的核心概念、工作原理和基本用法。"
-coverImage: "/images/webrtc-cover.jpg"
-author: {
-  name: "您的名字",
-  picture: "/images/author-avatar.jpg"
-}
+
 tags: ["WebRTC", "实时通信", "音视频", "Web开发"]
 ---
 
