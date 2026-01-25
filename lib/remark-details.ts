@@ -1,59 +1,59 @@
+import { visit } from 'unist-util-visit';
+
 function plugin() {
-  return (tree: unknown) => {
-    const children = (tree as { children?: Array<unknown> }).children;
-    if (!children) return;
+  return (tree: any) => {
+    visit(tree, (node: any, index: number | undefined, parent: any) => {
+      // 只处理段落节点
+      if (node.type !== 'paragraph') return;
 
-    const nodesToProcess: Array<{ start: number; end: number; title: string }> = [];
-    let i = 0;
+      // 检查是否是 ::: details 指令
+      const text = node.children?.[0]?.value;
+      if (typeof text !== 'string' || !text.startsWith('::: details')) return;
 
-    while (i < children.length) {
-      const node = children[i] as { type: string; value?: string };
+      // 提取标题
+      const titleMatch = text.match(/::: details\s+(.+)/);
+      const title = titleMatch ? titleMatch[1].trim() : 'Details';
 
-      if (node.type === 'paragraph' && typeof node.value === 'string' && node.value.startsWith('::: details')) {
-        const titleMatch = node.value.match(/::: details\s+(.+)/);
-        const title = titleMatch ? titleMatch[1].trim() : 'Details';
-        let depth = 1;
-        let j = i + 1;
+      // 查找结束标记
+      const siblings = parent?.children || [];
+      let endIndex = index! + 1;
+      let depth = 1;
 
-        while (j < children.length && depth > 0) {
-          const current = children[j] as { type: string; value?: string };
+      while (endIndex < siblings.length && depth > 0) {
+        const sibling = siblings[endIndex];
+        const siblingText = sibling?.children?.[0]?.value;
 
-          if (current.type === 'paragraph' && typeof current.value === 'string') {
-            if (current.value === '::: details') {
-              depth++;
-            } else if (current.value === ':::') {
-              depth--;
-              if (depth === 0) {
-                nodesToProcess.push({ start: i, end: j, title });
-                break;
-              }
-            }
+        if (typeof siblingText === 'string') {
+          if (siblingText.startsWith('::: details')) {
+            depth++;
+          } else if (siblingText === ':::') {
+            depth--;
           }
-          j++;
         }
-        i = j;
-      } else {
-        i++;
+
+        if (depth === 0) break;
+        endIndex++;
       }
-    }
 
-    for (let i = nodesToProcess.length - 1; i >= 0; i--) {
-      const { start, end, title } = nodesToProcess[i];
-      const detailsContent = children.slice(start + 1, end);
+      // 提取内容
+      const contentNodes = siblings.slice(index! + 1, endIndex);
 
+      // 创建 details 节点
       const detailsNode = {
-        type: 'html',
-        value: `<details data-details-title="${title}"><summary></summary>${detailsContent.map((c: unknown) => {
-          const node = c as { type: string; value?: string };
-          if (node.type === 'code') {
-            return `<pre><code>${node.value || ''}</code></pre>`;
-          }
-          return node.value || '';
-        }).join('\n')}</details>`,
+        type: 'mdxJsxFlowElement',
+        name: 'details',
+        attributes: [
+          { type: 'mdxJsxAttribute', name: 'data-details-title', value: title }
+        ],
+        children: [...contentNodes]
       };
 
-      children.splice(start, end - start + 1, detailsNode);
-    }
+      // 替换节点
+      parent.children.splice(index!, endIndex - index! + 1, detailsNode);
+
+      // 跳过已处理的节点
+      return index;
+    });
   };
 }
 

@@ -15,109 +15,13 @@ import InteractiveComponent from './InteractiveComponent';
 import ShaderPreview from './ShaderPreview';
 import CodePenDemo from './CodePenDemo';
 import SqlSimulator from './SqlSimulator';
-import { createLowlight } from 'lowlight';
-import sql from 'highlight.js/lib/languages/sql';
+import CodeBlock from './CodeBlock';
 import 'highlight.js/styles/github.css';
 import '../styles/code-highlight.css';
 import 'katex/dist/katex.min.css';
 
-const MAX_CODE_LINES = 15;
 
-// 创建 lowlight 实例
-const lowlight = createLowlight();
-// 注册 SQL 语言
-lowlight.register('sql', sql);
 
-function CodeBlock({ children, className, codeContent: propCodeContent, ...props }: { 
-  children?: React.ReactNode; 
-  className?: string;
-  codeContent?: string;
-}) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [highlightedCode, setHighlightedCode] = useState('');
-  
-  const codeChild = children as React.ReactElement<{ children?: React.ReactNode }>;
-  // 优先使用 propCodeContent，其次从 children 中提取
-  const codeContent = propCodeContent || codeChild?.props?.children || '';
-  const codeString = typeof codeContent === 'string' ? codeContent : '';
-  const lines = codeString.split('\n');
-  const showGradient = lines.length > MAX_CODE_LINES && !isExpanded;
-
-  const displayLines = isExpanded ? lines : lines.slice(0, MAX_CODE_LINES);
-  const displayContent = displayLines.join('\n');
-
-  // 代码高亮处理
-  useEffect(() => {
-    if (!displayContent) {
-      setHighlightedCode(displayContent);
-      return;
-    }
-
-    try {
-      // 提取语言
-      const match = /language-(\w+)/.exec(className || '');
-      const language = match ? match[1] : 'plaintext';
-
-      // 使用 lowlight 进行代码高亮
-      const result = lowlight.highlight(language, displayContent);
-
-      // 将 lowlight 的结果转换为 HTML
-      const html = result.children.map((node: any) => {
-        if (node.type === 'text') {
-          return node.value;
-        }
-        if (node.type === 'element') {
-          const className = node.properties?.className?.join(' ') || '';
-          const children = node.children.map((child: any) => {
-            if (child.type === 'text') {
-              return child.value;
-            }
-            return '';
-          }).join('');
-          return `<span class="${className}">${children}</span>`;
-        }
-        return '';
-      }).join('');
-
-      setHighlightedCode(html);
-    } catch (error) {
-      console.error('Error highlighting code:', error);
-      setHighlightedCode(displayContent);
-    }
-  }, [displayContent, className]);
-
-  // console.log(displayContent,'displayContent')
-  const toggleExpand = useCallback(() => {
-    setIsExpanded(prev => !prev);
-  }, []);
-
-  return (
-    <div className="relative my-4">
-      <div className={`overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 ${!isExpanded ? 'max-h-[400px]' : ''}`}>
-        <pre
-          className="p-4 overflow-x-auto font-mono text-sm leading-6 text-neutral-800 dark:text-neutral-200 m-0"
-          {...props}
-        >
-          <code 
-            className={className}
-            dangerouslySetInnerHTML={{ __html: highlightedCode || displayContent }}
-          />
-        </pre>
-        {showGradient && (
-          <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-white dark:from-neutral-900 to-transparent pointer-events-none" />
-        )}
-      </div>
-      {lines.length > MAX_CODE_LINES && (
-        <button
-          onClick={toggleExpand}
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 text-xs font-mono rounded-full shadow-lg hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors cursor-pointer z-10"
-        >
-          {isExpanded ? '收起代码' : `展开全部 (${lines.length} 行)`}
-        </button>
-      )}
-    </div>
-  );
-}
 
 const detailsArrowStyles = `
   .details-wrapper > summary:before {
@@ -469,23 +373,68 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       </td>
     ),
     details: ({ children, ...props }: React.ComponentPropsWithoutRef<'details'>) => {
-      const detailsProps = props as { 'data-details-title'?: string };
-      const titleFromAttr = detailsProps?.['data-details-title'];
+      const detailsProps = props as { 'data-details-title'?: string; title?: string };
+      const titleFromAttr = detailsProps?.['data-details-title'] || detailsProps?.title;
       
       const getSummaryContent = () => {
+        // 优先使用属性中的标题
+        if (titleFromAttr) {
+          return titleFromAttr;
+        }
+
+        // 检查第一个子元素是否是段落或文本
         if (Array.isArray(children) && children.length > 0) {
-          const firstChild = children[0] as React.ReactElement<{ children?: React.ReactNode }>;
-          if (firstChild?.props?.children) {
-            return firstChild.props.children;
+          const firstChild = children[0];
+
+          // 如果是 React 元素
+          if (React.isValidElement(firstChild)) {
+            // 如果是 p 元素，提取其内容作为标题
+            if ((firstChild.type as string) === 'p') {
+              return firstChild.props.children;
+            }
+            // 如果有 children 属性，提取其内容
+            if (firstChild.props?.children) {
+              return firstChild.props.children;
+            }
+          }
+
+          // 如果是字符串，直接作为标题
+          if (typeof firstChild === 'string') {
+            return firstChild;
           }
         }
-        return titleFromAttr || 'Details';
+
+        return 'Details';
       };
 
       const getBodyContent = () => {
-        if (Array.isArray(children)) {
-          return children.slice(1);
+        // 如果有标题属性，跳过第一个元素（summary）
+        if (titleFromAttr) {
+          if (Array.isArray(children) && children.length > 0) {
+            const firstChild = children[0];
+            // 如果第一个元素是 summary 元素，跳过它
+            if (React.isValidElement(firstChild) && (firstChild.type as string) === 'summary') {
+              return children.slice(1);
+            }
+          }
+          return children;
         }
+
+        // 如果没有标题属性，跳过第一个元素（作为标题）
+        if (Array.isArray(children) && children.length > 0) {
+          const firstChild = children[0];
+
+          // 如果第一个元素是 p 元素，跳过它
+          if (React.isValidElement(firstChild) && (firstChild.type as string) === 'p') {
+            return children.slice(1);
+          }
+
+          // 如果第一个元素是字符串，跳过它
+          if (typeof firstChild === 'string') {
+            return children.slice(1);
+          }
+        }
+
         return children;
       };
 
@@ -494,8 +443,11 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           className="details-wrapper border border-neutral-200 dark:border-neutral-700 rounded-lg overflow-hidden"
           {...props}
         >
-          <summary className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800 cursor-pointer font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors list-none">
-            {getSummaryContent()}
+          <summary className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800 cursor-pointer font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors list-none flex items-center justify-between w-full">
+            <span>{getSummaryContent()}</span>
+            <svg className="w-4 h-4 ml-2 transform transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
           </summary>
           <div className="p-4 bg-white dark:bg-neutral-900 [&>.my-4]:my-0">
             {getBodyContent()}
@@ -504,7 +456,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       );
     },
     summary: ({ children, ...props }: React.ComponentPropsWithoutRef<'summary'>) => {
-      return <div style={{ display: 'contents' }}>{children}</div>;
+      return <summary {...props}>{children}</summary>;
     },
     CodeRunner,
     InteractiveComponent,
