@@ -6,6 +6,7 @@ import { compile } from '@mdx-js/mdx';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { remarkDetails } from './remark-details';
+import { remarkAdmonitionsCustom } from './remark-admonitions-custom';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import rehypeSlug from 'rehype-slug';
@@ -133,11 +134,12 @@ export async function getPostData(slug: string): Promise<Post> {
 
     const processedContent = transformMarkdownDetails(content);
 
+
     if (isMdx) {
       try {
         const compiled = await compile(content, {
           outputFormat: 'function-body',
-          remarkPlugins: [remarkGfm, remarkMath, remarkDetails],
+          remarkPlugins: [remarkGfm, remarkMath, remarkDetails, [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'] }]],
           rehypePlugins: [rehypeSlug, rehypeHighlight, rehypeKatex],
         });
         compiledContent = String(compiled);
@@ -190,7 +192,7 @@ export async function getAllPosts(): Promise<Post[]> {
   const posts = await Promise.all(
     slugs.map(({ params }) => getPostData(params.slug))
   );
-
+  console.log('posts',posts)
   return posts.sort((a, b) => {
     if (a.date < b.date) {
       return 1;

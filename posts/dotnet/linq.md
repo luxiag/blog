@@ -1,8 +1,6 @@
 ---
 title: linq
 date: 2025-04-23
-category:
-  - DotNet
 ---
 
 LINQ 全称是 Language Integrated Query，它把查询语言集成到 .NET 编程语言中，比如 C# 或 VB.NET。LINQ 主要目的是简化数据查询，让你能在代码中像写 SQL 一样操作各种数据源。

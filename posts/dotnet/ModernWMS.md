@@ -1,5 +1,6 @@
 ---
 title: ModernWMS学习笔记
+date: 2025-04-25
 ---
 
 ## startup

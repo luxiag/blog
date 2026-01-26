@@ -1,8 +1,6 @@
 ---
 title: 泛型
 date: 2024-12-05
-category:
-  - DotNet
 ---
 
 # 没有泛型

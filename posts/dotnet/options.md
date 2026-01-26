@@ -1,8 +1,6 @@
 ---
 title: 选项 Options
 date: 2025-04-18
-category:
-  - DotNet
 --- 
 
 在 .NET 中，Options 是一套 用于绑定和管理配置的推荐做法，比直接使用 IConfiguration 更加强类型、安全、可维护。

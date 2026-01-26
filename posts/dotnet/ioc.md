@@ -1,8 +1,6 @@
 ---
 title: IOC和DI
 date: 2025-01-30
-category: 
-  - DotNet
 ---
 
 # IOC

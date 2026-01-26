@@ -1,7 +1,5 @@
 ---
 title: Entity Framework Core
-category: 
-    - DotNet
 date: 2024-08-05
 ---
 

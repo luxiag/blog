@@ -1,9 +1,6 @@
 ---
 title: 配置系统Configuration
 date: 2022-10-07
-category:
-  - DotNet
-
 ---
 
 

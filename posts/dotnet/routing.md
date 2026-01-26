@@ -1,8 +1,6 @@
 ---
 title: 路由 Routing
 date: 2025-04-16
-category:
-  - DotNet
 ---  
 
 用户请求哪个 URL 时，应该由哪个代码逻辑（控制器/页面/处理方法）来处理这个请求。

@@ -2,11 +2,6 @@
 title: AutoMapper
 subtitle: .NET对象映射的最佳实践
 date: 2023-03-15 16:25:33
-category:
-  - DotNet
-tags:
-  - AutoMapper
-  - 对象映射
 ---
 
 # 简介

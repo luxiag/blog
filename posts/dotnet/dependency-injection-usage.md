@@ -2,12 +2,6 @@
 title: 依赖注入
 subtitle: .NET Core 依赖注入完全指南
 date: 2023-03-15 16:25:33
-category:
-  - DotNet
-tags:
-  - 依赖注入
-  - DI
-  - 设计模式
 ---
 
 # 什么是依赖注入？

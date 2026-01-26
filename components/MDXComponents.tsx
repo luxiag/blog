@@ -7,7 +7,7 @@ import rehypeHighlight from 'rehype-highlight';
 import rehypeRaw from 'rehype-raw';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import remarkAdmonitions from 'remark-admonitions';
+import { remarkAdmonitionsCustom } from '@/lib/remark-admonitions-custom';
 import * as runtime from 'react/jsx-runtime';
 import Lightbox, { useLightbox } from './Lightbox';
 import type { MediaItem } from './Lightbox';
@@ -123,7 +123,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     if (typeof node === 'string' || typeof node === 'number') return String(node);
     if (Array.isArray(node)) return node.map(extractText).join('');
     if (React.isValidElement(node)) {
-      return extractText(node.props.children);
+      const element = node as React.ReactElement<{ children?: React.ReactNode }>;
+      return extractText(element.props.children);
     }
     return '';
   };
@@ -174,8 +175,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       const imgSrc = typeof src === 'string' ? src : '';
       const resolvedSrc = resolveImagePath(imgSrc);
       return (
-        <figure className="my-6">
-          <div className="relative group cursor-zoom-in inline-block" onClick={(e) => resolvedSrc && handleImageClick(e, resolvedSrc)}>
+        <>
+          <span className="relative group cursor-zoom-in inline-block my-6" onClick={(e) => resolvedSrc && handleImageClick(e, resolvedSrc)}>
             <img
               src={resolvedSrc}
               data-full-src={resolvedSrc}
@@ -184,47 +185,47 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
               className="rounded-lg shadow-sm max-w-full h-auto transition-transform duration-200 group-hover:scale-[1.01]"
               {...props}
             />
-            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 rounded-lg transition-colors" />
-          </div>
+            <span className="absolute inset-0 bg-black/0 group-hover:bg-black/5 rounded-lg transition-colors" />
+          </span>
           {alt && (
-            <figcaption className="text-center text-sm mt-3 italic text-neutral-500">
+            <p className="text-center text-sm mt-3 italic text-neutral-500">
               {alt}
-            </figcaption>
+            </p>
           )}
-        </figure>
+        </>
       );
     },
     video: ({ src, poster, controls, ...props }: React.ComponentPropsWithoutRef<'video'>) => {
       const videoSrc = typeof src === 'string' ? src : '';
       return (
-        <figure className="my-6">
-          <div
-            className="relative group cursor-pointer rounded-lg overflow-hidden shadow-sm inline-block"
+        <>
+          <span
+            className="relative group cursor-pointer rounded-lg overflow-hidden shadow-sm inline-block my-6"
             onClick={(e) => videoSrc && handleVideoClick(e, videoSrc)}
           >
             {poster ? (
-              <div className="relative">
+              <span className="relative">
                 <img src={poster} alt="" className="max-h-[400px] object-cover" />
-                <div className="absolute inset-0 bg-black/30 flex items-center justify-center group-hover:bg-black/40 transition-colors">
-                  <div className="w-16 h-16 rounded-full bg-white/90 flex items-center justify-center">
+                <span className="absolute inset-0 bg-black/30 flex items-center justify-center group-hover:bg-black/40 transition-colors">
+                  <span className="w-16 h-16 rounded-full bg-white/90 flex items-center justify-center">
                     <svg className="w-8 h-8 ml-1" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M8 5v14l11-7z" />
                     </svg>
-                  </div>
-                </div>
-              </div>
+                  </span>
+                </span>
+              </span>
             ) : (
-              <div className="w-full h-48 bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center rounded-lg">
-                <div className="w-16 h-16 rounded-full bg-neutral-200 dark:bg-neutral-700 flex items-center justify-center">
+              <span className="w-full h-48 bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center rounded-lg">
+                <span className="w-16 h-16 rounded-full bg-neutral-200 dark:bg-neutral-700 flex items-center justify-center">
                   <svg className="w-8 h-8 ml-1 text-neutral-500" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M8 5v14l11-7z" />
                   </svg>
-                </div>
-              </div>
+                </span>
+              </span>
             )}
-          </div>
+          </span>
           {controls && <p className="text-sm text-neutral-500 mt-2 text-center">点击播放视频</p>}
-        </figure>
+        </>
       );
     },
     code: ({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'>) => {
@@ -255,8 +256,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       return null;
     },
     pre: ({ children, ...props }: React.ComponentPropsWithoutRef<'pre'>) => {
-      const codeChild = React.Children.only(children) as React.ReactElement;
-      const codeProps = codeChild?.props || {};
+      const codeChild = React.Children.only(children) as React.ReactElement | null;
+      const codeProps = (codeChild?.props || {}) as { className?: string; children?: React.ReactNode };
       const className = codeProps?.className || '';
 
       // 使用递归函数提取完整代码字符串
@@ -378,13 +379,14 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
 
           // 如果是 React 元素
           if (React.isValidElement(firstChild)) {
+            const element = firstChild as React.ReactElement<{ children?: React.ReactNode }>;
             // 如果是 p 元素，提取其内容作为标题
-            if ((firstChild.type as string) === 'p') {
-              return firstChild.props.children;
+            if (typeof firstChild.type === 'string' && firstChild.type === 'p') {
+              return element.props.children;
             }
             // 如果有 children 属性，提取其内容
-            if (firstChild.props?.children) {
-              return firstChild.props.children;
+            if (element.props?.children) {
+              return element.props.children;
             }
           }
 
@@ -403,7 +405,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           if (Array.isArray(children) && children.length > 0) {
             const firstChild = children[0];
             // 如果第一个元素是 summary 元素，跳过它
-            if (React.isValidElement(firstChild) && (firstChild.type as string) === 'summary') {
+            if (React.isValidElement(firstChild) && typeof firstChild.type === 'string' && firstChild.type === 'summary') {
               return children.slice(1);
             }
           }
@@ -415,7 +417,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           const firstChild = children[0];
 
           // 如果第一个元素是 p 元素，跳过它
-          if (React.isValidElement(firstChild) && (firstChild.type as string) === 'p') {
+          if (React.isValidElement(firstChild) && typeof firstChild.type === 'string' && firstChild.type === 'p') {
             return children.slice(1);
           }
 
@@ -435,7 +437,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
         >
           <summary className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800 cursor-pointer font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors list-none flex items-center justify-between w-full">
             <span>{getSummaryContent()}</span>
-            <svg className="w-4 h-4 ml-2 transform transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4 ml-2 transform transition-transform details-[open]:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
           </summary>
@@ -478,11 +480,11 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       <style>{detailsArrowStyles}</style>
       <div className="mdx-content">
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath, [remarkAdmonitions, { keywords: ['details', 'note', 'warning', 'tip', 'important'] }]]}
+          remarkPlugins={[remarkGfm, remarkMath, [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'] }]]}
           rehypePlugins={[rehypeRaw, rehypeHighlight, rehypeKatex]}
           components={mdxComponents}
         >
-          {content}
+          {content || ''}
         </ReactMarkdown>
       </div>
       <Lightbox

@@ -1,8 +1,6 @@
 ---
 title: 身份认证 Authentication
 date: 2025-04-20
-category:
-  - DotNet
 ---
 
 Authentication（身份验证） 是一个核心的安全机制，用于验证用户的身份。它的主要目的是确定请求的发起者是否是他们声称的那个人。身份验证是安全体系中的第一步
