@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -16,51 +16,13 @@ import InteractiveComponent from './InteractiveComponent';
 import ShaderPreview from './ShaderPreview';
 import CodePenDemo from './CodePenDemo';
 import SqlSimulator from './SqlSimulator';
+import CodeBlock from './CodeBlock';
 import 'highlight.js/styles/github.css';
+import '../styles/code-highlight.css';
 import 'katex/dist/katex.min.css';
 
-const MAX_CODE_LINES = 15;
 
-function CodeBlock({ children, className, ...props }: { children: React.ReactNode; className?: string }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  
-  const codeChild = children as React.ReactElement<{ children?: React.ReactNode }>;
-  const codeContent = codeChild?.props?.children || '';
-  const codeString = typeof codeContent === 'string' ? codeContent : '';
-  const lines = codeString.split('\n');
-  const showGradient = lines.length > MAX_CODE_LINES && !isExpanded;
 
-  const displayLines = isExpanded ? lines : lines.slice(0, MAX_CODE_LINES);
-  const displayContent = displayLines.join('\n');
-
-  const toggleExpand = useCallback(() => {
-    setIsExpanded(prev => !prev);
-  }, []);
-
-  return (
-    <div className="relative my-4">
-      <div className={`overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 ${!isExpanded ? 'max-h-[400px]' : ''}`}>
-        <pre
-          className="p-4 overflow-x-auto font-mono text-sm leading-6 text-neutral-800 dark:text-neutral-200 m-0"
-          {...props}
-        >
-          <code className={className}>{displayContent}</code>
-        </pre>
-        {showGradient && (
-          <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-white dark:from-neutral-900 to-transparent pointer-events-none" />
-        )}
-      </div>
-      {lines.length > MAX_CODE_LINES && (
-        <button
-          onClick={toggleExpand}
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 text-xs font-mono rounded-full shadow-lg hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors cursor-pointer z-10"
-        >
-          {isExpanded ? '收起代码' : `展开全部 (${lines.length} 行)`}
-        </button>
-      )}
-    </div>
-  );
-}
 
 const detailsArrowStyles = `
   .details-wrapper > summary:before {
@@ -142,7 +104,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
 
   const CompiledMDX = useMemo(() => {
     if (!isMdxCompiled) return null;
-    
+
     try {
       const fn = new Function(content);
       const result = fn.call(null, {
@@ -156,16 +118,25 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       return null;
     }
   }, [content, isMdxCompiled]);
-
+  const extractText = (node: React.ReactNode): string => {
+    if (node == null) return '';
+    if (typeof node === 'string' || typeof node === 'number') return String(node);
+    if (Array.isArray(node)) return node.map(extractText).join('');
+    if (React.isValidElement(node)) {
+      return extractText(node.props.children);
+    }
+    return '';
+  };
   const mdxComponents: Record<string, React.ComponentType<any>> = {
     h1: ({ children, ...props }: React.ComponentPropsWithoutRef<'h1'>) => (
-      <h1
-        id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-        className="font-sans text-3xl font-bold text-neutral-900 dark:text-neutral-100 border-b border-neutral-200 dark:border-neutral-700 pb-4 mb-6 mt-8"
-        {...props}
-      >
-        {children}
-      </h1>
+      // <h1
+      //   id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
+      //   className="font-sans text-3xl font-bold text-neutral-900 dark:text-neutral-100 border-b border-neutral-200 dark:border-neutral-700 pb-4 mb-6 mt-8"
+      //   {...props}
+      // >
+      //   {children}
+      // </h1>
+      null
     ),
     h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => (
       <h2
@@ -227,7 +198,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       const videoSrc = typeof src === 'string' ? src : '';
       return (
         <figure className="my-6">
-          <div 
+          <div
             className="relative group cursor-pointer rounded-lg overflow-hidden shadow-sm inline-block"
             onClick={(e) => videoSrc && handleVideoClick(e, videoSrc)}
           >
@@ -269,7 +240,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           return <CodeRunner code={codeText} language={match[1]} />;
         }
       }
-      
+
       if (isInline) {
         return (
           <code
@@ -284,15 +255,19 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       return null;
     },
     pre: ({ children, ...props }: React.ComponentPropsWithoutRef<'pre'>) => {
-      const codeChild = children as React.ReactElement<{ className?: string; children?: React.ReactNode }>;
+      const codeChild = React.Children.only(children) as React.ReactElement;
       const codeProps = codeChild?.props || {};
-      const className = codeProps.className || '';
-      
+      const className = codeProps?.className || '';
+
+      // 使用递归函数提取完整代码字符串
+      const codeString = extractText(codeProps.children).trimEnd();
+
       return (
-        <CodeBlock className={className} {...props}>
-          {children}
+        <CodeBlock className={className} codeContent={codeString} {...props}>
+          <code className={className}>{codeProps.children}</code>
         </CodeBlock>
       );
+
     },
     a: ({ href, children, ...props }: React.ComponentPropsWithoutRef<'a'>) => {
       const isExternal = href?.startsWith('http');
@@ -388,25 +363,69 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       </td>
     ),
     details: ({ children, ...props }: React.ComponentPropsWithoutRef<'details'>) => {
-      const detailsProps = props as { 'data-details-title'?: string };
-      const titleFromAttr = detailsProps?.['data-details-title'];
-      const childArray = React.Children.toArray(children);
-      const summaryIndex = childArray.findIndex(
-        (c) => React.isValidElement(c) && c.type === 'summary'
-      );
+      const detailsProps = props as { 'data-details-title'?: string; title?: string };
+      const titleFromAttr = detailsProps?.['data-details-title'] || detailsProps?.title;
 
-      const summaryEl = summaryIndex >= 0 ? childArray[summaryIndex] : null;
-      const summaryChildren =
-        summaryEl && React.isValidElement(summaryEl) ? summaryEl.props.children : null;
-      
       const getSummaryContent = () => {
-        if (summaryChildren) return summaryChildren;
-        return titleFromAttr ?? 'Details';
+        // 优先使用属性中的标题
+        if (titleFromAttr) {
+          return titleFromAttr;
+        }
+
+        // 检查第一个子元素是否是段落或文本
+        if (Array.isArray(children) && children.length > 0) {
+          const firstChild = children[0];
+
+          // 如果是 React 元素
+          if (React.isValidElement(firstChild)) {
+            // 如果是 p 元素，提取其内容作为标题
+            if ((firstChild.type as string) === 'p') {
+              return firstChild.props.children;
+            }
+            // 如果有 children 属性，提取其内容
+            if (firstChild.props?.children) {
+              return firstChild.props.children;
+            }
+          }
+
+          // 如果是字符串，直接作为标题
+          if (typeof firstChild === 'string') {
+            return firstChild;
+          }
+        }
+
+        return 'Details';
       };
 
       const getBodyContent = () => {
-        if (summaryIndex < 0) return children;
-        return childArray.filter((_, idx) => idx !== summaryIndex);
+        // 如果有标题属性，跳过第一个元素（summary）
+        if (titleFromAttr) {
+          if (Array.isArray(children) && children.length > 0) {
+            const firstChild = children[0];
+            // 如果第一个元素是 summary 元素，跳过它
+            if (React.isValidElement(firstChild) && (firstChild.type as string) === 'summary') {
+              return children.slice(1);
+            }
+          }
+          return children;
+        }
+
+        // 如果没有标题属性，跳过第一个元素（作为标题）
+        if (Array.isArray(children) && children.length > 0) {
+          const firstChild = children[0];
+
+          // 如果第一个元素是 p 元素，跳过它
+          if (React.isValidElement(firstChild) && (firstChild.type as string) === 'p') {
+            return children.slice(1);
+          }
+
+          // 如果第一个元素是字符串，跳过它
+          if (typeof firstChild === 'string') {
+            return children.slice(1);
+          }
+        }
+
+        return children;
       };
 
       return (
@@ -414,14 +433,20 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           className="details-wrapper border border-neutral-200 dark:border-neutral-700 rounded-lg overflow-hidden"
           {...props}
         >
-          <summary className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800 cursor-pointer font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors list-none">
-            {getSummaryContent()}
+          <summary className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800 cursor-pointer font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors list-none flex items-center justify-between w-full">
+            <span>{getSummaryContent()}</span>
+            <svg className="w-4 h-4 ml-2 transform transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
           </summary>
            <div className="p-4 bg-white dark:bg-neutral-900 [&_pre]:my-0">
              {getBodyContent()}
            </div>
         </details>
       );
+    },
+    summary: ({ children, ...props }: React.ComponentPropsWithoutRef<'summary'>) => {
+      return <summary {...props}>{children}</summary>;
     },
     CodeRunner,
     InteractiveComponent,

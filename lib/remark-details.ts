@@ -1,93 +1,59 @@
-type MdastNode = {
-  type: string;
-  value?: string;
-  name?: string;
-  children?: MdastNode[];
-  attributes?: Array<{ type: string; name: string; value?: unknown }>;
-};
-
-function getParagraphText(node: MdastNode): string | null {
-  if (node.type !== 'paragraph' || !Array.isArray(node.children)) return null;
-  const parts: string[] = [];
-  for (const child of node.children) {
-    if (child.type !== 'text' || typeof child.value !== 'string') return null;
-    parts.push(child.value);
-  }
-  return parts.join('');
-}
+import { visit } from 'unist-util-visit';
 
 function plugin() {
-  return (tree: unknown) => {
-    const root = tree as { children?: MdastNode[] };
-    const children = root.children;
-    if (!children) return;
+  return (tree: any) => {
+    visit(tree, (node: any, index: number | undefined, parent: any) => {
+      // 只处理段落节点
+      if (node.type !== 'paragraph') return;
 
-    const nodesToProcess: Array<{ start: number; end: number; title: string }> = [];
-    let i = 0;
+      // 检查是否是 ::: details 指令
+      const text = node.children?.[0]?.value;
+      if (typeof text !== 'string' || !text.startsWith('::: details')) return;
 
-    while (i < children.length) {
-      const node = children[i];
-      const text = node ? getParagraphText(node) : null;
-      const openMatch = text?.trim().match(/^:::\s*details(?:\s+(.+))?$/);
+      // 提取标题
+      const titleMatch = text.match(/::: details\s+(.+)/);
+      const title = titleMatch ? titleMatch[1].trim() : 'Details';
 
-      if (openMatch) {
-        const title = (openMatch[1] ?? 'Details').trim();
-        let depth = 1;
-        let j = i + 1;
+      // 查找结束标记
+      const siblings = parent?.children || [];
+      let endIndex = index! + 1;
+      let depth = 1;
 
-        while (j < children.length && depth > 0) {
-          const current = children[j];
-          const currentText = current ? getParagraphText(current) : null;
-          const trimmed = currentText?.trim();
+      while (endIndex < siblings.length && depth > 0) {
+        const sibling = siblings[endIndex];
+        const siblingText = sibling?.children?.[0]?.value;
 
-          if (trimmed) {
-            if (/^:::\s*details(?:\s+.+)?$/.test(trimmed)) {
-              depth++;
-            } else if (trimmed === ':::') {
-              depth--;
-              if (depth === 0) {
-                nodesToProcess.push({ start: i, end: j, title });
-                break;
-              }
-            }
+        if (typeof siblingText === 'string') {
+          if (siblingText.startsWith('::: details')) {
+            depth++;
+          } else if (siblingText === ':::') {
+            depth--;
           }
-
-          j++;
         }
 
-        i = j + 1;
-      } else {
-        i++;
+        if (depth === 0) break;
+        endIndex++;
       }
-    }
 
-    for (let k = nodesToProcess.length - 1; k >= 0; k--) {
-      const { start, end, title } = nodesToProcess[k];
-      const detailsContent = children.slice(start + 1, end);
+      // 提取内容
+      const contentNodes = siblings.slice(index! + 1, endIndex);
 
-      const detailsNode: MdastNode = {
+      // 创建 details 节点
+      const detailsNode = {
         type: 'mdxJsxFlowElement',
         name: 'details',
         attributes: [
-          {
-            type: 'mdxJsxAttribute',
-            name: 'data-details-title',
-            value: title,
-          },
+          { type: 'mdxJsxAttribute', name: 'data-details-title', value: title }
         ],
-        children: [
-          {
-            type: 'mdxJsxFlowElement',
-            name: 'summary',
-            attributes: [],
-            children: [{ type: 'text', value: title }],
-          },
-          ...detailsContent,
-        ],
+        children: [...contentNodes]
       };
 
-      children.splice(start, end - start + 1, detailsNode);
-    }
+      // 替换节点
+      parent.children.splice(index!, endIndex - index! + 1, detailsNode);
+
+      // 跳过已处理的节点
+      return index;
+    });
   };
 }
 
