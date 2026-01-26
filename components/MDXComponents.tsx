@@ -260,7 +260,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       const className = codeProps?.className || '';
 
       // 使用递归函数提取完整代码字符串
-      const codeString = extractText(codeProps.children).trimEnd();
+      const codeString = extractText(codeProps?.children).trimEnd();
 
       return (
         <CodeBlock className={className} codeContent={codeString} {...props}>
