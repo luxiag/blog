@@ -1,4 +1,5 @@
 import { defineClientConfig } from 'vuepress/client'
+import { injectSpeedInsights } from '@vercel/speed-insights'
 
 import MyComponent from './components/custom/MyComponent.vue'
 import Tools from './components/ToolsLayout.vue'
@@ -11,5 +12,11 @@ export default defineClientConfig({
   },
   layouts: {
     Tools, Playground
+  },
+  setup() {
+    // Inject Vercel Speed Insights
+    if (typeof window !== 'undefined') {
+      injectSpeedInsights()
+    }
   }
 })
