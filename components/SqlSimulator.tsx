@@ -24,7 +24,8 @@ declare global {
 let sqlJsModulePromise: Promise<SqlJsModule> | null = null;
 
 const SQLJS_VERSION = '1.10.3';
-const SQLJS_CDN_BASE = `https://cdn.jsdelivr.net/npm/sql.js@${SQLJS_VERSION}/dist`;
+// 使用本地 SQL.js 文件
+const SQLJS_LOCAL_PATH = '/sql';
 
 function loadSqlJsModule(): Promise<SqlJsModule> {
   if (typeof window === 'undefined') {
@@ -37,14 +38,14 @@ function loadSqlJsModule(): Promise<SqlJsModule> {
     const existing = document.querySelector('script[data-sqljs="true"]');
     if (existing && window.initSqlJs) {
       window
-        .initSqlJs({ locateFile: (file) => `${SQLJS_CDN_BASE}/${file}` })
+        .initSqlJs({ locateFile: (file) => `${SQLJS_LOCAL_PATH}/${file}` })
         .then(resolve)
         .catch(reject);
       return;
     }
 
     const script = document.createElement('script');
-    script.src = `${SQLJS_CDN_BASE}/sql-wasm.js`;
+    script.src = `${SQLJS_LOCAL_PATH}/sql-wasm.js`;
     script.async = true;
     script.dataset.sqljs = 'true';
     script.onload = () => {
@@ -53,7 +54,7 @@ function loadSqlJsModule(): Promise<SqlJsModule> {
         return;
       }
       window
-        .initSqlJs({ locateFile: (file) => `${SQLJS_CDN_BASE}/${file}` })
+        .initSqlJs({ locateFile: (file) => `${SQLJS_LOCAL_PATH}/${file}` })
         .then(resolve)
         .catch(reject);
     };
