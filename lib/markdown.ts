@@ -192,7 +192,6 @@ export async function getAllPosts(): Promise<Post[]> {
   const posts = await Promise.all(
     slugs.map(({ params }) => getPostData(params.slug))
   );
-  console.log('posts',posts)
   return posts.sort((a, b) => {
     if (a.date < b.date) {
       return 1;
