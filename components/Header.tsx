@@ -12,7 +12,7 @@ export default function Header() {
   useEffect(() => {
     const fetchPosts = async () => {
       try {
-        const response = await fetch('/api/posts');
+        const response = await fetch('/blog/posts.json');
         if (!response.ok) {
           throw new Error('Failed to fetch posts');
         }

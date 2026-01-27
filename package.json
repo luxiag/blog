@@ -4,11 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/copy-images.js && next build",
+    "build": "node scripts/copy-images.js && tsx scripts/generate-posts-json.ts && next build",
     "start": "next start",
     "lint": "eslint . --ext .ts,.tsx,.js,.jsx",
-    "export": "node scripts/copy-images.js && next build",
-    "copy:images": "node scripts/copy-images.js"
+    "export": "node scripts/copy-images.js && tsx scripts/generate-posts-json.ts && next build",
+    "copy:images": "node scripts/copy-images.js",
+    "generate-posts": "tsx scripts/generate-posts-json.ts"
   },
   "dependencies": {
     "@antv/g6": "^5.0.51",
@@ -52,6 +53,7 @@
     "unist-util-visit": "^5.1.0"
   },
   "devDependencies": {
+    "tsx": "^4.19.2",
     "@tailwindcss/postcss": "^4",
     "@types/js-yaml": "^4.0.5",
     "@types/node": "^20",
