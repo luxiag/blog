@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { OrbitControls, PerspectiveCamera, OrthographicCamera, Html, Environment, ContactShadows } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { themes } from 'prism-react-renderer';
-import { Stats } from '@react-three/drei'
+import { Stats } from '@react-three/drei';
 
 // Define the scope available to the code
 const scope = {

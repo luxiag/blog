@@ -75,10 +75,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       if (imageName.startsWith('images/')) {
         imageName = imageName.replace(/^images\//, '');
       }
-      const isDev = process.env.NODE_ENV === 'development';
-      if (isDev) {
-        return `/api/posts/${category}/images/${imageName}`;
-      }
+      // Always use /posts/... path since images are served from public directory
       return `/posts/${category}/images/${imageName}`;
     }
     return src;
@@ -111,6 +108,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
         Fragment: (runtime as unknown as { Fragment: unknown }).Fragment,
         jsx: (runtime as unknown as { jsx: unknown }).jsx,
         jsxs: (runtime as unknown as { jsxs: unknown }).jsxs,
+        action: undefined, // Provide action for Next.js Server Actions
       });
       return (result as { default: unknown }).default;
     } catch (e) {

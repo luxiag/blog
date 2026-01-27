@@ -2,7 +2,6 @@
 import { notFound } from 'next/navigation';
 import { getPostData, getAllPostSlugs, extractToc } from '@/lib/markdown';
 import MDXComponents from '@/components/MDXComponents';
-import AIChatBox from '@/components/AIChatBox';
 import TableOfContents from '@/components/TableOfContents';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -138,10 +137,10 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
       </div>
       
       {/* AI聊天框 */}
-      <AIChatBox 
+      {/* <AIChatBox 
         articleTitle={post.title} 
         articleContent={post.rawContent || post.content} 
-      />
+      /> */}
       </div>
     </>
   );

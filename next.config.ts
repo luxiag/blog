@@ -1,9 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  output: 'export',
   pageExtensions: ["js", "jsx", "md", "mdx", "ts", "tsx"],
   reactCompiler: true,
   images: {
+    unoptimized: true,
     remotePatterns: [
       {
         protocol: 'http',

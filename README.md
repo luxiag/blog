@@ -4,22 +4,22 @@
 
 ## 功能特点
 
-- 📝 使用 Markdown 编写博客文章
-- 🎨 基于 Tailwind CSS 的现代化设计
-- 📱 响应式布局，支持各种设备
-- 🔍 优秀的 SEO 支持
-- 🏷️ 文章标签系统
-- 📖 代码高亮显示
-- ⚡ 静态生成，快速加载
+* 📝 使用 Markdown 编写博客文章
+* 🎨 基于 Tailwind CSS 的现代化设计
+* 📱 响应式布局，支持各种设备
+* 🔍 优秀的 SEO 支持
+* 🏷️ 文章标签系统
+* 📖 代码高亮显示
+* ⚡ 静态生成，快速加载
 
 ## 技术栈
 
-- **框架**: Next.js 14 (App Router)
-- **语言**: TypeScript
-- **样式**: Tailwind CSS
-- **内容管理**: Markdown + Gray Matter
-- **Markdown 渲染**: React Markdown
-- **代码高亮**: rehype-highlight
+* **框架**: Next.js 14 (App Router)
+* **语言**: TypeScript
+* **样式**: Tailwind CSS
+* **内容管理**: Markdown + Gray Matter
+* **Markdown 渲染**: React Markdown
+* **代码高亮**: rehype-highlight
 
 ## 项目结构
 
@@ -102,22 +102,60 @@ tags: ["标签1", "标签2"]
 
 ## 自定义
 
-- 修改 `app/layout.tsx` 中的元数据来自定义网站标题、描述等
-- 修改 `components/Header.tsx` 和 `components/Footer.tsx` 来自定义页头和页脚
-- 修改 `tailwind.config.js` 来自定义样式主题
+* 修改 `app/layout.tsx` 中的元数据来自定义网站标题、描述等
+* 修改 `components/Header.tsx` 和 `components/Footer.tsx` 来自定义页头和页脚
+* 修改 `tailwind.config.js` 来自定义样式主题
+# GitHub Pages 部署指南
 
-## 部署
+本博客已配置为可以部署到 GitHub Pages。
 
-推荐使用 [Vercel](https://vercel.com) 部署，这是最简单的方式：
+## 部署步骤
 
-1. 将代码推送到 GitHub
-2. 在 Vercel 上导入你的 GitHub 仓库
-3. Vercel 会自动构建和部署你的应用
+1. **推送代码到 GitHub**
+   
 
-## 贡献
+```bash
+   git add .
+   git commit -m "Update blog"
+   git push origin main
+   ```
 
-欢迎提交 Issue 和 Pull Request！
+2. **启用 GitHub Pages**
+   - 进入 GitHub 仓库的 Settings
+   - 选择 Pages 选项
+   - 在 Source 下选择 GitHub Actions
+   - 保存设置
 
-## 许可证
+3. **自动部署**
+   - 每次推送到 main 分支时，GitHub Actions 会自动构建并部署
+   - 构建产物会输出到 `out` 目录
+   - 部署完成后，可以通过 `https://<username>.github.io/<repo>/` 访问
+
+## 本地构建测试
+
+在部署前，可以在本地测试构建：
+
+```bash
+npm run export
+```
+
+构建产物会在 `out` 目录中。
+
+## 注意事项
+
+1. **静态导出限制**
+   - API 路由不会被导出（GitHub Pages 不支持服务器端 API）
+   - 图片已复制到 public/posts 目录
+   - 交互式组件（ShaderPreview、CodePenDemo、SqlSimulator）在静态导出时可能有限制
+
+2. **图片优化**
+   - 使用 `unoptimized: true` 配置以避免 GitHub Pages 的图片优化问题
+   - 所有图片会在构建时复制到 public 目录
+
+3. **构建配置**
+   - 使用 `output: 'export'` 进行静态导出
+   - 构建前会自动复制博客图片到 public 目录
+
+# 许可证
 
 MIT

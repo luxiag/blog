@@ -141,6 +141,7 @@ export async function getPostData(slug: string): Promise<Post> {
           outputFormat: 'function-body',
           remarkPlugins: [remarkGfm, remarkMath, remarkDetails, [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'] }]],
           rehypePlugins: [rehypeSlug, rehypeHighlight, rehypeKatex],
+          development: process.env.NODE_ENV === 'development',
         });
         compiledContent = String(compiled);
         isMdxCompiled = true;

@@ -5,6 +5,13 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { RefreshCw, Play, Pause } from 'lucide-react';
 import { Editor } from 'react-live';
+import dynamic from 'next/dynamic';
+
+// Dynamically import the Canvas component to avoid SSR issues
+const DynamicCanvas = dynamic(() => import('@react-three/fiber').then(mod => ({ default: mod.Canvas })), {
+  ssr: false,
+  loading: () => <div className="w-full h-[300px] bg-neutral-900 animate-pulse" />
+});
 
 const DEFAULT_VERTEX_SHADER = `
 varying vec2 vUv;
@@ -185,13 +192,13 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
           )}
 
           <ErrorBoundary onError={(e) => setError(e.message)}>
-            <Canvas camera={{ position: [0, 0, 1] }} key={activeCode}>
+            <DynamicCanvas camera={{ position: [0, 0, 1] }} key={activeCode}>
               <ShaderPlane
                 fragmentShader={activeCode}
                 vertexShader={vertexCode}
                 onError={(err) => setError(err)}
               />
-            </Canvas>
+            </DynamicCanvas>
           </ErrorBoundary>
 
           {/* <div className="absolute bottom-2 right-2 text-[10px] text-white/50 font-mono pointer-events-none select-none">
