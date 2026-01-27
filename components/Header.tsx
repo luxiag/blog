@@ -2,29 +2,14 @@
 
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
-import SearchBox from './SearchBox';
-import { Post } from '@/types/blog';
+
+
 
 export default function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [posts, setPosts] = useState<Post[]>([]);
 
-  useEffect(() => {
-    const fetchPosts = async () => {
-      try {
-        const response = await fetch('/api/posts');
-        if (!response.ok) {
-          throw new Error('Failed to fetch posts');
-        }
-        const allPosts = await response.json();
-        setPosts(allPosts);
-      } catch (error) {
-        console.error('Error fetching posts:', error);
-      }
-    };
 
-    fetchPosts();
-  }, []);
+
 
   const toggleMenu = () => {
     setIsMenuOpen(!isMenuOpen);
@@ -49,12 +34,11 @@ export default function Header() {
             <Link href="/todos" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
               Todo
             </Link>
-            <SearchBox posts={posts} />
+     
           </nav>
 
           <div className="md:hidden flex items-center gap-4">
             <div className="w-full max-w-xs">
-              <SearchBox posts={posts} />
             </div>
             <button
               type="button"
