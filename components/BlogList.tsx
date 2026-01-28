@@ -72,7 +72,7 @@ export default function BlogList({ posts }: { posts: Post[] }) {
                 {yearPosts.map((post) => (
                   <Link
                     key={post.slug}
-                    href={`/blog/${post.slug}`}
+                    href={`/posts/${post.slug}`}
                     className="no-underline"
                   >
                     <BorderedCard>

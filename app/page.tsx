@@ -24,7 +24,7 @@ export default async function Home() {
             </p>
             <div className="flex flex-col sm:flex-row justify-center" style={{gap: '16px'}}>
               <Link 
-                href="/blog" 
+                href="/posts" 
                 className="transition-colors"
                 style={{
                   padding: '12px 32px',
@@ -81,7 +81,7 @@ export default async function Home() {
 
             <div className="text-center" style={{marginTop: '48px'}}>
               <Link 
-                href="/blog" 
+                href="/posts" 
                 className="inline-flex items-center transition-colors"
                 style={{
                   padding: '12px 24px',

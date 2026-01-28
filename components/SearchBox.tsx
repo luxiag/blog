@@ -35,7 +35,7 @@ export default function SearchBox({ posts }: SearchBoxProps) {
     setSearchTerm('');
     setSearchResults([]);
     setIsSearchOpen(false);
-    router.push(`/blog/${slug}`);
+    router.push(`/posts/${slug}`);
   };
 
   return (
