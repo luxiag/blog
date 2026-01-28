@@ -1,9 +1,12 @@
 
 import Image from 'next/image';
+import PageTitle from '@/components/PageTitle';
 
 export default function AboutPage() {
   return (
-    <div className="min-h-screen" style={{backgroundColor: 'var(--background)'}}>
+    <>
+      <PageTitle title="关于我" />
+      <div className="min-h-screen" style={{backgroundColor: 'var(--background)'}}>
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8" style={{padding: '48px 24px'}}>
         <h1 style={{fontSize: '48px', fontWeight: 900, marginBottom: '48px', fontFamily: 'var(--font-sans)', color: 'var(--foreground)'}}>关于我</h1>
 
@@ -86,5 +89,6 @@ export default function AboutPage() {
         </div>
       </div>
     </div>
+    </>
   );
 }

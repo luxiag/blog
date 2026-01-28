@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import PageTitle from '@/components/PageTitle';
 import {
   getCategories,
   getTodos,
@@ -362,7 +363,9 @@ export default function TodosPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-60px)] bg-white relative">
+    <>
+      <PageTitle title="待办事项" />
+      <div className="flex h-[calc(100vh-60px)] bg-white relative">
       {/* 左侧分类导航 */}
       <div className="w-60 border-r p-6">
         <h2 className="text-xl font-semibold font-sans mb-6 text-neutral-900 dark:text-neutral-100">
@@ -859,6 +862,7 @@ export default function TodosPage() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }

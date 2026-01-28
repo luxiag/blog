@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 构建脚本：先复制图片，再运行 Next.js 构建
 
-const { spawn } = require('child_process');
+import { spawn } from 'child_process';
 
 function runCommand(command, args, options) {
   return new Promise((resolve, reject) => {

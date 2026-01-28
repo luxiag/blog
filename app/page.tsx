@@ -1,13 +1,17 @@
 import Link from 'next/link';
 import { getAllPosts } from '@/lib/markdown';
 import BlogCard from '@/components/BlogCard';
+import PageTitle from '@/components/PageTitle';
 
 export default async function Home() {
   const posts = await getAllPosts();
   const featuredPosts = posts.slice(0, 3);
 
   return (
-    <div className="min-h-screen" style={{backgroundColor: 'var(--background)'}}>
+    <>
+      <PageTitle title="首页" />
+      <div className="min-h-screen" style={{backgroundColor: 'var(--background)'}}>
+      {/* Hero Section */}
       {/* Hero Section */}
       <section style={{backgroundColor: 'white', borderBottom: '1px solid var(--border-color)'}}>
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8" style={{padding: '96px 24px'}}>
@@ -182,6 +186,7 @@ export default async function Home() {
           </form>
         </div>
       </section>
-    </div>
+      </div>
+    </>
   );
 }

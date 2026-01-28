@@ -1,5 +1,5 @@
 ---
-title: C# 语言集成查询（LINQ）完全指南
+title: C# 语言集成查询（LINQ）完全指南 MiniMax总结版
 date: 2025-04-23
 description: 深入掌握 LINQ 查询语法、操作符、最佳实践与性能优化技巧
 category: dotnet
@@ -11,7 +11,7 @@ tags:
   - 函数式编程
 ---
 
-# C# 语言集成查询（LINQ）完全指南
+# C# 语言集成查询（LINQ）
 
 ## 引言
 

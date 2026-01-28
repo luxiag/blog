@@ -1,0 +1,216 @@
+
+.DocSearch-Hit-source {
+  background: white;
+}
+.DocSearch-Button {
+    background: white !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 8px !important;
+    height: 32px !important;
+    width: 100% !important;
+    max-width: 180px !important;
+    margin: 0 !important;
+    padding: 0 12px 0 36px !important;
+    transition: background-color 0.2s !important;
+    box-shadow: none !important;
+}
+
+.dark .DocSearch-Button {
+    background: oklch(0.21 0 0) !important;
+}
+
+.DocSearch-Button:hover {
+    border-color: var(--border-color) !important;
+    background-color: var(--color-neutral-100) !important;
+    box-shadow: none !important;
+}
+
+.DocSearch-Button-Placeholder {
+    font-size: 13px !important;
+    font-family: var(--font-mono) !important;
+    color: oklch(0.55 0 0) !important;
+}
+
+.DocSearch-Button-Icon {
+    left: 12px !important;
+    width: 16px !important;
+    height: 16px !important;
+}
+
+.DocSearch-Button .DocSearch-Search-Icon {
+    width: 16px !important;
+    height: 16px !important;
+    color: oklch(0.55 0 0);
+}
+
+.DocSearch-Button-Keys {
+    display: none !important;
+}
+
+/* 弹窗 */
+.DocSearch-Modal {
+    border-radius: 12px !important;
+    border: 1px solid var(--border-color) !important;
+    overflow: hidden !important;
+    background: white !important;
+    box-shadow: none !important;
+}
+
+.dark .DocSearch-Modal {
+    background: oklch(0.21 0 0) !important;
+    border-color: var(--border-color) !important;
+}
+
+.DocSearch-SearchBar {
+    border-bottom: 1px solid var(--border-color) !important;
+    padding: 12px 16px !important;
+}
+
+.DocSearch-Form {
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+.DocSearch-Input {
+    font-family: var(--font-mono) !important;
+    font-size: 14px !important;
+    color: var(--foreground) !important;
+    background: transparent !important;
+}
+
+.DocSearch-Input::placeholder {
+    color: oklch(0.55 0 0) !important;
+}
+
+/* 搜索结果列表 - 匹配设计规范 */
+.DocSearch-Hits {
+    padding: 8px !important;
+}
+
+.DocSearch-Hit {
+    margin: 0 0 8px 0 !important;
+    padding: 0 !important;
+}
+
+.DocSearch-Hit a {
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    background: white !important;
+    border-radius: 8px !important;
+    padding: 12px 12px !important;
+    box-shadow: none !important;
+    border: 1px solid var(--border-color) !important;
+    transition: background-color 0.2s !important;
+    min-height: auto !important;
+    height: auto !important;
+}
+
+.dark .DocSearch-Hit a {
+    background: oklch(0.21 0 0) !important;
+    border-color: var(--border-color) !important;
+}
+
+.DocSearch-Hit a:hover {
+    background-color: transparent !important;
+    border-color: var(--color-orange-800) !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+.dark .DocSearch-Hit a:hover {
+    background-color: transparent !important;
+}
+
+.DocSearch-Hit-Container {
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    flex: 1 !important;
+    min-width: 0 !important;
+}
+
+.DocSearch-Hit-icon {
+    display: none !important;
+}
+
+.DocSearch-Hit-title {
+    font-family: var(--font-mono) !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    color: var(--foreground) !important;
+    flex: 1 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+}
+
+.DocSearch-Hit-path {
+    display: none !important;
+}
+
+/* 选中高亮 - 只保留边框 */
+.DocSearch-Hit[aria-selected="true"] a {
+    background: transparent !important;
+    border-color: var(--color-orange-800) !important;
+}
+
+.DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-title {
+    color: var(--foreground) !important;
+    font-weight: 600 !important;
+}
+
+.DocSearch-Hit[aria-selected="true"] mark {
+    color: var(--foreground) !important;
+    background: transparent !important;
+    font-weight: 700 !important;
+    text-decoration: underline !important;
+}
+
+/* 移除箭头图标 */
+.DocSearch-Hit-Select-Icon {
+    display: none !important;
+}
+
+/* 分隔线 */
+.DocSearch-Hits + .DocSearch-Hits {
+    border-top: 1px solid var(--border-color) !important;
+    margin-top: 8px !important;
+    padding-top: 8px !important;
+}
+
+/* 底部 */
+.DocSearch-Footer {
+    border-top: 1px solid var(--border-color) !important;
+    padding: 8px 16px !important;
+    background: transparent !important;
+}
+
+.DocSearch-Commands {
+    display: none !important;
+}
+
+/* 关闭按钮 */
+.DocSearch-Close {
+    width: 20px !important;
+    height: 20px !important;
+    color: var(--foreground) !important;
+}
+
+/* 搜索来源 */
+.DocSearch-Logo .DocSearch-Label {
+    font-family: var(--font-mono) !important;
+    font-size: 11px !important;
+    color: oklch(0.55 0 0) !important;
+}
+
+/* 无结果 */
+.DocSearch-NoResults {
+    padding: 32px 16px !important;
+}
+
+.DocSearch-NoResults .DocSearch-Title {
+    font-family: var(--font-mono) !important;
+    font-size: 13px !important;
+    color: oklch(0.55 0 0) !important;
+}
