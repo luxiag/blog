@@ -12,6 +12,8 @@ export interface Todo {
   date: string;
   completed: boolean;
   isImportant: boolean;
+  isDaily?: boolean;
+  reminderTime?: string;
 }
 
 export interface Category {
@@ -189,14 +191,17 @@ export async function initializeData(): Promise<{ categories: Category[]; todos:
     { id: 'work', name: 'Work', icon: 'briefcase' },
   ];
   
+  const today = new Date().toISOString().split('T')[0];
   const defaultTodos: Todo[] = [
-    { id: 1, title: 'Make UI design', category: 'personal', date: '2024-12-12', completed: false, isImportant: true },
-    { id: 2, title: 'Code prototype', category: 'work', date: '2024-12-13', completed: true, isImportant: true },
-    { id: 3, title: 'User testing', category: 'work', date: '2024-12-13', completed: true, isImportant: false },
-    { id: 4, title: 'Handover', category: 'work', date: '2024-12-15', completed: false, isImportant: true },
-    { id: 5, title: 'Team sync', category: 'work', date: '2024-12-16', completed: false, isImportant: false },
-    { id: 6, title: 'Read book', category: 'personal', date: '2024-12-14', completed: false, isImportant: false },
-    { id: 7, title: 'Exercise', category: 'personal', date: '2024-12-14', completed: false, isImportant: true },
+    { id: 1, title: 'Make UI design', category: 'personal', date: today, completed: false, isImportant: true },
+    { id: 2, title: 'Code prototype', category: 'work', date: today, completed: false, isImportant: true },
+    { id: 3, title: 'User testing', category: 'work', date: today, completed: true, isImportant: false },
+    { id: 4, title: 'Handover', category: 'work', date: today, completed: false, isImportant: true },
+    { id: 5, title: 'Team sync', category: 'work', date: today, completed: false, isImportant: false },
+    { id: 6, title: 'Read book', category: 'personal', date: today, completed: false, isImportant: false },
+    { id: 7, title: 'Exercise', category: 'personal', date: today, completed: false, isImportant: true },
+    { id: 8, title: 'Morning Standup', category: 'work', date: today, completed: false, isImportant: true, isDaily: true, reminderTime: '09:00' },
+    { id: 9, title: 'Drink Water', category: 'personal', date: today, completed: false, isImportant: false, isDaily: true, reminderTime: '10:30' },
   ];
 
   const existingCategories = await getCategories();
@@ -215,4 +220,20 @@ export async function initializeData(): Promise<{ categories: Category[]; todos:
     categories: existingCategories.length > 0 ? existingCategories : defaultCategories,
     todos: existingTodos.length > 0 ? existingTodos : defaultTodos,
   };
+}
+
+export async function getDailyTodos(): Promise<Todo[]> {
+  const todos = await getTodos();
+  return todos.filter(todo => todo.isDaily);
+}
+
+export async function resetDailyTodosForNewDay(): Promise<void> {
+  const todos = await getTodos();
+  const today = new Date().toISOString().split('T')[0];
+  const dailyTodos = todos.filter(todo => todo.isDaily);
+
+  for (const todo of dailyTodos) {
+    const updatedTodo = { ...todo, date: today, completed: false };
+    await updateTodo(updatedTodo);
+  }
 }

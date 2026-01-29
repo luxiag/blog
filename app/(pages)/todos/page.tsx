@@ -12,6 +12,8 @@ import {
   deleteTodo,
   updateTodo,
   initializeData,
+  getDailyTodos,
+  resetDailyTodosForNewDay,
   Category,
   Todo,
 } from '@/lib/todos-db';
@@ -117,8 +119,10 @@ export default function TodosPage() {
   const [showAddTodo, setShowAddTodo] = useState(false);
   const [newTodoTitle, setNewTodoTitle] = useState('');
   const [newTodoCategory, setNewTodoCategory] = useState('personal');
-  const [newTodoDate, setNewTodoDate] = useState('');
+  const [newTodoDate, setNewTodoDate] = useState(new Date().toISOString().split('T')[0]);
   const [newTodoImportant, setNewTodoImportant] = useState(false);
+  const [newTodoDaily, setNewTodoDaily] = useState(false);
+  const [newTodoReminderTime, setNewTodoReminderTime] = useState('');
 
   // 右键菜单状态
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: string; data: any } | null>(null);
@@ -127,6 +131,14 @@ export default function TodosPage() {
   useEffect(() => {
     async function loadData() {
       try {
+        const today = new Date().toISOString().split('T')[0];
+        const lastVisit = localStorage.getItem('lastVisitDate');
+
+        if (lastVisit && lastVisit !== today) {
+          await resetDailyTodosForNewDay();
+        }
+        localStorage.setItem('lastVisitDate', today);
+
         const data = await initializeData();
         setCategories(data.categories);
         setTodos(data.todos);
@@ -137,6 +149,39 @@ export default function TodosPage() {
       }
     }
     loadData();
+  }, []);
+
+  // 请求通知权限和设置提醒
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // 定时检查提醒
+  useEffect(() => {
+    const checkReminders = setInterval(async () => {
+      const now = new Date();
+      const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const currentDate = now.toISOString().split('T')[0];
+
+      const dailyTodos = await getDailyTodos();
+
+      for (const todo of dailyTodos) {
+        if (todo.reminderTime && todo.reminderTime === currentTime && todo.date === currentDate && !todo.completed) {
+          if (Notification.permission === 'granted') {
+            new Notification(`提醒: ${todo.title}`, {
+              body: `时间到了！${now.toLocaleTimeString()}`,
+              icon: '/favicon.ico',
+            });
+          } else if (Notification.permission === 'default') {
+            Notification.requestPermission();
+          }
+        }
+      }
+    }, 60000);
+
+    return () => clearInterval(checkReminders);
   }, []);
 
   const year = currentDate.getFullYear();
@@ -174,6 +219,12 @@ export default function TodosPage() {
   const hasTodoOnDate = useCallback((day: number) => {
     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     return todos.some(t => t.date === dateStr);
+  }, [todos, year, month]);
+
+  // 获取某日期是否有每日待办
+  const hasDailyTodoOnDate = useCallback((day: number) => {
+    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    return todos.some(t => t.date === dateStr && t.isDaily);
   }, [todos, year, month]);
 
   // 切换待办完成状态
@@ -261,20 +312,27 @@ export default function TodosPage() {
 
   // 添加待办
   const handleAddTodo = async () => {
-    if (newTodoTitle.trim() && newTodoDate) {
+    if (newTodoTitle.trim()) {
+      const today = new Date().toISOString().split('T')[0];
+      const finalDate = newTodoDaily ? today : (newTodoDate || today);
+
       const newTodo: Todo = {
         id: Date.now(),
         title: newTodoTitle,
         category: newTodoCategory,
-        date: newTodoDate,
+        date: finalDate,
         completed: false,
         isImportant: newTodoImportant,
+        isDaily: newTodoDaily,
+        reminderTime: newTodoDaily ? newTodoReminderTime : undefined,
       };
       await addTodo(newTodo);
       setTodos(prev => [...prev, newTodo]);
       setNewTodoTitle('');
       setNewTodoDate('');
       setNewTodoImportant(false);
+      setNewTodoDaily(false);
+      setNewTodoReminderTime('');
       setShowAddTodo(false);
     }
   };
@@ -526,6 +584,11 @@ export default function TodosPage() {
 
                   <span className={`flex-1 text-sm font-medium font-sans ${todo.completed ? 'line-through' : ''} text-neutral-900 dark:text-neutral-100`}>
                     {todo.title}
+                    {todo.isDaily && (
+                      <span className="ml-2 inline-flex items-center px-1.5 py-0.5 text-xs font-mono rounded bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-300">
+                        Daily
+                      </span>
+                    )}
                   </span>
 
                   <span className={`px-2 py-1 text-xs font-mono rounded ${
@@ -639,6 +702,7 @@ export default function TodosPage() {
               const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
               const isSelected = selectedDate === dateStr;
               const hasTodo = hasTodoOnDate(day);
+              const hasDaily = hasDailyTodoOnDate(day);
 
               return (
                 <button
@@ -653,8 +717,12 @@ export default function TodosPage() {
                   }`}
                 >
                   {day}
-                  {/* 有待办时显示的圆点 */}
-                  {hasTodo && !isSelected && (
+                  {/* 每日待办显示橙色方块 */}
+                  {hasDaily && !isSelected && (
+                    <div className="absolute bottom-1 w-1.5 h-1 bg-orange-600 rounded-sm" />
+                  )}
+                  {/* 非每日待办显示圆点 */}
+                  {hasTodo && !hasDaily && !isSelected && (
                     <div className="absolute bottom-1.5 w-1 h-1 rounded-full bg-orange-800" />
                   )}
                 </button>
@@ -775,10 +843,10 @@ export default function TodosPage() {
           className="fixed inset-0 flex items-center justify-center z-50 bg-black/50"
           onClick={() => setShowAddTodo(false)}
         >
-          <div
-            className="bg-white dark:bg-neutral-800 rounded-xl p-6 w-90"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div
+          className="bg-white dark:bg-neutral-800 rounded-xl p-6 w-96 max-w-[90vw]"
+          onClick={(e) => e.stopPropagation()}
+        >
             <h3 className="text-lg font-semibold mb-4 text-neutral-900 dark:text-neutral-100">
               Add Todo
             </h3>
@@ -815,18 +883,23 @@ export default function TodosPage() {
 
               <div className="flex-1">
                 <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
-                  Date
+                  Date {!newTodoDaily && '(Optional)'}
                 </label>
                 <input
                   type="date"
                   value={newTodoDate}
                   onChange={(e) => setNewTodoDate(e.target.value)}
-                  className="w-full px-3 py-2.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                  disabled={newTodoDaily}
+                  className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 ${
+                    newTodoDaily
+                      ? 'border-neutral-200 dark:border-neutral-600 text-neutral-400 cursor-not-allowed'
+                      : 'border-neutral-300 dark:border-neutral-600'
+                  }`}
                 />
               </div>
             </div>
 
-            <div className="mb-5">
+            <div className="mb-5 space-y-3">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -838,22 +911,48 @@ export default function TodosPage() {
                   Mark as Important
                 </span>
               </label>
+
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newTodoDaily}
+                  onChange={(e) => setNewTodoDaily(e.target.checked)}
+                  className="w-4 h-4 cursor-pointer accent-neutral-900 dark:accent-neutral-100"
+                />
+                <span className="text-sm text-neutral-900 dark:text-neutral-100">
+                  Daily Repeat
+                </span>
+              </label>
+
+              {newTodoDaily && (
+                <div className="ml-6">
+                  <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
+                    Reminder Time
+                  </label>
+                  <input
+                    type="time"
+                    value={newTodoReminderTime}
+                    onChange={(e) => setNewTodoReminderTime(e.target.value)}
+                    className="px-3 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                  />
+                </div>
+              )}
             </div>
 
-            <div className="flex gap-2 justify-end">
+            <div className="flex gap-2 justify-end mt-6">
               <button
                 onClick={() => setShowAddTodo(false)}
-                className="px-4 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-all text-neutral-900 dark:text-neutral-100"
+                className="px-4 py-2.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-all text-neutral-900 dark:text-neutral-100"
               >
                 Cancel
               </button>
               <button
                 onClick={handleAddTodo}
-                disabled={!newTodoTitle.trim() || !newTodoDate}
-                className={`px-4 py-2 text-sm rounded-lg transition-all cursor-pointer ${
-                  newTodoTitle.trim() && newTodoDate
-                    ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900'
-                    : 'bg-neutral-300 dark:bg-neutral-600 text-neutral-500 dark:text-neutral-400'
+                disabled={!newTodoTitle.trim()}
+                className={`px-5 py-2.5 text-sm font-medium rounded-lg transition-all ${
+                  newTodoTitle.trim()
+                    ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 cursor-pointer'
+                    : 'bg-gray-300 dark:bg-gray-600 text-gray-600 dark:text-gray-300 cursor-not-allowed'
                 }`}
               >
                 Add
