@@ -20,7 +20,7 @@ export default function Header() {
             </Link>
           </div>
 
-          <nav className="hidden md:flex items-center gap-8">
+            <nav className="hidden md:flex items-center gap-8">
             <Link href="/" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
               Home
             </Link>
@@ -29,6 +29,9 @@ export default function Header() {
             </Link>
             <Link href="/todos" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
               Todo
+            </Link>
+            <Link href="/tools" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
+              Tools
             </Link>
             <AlgoliaSearch />
           </nav>
@@ -56,7 +59,7 @@ export default function Header() {
 
         {isMenuOpen && (
           <div className="md:hidden pb-4 border-t border-neutral-200 dark:border-neutral-800 mt-3 pt-3">
-            <nav className="flex flex-col gap-4">
+              <nav className="flex flex-col gap-4">
               <Link href="/" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
                 首页
               </Link>
@@ -65,6 +68,9 @@ export default function Header() {
               </Link>
               <Link href="/todos" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
                 Todo
+              </Link>
+              <Link href="/tools" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
+                工具箱
               </Link>
               <Link href="/about" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
                 关于

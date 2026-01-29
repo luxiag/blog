@@ -63,7 +63,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
       <div className="min-h-screen" style={{backgroundColor: 'var(--background)'}}>
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8" style={{padding: '48px 24px'}}>
         <div style={{marginBottom: '32px'}}>
-          <Link href="/blog" className="inline-flex items-center transition-colors" style={{color: 'var(--color-orange-800)', fontSize: '14px', fontFamily: 'var(--font-mono)'}}>
+          <Link href="/posts" className="inline-flex items-center transition-colors" style={{color: 'var(--color-orange-800)', fontSize: '14px', fontFamily: 'var(--font-mono)'}}>
             <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
               <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
@@ -128,7 +128,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
 
         <div style={{marginTop: '48px', paddingTop: '32px', borderTop: '1px solid var(--border-color)'}}>
           <div className="text-center">
-            <Link href="/blog" className="inline-flex items-center transition-colors" style={{color: 'var(--color-orange-800)', fontSize: '14px', fontFamily: 'var(--font-mono)'}}>
+            <Link href="/posts" className="inline-flex items-center transition-colors" style={{color: 'var(--color-orange-800)', fontSize: '14px', fontFamily: 'var(--font-mono)'}}>
               <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
               </svg>
