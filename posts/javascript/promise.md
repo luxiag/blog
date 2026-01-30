@@ -5,10 +5,7 @@ category:
 date: 2020-10-16
 ---
 
-| **参考**                                                                     |
-| ---------------------------------------------------------------------------- |
-| **[100 行代码实现 Promises/A+ 规范](https://zhuanlan.zhihu.com/p/83965949)** |
-| **[Promises/A+](https://promisesaplus.com/)**                                |
+
 
 ## **0.前期工作**
 
@@ -452,3 +449,9 @@ module.exports = Promise;
 ```
 
 :::
+
+
+| **参考**                                                                     |
+| ---------------------------------------------------------------------------- |
+| **[100 行代码实现 Promises/A+ 规范](https://zhuanlan.zhihu.com/p/83965949)** |
+| **[Promises/A+](https://promisesaplus.com/)**                                |

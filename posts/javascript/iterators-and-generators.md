@@ -6,9 +6,6 @@ date: 2020-09-16
 ---
 
 
-
-
-
 ```jsx
 for (let i = 1; i <= 10; ++i) {
   console.log(i);

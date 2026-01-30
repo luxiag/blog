@@ -13,9 +13,9 @@ SQL（Structured Query Language）是**关系型数据库**的通用语言。你
 - 改数据（插入、更新、删除）
 - 管数据（建表、加约束、建索引、事务控制、权限）
 
-本文目标：让你在读完后能把 SQL 当成一门“表达数据问题”的语言，写出**正确、可读、可维护、可优化**的查询。
+本文目标：让你在读完后能把 SQL 当成一门"表达数据问题"的语言，写出**正确、可读、可维护、可优化**的查询。
 
-> 说明：不同数据库（MySQL / PostgreSQL / SQL Server / SQLite）在语法细节上有差异。本文以“通用 SQL 思维”为主，关键差异会单独标注。
+> 说明：不同数据库（MySQL / PostgreSQL / SQL Server / SQLite）在语法细节上有差异。本文以"通用 SQL 思维"为主，关键差异会单独标注。
 
 ---
 
@@ -23,7 +23,7 @@ SQL（Structured Query Language）是**关系型数据库**的通用语言。你
 
 ### 1.1 关系型数据库在解决什么问题？
 
-关系型数据库（RDBMS）把数据组织成“表（Table）”，表由“行（Row）”和“列（Column）”组成。
+关系型数据库（RDBMS）把数据组织成"表（Table）"，表由"行（Row）"和"列（Column）"组成。
 
 - 列：字段含义与类型（例如 `price` 是数值）
 - 行：一条记录（例如一笔订单）
@@ -100,20 +100,25 @@ LIMIT n;
 - 你写的时候通常是 `SELECT -> FROM -> WHERE ...`
 - 数据库执行时的逻辑顺序更像 `FROM -> WHERE -> GROUP BY -> HAVING -> SELECT -> ORDER BY -> LIMIT`
 
-理解逻辑顺序可以帮你解释很多“为什么不能在 WHERE 里用别名”等问题。
+理解逻辑顺序可以帮你解释很多"为什么不能在 WHERE 里用别名"等问题。
 
 ### 3.2 选择列、别名与去重
 
-```sql
-SELECT id, name, email
-FROM users;
+export const selectInitSql = `
+CREATE TABLE users (id INT, name TEXT, email TEXT);
+INSERT INTO users VALUES (1, 'Alice', 'alice@example.com'), (2, 'Bob', 'bob@example.com'), (3, 'Charlie', 'charlie@example.com');
 
-SELECT name AS user_name
-FROM users;
+CREATE TABLE orders (id INT, user_id INT, status TEXT);
+INSERT INTO orders VALUES (101, 1, 'PAID'), (102, 1, 'PAID'), (103, 2, 'PENDING'), (104, 3, 'SHIPPED');
+`;
 
-SELECT DISTINCT status
-FROM orders;
-```
+<SqlSimulator
+  initialSql={selectInitSql}
+  defaultQuery="SELECT * FROM users;"
+  answerSql="SELECT DISTINCT status FROM orders;"
+  title="练习：选择列、别名与去重"
+  description="尝试使用 SELECT 选择特定列，使用 AS 设置别名，以及使用 DISTINCT 去重。"
+/>
 
 建议：除非你明确需要全部列，否则不要用 `SELECT *`。
 
@@ -121,73 +126,82 @@ FROM orders;
 
 常见比较：`=`、`<>`（或 `!=`）、`>`、`>=`、`<`、`<=`。
 
-```sql
-SELECT id, status
-FROM orders
-WHERE status = 'PAID';
-```
+export const whereInitSql = `
+CREATE TABLE users (id INT, name TEXT, city TEXT, age INT, email TEXT);
+INSERT INTO users VALUES (1, 'Alice', 'Beijing', 25, 'alice@example.com'), (2, 'Bob', 'Shanghai', 30, 'bob@example.com'), (3, 'Charlie', 'Beijing', 22, NULL), (4, 'David', 'Shenzhen', 28, 'david@example.com');
+`;
+
+<SqlSimulator
+  initialSql={whereInitSql}
+  defaultQuery="SELECT * FROM users WHERE city = 'Beijing';"
+  answerSql="SELECT id, name, age FROM users WHERE age >= 25 AND city = 'Beijing';"
+  title="练习：WHERE 条件过滤"
+  description="使用 WHERE 子句进行条件过滤，支持比较运算符、逻辑组合（AND/OR）"
+/>
 
 范围与集合：
 
-```sql
-SELECT id
-FROM products
-WHERE price BETWEEN 10 AND 100;
-
-SELECT id
-FROM orders
-WHERE status IN ('PAID', 'SHIPPED');
-```
+<SqlSimulator
+  initialSql={whereInitSql}
+  defaultQuery="SELECT * FROM users WHERE age BETWEEN 20 AND 28;"
+  answerSql="SELECT * FROM users WHERE city IN ('Beijing', 'Shanghai');"
+  title="练习：范围与集合"
+  description="使用 BETWEEN 进行范围查询，使用 IN 进行集合匹配"
+/>
 
 模糊匹配：
 
-```sql
-SELECT id, email
-FROM users
-WHERE email LIKE '%@example.com';
-```
+export const likeInitSql = `
+CREATE TABLE users (id INT, name TEXT, email TEXT);
+INSERT INTO users VALUES (1, 'Alice', 'alice@example.com'), (2, 'Bob', 'bob@company.com'), (3, 'Charlie', 'charlie@test.org'), (4, 'David', 'david@company.com');
+`;
 
-逻辑组合：
-
-```sql
-SELECT id
-FROM orders
-WHERE status = 'PAID'
-  AND created_at >= '2026-01-01'
-  AND created_at <  '2026-02-01';
-```
+<SqlSimulator
+  initialSql={likeInitSql}
+  defaultQuery="SELECT * FROM users WHERE email LIKE '%@company.com';"
+  answerSql="SELECT * FROM users WHERE email LIKE '%@%';"
+  title="练习：模糊匹配"
+  description="使用 LIKE 进行模糊查询，% 匹配任意字符序列"
+/>
 
 #### NULL 的坑：必须用 IS NULL / IS NOT NULL
 
-```sql
-SELECT id
-FROM users
-WHERE email IS NULL;
-```
+export const nullInitSql = `
+CREATE TABLE users (id INT, name TEXT, email TEXT);
+INSERT INTO users VALUES (1, 'Alice', 'alice@example.com'), (2, 'Bob', NULL), (3, 'Charlie', 'charlie@example.com'), (4, 'David', NULL);
+`;
 
-原因：`NULL` 表示“未知”，`email = NULL` 不是 true，而是 unknown。
+<SqlSimulator
+  initialSql={nullInitSql}
+  defaultQuery="SELECT * FROM users WHERE email = NULL;"
+  answerSql="SELECT * FROM users WHERE email IS NULL;"
+  title="练习：NULL 查询"
+  description="NULL 不能用 = 判断，必须使用 IS NULL 或 IS NOT NULL"
+/>
+
+原因：`NULL` 表示"未知"，`email = NULL` 不是 true，而是 unknown。
 
 ### 3.4 ORDER BY 与分页
 
-```sql
-SELECT id, created_at
-FROM orders
-ORDER BY created_at DESC;
-```
+export const orderByInitSql = `
+CREATE TABLE orders (id INT, status TEXT, created_at TEXT);
+INSERT INTO orders VALUES (101, 'PAID', '2026-01-01'), (102, 'SHIPPED', '2026-01-02'), (103, 'PENDING', '2026-01-03'), (104, 'PAID', '2026-01-04'), (105, 'DELIVERED', '2026-01-05');
+`;
+
+<SqlSimulator
+  initialSql={orderByInitSql}
+  defaultQuery="SELECT * FROM orders;"
+  answerSql="SELECT * FROM orders ORDER BY created_at DESC LIMIT 3 OFFSET 1;"
+  title="练习：ORDER BY 与分页"
+  description="使用 ORDER BY 排序，DESC 降序，LIMIT 和 OFFSET 实现分页"
+/>
 
 分页：
 
 - MySQL / PostgreSQL：`LIMIT 20 OFFSET 40`
 - SQL Server：`OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY`
 
-```sql
-SELECT id
-FROM orders
-ORDER BY created_at DESC
-LIMIT 20 OFFSET 40;
-```
-
-提示：真实业务里深分页成本很高，常用“基于游标”的方式（例如 `WHERE created_at < ?`）。
+提示：真实业务里深分页成本很高，常用"基于游标"的方式（例如 `WHERE created_at < ?`）。
 
 ---
 
@@ -197,35 +211,40 @@ LIMIT 20 OFFSET 40;
 
 `COUNT`、`SUM`、`AVG`、`MIN`、`MAX`。
 
-```sql
-SELECT COUNT(*) AS order_count
-FROM orders;
+export const aggregateInitSql = `
+CREATE TABLE orders (id INT, user_id INT, status TEXT, amount INT);
+INSERT INTO orders VALUES (101, 1, 'PAID', 100), (102, 1, 'PAID', 200), (103, 2, 'PENDING', 50), (104, 3, 'SHIPPED', 300), (105, 1, 'PAID', 150), (106, 2, 'SHIPPED', 80);
+`;
 
-SELECT user_id, COUNT(*) AS order_count
-FROM orders
-GROUP BY user_id;
-```
+<SqlSimulator
+  initialSql={aggregateInitSql}
+  defaultQuery="SELECT COUNT(*) FROM orders;"
+  answerSql="SELECT user_id, COUNT(*) as order_count, SUM(amount) as total_amount FROM orders GROUP BY user_id;"
+  title="练习：聚合函数与 GROUP BY"
+  description="使用 COUNT、SUM、AVG 等聚合函数，配合 GROUP BY 按分组统计"
+/>
 
 ### 4.2 GROUP BY 的规则（非常重要）
 
 当你写 `GROUP BY` 时：
 
 - `SELECT` 里的非聚合列必须出现在 `GROUP BY` 里（严格 SQL）
-- 某些数据库（如 MySQL 在特定模式）可能“放宽”，但结果不可预测，不建议依赖
+- 某些数据库（如 MySQL 在特定模式）可能"放宽"，但结果不可预测，不建议依赖
 
 ### 4.3 HAVING：对分组后的结果再过滤
 
-```sql
-SELECT user_id, COUNT(*) AS order_count
-FROM orders
-GROUP BY user_id
-HAVING COUNT(*) >= 3;
-```
+<SqlSimulator
+  initialSql={aggregateInitSql}
+  defaultQuery="SELECT user_id, COUNT(*) FROM orders GROUP BY user_id;"
+  answerSql="SELECT user_id, COUNT(*) as order_count FROM orders GROUP BY user_id HAVING COUNT(*) >= 2;"
+  title="练习：HAVING 分组过滤"
+  description="WHERE 过滤行，HAVING 过滤分组后的结果"
+/>
 
 区别：
 
-- `WHERE` 过滤“行”
-- `HAVING` 过滤“分组后的结果”
+- `WHERE` 过滤"行"
+- `HAVING` 过滤"分组后的结果"
 
 ---
 
@@ -235,25 +254,37 @@ JOIN 是 SQL 的核心能力之一：把分散在不同表的数据拼成你需�
 
 ### 5.1 INNER JOIN（只保留匹配到的）
 
-```sql
-SELECT o.id, o.status, u.name
-FROM orders o
-JOIN users u ON u.id = o.user_id;
-```
+export const joinInitSql = `
+CREATE TABLE users (id INT, name TEXT, city TEXT);
+INSERT INTO users VALUES (1, 'Alice', 'Beijing'), (2, 'Bob', 'Shanghai'), (3, 'Charlie', 'Beijing'), (4, 'David', 'Shenzhen');
+
+CREATE TABLE orders (id INT, user_id INT, status TEXT, amount INT);
+INSERT INTO orders VALUES (101, 1, 'PAID', 100), (102, 1, 'PAID', 200), (103, 2, 'PENDING', 50), (104, 3, 'SHIPPED', 300), (105, 5, 'CANCELLED', 0);
+`;
+
+<SqlSimulator
+  initialSql={joinInitSql}
+  defaultQuery="SELECT * FROM users;"
+  answerSql="SELECT u.name, o.id, o.status, o.amount FROM users u JOIN orders o ON u.id = o.user_id;"
+  title="练习：INNER JOIN 内连接"
+  description="只保留两个表中匹配成功的记录"
+/>
 
 ### 5.2 LEFT JOIN（主表全保留）
 
-```sql
-SELECT u.id, u.name, o.id AS order_id
-FROM users u
-LEFT JOIN orders o ON o.user_id = u.id;
-```
+<SqlSimulator
+  initialSql={joinInitSql}
+  defaultQuery="SELECT * FROM users u LEFT JOIN orders o ON u.id = o.user_id;"
+  answerSql="SELECT u.name, COUNT(o.id) as order_count FROM users u LEFT JOIN orders o ON u.id = o.user_id GROUP BY u.id;"
+  title="练习：LEFT JOIN 左连接"
+  description="保留左表所有记录，右表无匹配则为 NULL"
+/>
 
-这能查出“没有订单的用户”（`order_id` 会是 `NULL`）。
+这能查出"没有订单的用户"（`order_id` 会是 `NULL`）。
 
 ### 5.3 JOIN 常见坑：把条件写错位置
 
-如果你想查“所有用户及其已支付订单（没有也要出现）”，这两句不等价：
+如果，你想查"所有用户及其已支付订单（没有也要出现）"，这两句不等价：
 
 ```sql
 SELECT u.id, u.name, o.id AS order_id
@@ -273,20 +304,28 @@ WHERE o.status = 'PAID';
 
 第二句会把 `LEFT JOIN` 变得更像 `INNER JOIN`（因为 `WHERE o.status='PAID'` 会过滤掉 `NULL` 行）。
 
-### 5.4 一条更完整的“业务查询”示例
+### 5.4 一条更完整的"业务查询"示例
 
 查询每个订单的明细与总价：
 
-```sql
-SELECT
-  o.id AS order_id,
-  u.name AS user_name,
-  SUM(oi.quantity * oi.unit_price) AS total_amount
-FROM orders o
-JOIN users u ON u.id = o.user_id
-JOIN order_items oi ON oi.order_id = o.id
-GROUP BY o.id, u.name;
-```
+export const orderDetailInitSql = `
+CREATE TABLE orders (id INT, user_id INT, status TEXT);
+INSERT INTO orders VALUES (101, 1, 'PAID'), (102, 1, 'PAID'), (103, 2, 'SHIPPED');
+
+CREATE TABLE users (id INT, name TEXT);
+INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');
+
+CREATE TABLE order_items (order_id INT, product_id INT, quantity INT, unit_price INT);
+INSERT INTO order_items VALUES (101, 1, 2, 50), (101, 2, 1, 100), (102, 3, 1, 200), (103, 1, 3, 50);
+`;
+
+<SqlSimulator
+  initialSql={orderDetailInitSql}
+  defaultQuery="SELECT * FROM orders;"
+  answerSql="SELECT o.id as order_id, u.name as user_name, SUM(oi.quantity * oi.unit_price) as total_amount FROM orders o JOIN users u ON u.id = o.user_id JOIN order_items oi ON oi.order_id = o.id GROUP BY o.id;"
+  title="练习：完整业务查询"
+  description="多表连接查询并使用聚合函数计算订单总价"
+/>
 
 ---
 
@@ -294,7 +333,23 @@ GROUP BY o.id, u.name;
 
 ### 6.1 IN 子查询
 
-查“下过单的用户”：
+export const subqueryInitSql = `
+CREATE TABLE users (id INT, name TEXT);
+INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie'), (4, 'David');
+
+CREATE TABLE orders (id INT, user_id INT, status TEXT);
+INSERT INTO orders VALUES (101, 1, 'PAID'), (102, 1, 'PAID'), (103, 2, 'PENDING'), (104, 3, 'SHIPPED');
+`;
+
+<SqlSimulator
+  initialSql={subqueryInitSql}
+  defaultQuery="SELECT * FROM users WHERE id IN (1, 2);"
+  answerSql="SELECT id, name FROM users WHERE id IN (SELECT DISTINCT user_id FROM orders);"
+  title="练习：IN 子查询"
+  description="使用 IN 子查询查找下过单的用户"
+/>
+
+查"下过单的用户"：
 
 ```sql
 SELECT id, name
@@ -307,20 +362,18 @@ WHERE id IN (
 
 ### 6.2 EXISTS：经常更高效的写法
 
-```sql
-SELECT u.id, u.name
-FROM users u
-WHERE EXISTS (
-  SELECT 1
-  FROM orders o
-  WHERE o.user_id = u.id
-);
-```
+<SqlSimulator
+  initialSql={subqueryInitSql}
+  defaultQuery="SELECT * FROM users;"
+  answerSql="SELECT u.id, u.name FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id);"
+  title="练习：EXISTS 子查询"
+  description="使用 EXISTS 判断是否存在满足条件的记录"
+/>
 
 经验法则：
 
-- `IN` 更像“把一堆值拿来比对”
-- `EXISTS` 更像“对每个外层行判断是否存在匹配”
+- `IN` 更像"把一堆值拿来比对"
+- `EXISTS` 更像"对每个外层行判断是否存在匹配"
 
 数据库优化器会做很多优化，但 `EXISTS` 常更稳健。
 
@@ -328,13 +381,20 @@ WHERE EXISTS (
 
 ## 7. 集合运算：UNION / INTERSECT / EXCEPT
 
-把两个查询结果“拼接/取交集/取差集”。
+把两个查询结果"拼接/取交集/取差集"。
 
-```sql
-SELECT id FROM orders WHERE status = 'PAID'
-UNION
-SELECT id FROM orders WHERE status = 'SHIPPED';
-```
+export const unionInitSql = `
+CREATE TABLE orders (id INT, status TEXT);
+INSERT INTO orders VALUES (101, 'PAID'), (102, 'PAID'), (103, 'SHIPPED'), (104, 'DELIVERED'), (105, 'PENDING');
+`;
+
+<SqlSimulator
+  initialSql={unionInitSql}
+  defaultQuery="SELECT id FROM orders WHERE status = 'PAID';"
+  answerSql="SELECT id FROM orders WHERE status = 'PAID' UNION ALL SELECT id FROM orders WHERE status = 'SHIPPED';"
+  title="练习：UNION 集合运算"
+  description="UNION 合并结果集，UNION ALL 不去重更快"
+/>
 
 - `UNION` 会去重
 - `UNION ALL` 不去重，通常更快
@@ -345,25 +405,29 @@ SELECT id FROM orders WHERE status = 'SHIPPED';
 
 ## 8. CTE：WITH 让复杂 SQL 更可读
 
-CTE（Common Table Expression）可以把查询拆成“可命名的步骤”。
+CTE（Common Table Expression）可以把查询拆成"可命名的步骤"。
 
-```sql
-WITH paid_orders AS (
-  SELECT id, user_id
-  FROM orders
-  WHERE status = 'PAID'
-)
-SELECT u.id, u.name, COUNT(*) AS paid_count
-FROM users u
-JOIN paid_orders po ON po.user_id = u.id
-GROUP BY u.id, u.name;
-```
+export const cteInitSql = `
+CREATE TABLE users (id INT, name TEXT);
+INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');
+
+CREATE TABLE orders (id INT, user_id INT, status TEXT);
+INSERT INTO orders VALUES (101, 1, 'PAID'), (102, 1, 'PAID'), (103, 2, 'PENDING'), (104, 3, 'SHIPPED');
+`;
+
+<SqlSimulator
+  initialSql={cteInitSql}
+  defaultQuery="WITH paid_orders AS (SELECT * FROM orders WHERE status = 'PAID') SELECT * FROM paid_orders;"
+  answerSql="WITH paid_orders AS (SELECT user_id FROM orders WHERE status = 'PAID') SELECT u.id, u.name, COUNT(*) as paid_count FROM users u JOIN paid_orders po ON po.user_id = u.id GROUP BY u.id;"
+  title="练习：CTE 公共表表达式"
+  description="使用 WITH 语句将复杂查询拆分为可命名的步骤"
+/>
 
 很多场景下 CTE 主要提升可读性；不同数据库对 CTE 的优化策略不同。
 
 ---
 
-## 9. 窗口函数：统计但不“折叠”行
+## 9. 窗口函数：统计但不"折叠"行
 
 窗口函数适合做排名、累计、环比等分析需求。
 
@@ -371,29 +435,30 @@ GROUP BY u.id, u.name;
 
 比如：每个用户的最近一笔订单。
 
-```sql
-WITH ranked AS (
-  SELECT
-    o.*,
-    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
-  FROM orders o
-)
-SELECT id, user_id, status, created_at
-FROM ranked
-WHERE rn = 1;
-```
+export const windowInitSql = `
+CREATE TABLE orders (id INT, user_id INT, status TEXT, created_at TEXT);
+INSERT INTO orders VALUES (101, 1, 'PAID', '2026-01-01'), (102, 1, 'SHIPPED', '2026-01-05'), (103, 2, 'PENDING', '2026-01-03'), (104, 2, 'DELIVERED', '2026-01-07');
+`;
+
+<SqlSimulator
+  initialSql={windowInitSql}
+  defaultQuery="SELECT * FROM orders;"
+  answerSql="SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) as rn FROM orders) WHERE rn = 1;"
+  title="练习：ROW_NUMBER 窗口函数"
+  description="在分组内按时间倒序排列并编号，获取每用户最新订单"
+/>
 
 ### 9.2 SUM OVER：累计求和
 
-```sql
-SELECT
-  o.user_id,
-  o.created_at,
-  SUM(1) OVER (PARTITION BY o.user_id ORDER BY o.created_at) AS cumulative_orders
-FROM orders o;
-```
+<SqlSimulator
+  initialSql={windowInitSql}
+  defaultQuery="SELECT user_id, created_at FROM orders ORDER BY user_id, created_at;"
+  answerSql="SELECT user_id, created_at, SUM(1) OVER (PARTITION BY user_id ORDER BY created_at) as cumulative_orders FROM orders;"
+  title="练习：SUM OVER 累计窗口"
+  description="使用窗口函数进行累计统计，不折叠原始行"
+/>
 
-窗口函数是从“会写查询”到“写得很强”的分水岭，建议专门练。
+窗口函数是从"会写查询"到"写得很强"的分水岭，建议专门练。
 
 ---
 
@@ -429,7 +494,7 @@ WHERE id = 1001;
 - MySQL：`INSERT ... ON DUPLICATE KEY UPDATE`
 - SQL Server：常用 `MERGE`（需谨慎）
 
-这是典型的“方言差异”，写文章/做项目时要确认你的数据库。
+这是典型的"方言差异"，写文章/做项目时要确认你的数据库。
 
 ---
 
@@ -458,13 +523,13 @@ CREATE TABLE payments (
 );
 ```
 
-把规则写在数据库里能减少“脏数据”出现的概率。
+把规则写在数据库里能减少"脏数据"出现的概率。
 
 ---
 
 ## 12. 事务：保证数据一致性的基础
 
-事务让一组操作“要么全部成功，要么全部失败”。
+事务让一组操作"要么全部成功，要么全部失败"。
 
 ```sql
 BEGIN;
@@ -494,7 +559,7 @@ ROLLBACK;
 
 ### 12.2 隔离级别（知道概念即可）
 
-不同隔离级别权衡“性能 vs 一致性”，会影响脏读、不可重复读、幻读等现象。
+不同隔离级别权衡"性能 vs 一致性"，会影响脏读、不可重复读、幻读等现象。
 
 ---
 
@@ -526,7 +591,7 @@ ROLLBACK;
 
 ---
 
-## 14. 设计思维：写出更“好用”的表
+## 14. 设计思维：写出更"好用"的表
 
 ### 14.1 规范化的直觉（不追概念也能做对）
 
@@ -545,9 +610,9 @@ ROLLBACK;
 
 ## 15. 常见错误与排查清单
 
-### 15.1 结果行数“异常多”
+### 15.1 结果行数"异常多"
 
-通常是 JOIN 条件不完整导致“倍增”。做法：
+通常是 JOIN 条件不完整导致"倍增"。做法：
 
 - 先单表 `SELECT COUNT(*)` 看规模
 - 再逐步加入 JOIN，每一步都检查行数变化
@@ -573,7 +638,7 @@ SQL 注入是最常见也最危险的问题之一。
 
 - 应用层使用参数化查询（Prepared Statement）
 - 数据库权限最小化（只给必要的读写权限）
-- 对输入做合理校验，但不要把“校验”当成注入防护的唯一手段
+- 对输入做合理校验，但不要把"校验"当成注入防护的唯一手段
 
 ---
 
@@ -608,5 +673,5 @@ SQL 注入是最常见也最危险的问题之一。
 3. 查每个用户最近一笔订单的状态
 4. 查销量最高的前 10 个商品
 
-把这些题写熟，你就已经超过“只会 SELECT *”的阶段了。
+把这些题写熟，你就已经超过"只会 SELECT * "的阶段了。
 
