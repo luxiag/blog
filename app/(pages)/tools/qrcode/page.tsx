@@ -1,244 +1,355 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, ChangeEvent } from 'react';
 import PageTitle from '@/components/PageTitle';
 import Link from 'next/link';
 import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
+import { Upload, X, Download, ImageIcon, Settings, Palette, Type, ScanLine } from 'lucide-react';
 
 export default function QrcodePage() {
   const [value, setValue] = useState('https://luxiag.blog');
-  const [size, setSize] = useState(256);
+  const [size, setSize] = useState(512);
   const [fgColor, setFgColor] = useState('#000000');
   const [bgColor, setBgColor] = useState('#ffffff');
-  const [level, setLevel] = useState<'L' | 'M' | 'Q' | 'H'>('L');
+  const [level, setLevel] = useState<'L' | 'M' | 'Q' | 'H'>('H');
   const [includeMargin, setIncludeMargin] = useState(true);
 
-  const canvasRef = useRef<HTMLDivElement>(null);
+  // Logo states
+  const [logoSrc, setLogoSrc] = useState<string | null>(null);
+  const [logoSize, setLogoSize] = useState(40);
+  const [excavate, setExcavate] = useState(true);
+
+  const THEMES = [
+    { name: '极简黑白', fg: '#000000', bg: '#ffffff', margin: true },
+    { name: '商务深蓝', fg: '#1e3a8a', bg: '#f8fafc', margin: true },
+    { name: '优雅紫色', fg: '#6d28d9', bg: '#f5f3ff', margin: true },
+    { name: '活力橙红', fg: '#ea580c', bg: '#fff7ed', margin: true },
+    { name: '森林绿', fg: '#15803d', bg: '#f0fdf4', margin: true },
+    { name: '暗黑模式', fg: '#ffffff', bg: '#171717', margin: true },
+    { name: '霓虹粉', fg: '#db2777', bg: '#000000', margin: true },
+  ];
+
+  const applyTheme = (theme: typeof THEMES[0]) => {
+    setFgColor(theme.fg);
+    setBgColor(theme.bg);
+    setIncludeMargin(theme.margin);
+  };
 
   const downloadQRCode = () => {
     const canvas = document.getElementById('qrcode-canvas') as HTMLCanvasElement;
     if (canvas) {
       const url = canvas.toDataURL('image/png');
       const link = document.createElement('a');
-      link.download = 'qrcode.png';
+      link.download = `qrcode-${Date.now()}.png`;
       link.href = url;
       link.click();
     }
   };
 
+  const handleLogoUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setLogoSrc(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const removeLogo = () => {
+    setLogoSrc(null);
+  };
+
   return (
     <>
-      <PageTitle title="二维码生成" />
-      <div className="min-h-screen" style={{ backgroundColor: 'var(--background)' }}>
-        <div className="max-w-6xl mx-auto px-4" style={{ padding: '48px 24px' }}>
-          <div style={{ marginBottom: '32px' }}>
+      <PageTitle title="高级二维码生成器" />
+      <div className="min-h-screen bg-neutral-50 dark:bg-neutral-900 pb-12">
+        <div className="max-w-6xl mx-auto px-6 py-12">
+          <div className="mb-8">
             <Link
               href="/tools"
-              className="inline-flex items-center transition-colors"
-              style={{ color: 'var(--color-orange-800)', fontSize: '14px', fontFamily: 'var(--font-mono)' }}
+              className="group inline-flex items-center text-orange-600 dark:text-orange-400 hover:text-orange-700 font-mono text-sm transition-all"
             >
-              <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+              <svg className="w-4 h-4 mr-2 transform group-hover:-translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
               </svg>
               返回工具箱
             </Link>
           </div>
 
-          <h1 style={{
-            fontSize: '32px',
-            fontWeight: 700,
-            marginBottom: '8px',
-            fontFamily: 'var(--font-sans)',
-            color: 'var(--foreground)'
-          }}>
-            二维码生成
-          </h1>
-          <p style={{
-            fontSize: '14px',
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--color-neutral-500)',
-            marginBottom: '32px'
-          }}>
-            生成自定义样式的二维码，支持下载。
-          </p>
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-10">
+            <div>
+              <h1 className="text-4xl font-black text-neutral-900 dark:text-white tracking-tight mb-2">
+                二维码生成器
+              </h1>
+              <p className="text-neutral-500 font-mono text-sm">
+                个性化定制您的二维码，支持 Logo 嵌入与高清下载。
+              </p>
+            </div>
+          </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 350px', gap: '32px' }}>
-            {/* 左侧配置 */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-              <div style={{ background: 'white', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '24px' }}>
-                <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, marginBottom: '12px' }}>二维码内容 (URL 或 文本)</label>
-                <textarea
-                  value={value}
-                  onChange={(e) => setValue(e.target.value)}
-                  placeholder='在此输入内容...'
-                  style={{
-                    width: '100%',
-                    height: '120px',
-                    padding: '16px',
-                    borderRadius: '8px',
-                    border: '1px solid var(--border-color)',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '14px',
-                    outline: 'none',
-                    resize: 'none'
-                  }}
-                />
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            {/* Left Side: Settings */}
+            <div className="lg:col-span-8 flex flex-col gap-6">
+              {/* Content Input */}
+              <div className="bg-white dark:bg-neutral-800 rounded-2xl border border-neutral-200 dark:border-neutral-700 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-neutral-100 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/50 flex items-center gap-2">
+                  <Type className="w-4 h-4 text-orange-500" />
+                  <span className="text-sm font-bold uppercase tracking-wider opacity-70">内容配置</span>
+                </div>
+                <div className="p-6">
+                  <textarea
+                    value={value}
+                    onChange={(e) => setValue(e.target.value)}
+                    placeholder='输入链接或文字内容...'
+                    className="w-full h-32 p-4 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 font-mono text-sm focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-none transition-all resize-none"
+                  />
+                </div>
               </div>
 
-              <div style={{ background: 'white', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '24px' }}>
-                <h3 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '20px' }}>样式设置</h3>
+              {/* Theme Presets */}
+              <div className="bg-white dark:bg-neutral-800 rounded-2xl border border-neutral-200 dark:border-neutral-700 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-neutral-100 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/50 flex items-center gap-2">
+                  <Palette className="w-4 h-4 text-orange-500" />
+                  <span className="text-sm font-bold uppercase tracking-wider opacity-70">风格预设</span>
+                </div>
+                <div className="p-6">
+                  <div className="flex flex-wrap gap-3">
+                    {THEMES.map((theme, index) => (
+                      <button
+                        key={index}
+                        onClick={() => applyTheme(theme)}
+                        className="group flex flex-col items-center gap-2 p-2 rounded-xl hover:bg-neutral-50 dark:hover:bg-neutral-900 transition-all border border-transparent hover:border-neutral-100 dark:hover:border-neutral-700"
+                      >
+                        <div
+                          className="w-12 h-12 rounded-full border-2 border-white dark:border-neutral-700 shadow-sm flex items-center justify-center overflow-hidden"
+                          style={{ background: theme.bg }}
+                        >
+                          <div className="w-6 h-6 rounded-sm rotate-45" style={{ background: theme.fg }}></div>
+                        </div>
+                        <span className="text-[10px] font-bold opacity-60 group-hover:opacity-100 transition-opacity">{theme.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>前景颜色</label>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Style Settings */}
+                <div className="bg-white dark:bg-neutral-800 rounded-2xl border border-neutral-200 dark:border-neutral-700 shadow-sm overflow-hidden">
+                  <div className="px-6 py-4 border-b border-neutral-100 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/50 flex items-center gap-2">
+                    <Palette className="w-4 h-4 text-orange-500" />
+                    <span className="text-sm font-bold uppercase tracking-wider opacity-70">视觉样式</span>
+                  </div>
+                  <div className="p-6 space-y-5">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-neutral-500 uppercase">前端颜色</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={fgColor}
+                            onChange={(e) => setFgColor(e.target.value)}
+                            className="w-10 h-10 rounded-lg cursor-pointer border-2 border-neutral-100 dark:border-neutral-700 bg-transparent overflow-hidden"
+                          />
+                          <input
+                            type="text"
+                            value={fgColor}
+                            onChange={(e) => setFgColor(e.target.value)}
+                            className="flex-1 px-2 py-2 rounded-lg bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 text-xs font-mono"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-neutral-500 uppercase">背景颜色</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={bgColor}
+                            onChange={(e) => setBgColor(e.target.value)}
+                            className="w-10 h-10 rounded-lg cursor-pointer border-2 border-neutral-100 dark:border-neutral-700 bg-transparent overflow-hidden"
+                          />
+                          <input
+                            type="text"
+                            value={bgColor}
+                            onChange={(e) => setBgColor(e.target.value)}
+                            className="flex-1 px-2 py-2 rounded-lg bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 text-xs font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center">
+                        <label className="text-xs font-bold text-neutral-500 uppercase">输出尺寸 ({size}px)</label>
+                      </div>
                       <input
-                        type="color"
-                        value={fgColor}
-                        onChange={(e) => setFgColor(e.target.value)}
-                        style={{ width: '40px', height: '40px', border: 'none', padding: 0, cursor: 'pointer', background: 'none' }}
-                      />
-                      <input
-                        type="text"
-                        value={fgColor}
-                        onChange={(e) => setFgColor(e.target.value)}
-                        style={{ flex: 1, padding: '8px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '13px', fontFamily: 'var(--font-mono)' }}
+                        type="range"
+                        min="256"
+                        max="2048"
+                        step="128"
+                        value={size}
+                        onChange={(e) => setSize(parseInt(e.target.value))}
+                        className="w-full h-2 bg-neutral-200 dark:bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
                       />
                     </div>
-                  </div>
 
-                  <div>
-                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>背景颜色</label>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                      <input
-                        type="color"
-                        value={bgColor}
-                        onChange={(e) => setBgColor(e.target.value)}
-                        style={{ width: '40px', height: '40px', border: 'none', padding: 0, cursor: 'pointer', background: 'none' }}
-                      />
-                      <input
-                        type="text"
-                        value={bgColor}
-                        onChange={(e) => setBgColor(e.target.value)}
-                        style={{ flex: 1, padding: '8px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '13px', fontFamily: 'var(--font-mono)' }}
-                      />
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-neutral-500 uppercase">纠错能力</label>
+                        <select
+                          value={level}
+                          onChange={(e) => setLevel(e.target.value as any)}
+                          className="w-full px-3 py-2 rounded-lg bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 text-sm outline-none focus:ring-2 focus:ring-orange-500/20"
+                        >
+                          <option value="L">低 (7% 损毁可读)</option>
+                          <option value="M">中 (15% 损毁可读)</option>
+                          <option value="Q">优 (25% 损毁可读)</option>
+                          <option value="H">极高 (30% 损毁可读)</option>
+                        </select>
+                      </div>
+                      <div className="flex items-end pb-1">
+                        <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={includeMargin}
+                            onChange={(e) => setIncludeMargin(e.target.checked)}
+                            className="w-4 h-4 accent-orange-500 rounded"
+                          />
+                          <span>包含安全边距</span>
+                        </label>
+                      </div>
                     </div>
                   </div>
+                </div>
 
-                  <div>
-                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>尺寸: {size}px</label>
-                    <input
-                      type="range"
-                      min="128"
-                      max="1024"
-                      step="32"
-                      value={size}
-                      onChange={(e) => setSize(parseInt(e.target.value))}
-                      style={{ width: '100%', accentColor: 'var(--color-orange-800)' }}
-                    />
+                {/* Logo Settings */}
+                <div className="bg-white dark:bg-neutral-800 rounded-2xl border border-neutral-200 dark:border-neutral-700 shadow-sm overflow-hidden">
+                  <div className="px-6 py-4 border-b border-neutral-100 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/50 flex items-center gap-2">
+                    <ImageIcon className="w-4 h-4 text-orange-500" />
+                    <span className="text-sm font-bold uppercase tracking-wider opacity-70">Logo 嵌入</span>
                   </div>
+                  <div className="p-6 space-y-6">
+                    {!logoSrc ? (
+                      <label className="flex flex-col items-center justify-center border-2 border-dashed border-neutral-200 dark:border-neutral-700 rounded-xl p-8 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-900 transition-colors group">
+                        <Upload className="w-8 h-8 text-neutral-300 group-hover:text-orange-500 transition-colors mb-2" />
+                        <span className="text-sm font-medium text-neutral-500">上传 Logo 图片</span>
+                        <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
+                      </label>
+                    ) : (
+                      <div className="space-y-6">
+                        <div className="flex items-center justify-between p-3 bg-neutral-50 dark:bg-neutral-900 rounded-xl">
+                          <div className="flex items-center gap-3">
+                            <img src={logoSrc} alt="Logo Preview" className="w-10 h-10 object-contain rounded bg-white shadow-sm" />
+                            <span className="text-xs font-mono opacity-60">Logo 已准备</span>
+                          </div>
+                          <button onClick={removeLogo} className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 rounded-lg transition-colors">
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
 
-                  <div>
-                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>容错级别</label>
-                    <select
-                      value={level}
-                      onChange={(e) => setLevel(e.target.value as any)}
-                      style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '13px' }}
-                    >
-                      <option value="L">L (7%)</option>
-                      <option value="M">M (15%)</option>
-                      <option value="Q">Q (25%)</option>
-                      <option value="H">H (30%)</option>
-                    </select>
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <label className="text-xs font-bold text-neutral-500 uppercase">Logo 比例 ({logoSize}px)</label>
+                            </div>
+                            <input
+                              type="range"
+                              min="20"
+                              max="120"
+                              step="5"
+                              value={logoSize}
+                              onChange={(e) => setLogoSize(parseInt(e.target.value))}
+                              className="w-full h-2 bg-neutral-200 dark:bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                            />
+                          </div>
+
+                          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={excavate}
+                              onChange={(e) => setExcavate(e.target.checked)}
+                              className="w-4 h-4 accent-orange-500 rounded"
+                            />
+                            <span>挖掘背景 (Excavate)</span>
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                    <p className="text-[10px] text-neutral-400">
+                      建议使用纠错级别更高的设置以确保嵌入 Logo 后的识别率。
+                    </p>
                   </div>
-
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={includeMargin}
-                      onChange={(e) => setIncludeMargin(e.target.checked)}
-                      style={{ accentColor: 'var(--color-orange-800)' }}
-                    />
-                    包含白边 (Margin)
-                  </label>
                 </div>
               </div>
             </div>
 
-            {/* 右侧预览 */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-              <div style={{
-                background: 'white',
-                border: '1px solid var(--border-color)',
-                borderRadius: '12px',
-                padding: '32px',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '24px',
-                position: 'sticky',
-                top: '24px'
-              }}>
-                <div style={{
-                  padding: '16px',
-                  background: 'var(--color-neutral-100)',
-                  borderRadius: '12px',
-                  border: '1px solid var(--border-color)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: 'fit-content'
-                }}>
-                  {/* 用于预览的 SVG */}
-                  <QRCodeSVG
-                    value={value || ' '}
-                    size={200}
-                    fgColor={fgColor}
-                    bgColor={bgColor}
-                    level={level}
-                    includeMargin={includeMargin}
-                  />
-                  {/* 用于下载的 Canvas (隐藏) */}
-                  <div style={{ display: 'none' }}>
-                    <QRCodeCanvas
-                      id="qrcode-canvas"
-                      value={value || ' '}
-                      size={size}
+            {/* Right Side: Preview */}
+            <div className="lg:col-span-4">
+              <div className="bg-white dark:bg-neutral-800 rounded-2xl border border-neutral-200 dark:border-neutral-700 shadow-xl overflow-hidden sticky top-24">
+                <div className="px-6 py-4 border-b border-neutral-100 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/50 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ScanLine className="w-4 h-4 text-orange-500" />
+                    <span className="text-sm font-bold uppercase tracking-wider opacity-70">实时预览</span>
+                  </div>
+                </div>
+
+                <div className="p-8 flex flex-col items-center">
+                  <div className="relative p-6 bg-white dark:bg-white rounded-2xl shadow-inner border-8 border-neutral-100 dark:border-neutral-100 flex items-center justify-center">
+                    <QRCodeSVG
+                      value={value || 'https://luxiag.blog'}
+                      size={240}
                       fgColor={fgColor}
                       bgColor={bgColor}
                       level={level}
                       includeMargin={includeMargin}
+                      imageSettings={logoSrc ? {
+                        src: logoSrc,
+                        height: logoSize / (size / 240),
+                        width: logoSize / (size / 240),
+                        excavate: excavate,
+                      } : undefined}
                     />
+                  </div>
+
+                  <div className="w-full mt-10 space-y-3">
+                    <button
+                      onClick={downloadQRCode}
+                      className="group w-full relative h-12 rounded-xl flex items-center justify-center font-bold text-white transition-all overflow-hidden"
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-r from-orange-500 to-red-600 group-hover:scale-105 transition-transform"></div>
+                      <div className="relative flex items-center gap-2">
+                        <Download className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" />
+                        下载 PNG 图片
+                      </div>
+                    </button>
+
+                    <div className="flex items-center justify-center gap-2 py-2 text-[11px] text-neutral-400 font-mono">
+                      <Settings className="w-3 h-3" />
+                      <span>分辨率: {size} x {size}px</span>
+                    </div>
                   </div>
                 </div>
 
-                <button
-                  onClick={downloadQRCode}
-                  style={{
-                    width: '100%',
-                    background: 'var(--foreground)',
-                    color: 'white',
-                    border: 'none',
-                    padding: '12px',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '8px'
-                  }}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v4M7 10l5 5 5-5M12 15V3" />
-                  </svg>
-                  下载 PNG
-                </button>
-
-                <p style={{ fontSize: '12px', color: 'var(--color-neutral-500)', textAlign: 'center' }}>
-                  提示：下载的图片尺寸为 {size}x{size} 像素。
-                </p>
+                {/* Hidden Canvas for High Res Export */}
+                <div className="hidden">
+                  <QRCodeCanvas
+                    id="qrcode-canvas"
+                    value={value || 'https://luxiag.blog'}
+                    size={size}
+                    fgColor={fgColor}
+                    bgColor={bgColor}
+                    level={level}
+                    includeMargin={includeMargin}
+                    imageSettings={logoSrc ? {
+                      src: logoSrc,
+                      height: logoSize,
+                      width: logoSize,
+                      excavate: excavate,
+                    } : undefined}
+                  />
+                </div>
               </div>
             </div>
           </div>
