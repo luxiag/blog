@@ -29,6 +29,7 @@
     "@types/pdf-parse": "^1.1.5",
     "@types/qrcode.react": "^3.0.0",
     "@types/three": "^0.182.0",
+    "cesium": "^1.137.0",
     "diff": "^8.0.3",
     "fabric": "^7.1.0",
     "gray-matter": "^4.0.3",

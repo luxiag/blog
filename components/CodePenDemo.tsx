@@ -25,6 +25,15 @@ import * as format from 'ol/format';
 import * as sphere from 'ol/sphere';
 import 'ol/ol.css';
 
+// Cesium imports
+import * as Cesium from 'cesium';
+import 'cesium/Build/Cesium/Widgets/widgets.css';
+
+// Configure Cesium Base URL for CDN access
+if (typeof window !== 'undefined') {
+  (window as any).CESIUM_BASE_URL = 'https://unpkg.com/cesium@latest/Build/Cesium/';
+}
+
 // Construct the ol namespace object
 const ol = {
   Map,
@@ -64,7 +73,8 @@ const scope = {
   Bloom,
   Stats,
   fabric,
-  ol
+  ol,
+  Cesium
 };
 
 interface CodePenDemoProps {
@@ -126,9 +136,13 @@ const codeHighlightTheme = {
 export default function CodePenDemo({ code, title = "Live Demo", height = "400px" }: CodePenDemoProps) {
   // Ensure code is a string
   const codeString = typeof code === 'string' ? code : '';
+  const [activeTab, setActiveTab] = React.useState<'preview' | 'code'>('preview');
 
   return (
-    <div className="my-8 rounded-xl overflow-hidden border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-sm flex flex-col md:flex-row h-[600px] md:h-[500px]">
+    <div
+      className="my-8 rounded-xl overflow-hidden border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-sm flex flex-col"
+      style={{ height }}
+    >
       <LiveProvider
         code={codeString}
         scope={scope}
@@ -140,33 +154,68 @@ export default function CodePenDemo({ code, title = "Live Demo", height = "400px
           return code.replace(/import\s+.*?from\s+['"].*?['"];?/g, '');
         }}
       >
-        {/* Left/Top: Editor */}
-        <div className="flex-1 flex flex-col min-h-[50%] md:min-h-0 border-b md:border-b-0 md:border-r border-neutral-200 dark:border-neutral-700" style={{ backgroundColor: 'var(--hljs-bg)', color: 'var(--hljs-fg)' }}>
-          <div className="px-4 py-2 border-b border-neutral-200 dark:border-neutral-700 flex justify-between items-center" style={{ backgroundColor: 'rgba(0,0,0,0.05)' }}>
-            <span className="text-xs font-mono font-bold uppercase tracking-wider opacity-70">{title} - Editor</span>
-            <div className="text-[10px] opacity-50">Editable</div>
+        {/* Header / Tabs */}
+        <div className="flex items-center border-b border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800">
+          <div className="px-4 py-2 text-xs font-mono font-bold uppercase tracking-wider opacity-70 flex items-center">
+            {title}
           </div>
-          <div className="flex-1 overflow-auto relative font-mono text-sm code-pen-editor">
-            <LiveEditor
-              className="min-h-full"
-              style={{
-                fontFamily: '"Fira Code", "Cascadia Code", Consolas, monospace',
-                fontSize: 14,
-                backgroundColor: 'transparent',
-              }}
-            />
+          <div className="flex-1" />
+          <div className="flex">
+            <button
+              onClick={() => setActiveTab('preview')}
+              className={`px-4 py-2 text-xs font-medium transition-colors border-l border-neutral-200 dark:border-neutral-700 ${activeTab === 'preview'
+                ? 'bg-white dark:bg-neutral-900 text-blue-600 dark:text-blue-400'
+                : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700/50'
+                }`}
+            >
+              Preview
+            </button>
+            <button
+              onClick={() => setActiveTab('code')}
+              className={`px-4 py-2 text-xs font-medium transition-colors border-l border-neutral-200 dark:border-neutral-700 ${activeTab === 'code'
+                ? 'bg-white dark:bg-neutral-900 text-blue-600 dark:text-blue-400'
+                : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700/50'
+                }`}
+            >
+              Code
+            </button>
           </div>
-          <LiveError className="bg-red-900/80 text-red-200 p-4 text-xs font-mono overflow-auto max-h-[100px]" />
         </div>
 
-        {/* Right/Bottom: Preview */}
-        <div className="flex-1 flex flex-col bg-neutral-100 dark:bg-neutral-900 relative overflow-hidden">
-          <div className="absolute top-2 right-2 z-10 px-2 py-1 bg-black/50 text-white/70 text-[10px] rounded backdrop-blur-sm pointer-events-none">
-            Live Preview
+        {/* Content Area */}
+        <div className="flex-1 relative overflow-hidden">
+          {/* Preview Tab */}
+          <div
+            className={`absolute inset-0 flex flex-col bg-neutral-100 dark:bg-neutral-900 overflow-hidden transition-opacity duration-200 ${activeTab === 'preview' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
+              }`}
+          >
+            <div className="flex-1 relative w-full h-full overflow-auto flex items-center justify-center p-4">
+              <LivePreview className="flex justify-center items-center w-full min-h-full" />
+            </div>
+            {/* Error overlay at bottom */}
+            <LiveError className="absolute bottom-0 left-0 right-0 max-h-[200px] overflow-auto bg-red-900/90 text-red-100 p-3 text-xs font-mono backdrop-blur-sm border-t border-red-700" />
           </div>
-          {/* Center the content */}
-          <div className="flex-1 relative w-full h-full overflow-auto flex items-center justify-center p-4">
-            <LivePreview className="flex justify-center items-center w-full" />
+
+          {/* Editor Tab */}
+          <div
+            className={`absolute inset-0 flex flex-col bg-white dark:bg-neutral-900 transition-opacity duration-200 ${activeTab === 'code' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
+              }`}
+            style={{ backgroundColor: 'var(--hljs-bg)', color: 'var(--hljs-fg)' }}
+          >
+            <div className="flex-1 overflow-auto relative font-mono text-sm code-pen-editor">
+              <LiveEditor
+                className="min-h-full"
+                style={{
+                  fontFamily: '"Fira Code", "Cascadia Code", Consolas, monospace',
+                  fontSize: 14,
+                  backgroundColor: 'transparent',
+                }}
+              />
+            </div>
+            {/* Show error in editor too if needed, but LiveError component handles it, maybe confusing to have duplicates. 
+                 react-live LiveError only renders if there is an error.
+             */}
+            <LiveError className="shrink-0 max-h-[100px] overflow-auto bg-red-900/90 text-red-100 p-2 text-xs font-mono border-t border-red-700" />
           </div>
         </div>
       </LiveProvider>
