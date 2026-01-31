@@ -107,8 +107,8 @@ export default function TableOfContents({ toc }: TableOfContentsProps) {
       <div className="flex items-start gap-2">
         <div
           className={`bg-white dark:bg-neutral-900 rounded-lg shadow-lg border border-neutral-200 dark:border-neutral-800 p-4 w-64 transition-all duration-300 ${isExpanded
-              ? 'opacity-100 visible translate-x-0'
-              : 'opacity-0 invisible -translate-x-4 pointer-events-none'
+            ? 'opacity-100 visible translate-x-0'
+            : 'opacity-0 invisible -translate-x-4 pointer-events-none'
             }`}
         >
           <div className="flex items-center justify-between mb-3">
@@ -123,7 +123,7 @@ export default function TableOfContents({ toc }: TableOfContentsProps) {
               <X size={14} />
             </button>
           </div>
-          <nav className="space-y-0.5">
+          <nav className="space-y-0.5 max-h-[calc(100vh-16rem)] overflow-y-auto pr-2 custom-scrollbar">
             {toc.map((item) => {
               const status = getHeadingStatus(item);
               const isRead = status === 'read';
@@ -142,18 +142,18 @@ export default function TableOfContents({ toc }: TableOfContentsProps) {
                   <ChevronRight
                     size={12}
                     className={`mr-2 flex-shrink-0 transition-colors ${isActive
-                        ? 'text-orange-500'
-                        : isRead
-                          ? 'text-neutral-600 dark:text-neutral-400'
-                          : 'text-neutral-300 dark:text-neutral-600 group-hover:text-neutral-400'
+                      ? 'text-orange-500'
+                      : isRead
+                        ? 'text-neutral-600 dark:text-neutral-400'
+                        : 'text-neutral-300 dark:text-neutral-600 group-hover:text-neutral-400'
                       }`}
                   />
                   <span
                     className={`text-sm transition-colors ${isActive
-                        ? 'text-orange-600 dark:text-orange-400 font-medium'
-                        : isRead
-                          ? 'text-neutral-800 dark:text-neutral-200'
-                          : 'text-neutral-400 dark:text-neutral-500 group-hover:text-neutral-600 dark:group-hover:text-neutral-300'
+                      ? 'text-orange-600 dark:text-orange-400 font-medium'
+                      : isRead
+                        ? 'text-neutral-800 dark:text-neutral-200'
+                        : 'text-neutral-400 dark:text-neutral-500 group-hover:text-neutral-600 dark:group-hover:text-neutral-300'
                       }`}
                   >
                     {item.text}
@@ -167,8 +167,8 @@ export default function TableOfContents({ toc }: TableOfContentsProps) {
 
       <div
         className={`transition-all duration-300 ${!isExpanded && isHovering
-            ? 'opacity-100 visible translate-x-0'
-            : 'opacity-0 invisible -translate-x-4 pointer-events-none'
+          ? 'opacity-100 visible translate-x-0'
+          : 'opacity-0 invisible -translate-x-4 pointer-events-none'
           }`}
       >
         <button

@@ -352,3 +352,25 @@ pre code {
     padding: 0;
 }
 
+
+/* Custom Scrollbar for TOC and other navs */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-neutral-200);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-neutral-300);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #333;
+}
