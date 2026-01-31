@@ -25,7 +25,7 @@ let sqlJsModulePromise: Promise<SqlJsModule> | null = null;
 
 const SQLJS_VERSION = '1.10.3';
 // 使用本地 SQL.js 文件
-const SQLJS_LOCAL_PATH = '/sql';
+const SQLJS_LOCAL_PATH = `${process.env.NEXT_PUBLIC_BASE_PATH || ''}/sql`;
 
 function loadSqlJsModule(): Promise<SqlJsModule> {
   if (typeof window === 'undefined') {
@@ -76,8 +76,8 @@ interface SqlSimulatorProps {
   showSchema?: boolean;
 }
 
-export default function SqlSimulator({ 
-  initialSql = '', 
+export default function SqlSimulator({
+  initialSql = '',
   defaultQuery = 'SELECT * FROM users',
   answerSql,
   title = 'SQL 模拟器',
@@ -114,7 +114,7 @@ export default function SqlSimulator({
       }
 
       const SQL = await loadSqlJsModule();
-      
+
       const db = new SQL.Database();
       dbRef.current = db;
 
@@ -146,7 +146,7 @@ export default function SqlSimulator({
           setSchemaText('');
         }
       }
-      
+
       setIsInitialized(true);
     } catch (err: any) {
       console.error('SQL Init Error:', err);
@@ -244,7 +244,7 @@ export default function SqlSimulator({
             清空编辑器
           </button>
           {answerSql && (
-            <button 
+            <button
               onClick={() => setShowAnswer(!showAnswer)}
               className="text-xs text-orange-600 hover:text-orange-700 dark:text-orange-400 font-medium"
             >
@@ -253,7 +253,7 @@ export default function SqlSimulator({
           )}
         </div>
       </div>
-      
+
       {description && (
         <div className="p-4 text-sm text-neutral-600 dark:text-neutral-400 bg-neutral-50/50 dark:bg-neutral-800/30 border-b border-neutral-200 dark:border-neutral-700">
           {description}

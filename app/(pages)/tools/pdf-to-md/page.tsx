@@ -33,7 +33,8 @@ export default function PdfToMdPage() {
       const arrayBuffer = await file.arrayBuffer();
       const { PDFParse } = await import('pdf-parse');
 
-      PDFParse.setWorker('/js/pdf.worker.min.mjs');
+      // 动态获取 basePath，如果是生产环境部署在子目录下会自动处理
+      PDFParse.setWorker(`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/js/pdf.worker.min.mjs`);
 
       const parser = new PDFParse({ data: arrayBuffer });
       const info = await parser.getInfo();
@@ -223,11 +224,10 @@ export default function PdfToMdPage() {
             <button
               onClick={processPdf}
               disabled={!file || isProcessing}
-              className={`w-full px-6 py-3 text-sm font-medium rounded-lg transition-all ${
-                file && !isProcessing
-                  ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 cursor-pointer'
-                  : 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 cursor-not-allowed opacity-40'
-              }`}
+              className={`w-full px-6 py-3 text-sm font-medium rounded-lg transition-all ${file && !isProcessing
+                ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 cursor-pointer'
+                : 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 cursor-not-allowed opacity-40'
+                }`}
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
             >
               {isProcessing ? (

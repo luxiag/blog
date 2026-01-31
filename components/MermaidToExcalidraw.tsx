@@ -141,12 +141,12 @@ export const MermaidExcalidraw: React.FC<MermaidExcalidrawProps> = ({ code }) =>
 
     @font-face {
       font-family: 'VirgilLocal';
-      src: url('/fonts/Virgil.woff2') format('woff2');
+      src: url('${process.env.NEXT_PUBLIC_BASE_PATH || ''}/fonts/Virgil.woff2') format('woff2');
       font-display: swap;
     }
     @font-face {
       font-family: 'ChineseHandwrittenLocal';
-      src: url('/fonts/ZCOOLKuaiLe-Regular.ttf') format('ttf');
+      src: url('${process.env.NEXT_PUBLIC_BASE_PATH || ''}/fonts/ZCOOLKuaiLe-Regular.ttf') format('ttf');
       font-display: swap;
     }
 svg text {
