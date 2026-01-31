@@ -109,6 +109,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
         jsx: (runtime as unknown as { jsx: unknown }).jsx,
         jsxs: (runtime as unknown as { jsxs: unknown }).jsxs,
         action: undefined, // Provide action for Next.js Server Actions
+        requestAnimationFrame: typeof window !== 'undefined' ? window.requestAnimationFrame : undefined,
+        cancelAnimationFrame: typeof window !== 'undefined' ? window.cancelAnimationFrame : undefined,
       });
       return (result as { default: unknown }).default;
     } catch (e) {
@@ -439,9 +441,9 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
           </summary>
-           <div className="p-4 bg-white dark:bg-neutral-900 [&_pre]:my-0">
-             {getBodyContent()}
-           </div>
+          <div className="p-4 bg-white dark:bg-neutral-900 [&_pre]:my-0">
+            {getBodyContent()}
+          </div>
         </details>
       );
     },

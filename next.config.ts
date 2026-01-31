@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+// Force rebuild for CSS cache clearing
+
 const nextConfig: NextConfig = {
   output: 'export',
   basePath: '/blog',

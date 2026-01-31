@@ -1,0 +1,524 @@
+---
+title: 'Canvas 从入门到进阶：系统指南'
+date: '2025-02-01'
+excerpt: '一篇全面、系统且通俗易懂的 HTML5 Canvas 学习指南，涵盖基础绘制、图形变换、动画制作以及性能优化等进阶知识，附带实时交互示例。'
+coverImage: '/posts/canvas/images/canvas-cover.png'
+tags: ['canvas', 'graphics', 'javascript', 'frontend']
+author:
+  name: 'Antigravity'
+  picture: '/assets/blog/authors/antigravity.png'
+---
+
+# Canvas 从入门到进阶
+
+HTML5 Canvas 是一个强大的 2D 图形 API，它允许我们使用 JavaScript 在网页上绘制图形、动画甚至简单的游戏。本文将带你从零开始，系统掌握 Canvas 的核心用法。
+
+## 1. 初识 Canvas
+
+`<canvas>` 元素本身只是一个图形容器（画布），必须使用脚本（通常是 JavaScript）来绘制图形。
+
+### 基础模板
+
+```html
+<canvas id="myCanvas" width="200" height="100"></canvas>
+```
+
+> **注意**：建议直接在 HTML 属性中设置 `width` 和 `height`。如果通过 CSS 设置宽高，画布会被拉伸，导致绘制内容变形。
+
+### 获取上下文 (Context)
+
+Canvas 的核心在于 "上下文"，我们所有的绘制操作都是针对 Context 进行的。最常用的是 `2d` 上下文。
+
+```javascript
+const canvas = document.getElementById('myCanvas');
+if (canvas.getContext) {
+  const ctx = canvas.getContext('2d');
+  // 开始绘制...
+}
+```
+
+<CodePenDemo
+  title="Canvas Hello World"
+  height="300px"
+  code={`const CanvasIntro = () => {
+  const canvasRef = React.useRef(null);
+
+  const drawRect = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    
+    // 清除画布
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // 随机颜色
+    const color = '#' + Math.floor(Math.random()*16777215).toString(16);
+    ctx.fillStyle = color;
+    
+    // 绘制填充矩形: fillRect(x, y, width, height)
+    ctx.fillRect(50, 50, 300, 100);
+    
+    // 绘制描边: strokeRect(x, y, width, height)
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(50, 50, 300, 100);
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-4 p-4 bg-white">
+      <canvas 
+        ref={canvasRef} 
+        width={400} 
+        height={200}
+        className="border border-neutral-200"
+      />
+      <button 
+        onClick={drawRect}
+        className="px-4 py-2 bg-neutral-100 hover:bg-neutral-200 rounded text-sm text-neutral-800 transition-colors"
+      >
+        点击绘制矩形
+      </button>
+    </div>
+  );
+}
+
+render(<CanvasIntro />)`}
+/>
+
+## 2. 绘制基础图形
+
+Canvas 的坐标系原点 `(0, 0)` 默认在左上角，X 轴向右增加，Y 轴向下增加。
+
+### 矩形
+
+Canvas 提供了三种绘制矩形的方法：
+
+1.  `fillRect(x, y, width, height)`: 绘制填充矩形。
+2.  `strokeRect(x, y, width, height)`: 绘制矩形边框。
+3.  `clearRect(x, y, width, height)`: 清除指定矩形区域，使其完全透明。
+
+### 路径 (Path)
+
+除了矩形，其他所有图形（直线、圆弧、复杂形状）都需要通过路径来绘制。
+
+基本步骤：
+1.  `beginPath()`: 新建路径。
+2.  使用绘制命令（如 `moveTo`, `lineTo`）。
+3.  `closePath()`: 闭合路径（可选）。
+4.  `stroke()` 或 `fill()`: 描边或填充。
+
+#### 示例：绘制三角形
+
+```javascript
+ctx.beginPath();
+ctx.moveTo(75, 50);
+ctx.lineTo(100, 75);
+ctx.lineTo(100, 25);
+ctx.fill();
+```
+
+#### 圆弧 (Arc)
+
+绘制圆弧或圆形：`arc(x, y, radius, startAngle, endAngle, anticlockwise)`
+
+*   角度单位是弧度（radians），不是度数。
+*   `Math.PI` 表示 180°，`2 * Math.PI` 表示 360°。
+
+<CodePenDemo
+  title="绘制形状"
+  height="300px"
+  code={`const CanvasShapes = () => {
+  const canvasRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    
+    // 清除重绘，方便调试
+    ctx.clearRect(0,0,canvas.width, canvas.height);
+
+    // 1. 绘制笑脸（圆弧）
+    ctx.beginPath();
+    ctx.arc(100, 100, 50, 0, Math.PI * 2, true); // 外圆
+    ctx.moveTo(135, 100);
+    ctx.arc(100, 100, 35, 0, Math.PI, false);  // 口 ('false' 表示顺时针)
+    ctx.moveTo(85, 85);
+    ctx.arc(80, 85, 5, 0, Math.PI * 2, true);  // 左眼
+    ctx.moveTo(125, 85);
+    ctx.arc(120, 85, 5, 0, Math.PI * 2, true);  // 右眼
+    ctx.stroke();
+
+    // 2. 绘制三角形
+    ctx.beginPath();
+    ctx.moveTo(250, 150);
+    ctx.lineTo(250, 50);
+    ctx.lineTo(350, 150);
+    ctx.closePath(); // 自动闭合，连接终点到起点
+    
+    ctx.fillStyle = '#ff6b6b';
+    ctx.fill();
+    ctx.strokeStyle = '#c92a2a';
+    ctx.stroke();
+  }, []);
+
+  return (
+    <div className="flex justify-center p-4 bg-white">
+      <canvas 
+        ref={canvasRef} 
+        width={400} 
+        height={200}
+        className="border border-neutral-200"
+      />
+    </div>
+  );
+}
+
+render(<CanvasShapes />)`}
+/>
+
+## 3. 样式与颜色
+
+*   `fillStyle = color`: 设置填充颜色。
+*   `strokeStyle = color`: 设置轮廓颜色。
+*   `globalAlpha = value`: 设置全局透明度 (0.0 - 1.0)。
+*   `lineWidth = value`: 设置线条宽度。
+*   `lineCap`: 线条末端样式 (`butt`, `round`, `square`)。
+*   `lineJoin`: 线条连接处样式 (`round`, `bevel`, `miter`)。
+
+### 渐变 (Gradients)
+
+Canvas 支持线性渐变和径向渐变。
+
+1.  `createLinearGradient(x1, y1, x2, y2)`
+2.  `createRadialGradient(x1, y1, r1, x2, y2, r2)`
+3.  `gradient.addColorStop(position, color)`
+
+<CodePenDemo
+  title="样式与渐变"
+  height="250px"
+  code={`const CanvasStyle = () => {
+  const canvasRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    // 创建线性渐变
+    const lingrad = ctx.createLinearGradient(0, 0, 0, 150);
+    lingrad.addColorStop(0, '#4facfe');
+    lingrad.addColorStop(1, '#00f2fe');
+
+    ctx.fillStyle = lingrad;
+    ctx.strokeStyle = '#0052d4';
+    
+    // 绘制圆角矩形效果（手动）
+    ctx.beginPath();
+    // 注意：roundRect 是较新的 API，部分旧浏览器可能不支持，实际项目中需 polyfill
+    if (ctx.roundRect) {
+       ctx.roundRect(50, 25, 300, 100, 20);
+    } else {
+       ctx.rect(50, 25, 300, 100);
+    }
+    ctx.fill();
+    
+    ctx.lineWidth = 5;
+    ctx.stroke();
+    
+    // 添加文字
+    ctx.fillStyle = 'white';
+    ctx.font = '20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Hello Canvas Gradients', 200, 75);
+  }, []);
+
+  return (
+    <div className="flex justify-center p-4 bg-white">
+      <canvas 
+        ref={canvasRef} 
+        width={400} 
+        height={150}
+        className="border border-neutral-200"
+      />
+    </div>
+  );
+}
+
+render(<CanvasStyle />)`}
+/>
+
+## 4. 状态保存与恢复 (Save & Restore)
+
+Canvas 是基于状态的。这非常重要！
+
+*   `save()`: 将当前状态放入栈中。
+*   `restore()`: 从栈中弹出顶部状态并恢复。
+
+**保存的状态包括：**
+*   当前的变换矩阵 (translate, rotate, scale 等)。
+*   当前的剪切区域 (clipping region)。
+*   当前的属性值：`strokeStyle`, `fillStyle`, `lineWidth`, `font` 等。
+
+**不会保存的状态：**
+*   当前的路径（正在绘制的线条）。
+*   当前的位图（画布上的内容）。
+
+```javascript
+ctx.fillStyle = 'red';
+ctx.save(); // 保存红色状态
+
+ctx.fillStyle = 'blue';
+ctx.fillRect(10, 10, 100, 100); // 绘制蓝色矩形
+
+ctx.restore(); // 恢复到红色状态
+ctx.fillRect(120, 10, 100, 100); // 这个矩形是红色的
+```
+
+## 5. 变形 (Transformations)
+
+Canvas 提供了平移、旋转、缩放等功能。通常配合 `save()` 和 `restore()` 使用，以免影响后续绘制。
+
+*   `translate(x, y)`: 移动 canvas 的原点。
+*   `rotate(angle)`: 顺时针旋转，单位是弧度。
+*   `scale(x, y)`: 缩放。
+
+> **技巧**：如果你想围绕图形中心旋转，通常的做法是：
+> 1. `translate` 到图形中心。
+> 2. `rotate`。
+> 3. 绘制图形（绘制坐标设为 `-width/2, -height/2`）。
+
+<CodePenDemo
+  title="图形变换动画"
+  height="300px"
+  code={`const CanvasTransform = () => {
+  const canvasRef = React.useRef(null);
+  const requestRef = React.useRef();
+  const angleRef = React.useRef(0);
+
+  const draw = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    
+    // 1. 清除画布
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // 2. 保存初始状态（原点在 0,0）
+    ctx.save();
+    
+    // 3. 移动原点到画布中心
+    ctx.translate(200, 100);
+    
+    // 4. 旋转
+    ctx.rotate(angleRef.current);
+    
+    // 5. 绘制（注意坐标是相对于新原点的）
+    ctx.fillStyle = '#fd79a8';
+    // 绘制矩形，使其中心与原点重合
+    ctx.fillRect(-50, -25, 100, 50);
+    
+    // 6. 恢复状态
+    ctx.restore();
+    
+    angleRef.current += 0.02;
+    requestRef.current = requestAnimationFrame(draw);
+  };
+
+  React.useEffect(() => {
+    requestRef.current = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(requestRef.current);
+  }, []);
+
+  return (
+    <div className="flex flex-col items-center p-4 bg-white">
+      <canvas 
+        ref={canvasRef} 
+        width={400} 
+        height={200}
+        className="border border-neutral-200"
+      />
+      <div className="mt-2 text-sm text-neutral-500">不断旋转的矩形</div>
+    </div>
+  );
+}
+
+render(<CanvasTransform />)`}
+/>
+
+## 6. 动画 (Animation)
+
+实现动画的本质是：**清除画布 -> 更新状态 -> 绘制**，并不断循环。
+
+现代 Web 动画推荐使用 `requestAnimationFrame(callback)`，它比 `setInterval` 更流畅且节省性能。
+
+### 标准动画循环
+
+```javascript
+function animate() {
+  // 1. 清除
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  // 2. 更新 & 绘制
+  update();
+  draw();
+  
+  // 3. 循环
+  requestAnimationFrame(animate);
+}
+
+animate(); // 启动
+```
+
+### 综合实战：粒子系统
+
+下面是一个带有鼠标交互的简单粒子系统。
+
+<CodePenDemo
+  title="互动粒子系统"
+  height="400px"
+  code={`const ParticleSystem = () => {
+  const canvasRef = React.useRef(null);
+  const requestRef = React.useRef();
+  const particlesRef = React.useRef([]);
+  const hueRef = React.useRef(0);
+  const mouseRef = React.useRef({ x: undefined, y: undefined });
+
+  // 粒子类定义
+  class Particle {
+    constructor(x, y, hue) {
+      this.x = x;
+      this.y = y;
+      this.size = Math.random() * 8 + 1;
+      this.speedX = Math.random() * 3 - 1.5;
+      this.speedY = Math.random() * 3 - 1.5;
+      this.color = 'hsl(' + hue + ', 100%, 50%)';
+    }
+    
+    update() {
+      this.x += this.speedX;
+      this.y += this.speedY;
+      if (this.size > 0.2) this.size -= 0.1;
+    }
+    
+    draw(ctx) {
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  const handleParticles = (ctx) => {
+    for(let i = 0; i < particlesRef.current.length; i++) {
+      particlesRef.current[i].update();
+      particlesRef.current[i].draw(ctx);
+      
+      if (particlesRef.current[i].size <= 0.3) {
+        particlesRef.current.splice(i, 1);
+        i--;
+      }
+    }
+  };
+
+  const animate = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    // 产生拖尾效果
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    handleParticles(ctx);
+    hueRef.current += 2;
+    requestRef.current = requestAnimationFrame(animate);
+  };
+
+  React.useEffect(() => {
+    requestRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(requestRef.current);
+  }, []);
+
+  const handleMouseMove = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    mouseRef.current = { x, y };
+    
+    for(let i=0; i<3; i++) {
+      particlesRef.current.push(new Particle(x, y, hueRef.current));
+    }
+  };
+
+  const handleClick = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    for(let i=0; i<15; i++) {
+      particlesRef.current.push(new Particle(x, y, hueRef.current));
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center bg-[#1a1a1a] p-4 text-white">
+      <canvas 
+        ref={canvasRef} 
+        width={600} 
+        height={300}
+        className="border border-neutral-700 cursor-crosshair touch-none bg-black"
+        onMouseMove={handleMouseMove}
+        onClick={handleClick}
+      />
+      <div className="mt-2 text-xs text-neutral-400">移动鼠标或点击产生粒子效果</div>
+    </div>
+  );
+}
+
+render(<ParticleSystem />)`}
+/>
+
+## 7. 高级技巧与性能优化
+
+### 离屏 Canvas (Offscreen Canvas)
+
+如果有一个复杂的静态背景需要频繁重绘，可以先将其绘制在一个不可见的 canvas 上，然后在主 canvas 上通过 `drawImage` 直接绘制这个离屏 canvas。这比每帧重新运行所有绘制命令快得多。
+
+```javascript
+// 创建离屏 canvas
+const offscreen = document.createElement('canvas');
+offscreen.width = 800;
+offscreen.height = 600;
+const offCtx = offscreen.getContext('2d');
+
+// 在离屏 canvas 上绘制复杂图形（只做一次）
+offCtx.fillStyle = 'blue';
+offCtx.fillRect(0, 0, 100, 100);
+// ... 更多复杂绘制
+
+// 在主循环中
+function animate() {
+  // 直接绘制离屏 canvas 的内容，性能极高
+  ctx.drawImage(offscreen, 0, 0);
+  requestAnimationFrame(animate);
+}
+```
+
+### 像素操作 (Pixel Manipulation)
+
+通过 `getImageData` 和 `putImageData`，我们可以直接读写画布上的每一个像素。这对于图像处理（滤镜、抠图）非常有用。
+
+*   `ctx.getImageData(x, y, width, height)`: 返回 `ImageData` 对象。
+*   `ImageData.data`: 一个巨大的 `Uint8ClampedArray`，每 4 个值代表一个像素 (R, G, B, A)。
+
+### 性能 check list
+
+1.  **减少绘制指令调用**：绘制指令开销很大，尽量批量处理。
+2.  **分层 Canvas**：游戏开发中，常将背景、前景、UI 分层放在不同的 canvas 元素中叠加，背景不动时不需要重绘。
+3.  **避免浮点数坐标**：尽量使用整数坐标，避免浏览器进行子像素抗锯齿运算。
+4.  **不在动画循环中创建对象**：避免频繁 GC（垃圾回收），复用对象。
+
+## 结语
+
+Canvas 的世界非常广阔，从简单的图表展示到复杂的 WebGL 3D 渲染（虽然 WebGL 是 3D 的，但也使用 canvas 元素），它是 Web 前端可视化的基石。希望这篇指南能带你入门，开启你的创意编程之旅！

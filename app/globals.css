@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import '../styles/algolia-search.css';
+@import '../styles/code-highlight.css';
 
 :root {
   --background: #f5f5f5;
@@ -36,8 +37,8 @@
   --radius-full: 50%;
 
   /* 阴影 */
-  --shadow-subtle: 0 2px 4px rgba(0,0,0,0.05);
-  --shadow-tooltip: 0 2px 8px rgba(0,0,0,0.1);
+  --shadow-subtle: 0 2px 4px rgba(0, 0, 0, 0.05);
+  --shadow-tooltip: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 @theme inline {
@@ -61,13 +62,11 @@ body {
   font-weight: 900;
   letter-spacing: -0.02em;
   line-height: 1;
-  background: repeating-linear-gradient(
-    0deg,
-    var(--foreground) 0px,
-    var(--foreground) 4px,
-    transparent 4px,
-    transparent 8px
-  );
+  background: repeating-linear-gradient(0deg,
+      var(--foreground) 0px,
+      var(--foreground) 4px,
+      transparent 4px,
+      transparent 8px);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -85,19 +84,21 @@ body {
   color: var(--color-neutral-500);
   line-height: 1.5;
 }
+
 /* 代码高亮 */
 .code-keyword {
-    color: var(--foreground);
-    font-weight: 500;
+  color: var(--foreground);
+  font-weight: 500;
 }
 
 .code-function {
-    color: var(--foreground);
+  color: var(--foreground);
 }
 
 .code-string {
-    color: var(--color-orange-800);
+  color: var(--color-orange-800);
 }
+
 /* Cards */
 .card {
   background: white;
@@ -107,7 +108,7 @@ body {
 }
 
 .card:hover {
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .card-body {
@@ -162,49 +163,49 @@ body {
 
 /* Patterns */
 .pattern-dots {
-  background-image: radial-gradient(
-    circle, 
-    var(--color-neutral-400) 1px, 
-    transparent 1px
-  );
+  background-image: radial-gradient(circle,
+      var(--color-neutral-400) 1px,
+      transparent 1px);
   background-size: 6px 6px;
 }
 
 .pattern-lines {
-  background-image: repeating-linear-gradient(
-    -45deg,
-    transparent,
-    transparent 3px,
-    var(--color-neutral-200) 3px,
-    var(--color-neutral-200) 4px
-  );
+  background-image: repeating-linear-gradient(-45deg,
+      transparent,
+      transparent 3px,
+      var(--color-neutral-200) 3px,
+      var(--color-neutral-200) 4px);
 }
 
 /* 标签样式 */
-.tag {
-    display: inline-block;
-    padding: var(--spacing-xs) var(--spacing-sm);
-    font-size: 0.75rem;
-    font-weight: 500;
-    background-color: var(--color-neutral-100);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    margin-right: var(--spacing-sm);
-    margin-bottom: var(--spacing-sm);
+/* 标签样式 - Renamed to avoid conflict with PrismJS 'tag' token */
+.blog-tag {
+  display: inline-block;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: 0.75rem;
+  font-weight: 500;
+  background-color: var(--color-neutral-100);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-right: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
 }
 
 /* 加载动画 */
 .spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid var(--color-neutral-200);
-    border-top-color: var(--foreground);
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-neutral-200);
+  border-top-color: var(--foreground);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
 }
+
 /* Animations */
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .spinner {
@@ -221,7 +222,7 @@ body {
   .spinner {
     animation: none;
   }
-  
+
   * {
     transition: none !important;
   }
@@ -232,124 +233,132 @@ body {
   .features-title {
     font-size: 48px;
   }
-    .card-body {
-        padding: var(--spacing-lg);
-    }
 
-    h1 {
-        font-size: 1.75rem;
-    }
+  .card-body {
+    padding: var(--spacing-lg);
+  }
 
-    h2 {
-        font-size: 1.25rem;
-    }
+  h1 {
+    font-size: 1.75rem;
+  }
+
+  h2 {
+    font-size: 1.25rem;
+  }
 }
 
 
 
 /* 标题样式 */
-h1, h2, h3, h4, h5, h6 {
-    margin-top: 0;
-    margin-bottom: var(--spacing-md);
-    font-weight: 600;
-    line-height: 1.25;
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin-top: 0;
+  margin-bottom: var(--spacing-md);
+  font-weight: 600;
+  line-height: 1.25;
 }
 
 h1 {
-    font-size: 2rem;
-    font-weight: 700;
+  font-size: 2rem;
+  font-weight: 700;
 }
 
 h2 {
-    font-size: 1.5rem;
+  font-size: 1.5rem;
 }
 
 h3 {
-    font-size: 1.25rem;
+  font-size: 1.25rem;
 }
 
 /* 段落样式 */
 p {
-    margin-top: 0;
-    margin-bottom: var(--spacing-lg);
+  margin-top: 0;
+  margin-bottom: var(--spacing-lg);
 }
 
 /* 列表样式 */
-ul, ol {
-    margin-top: 0;
-    margin-bottom: var(--spacing-lg);
-    padding-left: var(--spacing-2xl);
+ul,
+ol {
+  margin-top: 0;
+  margin-bottom: var(--spacing-lg);
+  padding-left: var(--spacing-2xl);
 }
 
 li {
-    margin-bottom: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
 }
 
 /* 引用样式 */
 blockquote {
-    margin: var(--spacing-lg) 0;
-    padding: var(--spacing-lg) var(--spacing-2xl);
-    border-left: 4px solid var(--color-orange-800);
-    background-color: var(--color-neutral-100);
-    font-style: italic;
+  margin: var(--spacing-lg) 0;
+  padding: var(--spacing-lg) var(--spacing-2xl);
+  border-left: 4px solid var(--color-orange-800);
+  background-color: var(--color-neutral-100);
+  font-style: italic;
 }
 
 /* 表格样式 */
 table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-bottom: var(--spacing-lg);
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--spacing-lg);
 }
 
-th, td {
-    padding: var(--spacing-md);
-    text-align: left;
-    border-bottom: 1px solid var(--border-color);
+th,
+td {
+  padding: var(--spacing-md);
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
 }
 
 th {
-    font-weight: 600;
+  font-weight: 600;
 }
 
 /* 图片样式 */
 img {
-    max-width: 100%;
-    height: auto;
-    border-radius: var(--radius-lg);
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-lg);
 }
 
 /* 分隔线样式 */
 hr {
-    border: 0;
-    height: 1px;
-    background-color: var(--border-color);
-    margin: var(--spacing-3xl) 0;
+  border: 0;
+  height: 1px;
+  background-color: var(--border-color);
+  margin: var(--spacing-3xl) 0;
 }
 
 
 /* 代码块样式 */
 code {
-    font-family: var(--font-mono);
-    font-size: 0.875em;
-    background-color: rgba(0, 0, 0, 0.05);
-    padding: 0.125em 0.25em;
-    border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 0.125em 0.25em;
+  border-radius: var(--radius-sm);
 }
 
 pre {
-    font-family: var(--font-mono);
-    background-color: white;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: var(--spacing-lg);
-    overflow-x: auto;
-    font-size: 13px;
-    line-height: 1.6;
+  font-family: var(--font-mono);
+  background-color: white;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 pre code {
-    background-color: transparent;
-    padding: 0;
+  background-color: transparent;
+  padding: 0;
 }
 
 
@@ -373,4 +382,15 @@ pre code {
 
 .dark .custom-scrollbar::-webkit-scrollbar-thumb {
   background: #333;
+}
+
+/* Fix for CodePenDemo editor highlighting */
+/* Fix for CodePenDemo editor highlighting */
+.code-pen-editor pre,
+.code-pen-editor code,
+.code-pen-editor span {
+  background-color: transparent !important;
+  font-family: inherit !important;
+  border: none !important;
+  padding: 0 !important;
 }
