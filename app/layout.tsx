@@ -1,19 +1,28 @@
 import type { Metadata } from "next";
-import { Inter, IBM_Plex_Mono } from "next/font/google";
+import { Public_Sans, IBM_Plex_Mono, Noto_Sans_SC } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
 import BambooRuler from "@/components/BambooRuler";
 import RulerLayout from "@/components/RulerLayout";
 
-const inter = Inter({
+const publicSans = Public_Sans({
   subsets: ["latin"],
-  variable: "--font-inter",
+  variable: "--font-public-sans",
+  display: 'swap',
 });
 
 const ibmPlexMono = IBM_Plex_Mono({
-  weight: ["400", "500", "600"],
+  weight: ["300", "400", "500", "600", "700"],
   subsets: ["latin"],
   variable: "--font-ibm-plex-mono",
+  display: 'swap',
+});
+
+const notoSansSC = Noto_Sans_SC({
+  weight: ["400", "500", "700", "900"],
+  preload: false,
+  variable: "--font-noto-sans-sc",
+  display: 'swap',
 });
 
 export const metadata: Metadata = {
@@ -45,7 +54,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" className={`${inter.variable} ${ibmPlexMono.variable}`}>
+    <html lang="zh-CN" className={`${publicSans.variable} ${ibmPlexMono.variable} ${notoSansSC.variable}`}>
       <body className="antialiased" style={{ backgroundColor: 'var(--background)' }}>
         <RulerLayout>
           <Header />

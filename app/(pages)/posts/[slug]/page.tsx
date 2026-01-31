@@ -7,12 +7,11 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { logger } from '@/lib/logger';
 import PageTitle from '@/components/PageTitle';
+import { ChevronLeft, Calendar, Clock, User, Bookmark, MoreHorizontal } from 'lucide-react';
 
-// 生成静态参数
 export async function generateStaticParams() {
   try {
     const slugs = getAllPostSlugs();
-    logger.info('Available slugs:', slugs);
     return slugs.map((item) => ({
       slug: item.params.slug,
     }));
@@ -22,128 +21,123 @@ export async function generateStaticParams() {
   }
 }
 
-// 获取博客文章数据
 async function getPost(slug: string) {
   try {
     const post = await getPostData(slug);
     return post;
   } catch (error) {
-    logger.error(`Error fetching post ${slug}:`, error);
     return null;
   }
 }
 
 export default async function BlogPost({ params }: { params: Promise<{ slug: string }> }) {
-  // 在Next.js 15+中，params是一个Promise，需要await
   const resolvedParams = await params;
   const slug = resolvedParams?.slug;
 
-  if (!slug) {
-    logger.error('Slug is undefined in params');
-    notFound();
-  }
+  if (!slug) notFound();
 
-  logger.info('Fetching post with slug:', slug);
   const post = await getPost(slug);
-
-  if (!post) {
-    logger.error('Post not found for slug:', slug);
-    notFound();
-    return null;
-  }
+  if (!post) notFound();
 
   const toc = extractToc(post.rawContent || post.content);
 
-  logger.debug('Post data:', post)
-
   return (
-    <>
+    <div className="min-h-screen bg-[#f5f5f5] dark:bg-neutral-950 font-sans text-[oklch(0.145_0_0)] dark:text-neutral-100 selection:bg-orange-500/20">
       <PageTitle title={post.title} />
       <TableOfContents toc={toc} />
-      <div className="min-h-screen" style={{backgroundColor: 'var(--background)'}}>
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8" style={{padding: '48px 24px'}}>
-        <div style={{marginBottom: '32px'}}>
-          <Link href="/posts" className="inline-flex items-center transition-colors" style={{color: 'var(--color-orange-800)', fontSize: '14px', fontFamily: 'var(--font-mono)'}}>
-            <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-            返回博客列表
+
+      <div className="max-w-5xl mx-auto px-6 py-12">
+        {/* Back Link */}
+        <div className="mb-12">
+          <Link
+            href="/posts"
+            className="inline-flex items-center text-[11px] font-mono font-bold uppercase tracking-[0.2em] text-[#ea580c] group"
+          >
+            <ChevronLeft className="w-3 h-3 mr-2 group-hover:-translate-x-1 transition-transform" />
+            BACK_TO_ARCHIVE
           </Link>
         </div>
 
-        <article>
-          <header style={{marginBottom: '48px'}}>
-            <h1 style={{fontSize: '32px', fontWeight: 700, marginBottom: '24px', color: 'var(--foreground)', fontFamily: 'var(--font-sans)'}}>{post.title}</h1>
-            <div className="flex items-center" style={{marginBottom: '24px', fontSize: '14px', color: 'var(--color-neutral-500)', fontFamily: 'var(--font-mono)'}}>
-              <time dateTime={post.date}>{post.date}</time>
-              {post.readingTime && (
-                <>
-                  <span style={{margin: '0 8px'}}>·</span>
-                  <span>{post.readingTime}</span>
-                </>
-              )}
-              {post.author && (
-                <>
-                  <span style={{margin: '0 8px'}}>·</span>
-                  <span>{post.author.name}</span>
-                </>
-              )}
+        <article className="bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-3xl overflow-hidden shadow-[8px_8px_0_oklch(0.145_0_0)]">
+          {/* Article Header */}
+          <header className="p-8 md:p-12 border-b border-[oklch(0.145_0_0)] bg-[#f5f5f5] dark:bg-neutral-800/50">
+            <div className="flex flex-wrap items-center gap-4 mb-8">
+              <div className="flex items-center gap-2 px-3 py-1 bg-[oklch(0.145_0_0)] text-white text-[9px] font-mono font-bold uppercase tracking-widest rounded shadow-[2px_2px_0_#ea580c]">
+                <Bookmark className="w-3 h-3" />
+                {post.category?.toUpperCase() || 'GENERAL'}
+              </div>
+              <div className="h-px w-8 bg-[oklch(0.145_0_0)] opacity-20" />
+              <div className="text-[10px] font-mono font-bold opacity-40 uppercase tracking-widest">
+                VER_2.4.0_STABLE
+              </div>
             </div>
+
+            <h1 className="text-4xl md:text-6xl font-black tracking-tighter leading-tight mb-10 uppercase italic">
+              {post.title}
+            </h1>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+              {[
+                { icon: Calendar, label: 'PUBLISHED_AT', value: post.date.replace(/-/g, '.') },
+                { icon: Clock, label: 'READ_TIME', value: post.readingTime || '---' },
+                { icon: User, label: 'AUTHOR_UID', value: post.author?.name?.toUpperCase() || 'SYSTEM' },
+                { icon: MoreHorizontal, label: 'DATA_INTEGRITY', value: 'VERIFIED' }
+              ].map((meta, i) => (
+                <div key={i} className="flex flex-col gap-1">
+                  <div className="flex items-center gap-1.5 text-[9px] font-mono font-bold opacity-40 uppercase tracking-widest">
+                    <meta.icon className="w-3 h-3" />
+                    {meta.label}
+                  </div>
+                  <div className="text-[11px] font-mono font-bold">{meta.value}</div>
+                </div>
+              ))}
+            </div>
+          </header>
+
+          <div className="p-8 md:p-16">
             {post.coverImage && (
-              <div className="relative h-64 w-full mb-8" style={{borderRadius: '8px', border: '1px solid var(--border-color)'}}>
+              <div className="relative aspect-video w-full mb-12 border border-[oklch(0.145_0_0)] rounded-2xl overflow-hidden shadow-[4px_4px_0_oklch(0.145_0_0)]">
                 <Image
                   src={post.coverImage}
                   alt={post.title}
                   fill
-                  className="object-cover"
+                  className="object-cover grayscale hover:grayscale-0 transition-all duration-700"
                 />
               </div>
             )}
+
+            {/* Post Content */}
+            <div className="prose prose-neutral dark:prose-invert max-w-none prose-headings:font-black prose-headings:tracking-tighter prose-headings:uppercase prose-blockquote:border-l-orange-600 prose-a:text-orange-600">
+              <MDXComponents content={post.content} isMdxCompiled={post.isMdxCompiled} category={post.category} />
+            </div>
+
+            {/* Tags */}
             {post.tags && post.tags.length > 0 && (
-              <div className="flex flex-wrap" style={{gap: '8px', marginBottom: '32px'}}>
+              <div className="mt-16 pt-8 border-t border-[oklch(0.145_0_0)] border-dashed flex flex-wrap gap-3">
                 {post.tags.map((tag) => (
                   <span
                     key={tag}
-                    style={{
-                      padding: '4px 12px',
-                      fontSize: '11px',
-                      borderRadius: '4px',
-                      backgroundColor: 'white',
-                      color: 'var(--foreground)',
-                      border: '1px solid var(--border-color)',
-                      fontFamily: 'var(--font-mono)'
-                    }}
+                    className="px-4 py-1.5 text-[10px] font-mono font-bold uppercase tracking-widest border border-[oklch(0.145_0_0)] rounded-full hover:bg-[oklch(0.145_0_0)] hover:text-white transition-colors cursor-default"
                   >
-                    {tag}
+                    #{tag}
                   </span>
                 ))}
               </div>
             )}
-          </header>
-
-          <div style={{fontSize: '16px', lineHeight: '1.7', color: 'var(--foreground)'}}>
-            <MDXComponents content={post.content} isMdxCompiled={post.isMdxCompiled} category={post.category} />
           </div>
         </article>
 
-        <div style={{marginTop: '48px', paddingTop: '32px', borderTop: '1px solid var(--border-color)'}}>
-          <div className="text-center">
-            <Link href="/posts" className="inline-flex items-center transition-colors" style={{color: 'var(--color-orange-800)', fontSize: '14px', fontFamily: 'var(--font-mono)'}}>
-              <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-              </svg>
-              返回博客列表
-            </Link>
-          </div>
+        {/* Footer Navigation */}
+        <div className="mt-12 flex justify-center">
+          <Link
+            href="/posts"
+            className="flex items-center gap-3 px-8 py-4 border border-[oklch(0.145_0_0)] rounded-2xl font-mono font-bold text-xs uppercase tracking-widest hover:bg-white transition-all shadow-[4px_4px_0_oklch(0.145_0_0)] active:shadow-none active:translate-x-1 active:translate-y-1"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            RETURN_TO_ARCHIVES
+          </Link>
         </div>
       </div>
-      
-      {/* AI聊天框 */}
-      {/* <AIChatBox 
-        articleTitle={post.title} 
-        articleContent={post.rawContent || post.content} 
-      /> */}
-      </div>
-    </>
+    </div>
   );
 }
