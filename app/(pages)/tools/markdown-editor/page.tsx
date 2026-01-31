@@ -5,81 +5,54 @@ import PageTitle from '@/components/PageTitle';
 import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-
-const initialMarkdown = `# Markdown 编辑器
-
-这是一个实时预览的 Markdown 编辑器。
-
-## 支持的特性
-- **加粗** 和 *斜体*
-- [链接](https://luxiag.blog)
-- 代码块: \`const foo = "bar";\`
-- 列表:
-  1. 第一项
-  2. 第二项
-- 表格:
-
-| 标题 | 描述 |
-| :--- | :--- |
-| EF Core | .NET ORM |
-| LINQ | 查询语言 |
-
----
-
-> 这是一个引用。
-
-![图片示例](https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=150&q=80)
-`;
-
 import Editor from 'react-simple-code-editor';
-import { Highlight, themes } from 'prism-react-renderer';
+import { Highlight } from 'prism-react-renderer';
+import {
+    ChevronLeft,
+    Edit3,
+    Eye,
+    Columns,
+    Terminal
+} from 'lucide-react';
+
+const initialMarkdown = `# MARKDOWN_IDE_v1.0
+
+## SYSTEM_OVERVIEW
+Minimalist, high-performance Markdown editor with real-time feedback.
+
+### FEATURES
+- **TECHNICAL_CONTRAST**: Oklch-based color palette
+- **STRUCTURAL_INTEGRITY**: Remark-GFM compliant
+- **MONO_TYPOGRAPHY**: IBM Plex Mono for technical labels
+
+\`\`\`javascript
+const engine = "Markdown/Editor";
+function render(input) {
+  return parse(input);
+}
+\`\`\`
+
+> NOTICE: Always verify structural coherence before export.
+
+| COMPONENT | STATUS |
+| :--- | :--- |
+| Core Engine | OPERATIONAL |
+| GFM Parser | ACTIVE |
+| Previewer | ONLINE |
+`;
 
 const codeHighlightTheme = {
     plain: {
-        color: 'var(--hljs-fg)',
+        color: 'oklch(0.145 0 0)',
         backgroundColor: 'transparent',
     },
     styles: [
-        {
-            types: ['comment', 'prolog', 'doctype', 'cdata'],
-            style: { color: 'var(--hljs-comment)' },
-        },
-        {
-            types: ['punctuation'],
-            style: { color: 'var(--hljs-operator)' },
-        },
-        {
-            types: ['namespace'],
-            style: { opacity: 0.7 },
-        },
-        {
-            types: ['tag', 'operator', 'number'],
-            style: { color: 'var(--hljs-number)' },
-        },
-        {
-            types: ['property', 'function'],
-            style: { color: 'var(--hljs-function)' },
-        },
-        {
-            types: ['tag-id', 'selector', 'atrule-id'],
-            style: { color: 'var(--hljs-symbol)' },
-        },
-        {
-            types: ['attr-name'],
-            style: { color: 'var(--hljs-attribute)' },
-        },
-        {
-            types: ['boolean', 'string', 'entity', 'url', 'attr-value', 'keyword', 'control', 'directive', 'unit', 'statement', 'regex', 'at-rule', 'placeholder', 'variable'],
-            style: { color: 'var(--hljs-keyword)' },
-        },
-        {
-            types: ['tag'],
-            style: { color: 'var(--hljs-tag)' }
-        },
-        {
-            types: ['attr-value'],
-            style: { color: 'var(--hljs-string)' }
-        }
+        { types: ['comment'], style: { color: '#888', fontStyle: 'italic' } },
+        { types: ['keyword', 'operator'], style: { color: 'oklch(0.145 0 0)', fontWeight: 'bold' } },
+        { types: ['string', 'url', 'attr-value'], style: { color: '#ea580c' } },
+        { types: ['function', 'property'], style: { color: 'oklch(0.145 0 0)' } },
+        { types: ['number', 'boolean'], style: { color: '#ea580c' } },
+        { types: ['tag', 'selector'], style: { color: 'oklch(0.145 0 0)' } },
     ],
 };
 
@@ -88,86 +61,70 @@ export default function MarkdownEditorPage() {
     const [activeTab, setActiveTab] = useState<'both' | 'edit' | 'preview'>('both');
 
     return (
-        <>
-            <PageTitle title="Markdown 编辑器" />
-            <div className="min-h-screen" style={{ backgroundColor: 'var(--background)' }}>
-                <div className="max-w-7xl mx-auto px-4" style={{ padding: '48px 24px' }}>
-                    <div style={{ marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="min-h-screen bg-[#f5f5f5] dark:bg-neutral-950 font-sans text-[oklch(0.145_0_0)] dark:text-neutral-100 selection:bg-orange-500/20">
+            <PageTitle title="MD 编辑器" />
+
+            <div className="max-w-[1400px] mx-auto px-6 py-12">
+                {/* Technical Header */}
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 mb-16 relative">
+                    <div className="relative z-10">
                         <Link
                             href="/tools"
-                            className="inline-flex items-center transition-colors"
-                            style={{ color: 'var(--color-orange-800)', fontSize: '14px', fontFamily: 'var(--font-mono)' }}
+                            className="inline-flex items-center text-[11px] font-mono font-bold uppercase tracking-[0.2em] text-[#ea580c] mb-6 group"
                         >
-                            <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                            </svg>
-                            返回工具箱
+                            <ChevronLeft className="w-3 h-3 mr-2 group-hover:-translate-x-1 transition-transform" />
+                            BACK_TO_LIBRARY
                         </Link>
-
-                        <div style={{ display: 'flex', background: 'white', padding: '4px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                            <button
-                                onClick={() => setActiveTab('edit')}
-                                style={{
-                                    padding: '6px 16px',
-                                    fontSize: '13px',
-                                    borderRadius: '4px',
-                                    border: 'none',
-                                    cursor: 'pointer',
-                                    background: activeTab === 'edit' ? 'var(--foreground)' : 'transparent',
-                                    color: activeTab === 'edit' ? 'white' : 'var(--foreground)'
-                                }}
-                            >
-                                编辑
-                            </button>
-                            <button
-                                onClick={() => setActiveTab('both')}
-                                style={{
-                                    padding: '6px 16px',
-                                    fontSize: '13px',
-                                    borderRadius: '4px',
-                                    border: 'none',
-                                    cursor: 'pointer',
-                                    background: activeTab === 'both' ? 'var(--foreground)' : 'transparent',
-                                    color: activeTab === 'both' ? 'white' : 'var(--foreground)'
-                                }}
-                            >
-                                分屏
-                            </button>
-                            <button
-                                onClick={() => setActiveTab('preview')}
-                                style={{
-                                    padding: '6px 16px',
-                                    fontSize: '13px',
-                                    borderRadius: '4px',
-                                    border: 'none',
-                                    cursor: 'pointer',
-                                    background: activeTab === 'preview' ? 'var(--foreground)' : 'transparent',
-                                    color: activeTab === 'preview' ? 'white' : 'var(--foreground)'
-                                }}
-                            >
-                                预览
-                            </button>
+                        <h1 className="text-6xl md:text-8xl font-black tracking-tighter leading-none mb-4">
+                            MARKDOWN<span className="text-[#ea580c]">/</span>IDE
+                        </h1>
+                        <div className="flex items-center gap-3 text-sm font-mono opacity-60">
+                            <span className="w-2 h-2 rounded-full bg-orange-600" />
+                            REALTIME_SYMBOLS_RENDERING_ENGINE_v1.0
                         </div>
                     </div>
 
-                    <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: activeTab === 'both' ? '1fr 1fr' : '1fr',
-                        gap: '24px',
-                        height: 'calc(100vh - 250px)',
-                        minHeight: '600px'
-                    }}>
-                        {/* 编辑器 */}
-                        {(activeTab === 'both' || activeTab === 'edit') && (
-                            <div style={{
-                                display: 'flex',
-                                flexDirection: 'column',
-                                background: 'white',
-                                borderRadius: '12px',
-                                border: '1px solid var(--border-color)',
-                                overflow: 'auto',
-                                boxShadow: 'var(--shadow-subtle)'
-                            }}>
+                    {/* View Controls */}
+                    <div className="flex bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] p-1.5 rounded-xl shadow-[4px_4px_0_oklch(0.145_0_0)] h-fit items-center">
+                        {[
+                            { id: 'edit', label: 'EDIT_MODE', icon: Edit3 },
+                            { id: 'both', label: 'SPLIT_VIEW', icon: Columns },
+                            { id: 'preview', label: 'READ_ONLY', icon: Eye }
+                        ].map((tab) => {
+                            const Icon = tab.icon;
+                            return (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id as any)}
+                                    className={`flex items-center gap-2 px-5 py-2 font-mono font-bold text-[10px] tracking-widest transition-all rounded-lg ${activeTab === tab.id
+                                            ? 'bg-[oklch(0.145_0_0)] text-white'
+                                            : 'hover:bg-neutral-100 text-neutral-400'
+                                        }`}
+                                >
+                                    <Icon className="w-3 h-3" />
+                                    {tab.label}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <div className={`grid gap-8 items-start h-[calc(100vh-320px)] min-h-[700px] transition-all ${activeTab === 'both' ? 'grid-cols-2' : 'grid-cols-1'
+                    }`}>
+                    {/* Editor Container */}
+                    {(activeTab === 'both' || activeTab === 'edit') && (
+                        <div className="flex flex-col h-full bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl overflow-hidden shadow-[2px_2px_0_oklch(0.145_0_0)]">
+                            <div className="px-6 py-4 border-b border-[oklch(0.145_0_0)] flex items-center justify-between bg-[#f5f5f5] dark:bg-neutral-800/50">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-3 h-3 border border-[oklch(0.145_0_0)] rounded-sm" />
+                                    <span className="text-xs font-mono font-bold uppercase tracking-widest">Editor_Buffer</span>
+                                </div>
+                                <div className="flex gap-1.5">
+                                    <div className="w-2 h-2 rounded-full bg-neutral-300" />
+                                    <div className="w-2 h-2 rounded-full bg-neutral-300" />
+                                </div>
+                            </div>
+                            <div className="flex-1 overflow-auto bg-white dark:bg-neutral-900">
                                 <Editor
                                     value={markdown}
                                     onValueChange={setMarkdown}
@@ -177,6 +134,7 @@ export default function MarkdownEditorPage() {
                                                 <>
                                                     {tokens.map((line, i) => (
                                                         <div key={i} {...getLineProps({ line })}>
+                                                            <span className="inline-block w-8 text-[10px] font-mono opacity-20 select-none mr-4">{i + 1}</span>
                                                             {line.map((token, key) => (
                                                                 <span key={key} {...getTokenProps({ token })} />
                                                             ))}
@@ -189,52 +147,115 @@ export default function MarkdownEditorPage() {
                                     padding={24}
                                     style={{
                                         fontFamily: 'var(--font-mono)',
-                                        fontSize: 14,
+                                        fontSize: 13,
                                         minHeight: '100%',
                                         outline: 'none',
                                     }}
-                                    placeholder="在此输入 Markdown 内容..."
+                                    placeholder="// TYPE_MARKDOWN_HERE..."
                                 />
                             </div>
-                        )}
+                        </div>
+                    )}
 
-                        {/* 预览 */}
-                        {(activeTab === 'both' || activeTab === 'preview') && (
-                            <div style={{
-                                background: 'white',
-                                borderRadius: '12px',
-                                border: '1px solid var(--border-color)',
-                                padding: '24px',
-                                overflowY: 'auto',
-                                boxShadow: 'var(--shadow-subtle)',
-                                backgroundColor: '#ffffff'
-                            }}>
-                                <div className="markdown-body" style={{ color: 'var(--foreground)' }}>
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {markdown}
-                                    </ReactMarkdown>
+                    {/* Preview Container */}
+                    {(activeTab === 'both' || activeTab === 'preview') && (
+                        <div className="flex flex-col h-full bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl overflow-hidden shadow-[2px_2px_0_oklch(0.145_0_0)]">
+                            <div className="px-6 py-4 border-b border-[oklch(0.145_0_0)] flex items-center justify-between bg-[#f5f5f5] dark:bg-neutral-800/50">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-3 h-3 border border-[oklch(0.145_0_0)] bg-[oklch(0.145_0_0)] rounded-sm" />
+                                    <span className="text-xs font-mono font-bold uppercase tracking-widest">Rendered_View</span>
                                 </div>
+                                <Terminal className="w-4 h-4 opacity-40" />
                             </div>
-                        )}
+                            <div className="flex-1 overflow-auto p-12 bg-white dark:bg-neutral-900 markdown-body">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                    {markdown}
+                                </ReactMarkdown>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                <div className="mt-8 flex justify-between items-center text-[10px] font-mono opacity-40 uppercase tracking-[0.2em]">
+                    <div className="flex items-center gap-4">
+                        <span>LENGTH: {markdown.length}</span>
+                        <span>LINES: {markdown.split('\n').length}</span>
                     </div>
+                    <span>SYNC_STATUS: ENCRYPTED_LOCAL_SAVE</span>
                 </div>
             </div>
 
             <style jsx global>{`
-        .markdown-body h1 { fontSize: 2em; border-bottom: 1px solid var(--border-color); padding-bottom: 0.3em; margin-bottom: 16px; margin-top: 0; }
-        .markdown-body h2 { fontSize: 1.5em; border-bottom: 1px solid var(--border-color); padding-bottom: 0.3em; margin-bottom: 16px; margin-top: 24px; }
-        .markdown-body h3 { fontSize: 1.25em; margin-bottom: 16px; margin-top: 24px; }
-        .markdown-body p { margin-bottom: 16px; line-height: 1.6; }
-        .markdown-body ul, .markdown-body ol { padding-left: 2em; margin-bottom: 16px; }
-        .markdown-body blockquote { border-left: 4px solid var(--color-orange-800); padding-left: 16px; color: var(--color-neutral-500); margin: 16px 0; }
-        .markdown-body code { background: var(--color-neutral-100); padding: 2px 4px; borderRadius: 4px; font-family: var(--font-mono); font-size: 0.9em; }
-        .markdown-body pre { background: var(--color-neutral-100); padding: 16px; borderRadius: 8px; margin-bottom: 16px; overflow: auto; }
-        .markdown-body table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
-        .markdown-body th, .markdown-body td { border: 1px solid var(--border-color); padding: 8px 12px; }
-        .markdown-body th { background: var(--color-neutral-500); }
-        .markdown-body hr { height: 1px; background: var(--border-color); border: none; margin: 24px 0; }
-        .markdown-body img { max-width: 100%; height: auto; border-radius: 8px; }
-      `}</style>
-        </>
+                .markdown-body {
+                    color: oklch(0.145 0 0);
+                    line-height: 1.6;
+                }
+                .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+                    font-weight: 900;
+                    letter-spacing: -0.02em;
+                    text-transform: uppercase;
+                    border-bottom: 2px solid oklch(0.145 0 0);
+                    padding-bottom: 0.5rem;
+                    margin-bottom: 1.5rem;
+                    margin-top: 2rem;
+                    color: oklch(0.145 0 0);
+                }
+                .markdown-body h1 { font-size: 2rem; }
+                .markdown-body h2 { font-size: 1.5rem; }
+                .markdown-body h3 { font-size: 1.25rem; }
+                .markdown-body p { margin-bottom: 1rem; }
+                .markdown-body ul, .markdown-body ol { margin-bottom: 1rem; padding-left: 1.5rem; }
+                .markdown-body li { margin-bottom: 0.25rem; }
+                .markdown-body blockquote {
+                    padding: 1.5rem;
+                    background: #f5f5f5;
+                    border: 1px solid oklch(0.145 0 0);
+                    border-left-width: 6px;
+                    border-left-color: #ea580c;
+                    border-radius: 8px;
+                    margin: 2rem 0;
+                    font-style: italic;
+                    color: oklch(0.145 0 0 / 0.7);
+                }
+                .markdown-body code:not(pre code) {
+                    background: #ea580c;
+                    color: white;
+                    padding: 0.2rem 0.4rem;
+                    border-radius: 4px;
+                    font-size: 0.85em;
+                }
+                .markdown-body pre {
+                    background: white;
+                    border: 1px solid oklch(0.145 0 0);
+                    padding: 1.5rem;
+                    border-radius: 12px;
+                    margin: 1.5rem 0;
+                    overflow: auto;
+                    box-shadow: 4px 4px 0 oklch(0.145 0 0);
+                }
+                .markdown-body table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin: 2rem 0;
+                    font-size: 0.9em;
+                }
+                .markdown-body th, .markdown-body td {
+                    border: 1px solid oklch(0.145 0 0);
+                    padding: 0.75rem 1rem;
+                    text-align: left;
+                }
+                .markdown-body th {
+                    background: oklch(0.145 0 0);
+                    color: white;
+                    text-transform: uppercase;
+                    letter-spacing: 0.1em;
+                }
+                .markdown-body hr {
+                    border: none;
+                    border-top: 1px dashed oklch(0.145 0 0);
+                    margin: 3rem 0;
+                }
+            `}</style>
+        </div>
     );
 }
