@@ -296,7 +296,7 @@ export default function ViewerComponent() {
                         <Canvas shadows dpr={[1, 2]} camera={{ position: [0, 0, 5], fov: 45 }}>
                             <color attach="background" args={[envPreset === 'night' ? '#050505' : '#f5f5f5']} />
                             <Suspense fallback={<Loader />}>
-                                <Stage environment={envPreset as any} intensity={0.5} contactShadow opacity={0.6} blur={2} shadows adjustCamera>
+                                <Stage environment={envPreset as any} intensity={0.5} shadows adjustCamera>
                                     <ModelSwitcher
                                         url={fileUrl}
                                         extension={fileExt}

@@ -149,6 +149,7 @@ export default function ImageEditorPage() {
             const dataURL = canvas.toDataURL({
                 format: 'png',
                 quality: 1,
+                multiplier: 1,
             });
             const link = document.createElement('a');
             link.download = 'edited-image.png';
@@ -164,6 +165,7 @@ export default function ImageEditorPage() {
                 const dataURL = activeObject.toDataURL({
                     format: 'png',
                     quality: 1,
+                    multiplier: 1,
                 });
                 const link = document.createElement('a');
                 link.download = 'selection.png';

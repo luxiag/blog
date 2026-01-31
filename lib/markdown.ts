@@ -2,14 +2,6 @@
 import fs from 'fs';
 import path from 'path';
 import matter from 'gray-matter';
-import { compile } from '@mdx-js/mdx';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import { remarkDetails } from './remark-details';
-import { remarkAdmonitionsCustom } from './remark-admonitions-custom';
-import rehypeHighlight from 'rehype-highlight';
-import rehypeKatex from 'rehype-katex';
-import rehypeSlug from 'rehype-slug';
 import { calculateReadingTime } from './reading-time';
 import { Post, PostFrontMatter } from '@/types/blog';
 import { logger } from './logger';
@@ -137,10 +129,21 @@ export async function getPostData(slug: string): Promise<Post> {
 
     if (isMdx) {
       try {
+        const [{ compile }, { default: remarkGfm }, { default: remarkMath }, { remarkDetails }, { remarkAdmonitionsCustom }, { default: rehypeHighlight }, { default: rehypeKatex }, { default: rehypeSlug }] = await Promise.all([
+          import('@mdx-js/mdx'),
+          import('remark-gfm'),
+          import('remark-math'),
+          import('./remark-details'),
+          import('./remark-admonitions-custom'),
+          import('rehype-highlight'),
+          import('rehype-katex'),
+          import('rehype-slug'),
+        ]);
+
         const compiled = await compile(content, {
           outputFormat: 'function-body',
           remarkPlugins: [remarkGfm, remarkMath, remarkDetails, [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'] }]],
-          rehypePlugins: [rehypeSlug, rehypeHighlight, rehypeKatex],
+          rehypePlugins: [rehypeSlug as any, rehypeHighlight as any, rehypeKatex as any],
           development: false,
         });
         compiledContent = String(compiled);
@@ -193,7 +196,6 @@ export async function getAllPosts(): Promise<Post[]> {
   const posts = await Promise.all(
     slugs.map(({ params }) => getPostData(params.slug))
   );
-  console.log('posts', posts)
   return posts.sort((a, b) => {
     if (a.date < b.date) {
       return 1;
