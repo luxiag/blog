@@ -1,0 +1,1662 @@
+---
+title: 'OpenLayers 完全指南：企业级 WebGIS 开发实战'
+date: '2026-01-31'
+tags: ['OpenLayers', 'WebGIS', 'GIS', '地图开发', 'JavaScript']
+summary: '从零开始掌握 OpenLayers，这个强大的企业级 WebGIS 框架。通过交互式示例学习地图初始化、图层管理、矢量绘制、空间查询等核心功能。'
+---
+
+# OpenLayers 完全指南：企业级 WebGIS 开发实战
+
+## 为什么选择 OpenLayers？
+
+OpenLayers 是一个功能强大的开源 JavaScript 库，专为构建企业级 WebGIS 应用而设计。与 Leaflet 的轻量简洁不同，OpenLayers 提供了更全面的 GIS 功能。
+
+**OpenLayers 的核心优势：**
+
+- 🌍 **多投影支持**：内置数十种坐标系统，支持任意投影转换
+- 📊 **丰富的数据源**：WMS、WMTS、WFS、GeoJSON、KML、GPX...
+- 🎨 **强大的渲染引擎**：Canvas、WebGL 双引擎，性能卓越
+- 🛠️ **企业级功能**：空间查询、要素编辑、测量工具、打印导出
+- 📱 **移动端优化**：触摸手势、响应式设计
+- 🔧 **高度可定制**：灵活的 API，满足复杂业务需求
+
+---
+
+## 快速开始：第一个地图
+
+让我们从最简单的示例开始，创建一个基础地图。
+
+<CodePenDemo
+  title="OpenLayers 基础地图"
+  height="450px"
+  code={`const BasicMap = () => {
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+
+  React.useEffect(() => {
+    // 1. 创建地图视图
+    const view = new ol.View({
+      center: ol.proj.fromLonLat([116.4074, 39.9042]), // 北京天安门
+      zoom: 10,
+      minZoom: 3,
+      maxZoom: 18
+    });
+
+    // 2. 创建 OSM 瓦片图层
+    const osmLayer = new ol.layer.Tile({
+      source: new ol.source.OSM()
+    });
+
+    // 3. 创建地图实例
+    const map = new ol.Map({
+      target: mapRef.current,
+      layers: [osmLayer],
+      view: view
+    });
+
+    mapInstanceRef.current = map;
+
+    // 清理函数
+    return () => {
+      map.setTarget(null);
+    };
+  }, []);
+
+  const zoomIn = () => {
+    const view = mapInstanceRef.current.getView();
+    view.animate({ zoom: view.getZoom() + 1, duration: 300 });
+  };
+
+  const zoomOut = () => {
+    const view = mapInstanceRef.current.getView();
+    view.animate({ zoom: view.getZoom() - 1, duration: 300 });
+  };
+
+  const goToBeijing = () => {
+    const view = mapInstanceRef.current.getView();
+    view.animate({
+      center: ol.proj.fromLonLat([116.4074, 39.9042]),
+      zoom: 12,
+      duration: 1000
+    });
+  };
+
+  const goToShanghai = () => {
+    const view = mapInstanceRef.current.getView();
+    view.animate({
+      center: ol.proj.fromLonLat([121.4737, 31.2304]),
+      zoom: 12,
+      duration: 1000
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div 
+        ref={mapRef} 
+        className="w-full h-80 border-2 border-gray-300 rounded-lg"
+      />
+      <div className="flex gap-2 justify-center flex-wrap">
+        <button 
+          onClick={zoomIn}
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+        >
+          🔍 放大
+        </button>
+        <button 
+          onClick={zoomOut}
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+        >
+          🔍 缩小
+        </button>
+        <button 
+          onClick={goToBeijing}
+          className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition"
+        >
+          📍 北京
+        </button>
+        <button 
+          onClick={goToShanghai}
+          className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition"
+        >
+          📍 上海
+        </button>
+      </div>
+      <p className="text-sm text-gray-600 text-center">
+        💡 提示：可以拖拽地图、滚轮缩放、双击放大
+      </p>
+    </div>
+  );
+};
+
+render(<BasicMap />);`}
+/>
+
+**核心概念解析：**
+
+1. **`ol.View`**：定义地图的视图（中心点、缩放级别、投影）
+2. **`ol.layer.Tile`**：瓦片图层，用于显示栅格地图
+3. **`ol.source.OSM`**：OpenStreetMap 数据源
+4. **`ol.proj.fromLonLat()`**：将经纬度坐标转换为地图投影坐标
+
+---
+
+## 图层管理：多图层叠加
+
+OpenLayers 支持多种图层类型的叠加，每个图层可以独立控制。
+
+<CodePenDemo
+  title="多图层管理"
+  height="500px"
+  code={`const LayerManagement = () => {
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+  const [layers, setLayers] = React.useState({
+    osm: true,
+    satellite: false,
+    labels: true
+  });
+
+  React.useEffect(() => {
+    // 1. OSM 街道图层
+    const osmLayer = new ol.layer.Tile({
+      source: new ol.source.OSM(),
+      visible: layers.osm
+    });
+
+    // 2. 卫星影像图层
+    const satelliteLayer = new ol.layer.Tile({
+      source: new ol.source.XYZ({
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        attributions: '© Esri'
+      }),
+      visible: layers.satellite
+    });
+
+    // 3. 标注图层
+    const labelsLayer = new ol.layer.Tile({
+      source: new ol.source.XYZ({
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+        attributions: '© Esri'
+      }),
+      visible: layers.labels
+    });
+
+    const map = new ol.Map({
+      target: mapRef.current,
+      layers: [satelliteLayer, osmLayer, labelsLayer],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([116.4074, 39.9042]),
+        zoom: 10
+      })
+    });
+
+    mapInstanceRef.current = map;
+
+    return () => map.setTarget(null);
+  }, []);
+
+  React.useEffect(() => {
+    if (!mapInstanceRef.current) return;
+    
+    const allLayers = mapInstanceRef.current.getLayers().getArray();
+    allLayers[0].setVisible(layers.satellite); // 卫星
+    allLayers[1].setVisible(layers.osm);       // 街道
+    allLayers[2].setVisible(layers.labels);    // 标注
+  }, [layers]);
+
+  const toggleLayer = (layerName) => {
+    setLayers(prev => ({
+      ...prev,
+      [layerName]: !prev[layerName]
+    }));
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div 
+        ref={mapRef} 
+        className="w-full h-80 border-2 border-gray-300 rounded-lg"
+      />
+      
+      <div className="bg-white border-2 border-gray-300 rounded-lg p-4">
+        <h3 className="font-bold mb-3 text-gray-800">图层控制</h3>
+        <div className="flex flex-col gap-2">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input 
+              type="checkbox" 
+              checked={layers.osm}
+              onChange={() => toggleLayer('osm')}
+              className="w-4 h-4"
+            />
+            <span className="text-gray-700">🗺️ 街道地图</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input 
+              type="checkbox" 
+              checked={layers.satellite}
+              onChange={() => toggleLayer('satellite')}
+              className="w-4 h-4"
+            />
+            <span className="text-gray-700">🛰️ 卫星影像</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input 
+              type="checkbox" 
+              checked={layers.labels}
+              onChange={() => toggleLayer('labels')}
+              className="w-4 h-4"
+            />
+            <span className="text-gray-700">🏷️ 地名标注</span>
+          </label>
+        </div>
+      </div>
+
+      <p className="text-sm text-gray-600 text-center">
+        💡 切换不同图层组合，观察效果
+      </p>
+    </div>
+  );
+};
+
+render(<LayerManagement />);`}
+/>
+
+---
+
+## 矢量图层：点、线、面绘制
+
+矢量图层用于显示可交互的地理要素，如标记点、路线、区域等。
+
+<CodePenDemo
+  title="矢量要素绘制"
+  height="550px"
+  code={`const VectorFeatures = () => {
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+  const vectorLayerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    // 创建矢量数据源
+    const vectorSource = new ol.source.Vector();
+
+    // 创建矢量图层
+    const vectorLayer = new ol.layer.Vector({
+      source: vectorSource,
+      style: new ol.style.Style({
+        fill: new ol.style.Fill({
+          color: 'rgba(59, 130, 246, 0.3)'
+        }),
+        stroke: new ol.style.Stroke({
+          color: '#3b82f6',
+          width: 2
+        }),
+        image: new ol.style.Circle({
+          radius: 7,
+          fill: new ol.style.Fill({ color: '#ef4444' }),
+          stroke: new ol.style.Stroke({
+            color: '#fff',
+            width: 2
+          })
+        })
+      })
+    });
+
+    vectorLayerRef.current = vectorLayer;
+
+    const map = new ol.Map({
+      target: mapRef.current,
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() }),
+        vectorLayer
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([116.4074, 39.9042]),
+        zoom: 12
+      })
+    });
+
+    mapInstanceRef.current = map;
+
+    return () => map.setTarget(null);
+  }, []);
+
+  const addPoint = () => {
+    const source = vectorLayerRef.current.getSource();
+    const center = mapInstanceRef.current.getView().getCenter();
+    
+    // 随机偏移
+    const offsetX = (Math.random() - 0.5) * 20000;
+    const offsetY = (Math.random() - 0.5) * 20000;
+    
+    const point = new ol.Feature({
+      geometry: new ol.geom.Point([center[0] + offsetX, center[1] + offsetY]),
+      name: '标记点 ' + (source.getFeatures().length + 1)
+    });
+    
+    source.addFeature(point);
+  };
+
+  const addLine = () => {
+    const source = vectorLayerRef.current.getSource();
+    const center = mapInstanceRef.current.getView().getCenter();
+    
+    const coordinates = [
+      [center[0] - 10000, center[1] - 10000],
+      [center[0], center[1] + 10000],
+      [center[0] + 10000, center[1] - 5000]
+    ];
+    
+    const line = new ol.Feature({
+      geometry: new ol.geom.LineString(coordinates),
+      name: '路线'
+    });
+    
+    source.addFeature(line);
+  };
+
+  const addPolygon = () => {
+    const source = vectorLayerRef.current.getSource();
+    const center = mapInstanceRef.current.getView().getCenter();
+    
+    const coordinates = [[
+      [center[0] - 8000, center[1] - 8000],
+      [center[0] + 8000, center[1] - 8000],
+      [center[0] + 8000, center[1] + 8000],
+      [center[0] - 8000, center[1] + 8000],
+      [center[0] - 8000, center[1] - 8000]
+    ]];
+    
+    const polygon = new ol.Feature({
+      geometry: new ol.geom.Polygon(coordinates),
+      name: '区域'
+    });
+    
+    source.addFeature(polygon);
+  };
+
+  const clearAll = () => {
+    const source = vectorLayerRef.current.getSource();
+    source.clear();
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div 
+        ref={mapRef} 
+        className="w-full h-80 border-2 border-gray-300 rounded-lg"
+      />
+      
+      <div className="flex gap-2 justify-center flex-wrap">
+        <button 
+          onClick={addPoint}
+          className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition"
+        >
+          📍 添加点
+        </button>
+        <button 
+          onClick={addLine}
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+        >
+          📏 添加线
+        </button>
+        <button 
+          onClick={addPolygon}
+          className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition"
+        >
+          ⬛ 添加面
+        </button>
+        <button 
+          onClick={clearAll}
+          className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition"
+        >
+          🗑️ 清空
+        </button>
+      </div>
+
+      <p className="text-sm text-gray-600 text-center">
+        💡 点击要素可以选中，拖拽地图查看不同位置
+      </p>
+    </div>
+  );
+};
+
+render(<VectorFeatures />);`}
+/>
+
+**矢量要素类型：**
+
+- **`ol.geom.Point`**：点要素（标记、POI）
+- **`ol.geom.LineString`**：线要素（道路、河流）
+- **`ol.geom.Polygon`**：面要素（建筑、行政区）
+- **`ol.geom.Circle`**：圆形要素（缓冲区）
+- **`ol.geom.MultiPoint/MultiLineString/MultiPolygon`**：多要素组合
+
+---
+
+## 交互功能：点击查询与弹窗
+
+实现地图要素的点击查询和信息展示。
+
+<CodePenDemo
+  title="要素点击查询"
+  height="550px"
+  code={`const FeatureClick = () => {
+  const mapRef = React.useRef(null);
+  const popupRef = React.useRef(null);
+  const [popupContent, setPopupContent] = React.useState('');
+  const overlayRef = React.useRef(null);
+
+  React.useEffect(() => {
+    // 创建一些示例要素
+    const features = [
+      new ol.Feature({
+        geometry: new ol.geom.Point(ol.proj.fromLonLat([116.4074, 39.9042])),
+        name: '天安门',
+        type: '景点',
+        description: '北京市中心的标志性建筑'
+      }),
+      new ol.Feature({
+        geometry: new ol.geom.Point(ol.proj.fromLonLat([116.3972, 39.9087])),
+        name: '故宫',
+        type: '景点',
+        description: '明清两代的皇家宫殿'
+      }),
+      new ol.Feature({
+        geometry: new ol.geom.Point(ol.proj.fromLonLat([116.4133, 39.9042])),
+        name: '王府井',
+        type: '商业区',
+        description: '北京著名商业街'
+      })
+    ];
+
+    const vectorSource = new ol.source.Vector({ features });
+
+    const vectorLayer = new ol.layer.Vector({
+      source: vectorSource,
+      style: new ol.style.Style({
+        image: new ol.style.Circle({
+          radius: 8,
+          fill: new ol.style.Fill({ color: '#ef4444' }),
+          stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+        })
+      })
+    });
+
+    // 创建弹窗 Overlay
+    const overlay = new ol.Overlay({
+      element: popupRef.current,
+      positioning: 'bottom-center',
+      offset: [0, -15],
+      autoPan: true
+    });
+    overlayRef.current = overlay;
+
+    const map = new ol.Map({
+      target: mapRef.current,
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() }),
+        vectorLayer
+      ],
+      overlays: [overlay],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([116.4074, 39.9042]),
+        zoom: 13
+      })
+    });
+
+    // 点击事件
+    map.on('click', (evt) => {
+      const feature = map.forEachFeatureAtPixel(evt.pixel, (feature) => feature);
+      
+      if (feature) {
+        const coords = feature.getGeometry().getCoordinates();
+        const props = feature.getProperties();
+        
+        setPopupContent(\`
+          <div class="p-3 bg-white rounded-lg shadow-lg min-w-[200px]">
+            <h3 class="font-bold text-lg mb-2 text-gray-800">\${props.name}</h3>
+            <p class="text-sm text-gray-600 mb-1">
+              <span class="font-semibold">类型：</span>\${props.type}
+            </p>
+            <p class="text-sm text-gray-600">
+              <span class="font-semibold">描述：</span>\${props.description}
+            </p>
+          </div>
+        \`);
+        
+        overlay.setPosition(coords);
+      } else {
+        overlay.setPosition(undefined);
+        setPopupContent('');
+      }
+    });
+
+    // 鼠标悬停效果
+    map.on('pointermove', (evt) => {
+      const pixel = map.getEventPixel(evt.originalEvent);
+      const hit = map.hasFeatureAtPixel(pixel);
+      map.getTargetElement().style.cursor = hit ? 'pointer' : '';
+    });
+
+    return () => map.setTarget(null);
+  }, []);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div 
+        ref={mapRef} 
+        className="w-full h-96 border-2 border-gray-300 rounded-lg relative"
+      >
+        <div 
+          ref={popupRef}
+          dangerouslySetInnerHTML={{ __html: popupContent }}
+        />
+      </div>
+
+      <p className="text-sm text-gray-600 text-center">
+        💡 点击红色标记查看详细信息
+      </p>
+    </div>
+  );
+};
+
+render(<FeatureClick />);`}
+/>
+
+---
+
+## 绘制工具：交互式绘图
+
+让用户在地图上绘制点、线、面等要素。
+
+<CodePenDemo
+  title="交互式绘图工具"
+  height="600px"
+  code={`const DrawingTools = () => {
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+  const drawRef = React.useRef(null);
+  const [drawType, setDrawType] = React.useState('Point');
+  const [featureCount, setFeatureCount] = React.useState(0);
+
+  React.useEffect(() => {
+    const vectorSource = new ol.source.Vector();
+
+    const vectorLayer = new ol.layer.Vector({
+      source: vectorSource,
+      style: new ol.style.Style({
+        fill: new ol.style.Fill({
+          color: 'rgba(16, 185, 129, 0.3)'
+        }),
+        stroke: new ol.style.Stroke({
+          color: '#10b981',
+          width: 3
+        }),
+        image: new ol.style.Circle({
+          radius: 7,
+          fill: new ol.style.Fill({ color: '#3b82f6' }),
+          stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+        })
+      })
+    });
+
+    const map = new ol.Map({
+      target: mapRef.current,
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() }),
+        vectorLayer
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([116.4074, 39.9042]),
+        zoom: 12
+      })
+    });
+
+    mapInstanceRef.current = map;
+
+    // 监听要素添加
+    vectorSource.on('addfeature', () => {
+      setFeatureCount(vectorSource.getFeatures().length);
+    });
+
+    return () => map.setTarget(null);
+  }, []);
+
+  React.useEffect(() => {
+    if (!mapInstanceRef.current) return;
+
+    // 移除旧的绘制交互
+    if (drawRef.current) {
+      mapInstanceRef.current.removeInteraction(drawRef.current);
+    }
+
+    const vectorLayer = mapInstanceRef.current.getLayers().getArray()[1];
+    const source = vectorLayer.getSource();
+
+    // 创建新的绘制交互
+    const draw = new ol.interaction.Draw({
+      source: source,
+      type: drawType
+    });
+
+    drawRef.current = draw;
+    mapInstanceRef.current.addInteraction(draw);
+
+    return () => {
+      if (drawRef.current) {
+        mapInstanceRef.current.removeInteraction(drawRef.current);
+      }
+    };
+  }, [drawType]);
+
+  const clearAll = () => {
+    const vectorLayer = mapInstanceRef.current.getLayers().getArray()[1];
+    vectorLayer.getSource().clear();
+    setFeatureCount(0);
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div 
+        ref={mapRef} 
+        className="w-full h-80 border-2 border-gray-300 rounded-lg"
+      />
+      
+      <div className="bg-white border-2 border-gray-300 rounded-lg p-4">
+        <h3 className="font-bold mb-3 text-gray-800">绘制工具</h3>
+        <div className="flex gap-2 flex-wrap mb-3">
+          <button 
+            onClick={() => setDrawType('Point')}
+            className={\`px-4 py-2 rounded transition \${
+              drawType === 'Point' 
+                ? 'bg-blue-600 text-white' 
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }\`}
+          >
+            📍 点
+          </button>
+          <button 
+            onClick={() => setDrawType('LineString')}
+            className={\`px-4 py-2 rounded transition \${
+              drawType === 'LineString' 
+                ? 'bg-blue-600 text-white' 
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }\`}
+          >
+            📏 线
+          </button>
+          <button 
+            onClick={() => setDrawType('Polygon')}
+            className={\`px-4 py-2 rounded transition \${
+              drawType === 'Polygon' 
+                ? 'bg-blue-600 text-white' 
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }\`}
+          >
+            ⬛ 面
+          </button>
+          <button 
+            onClick={() => setDrawType('Circle')}
+            className={\`px-4 py-2 rounded transition \${
+              drawType === 'Circle' 
+                ? 'bg-blue-600 text-white' 
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }\`}
+          >
+            ⭕ 圆
+          </button>
+          <button 
+            onClick={clearAll}
+            className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition"
+          >
+            🗑️ 清空
+          </button>
+        </div>
+        <div className="text-sm text-gray-600">
+          已绘制要素：<span className="font-bold text-blue-600">{featureCount}</span> 个
+        </div>
+      </div>
+
+      <p className="text-sm text-gray-600 text-center">
+        💡 点击地图开始绘制，双击结束绘制（线和面）
+      </p>
+    </div>
+  );
+};
+
+render(<DrawingTools />);`}
+/>
+
+**绘制类型：**
+- **Point**：点击一次完成
+- **LineString**：点击多次，双击结束
+- **Polygon**：点击多次，双击闭合
+- **Circle**：点击起点，拖拽确定半径
+
+---
+
+## 测量工具：距离与面积
+
+实现距离测量和面积测量功能。
+
+<CodePenDemo
+  title="测量工具"
+  height="600px"
+  code={`const MeasurementTools = () => {
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+  const drawRef = React.useRef(null);
+  const [measureType, setMeasureType] = React.useState(null);
+  const [result, setResult] = React.useState('');
+
+  React.useEffect(() => {
+    const vectorSource = new ol.source.Vector();
+
+    const vectorLayer = new ol.layer.Vector({
+      source: vectorSource,
+      style: new ol.style.Style({
+        fill: new ol.style.Fill({
+          color: 'rgba(251, 191, 36, 0.3)'
+        }),
+        stroke: new ol.style.Stroke({
+          color: '#f59e0b',
+          width: 3,
+          lineDash: [10, 10]
+        }),
+        image: new ol.style.Circle({
+          radius: 5,
+          fill: new ol.style.Fill({ color: '#f59e0b' })
+        })
+      })
+    });
+
+    const map = new ol.Map({
+      target: mapRef.current,
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() }),
+        vectorLayer
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([116.4074, 39.9042]),
+        zoom: 12
+      })
+    });
+
+    mapInstanceRef.current = map;
+
+    return () => map.setTarget(null);
+  }, []);
+
+  React.useEffect(() => {
+    if (!mapInstanceRef.current || !measureType) return;
+
+    // 移除旧的绘制交互
+    if (drawRef.current) {
+      mapInstanceRef.current.removeInteraction(drawRef.current);
+    }
+
+    const vectorLayer = mapInstanceRef.current.getLayers().getArray()[1];
+    const source = vectorLayer.getSource();
+
+    const draw = new ol.interaction.Draw({
+      source: source,
+      type: measureType === 'distance' ? 'LineString' : 'Polygon'
+    });
+
+    draw.on('drawend', (evt) => {
+      const geometry = evt.feature.getGeometry();
+      
+      if (measureType === 'distance') {
+        const length = ol.sphere.getLength(geometry);
+        const output = length > 1000 
+          ? (length / 1000).toFixed(2) + ' km'
+          : length.toFixed(2) + ' m';
+        setResult(\`距离: \${output}\`);
+      } else {
+        const area = ol.sphere.getArea(geometry);
+        const output = area > 1000000
+          ? (area / 1000000).toFixed(2) + ' km²'
+          : area.toFixed(2) + ' m²';
+        setResult(\`面积: \${output}\`);
+      }
+    });
+
+    drawRef.current = draw;
+    mapInstanceRef.current.addInteraction(draw);
+
+    return () => {
+      if (drawRef.current) {
+        mapInstanceRef.current.removeInteraction(drawRef.current);
+      }
+    };
+  }, [measureType]);
+
+  const startMeasure = (type) => {
+    setMeasureType(type);
+    setResult('');
+    // 清空之前的测量
+    const vectorLayer = mapInstanceRef.current.getLayers().getArray()[1];
+    vectorLayer.getSource().clear();
+  };
+
+  const stopMeasure = () => {
+    setMeasureType(null);
+    if (drawRef.current) {
+      mapInstanceRef.current.removeInteraction(drawRef.current);
+    }
+  };
+
+  const clearAll = () => {
+    const vectorLayer = mapInstanceRef.current.getLayers().getArray()[1];
+    vectorLayer.getSource().clear();
+    setResult('');
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div 
+        ref={mapRef} 
+        className="w-full h-80 border-2 border-gray-300 rounded-lg"
+      />
+      
+      <div className="bg-white border-2 border-gray-300 rounded-lg p-4">
+        <h3 className="font-bold mb-3 text-gray-800">测量工具</h3>
+        <div className="flex gap-2 flex-wrap mb-3">
+          <button 
+            onClick={() => startMeasure('distance')}
+            className={\`px-4 py-2 rounded transition \${
+              measureType === 'distance' 
+                ? 'bg-orange-600 text-white' 
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }\`}
+          >
+            📏 测距离
+          </button>
+          <button 
+            onClick={() => startMeasure('area')}
+            className={\`px-4 py-2 rounded transition \${
+              measureType === 'area' 
+                ? 'bg-orange-600 text-white' 
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }\`}
+          >
+            📐 测面积
+          </button>
+          <button 
+            onClick={stopMeasure}
+            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+          >
+            ⏹️ 停止
+          </button>
+          <button 
+            onClick={clearAll}
+            className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition"
+          >
+            🗑️ 清空
+          </button>
+        </div>
+        {result && (
+          <div className="bg-green-50 border-2 border-green-300 rounded p-3">
+            <p className="text-green-800 font-bold text-lg">{result}</p>
+          </div>
+        )}
+      </div>
+
+      <p className="text-sm text-gray-600 text-center">
+        💡 测距离：点击多次，双击结束 | 测面积：绘制多边形，双击闭合
+      </p>
+    </div>
+  );
+};
+
+render(<MeasurementTools />);`}
+/>
+
+---
+
+## GeoJSON 数据加载
+
+加载和显示 GeoJSON 格式的地理数据。
+
+<CodePenDemo
+  title="GeoJSON 数据可视化"
+  height="550px"
+  code={`const GeoJSONDemo = () => {
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+  const [featureInfo, setFeatureInfo] = React.useState(null);
+
+  React.useEffect(() => {
+    // 示例 GeoJSON 数据：北京的几个区
+    const geojsonData = {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "朝阳区",
+            "population": 3545000,
+            "area": 470.8
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+              [116.45, 39.95],
+              [116.55, 39.95],
+              [116.55, 39.85],
+              [116.45, 39.85],
+              [116.45, 39.95]
+            ]]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "海淀区",
+            "population": 3280000,
+            "area": 430.8
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+              [116.25, 39.95],
+              [116.35, 39.95],
+              [116.35, 39.85],
+              [116.25, 39.85],
+              [116.25, 39.95]
+            ]]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "东城区",
+            "population": 919000,
+            "area": 41.8
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+              [116.40, 39.93],
+              [116.44, 39.93],
+              [116.44, 39.89],
+              [116.40, 39.89],
+              [116.40, 39.93]
+            ]]
+          }
+        }
+      ]
+    };
+
+    // 创建 GeoJSON 数据源
+    const vectorSource = new ol.source.Vector({
+      features: new ol.format.GeoJSON().readFeatures(geojsonData, {
+        featureProjection: 'EPSG:3857'
+      })
+    });
+
+    // 样式函数：根据人口密度设置颜色
+    const styleFunction = (feature) => {
+      const props = feature.getProperties();
+      const density = props.population / props.area;
+      
+      let color;
+      if (density > 10000) color = 'rgba(239, 68, 68, 0.6)';
+      else if (density > 8000) color = 'rgba(251, 191, 36, 0.6)';
+      else color = 'rgba(34, 197, 94, 0.6)';
+
+      return new ol.style.Style({
+        fill: new ol.style.Fill({ color }),
+        stroke: new ol.style.Stroke({
+          color: '#fff',
+          width: 2
+        }),
+        text: new ol.style.Text({
+          text: props.name,
+          font: 'bold 14px sans-serif',
+          fill: new ol.style.Fill({ color: '#333' }),
+          stroke: new ol.style.Stroke({
+            color: '#fff',
+            width: 3
+          })
+        })
+      });
+    };
+
+    const vectorLayer = new ol.layer.Vector({
+      source: vectorSource,
+      style: styleFunction
+    });
+
+    const map = new ol.Map({
+      target: mapRef.current,
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() }),
+        vectorLayer
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([116.4, 39.9]),
+        zoom: 11
+      })
+    });
+
+    // 点击事件
+    map.on('click', (evt) => {
+      const feature = map.forEachFeatureAtPixel(evt.pixel, (f) => f);
+      if (feature) {
+        const props = feature.getProperties();
+        setFeatureInfo({
+          name: props.name,
+          population: props.population.toLocaleString(),
+          area: props.area,
+          density: (props.population / props.area).toFixed(0)
+        });
+      } else {
+        setFeatureInfo(null);
+      }
+    });
+
+    mapInstanceRef.current = map;
+
+    return () => map.setTarget(null);
+  }, []);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div 
+        ref={mapRef} 
+        className="w-full h-80 border-2 border-gray-300 rounded-lg"
+      />
+      
+      {featureInfo && (
+        <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4">
+          <h3 className="font-bold text-lg mb-2 text-blue-900">
+            {featureInfo.name}
+          </h3>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <div>
+              <span className="text-gray-600">人口：</span>
+              <span className="font-semibold">{featureInfo.population}</span>
+            </div>
+            <div>
+              <span className="text-gray-600">面积：</span>
+              <span className="font-semibold">{featureInfo.area} km²</span>
+            </div>
+            <div className="col-span-2">
+              <span className="text-gray-600">人口密度：</span>
+              <span className="font-semibold">{featureInfo.density} 人/km²</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-gray-50 border-2 border-gray-300 rounded-lg p-3">
+        <div className="flex items-center gap-4 text-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-red-500 opacity-60 rounded"></div>
+            <span>高密度 (&gt;10000)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-yellow-500 opacity-60 rounded"></div>
+            <span>中密度 (8000-10000)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-green-500 opacity-60 rounded"></div>
+            <span>低密度 (&lt;8000)</span>
+          </div>
+        </div>
+      </div>
+
+      <p className="text-sm text-gray-600 text-center">
+        💡 点击区域查看详细信息
+      </p>
+    </div>
+  );
+};
+
+render(<GeoJSONDemo />);`}
+/>
+
+---
+
+## 热力图可视化
+
+使用热力图展示空间数据密度分布。
+
+<CodePenDemo
+  title="热力图"
+  height="550px"
+  code={`const HeatmapDemo = () => {
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+  const heatmapLayerRef = React.useRef(null);
+  const [blur, setBlur] = React.useState(15);
+  const [radius, setRadius] = React.useState(8);
+
+  React.useEffect(() => {
+    // 生成随机热力点数据
+    const center = ol.proj.fromLonLat([116.4074, 39.9042]);
+    const features = [];
+    
+    for (let i = 0; i < 200; i++) {
+      const offsetX = (Math.random() - 0.5) * 50000;
+      const offsetY = (Math.random() - 0.5) * 50000;
+      
+      const feature = new ol.Feature({
+        geometry: new ol.geom.Point([
+          center[0] + offsetX,
+          center[1] + offsetY
+        ]),
+        weight: Math.random()
+      });
+      
+      features.push(feature);
+    }
+
+    const vectorSource = new ol.source.Vector({ features });
+
+    const heatmapLayer = new ol.layer.Heatmap({
+      source: vectorSource,
+      blur: blur,
+      radius: radius,
+      weight: (feature) => feature.get('weight')
+    });
+
+    heatmapLayerRef.current = heatmapLayer;
+
+    const map = new ol.Map({
+      target: mapRef.current,
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() }),
+        heatmapLayer
+      ],
+      view: new ol.View({
+        center: center,
+        zoom: 11
+      })
+    });
+
+    mapInstanceRef.current = map;
+
+    return () => map.setTarget(null);
+  }, []);
+
+  React.useEffect(() => {
+    if (heatmapLayerRef.current) {
+      heatmapLayerRef.current.setBlur(blur);
+      heatmapLayerRef.current.setRadius(radius);
+    }
+  }, [blur, radius]);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div 
+        ref={mapRef} 
+        className="w-full h-80 border-2 border-gray-300 rounded-lg"
+      />
+      
+      <div className="bg-white border-2 border-gray-300 rounded-lg p-4">
+        <h3 className="font-bold mb-3 text-gray-800">热力图参数</h3>
+        
+        <div className="space-y-4">
+          <div>
+            <label className="flex justify-between text-sm mb-2">
+              <span>模糊度 (Blur)</span>
+              <span className="font-bold text-blue-600">{blur}</span>
+            </label>
+            <input 
+              type="range" 
+              min="5" 
+              max="30" 
+              value={blur}
+              onChange={(e) => setBlur(Number(e.target.value))}
+              className="w-full"
+            />
+          </div>
+          
+          <div>
+            <label className="flex justify-between text-sm mb-2">
+              <span>半径 (Radius)</span>
+              <span className="font-bold text-blue-600">{radius}</span>
+            </label>
+            <input 
+              type="range" 
+              min="3" 
+              max="20" 
+              value={radius}
+              onChange={(e) => setRadius(Number(e.target.value))}
+              className="w-full"
+            />
+          </div>
+        </div>
+      </div>
+
+      <p className="text-sm text-gray-600 text-center">
+        💡 调整参数观察热力图效果变化
+      </p>
+    </div>
+  );
+};
+
+render(<HeatmapDemo />);`}
+/>
+
+---
+
+## 综合实战：完整地图应用
+
+整合所有功能，创建一个完整的地图应用。
+
+<CodePenDemo
+  title="完整地图应用"
+  height="700px"
+  code={`const CompleteMapApp = () => {
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+  const drawRef = React.useRef(null);
+  const [activeTab, setActiveTab] = React.useState('view');
+  const [drawType, setDrawType] = React.useState('Point');
+  const [coordinates, setCoordinates] = React.useState('');
+  const [zoom, setZoom] = React.useState(10);
+
+  React.useEffect(() => {
+    const vectorSource = new ol.source.Vector();
+
+    const vectorLayer = new ol.layer.Vector({
+      source: vectorSource,
+      style: new ol.style.Style({
+        fill: new ol.style.Fill({ color: 'rgba(59, 130, 246, 0.3)' }),
+        stroke: new ol.style.Stroke({ color: '#3b82f6', width: 2 }),
+        image: new ol.style.Circle({
+          radius: 7,
+          fill: new ol.style.Fill({ color: '#ef4444' }),
+          stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+        })
+      })
+    });
+
+    const view = new ol.View({
+      center: ol.proj.fromLonLat([116.4074, 39.9042]),
+      zoom: 10
+    });
+
+    const map = new ol.Map({
+      target: mapRef.current,
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() }),
+        vectorLayer
+      ],
+      view: view
+    });
+
+    // 监听视图变化
+    view.on('change', () => {
+      const center = ol.proj.toLonLat(view.getCenter());
+      setCoordinates(\`\${center[0].toFixed(4)}, \${center[1].toFixed(4)}\`);
+      setZoom(Math.round(view.getZoom()));
+    });
+
+    mapInstanceRef.current = map;
+
+    return () => map.setTarget(null);
+  }, []);
+
+  React.useEffect(() => {
+    if (!mapInstanceRef.current) return;
+
+    // 移除旧的绘制交互
+    if (drawRef.current) {
+      mapInstanceRef.current.removeInteraction(drawRef.current);
+      drawRef.current = null;
+    }
+
+    if (activeTab === 'draw') {
+      const vectorLayer = mapInstanceRef.current.getLayers().getArray()[1];
+      const draw = new ol.interaction.Draw({
+        source: vectorLayer.getSource(),
+        type: drawType
+      });
+      drawRef.current = draw;
+      mapInstanceRef.current.addInteraction(draw);
+    }
+
+    return () => {
+      if (drawRef.current) {
+        mapInstanceRef.current.removeInteraction(drawRef.current);
+      }
+    };
+  }, [activeTab, drawType]);
+
+  const clearFeatures = () => {
+    const vectorLayer = mapInstanceRef.current.getLayers().getArray()[1];
+    vectorLayer.getSource().clear();
+  };
+
+  const goToLocation = (lon, lat, zoomLevel) => {
+    const view = mapInstanceRef.current.getView();
+    view.animate({
+      center: ol.proj.fromLonLat([lon, lat]),
+      zoom: zoomLevel,
+      duration: 1000
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div 
+        ref={mapRef} 
+        className="w-full h-96 border-2 border-gray-300 rounded-lg"
+      />
+      
+      {/* 状态栏 */}
+      <div className="bg-gray-800 text-white px-4 py-2 rounded text-sm font-mono flex justify-between">
+        <span>坐标: {coordinates}</span>
+        <span>缩放: {zoom}</span>
+      </div>
+
+      {/* 标签页 */}
+      <div className="border-2 border-gray-300 rounded-lg overflow-hidden">
+        <div className="flex border-b-2 border-gray-300">
+          <button
+            onClick={() => setActiveTab('view')}
+            className={\`flex-1 px-4 py-2 font-semibold transition \${
+              activeTab === 'view'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }\`}
+          >
+            🗺️ 视图
+          </button>
+          <button
+            onClick={() => setActiveTab('draw')}
+            className={\`flex-1 px-4 py-2 font-semibold transition \${
+              activeTab === 'draw'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }\`}
+          >
+            ✏️ 绘制
+          </button>
+          <button
+            onClick={() => setActiveTab('locations')}
+            className={\`flex-1 px-4 py-2 font-semibold transition \${
+              activeTab === 'locations'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }\`}
+          >
+            📍 位置
+          </button>
+        </div>
+
+        <div className="p-4 bg-white">
+          {activeTab === 'view' && (
+            <div className="space-y-2">
+              <p className="text-gray-700">
+                使用鼠标拖拽平移地图，滚轮缩放，双击放大。
+              </p>
+              <button
+                onClick={clearFeatures}
+                className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition"
+              >
+                🗑️ 清空所有要素
+              </button>
+            </div>
+          )}
+
+          {activeTab === 'draw' && (
+            <div className="space-y-3">
+              <p className="text-gray-700 mb-2">选择绘制类型：</p>
+              <div className="flex gap-2 flex-wrap">
+                {['Point', 'LineString', 'Polygon', 'Circle'].map(type => (
+                  <button
+                    key={type}
+                    onClick={() => setDrawType(type)}
+                    className={\`px-4 py-2 rounded transition \${
+                      drawType === type
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }\`}
+                  >
+                    {type === 'Point' && '📍 点'}
+                    {type === 'LineString' && '📏 线'}
+                    {type === 'Polygon' && '⬛ 面'}
+                    {type === 'Circle' && '⭕ 圆'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'locations' && (
+            <div className="space-y-2">
+              <p className="text-gray-700 mb-2">快速跳转到：</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => goToLocation(116.4074, 39.9042, 12)}
+                  className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 transition"
+                >
+                  📍 北京
+                </button>
+                <button
+                  onClick={() => goToLocation(121.4737, 31.2304, 12)}
+                  className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 transition"
+                >
+                  📍 上海
+                </button>
+                <button
+                  onClick={() => goToLocation(113.2644, 23.1291, 12)}
+                  className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 transition"
+                >
+                  📍 广州
+                </button>
+                <button
+                  onClick={() => goToLocation(114.0579, 22.5431, 12)}
+                  className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 transition"
+                >
+                  📍 深圳
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+render(<CompleteMapApp />);`}
+/>
+
+---
+
+## 核心概念总结
+
+### 1. 地图组成
+
+```javascript
+const map = new ol.Map({
+  target: 'map',           // 容器元素
+  layers: [...],           // 图层数组
+  view: new ol.View({...}),// 视图配置
+  controls: [...],         // 控件
+  interactions: [...]      // 交互
+});
+```
+
+### 2. 图层类型
+
+| 图层类型 | 用途 | 示例 |
+|---------|------|------|
+| `ol.layer.Tile` | 瓦片图层 | OSM、Google Maps |
+| `ol.layer.Vector` | 矢量图层 | GeoJSON、要素绘制 |
+| `ol.layer.Heatmap` | 热力图 | 密度分布 |
+| `ol.layer.Image` | 图片图层 | WMS 服务 |
+
+### 3. 数据源类型
+
+| 数据源 | 说明 |
+|-------|------|
+| `ol.source.OSM` | OpenStreetMap |
+| `ol.source.XYZ` | 自定义瓦片服务 |
+| `ol.source.Vector` | 矢量数据 |
+| `ol.source.TileWMS` | WMS 服务 |
+| `ol.source.WMTS` | WMTS 服务 |
+
+### 4. 坐标转换
+
+```javascript
+// 经纬度 → Web Mercator
+const mercator = ol.proj.fromLonLat([116.4, 39.9]);
+
+// Web Mercator → 经纬度
+const lonLat = ol.proj.toLonLat([12958752, 4825476]);
+
+// 自定义投影转换
+const transformed = ol.proj.transform(
+  [116.4, 39.9],
+  'EPSG:4326',    // 源坐标系
+  'EPSG:3857'     // 目标坐标系
+);
+```
+
+---
+
+## 最佳实践
+
+### 1. 性能优化
+
+```javascript
+// ✅ 使用矢量瓦片（大数据量）
+const vectorTileLayer = new ol.layer.VectorTile({
+  source: new ol.source.VectorTile({
+    format: new ol.format.MVT(),
+    url: 'https://example.com/tiles/{z}/{x}/{y}.pbf'
+  })
+});
+
+// ✅ 设置图层可见范围
+layer.setMinZoom(10);
+layer.setMaxZoom(18);
+
+// ✅ 使用要素简化
+const simplifiedGeometry = geometry.simplify(100);
+```
+
+### 2. 内存管理
+
+```javascript
+// React 中正确清理地图
+React.useEffect(() => {
+  const map = new ol.Map({...});
+  
+  return () => {
+    map.setTarget(null); // 解除绑定
+    map.dispose();       // 释放资源
+  };
+}, []);
+```
+
+### 3. 样式优化
+
+```javascript
+// ✅ 使用样式缓存
+const styleCache = {};
+
+const styleFunction = (feature) => {
+  const type = feature.get('type');
+  
+  if (!styleCache[type]) {
+    styleCache[type] = new ol.style.Style({...});
+  }
+  
+  return styleCache[type];
+};
+```
+
+---
+
+## 常见问题
+
+### Q1: 地图不显示？
+
+**检查清单：**
+1. 容器是否有明确的宽高
+2. 坐标系是否正确转换
+3. 图层是否正确添加
+4. 控制台是否有错误
+
+### Q2: 如何加载本地瓦片？
+
+```javascript
+const localTiles = new ol.layer.Tile({
+  source: new ol.source.XYZ({
+    url: '/tiles/{z}/{x}/{y}.png'
+  })
+});
+```
+
+### Q3: 如何导出地图为图片？
+
+```javascript
+map.once('rendercomplete', () => {
+  const mapCanvas = document.createElement('canvas');
+  const size = map.getSize();
+  mapCanvas.width = size[0];
+  mapCanvas.height = size[1];
+  const mapContext = mapCanvas.getContext('2d');
+  
+  Array.from(
+    document.querySelectorAll('.ol-layer canvas')
+  ).forEach((canvas) => {
+    mapContext.drawImage(canvas, 0, 0);
+  });
+  
+  // 下载图片
+  mapCanvas.toBlob((blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'map.png';
+    a.click();
+  });
+});
+
+map.renderSync();
+```
+
+---
+
+## 学习资源
+
+**官方文档：**
+- [OpenLayers 官网](https://openlayers.org/)
+- [API 文档](https://openlayers.org/en/latest/apidoc/)
+- [示例集合](https://openlayers.org/en/latest/examples/)
+
+**进阶主题：**
+- 自定义控件开发
+- WebGL 渲染优化
+- 离线地图实现
+- 3D 地形可视化
+
+**相关库：**
+- [Turf.js](https://turfjs.org/) - 空间分析
+- [Proj4js](http://proj4js.org/) - 坐标转换
+- [GeoServer](http://geoserver.org/) - 地图服务器
+
+---
+
+## 总结
+
+OpenLayers 是一个功能强大、高度可定制的 WebGIS 框架，适合构建企业级地图应用。通过本文的交互式示例，你应该已经掌握了：
+
+✅ 地图初始化与视图控制  
+✅ 多图层管理与切换  
+✅ 矢量要素的创建与样式  
+✅ 交互功能（点击、绘制、测量）  
+✅ GeoJSON 数据加载与可视化  
+✅ 热力图等高级可视化  
+
+继续探索 OpenLayers 的更多功能，构建属于你的 WebGIS 应用吧！🚀

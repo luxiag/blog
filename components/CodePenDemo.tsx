@@ -10,6 +10,37 @@ import { themes } from 'prism-react-renderer';
 import { Stats } from '@react-three/drei';
 import * as fabric from 'fabric';
 
+// OpenLayers imports
+import Map from 'ol/Map';
+import View from 'ol/View';
+import Overlay from 'ol/Overlay';
+import Feature from 'ol/Feature';
+import * as layer from 'ol/layer';
+import * as source from 'ol/source';
+import * as proj from 'ol/proj';
+import * as geom from 'ol/geom';
+import * as style from 'ol/style';
+import * as interaction from 'ol/interaction';
+import * as format from 'ol/format';
+import * as sphere from 'ol/sphere';
+import 'ol/ol.css';
+
+// Construct the ol namespace object
+const ol = {
+  Map,
+  View,
+  Overlay,
+  Feature,
+  layer,
+  source,
+  proj,
+  geom,
+  style,
+  interaction,
+  format,
+  sphere
+};
+
 // Define the scope available to the code
 const scope = {
   React,
@@ -32,7 +63,8 @@ const scope = {
   EffectComposer,
   Bloom,
   Stats,
-  fabric
+  fabric,
+  ol
 };
 
 interface CodePenDemoProps {

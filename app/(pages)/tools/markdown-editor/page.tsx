@@ -31,6 +31,58 @@ const initialMarkdown = `# Markdown 编辑器
 ![图片示例](https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=150&q=80)
 `;
 
+import Editor from 'react-simple-code-editor';
+import { Highlight, themes } from 'prism-react-renderer';
+
+const codeHighlightTheme = {
+    plain: {
+        color: 'var(--hljs-fg)',
+        backgroundColor: 'transparent',
+    },
+    styles: [
+        {
+            types: ['comment', 'prolog', 'doctype', 'cdata'],
+            style: { color: 'var(--hljs-comment)' },
+        },
+        {
+            types: ['punctuation'],
+            style: { color: 'var(--hljs-operator)' },
+        },
+        {
+            types: ['namespace'],
+            style: { opacity: 0.7 },
+        },
+        {
+            types: ['tag', 'operator', 'number'],
+            style: { color: 'var(--hljs-number)' },
+        },
+        {
+            types: ['property', 'function'],
+            style: { color: 'var(--hljs-function)' },
+        },
+        {
+            types: ['tag-id', 'selector', 'atrule-id'],
+            style: { color: 'var(--hljs-symbol)' },
+        },
+        {
+            types: ['attr-name'],
+            style: { color: 'var(--hljs-attribute)' },
+        },
+        {
+            types: ['boolean', 'string', 'entity', 'url', 'attr-value', 'keyword', 'control', 'directive', 'unit', 'statement', 'regex', 'at-rule', 'placeholder', 'variable'],
+            style: { color: 'var(--hljs-keyword)' },
+        },
+        {
+            types: ['tag'],
+            style: { color: 'var(--hljs-tag)' }
+        },
+        {
+            types: ['attr-value'],
+            style: { color: 'var(--hljs-string)' }
+        }
+    ],
+};
+
 export default function MarkdownEditorPage() {
     const [markdown, setMarkdown] = useState(initialMarkdown);
     const [activeTab, setActiveTab] = useState<'both' | 'edit' | 'preview'>('both');
@@ -107,23 +159,39 @@ export default function MarkdownEditorPage() {
                     }}>
                         {/* 编辑器 */}
                         {(activeTab === 'both' || activeTab === 'edit') && (
-                            <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                <textarea
+                            <div style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                background: 'white',
+                                borderRadius: '12px',
+                                border: '1px solid var(--border-color)',
+                                overflow: 'auto',
+                                boxShadow: 'var(--shadow-subtle)'
+                            }}>
+                                <Editor
                                     value={markdown}
-                                    onChange={(e) => setMarkdown(e.target.value)}
+                                    onValueChange={setMarkdown}
+                                    highlight={code => (
+                                        <Highlight theme={codeHighlightTheme as any} code={code} language="markdown">
+                                            {({ tokens, getLineProps, getTokenProps }) => (
+                                                <>
+                                                    {tokens.map((line, i) => (
+                                                        <div key={i} {...getLineProps({ line })}>
+                                                            {line.map((token, key) => (
+                                                                <span key={key} {...getTokenProps({ token })} />
+                                                            ))}
+                                                        </div>
+                                                    ))}
+                                                </>
+                                            )}
+                                        </Highlight>
+                                    )}
+                                    padding={24}
                                     style={{
-                                        flex: 1,
-                                        width: '100%',
-                                        padding: '24px',
-                                        borderRadius: '12px',
-                                        border: '1px solid var(--border-color)',
-                                        background: 'white',
                                         fontFamily: 'var(--font-mono)',
-                                        fontSize: '14px',
-                                        lineHeight: '1.6',
+                                        fontSize: 14,
+                                        minHeight: '100%',
                                         outline: 'none',
-                                        resize: 'none',
-                                        boxShadow: 'var(--shadow-subtle)'
                                     }}
                                     placeholder="在此输入 Markdown 内容..."
                                 />

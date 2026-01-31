@@ -33,6 +33,7 @@ const tools: Tool[] = [
   { id: 'url-encoder', name: 'URL 编码解码', description: 'URL 编码/解码工具', icon: 'link', category: 'productivity' },
   { id: 'base64', name: 'Base64 转换', description: 'Base64 编码解码工具', icon: 'binary', category: 'productivity' },
   { id: 'chatgpt', name: 'AI 对话', description: '与 AI 进行对话交流', icon: 'message-square', category: 'ai' },
+  { id: 'image-editor', name: '图片编辑器', description: '在线图片编辑、滤镜与标注', icon: 'image', category: 'design' },
   { id: 'qrcode', name: '二维码生成', description: '生成自定义二维码', icon: 'qr-code', category: 'other' },
 ];
 
