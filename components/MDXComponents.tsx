@@ -9,17 +9,19 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { remarkAdmonitionsCustom } from '@/lib/remark-admonitions-custom';
 import * as runtime from 'react/jsx-runtime';
+import dynamic from 'next/dynamic';
 import Lightbox, { useLightbox } from './Lightbox';
 import type { MediaItem } from './Lightbox';
-import CodeRunner from './CodeRunner';
-import InteractiveComponent from './InteractiveComponent';
-import ShaderPreview from './ShaderPreview';
-import CodePenDemo from './CodePenDemo';
-import SqlSimulator from './SqlSimulator';
 import CodeBlock from './CodeBlock';
 import 'highlight.js/styles/github.css';
 import '../styles/code-highlight.css';
 import 'katex/dist/katex.min.css';
+
+const CodeRunner = dynamic(() => import('./CodeRunner'), { ssr: false });
+const InteractiveComponent = dynamic(() => import('./InteractiveComponent'), { ssr: false });
+const ShaderPreview = dynamic(() => import('./ShaderPreview'), { ssr: false });
+const CodePenDemo = dynamic(() => import('./CodePenDemo'), { ssr: false });
+const SqlSimulator = dynamic(() => import('./SqlSimulator'), { ssr: false });
 
 
 
@@ -441,9 +443,9 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
           </summary>
-           <div className="p-4 bg-white dark:bg-neutral-900 [&_pre]:my-0">
-             {getBodyContent()}
-           </div>
+          <div className="p-4 bg-white dark:bg-neutral-900 [&_pre]:my-0">
+            {getBodyContent()}
+          </div>
         </details>
       );
     },
