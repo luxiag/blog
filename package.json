@@ -27,6 +27,7 @@
     "@react-three/postprocessing": "^3.0.4",
     "@types/pdf-parse": "^1.1.5",
     "@types/three": "^0.182.0",
+    "fabric": "^7.1.0",
     "gray-matter": "^4.0.3",
     "hastscript": "^9.0.1",
     "highlight.js": "^11.11.1",

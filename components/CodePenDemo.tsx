@@ -8,6 +8,7 @@ import { OrbitControls, PerspectiveCamera, OrthographicCamera, Html, Environment
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { themes } from 'prism-react-renderer';
 import { Stats } from '@react-three/drei';
+import * as fabric from 'fabric';
 
 // Define the scope available to the code
 const scope = {
@@ -30,7 +31,8 @@ const scope = {
   ContactShadows,
   EffectComposer,
   Bloom,
-  Stats
+  Stats,
+  fabric
 };
 
 interface CodePenDemoProps {
