@@ -26,7 +26,7 @@ function runCommand(command, args, options) {
 async function build() {
   console.log('📸 Copying blog images to public folder...');
   try {
-    await runCommand('node', ['scripts/copy-images.js']);
+    await runCommand('node', ['scripts/copy-images.mjs']);
     console.log('✅ Images copied successfully');
   } catch (error) {
     console.error('❌ Image copy failed:', error);
