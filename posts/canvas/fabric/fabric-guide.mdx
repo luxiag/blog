@@ -1,437 +1,949 @@
 ---
-title: 'Fabric.js：Canvas 交互式绘图利器'
+title: 'Fabric.js 完全指南：从零开始掌握 Canvas 对象模型'
 date: '2025-02-02'
-excerpt: 'Fabric.js 是一个强大的 Canvas 库，它将 Canvas 元素变成了可交互的对象。本文带你系统学习 Fabric.js，从基础对象到事件交互，再到高级功能。'
-coverImage: '/posts/canvas/fabric/images/fabric-cover.png'
-tags: ['canvas', 'fabric.js', 'javascript', 'frontend']
-author:
-  name: 'Antigravity'
-  picture: '/assets/blog/authors/antigravity.png'
+excerpt: 'Fabric.js 是最强大的 Canvas 库之一，它将复杂的像素操作转化为简单的对象操作。本文从零开始，带你系统学习 Fabric.js 的核心概念、基础用法和实战技巧。'
 ---
 
-# Fabric.js：让 Canvas 动起来
+# Fabric.js 完全指南
 
-原生的 Canvas API 虽然强大，但它是基于过程的（Procedural），一旦绘制完成，像素就“死”在画布上了，你无法直接选中、移动或修改某个已经绘制的图形。
+## 为什么需要 Fabric.js？
 
-**Fabric.js** 解决了这个问题。它在 Canvas 之上构建了一个**对象模型**（Object Model），让你可以以面向对象的方式操作图形。所有的图形（矩形、圆形、图片等）都是对象，你可以轻松地改变它们的属性、监听事件、进行拖拽缩放等操作。
+想象一下，你用原生 Canvas API 画了一个红色矩形。现在你想把它移动到另一个位置，或者改变它的颜色。怎么办？
 
-## 1. 快速上手
+**原生 Canvas 的困境：**
+```javascript
+// 绘制一个矩形
+ctx.fillStyle = 'red';
+ctx.fillRect(100, 100, 150, 100);
 
-首先，我们需要创建一个 `canvas` 元素，然后用 Fabric 初始化它。注意，Fabric 会在你的原生 canvas 外面包裹一层 wrapper，因此样式布局时要注意。
+// 想要移动它？抱歉，你需要：
+// 1. 清空整个画布
+// 2. 重新计算新位置
+// 3. 重新绘制所有内容
+ctx.clearRect(0, 0, canvas.width, canvas.height);
+ctx.fillStyle = 'red';
+ctx.fillRect(200, 150, 150, 100); // 新位置
+```
 
-<CodePenDemo
-  title="Fabric.js Hello World"
-  height="400px"
-  code={`const FabricIntro = () => {
-  const canvasEl = React.useRef(null);
-  const fabricCanvas = React.useRef(null);
+这就是原生 Canvas 的本质：**一旦绘制，像素就"死"了**。你操作的是像素，而不是"对象"。
 
-  React.useEffect(() => {
-    // 1. 初始化 Fabric Canvas
-    if (canvasEl.current) {
-        // dispose old instance if exists to prevent duplicate canvases
-        if (fabricCanvas.current) {
-            fabricCanvas.current.dispose();
-        }
-        
-        const canvas = new fabric.Canvas(canvasEl.current, {
-            width: 500,
-            height: 300,
-            backgroundColor: '#f3f3f3'
-        });
-        
-        fabricCanvas.current = canvas;
+**Fabric.js 的解决方案：**
+```javascript
+// 创建一个矩形对象
+const rect = new fabric.Rect({
+  left: 100,
+  top: 100,
+  width: 150,
+  height: 100,
+  fill: 'red'
+});
 
-        // 2. 创建一个矩形对象
-        const rect = new fabric.Rect({
-            left: 100,
-            top: 100,
-            fill: 'red',
-            width: 100,
-            height: 100,
-            angle: 45,
-            cornerColor: 'blue',
-            transparentCorners: false
-        });
+canvas.add(rect);
 
-        // 3. 添加到画布
-        canvas.add(rect);
-        
-        // 4. 创建一个圆形
-        const circle = new fabric.Circle({
-            radius: 50,
-            fill: 'green',
-            left: 250,
-            top: 100
-        });
-        
-        canvas.add(circle);
-        
-        // 选中矩形
-        canvas.setActiveObject(rect);
-    }
+// 想要移动？直接改属性！
+rect.set({ left: 200, top: 150 });
+canvas.requestRenderAll();
 
-    // Cleanup
-    return () => {
-        if (fabricCanvas.current) {
-            fabricCanvas.current.dispose();
-            fabricCanvas.current = null;
-        }
-    }
-  }, []);
+// 想要改颜色？
+rect.set({ fill: 'blue' });
+canvas.requestRenderAll();
+```
 
-  return (
-    <div className="flex justify-center p-4 bg-white">
-      <canvas ref={canvasEl} />
-    </div>
-  );
-}
+Fabric.js 在 Canvas 之上构建了一个**对象模型**，让你像操作 DOM 元素一样操作图形。
 
-render(<FabricIntro />)`}
-/>
+---
 
-试着鼠标点击选中上面的红色矩形，你会发现它自带了控制点（Controls），你可以直接**拖拽、旋转、缩放**它！这就是 Fabric.js 的魅力。
+## 第一步：初始化画布
 
-## 2. 基础对象 (Basic Shapes)
+### 安装与引入
 
-Fabric 提供了丰富的内置图形对象：
+```bash
+npm install fabric
+```
 
-*   `fabric.Rect`: 矩形
-*   `fabric.Circle`: 圆形
-*   `fabric.Triangle`: 三角形
-*   `fabric.Ellipse`: 椭圆
-*   `fabric.Line`: 线条
-*   `fabric.Polyline`: 多折线
-*   `fabric.Path`: 路径（SVG Path）
+```javascript
+import * as fabric from 'fabric';
+```
+
+### 创建画布
 
 <CodePenDemo
-  title="基础图形展示"
-  height="400px"
-  code={`const FabricShapes = () => {
+  title="初始化 Fabric Canvas"
+  height="350px"
+  code={`const FabricInit = () => {
   const canvasEl = React.useRef(null);
   const canvasRef = React.useRef(null);
 
   React.useEffect(() => {
-    if (!canvasEl.current) return;
-    
-    // 初始化画布
+    // 1. 创建 Fabric Canvas 实例
     const canvas = new fabric.Canvas(canvasEl.current, {
       width: 600,
-      height: 350,
-      backgroundColor: '#fff',
-      selection: true // 开启框选
-    });
-    canvasRef.current = canvas;
-
-    // 1. 三角形
-    const triangle = new fabric.Triangle({
-      width: 100, 
-      height: 100, 
-      fill: '#7c4dff', 
-      left: 50, 
-      top: 50
-    });
-
-    // 2. 椭圆
-    const ellipse = new fabric.Ellipse({
-      rx: 80, // x轴半径
-      ry: 40, // y轴半径
-      fill: '#ff4081',
-      stroke: '#c51162',
-      strokeWidth: 5,
-      left: 200,
-      top: 50
-    });
-
-    // 3. 线条
-    const line = new fabric.Line([50, 200, 200, 300], {
-      stroke: 'rgba(0,0,0,0.5)',
-      strokeWidth: 5
+      height: 250,
+      backgroundColor: '#f5f5f5'
     });
     
-    // 4. 虚线边框的矩形
-    const dashedRect = new fabric.Rect({
-        left: 250,
-        top: 200,
-        width: 150,
-        height: 100,
-        fill: 'transparent',
-        stroke: 'orange',
-        strokeWidth: 3,
-        strokeDashArray: [10, 5] // 虚线模式：10px实线，5px间隔
+    canvasRef.current = canvas;
+
+    // 2. 添加一些提示文字
+    const text = new fabric.Text('这是一个 Fabric.js 画布', {
+      left: 150,
+      top: 100,
+      fontSize: 28,
+      fill: '#333',
+      fontFamily: 'Arial'
     });
+    
+    canvas.add(text);
 
-    canvas.add(triangle, ellipse, line, dashedRect);
-
+    // 清理函数：组件卸载时销毁画布
     return () => {
       canvas.dispose();
     };
   }, []);
 
+  const addRect = () => {
+    const canvas = canvasRef.current;
+    const rect = new fabric.Rect({
+      left: Math.random() * 400,
+      top: Math.random() * 150,
+      width: 100,
+      height: 60,
+      fill: '#' + Math.floor(Math.random()*16777215).toString(16),
+      rx: 5,
+      ry: 5
+    });
+    canvas.add(rect);
+  };
+
   return (
-    <div className="flex justify-center p-4 bg-white shadow-sm border border-neutral-200 rounded">
+    <div className="flex flex-col items-center gap-3">
       <canvas ref={canvasEl} />
+      <button 
+        onClick={addRect}
+        className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+      >
+        添加随机矩形
+      </button>
+      <p className="text-sm text-gray-600">💡 提示：点击图形可以拖拽、缩放、旋转</p>
     </div>
   );
 }
 
-render(<FabricShapes />)`}
+render(<FabricInit />)`}
 />
 
-## 3. 图片与文本 (Images & Text)
+**关键概念：**
+- `new fabric.Canvas(element, options)`: 将普通 `<canvas>` 元素升级为 Fabric 画布
+- `canvas.add(object)`: 添加对象到画布
+- `canvas.dispose()`: 销毁画布，释放内存（React 中很重要！）
 
-### 图片 (fabric.IText)
+---
 
-加载图片有两种主要方式：
-1.  `fabric.Image.fromURL(url, callback)`: 从 URL 加载。
-2.  `new fabric.Image(imgElement)`: 从现有的 `<img>` 标签创建。
+## 核心概念：对象（Objects）
 
-### 文本 (fabric.IText)
+在 Fabric.js 中，一切都是对象。每个对象都有一系列属性，你可以随时修改。
 
-Fabric 支持两种文本：
-*   `fabric.Text`: 静态文本。
-*   `fabric.IText`: **可交互式文本**，用户可以直接双击编辑内容！
+### 基础形状对象
 
 <CodePenDemo
-  title="图片与可编辑文本"
+  title="基础形状全家福"
   height="450px"
-  code={`const FabricImageText = () => {
+  code={`const BasicShapes = () => {
   const canvasEl = React.useRef(null);
 
   React.useEffect(() => {
     const canvas = new fabric.Canvas(canvasEl.current, {
-        width: 600,
-        height: 400,
-        backgroundColor: '#f0f2f5'
+      width: 700,
+      height: 400,
+      backgroundColor: '#fafafa'
     });
 
-    // 1. 添加可编辑文本
-    const text = new fabric.IText('双击编辑我\nHello World', {
-        fontFamily: 'arial',
-        fill: '#333',
-        fontSize: 40,
-        left: 100,
-        top: 50,
-        fontWeight: 'bold',
-        shadow: 'rgba(0,0,0,0.3) 5px 5px 5px'
+    // 1. 矩形 (Rect)
+    const rect = new fabric.Rect({
+      left: 50,
+      top: 50,
+      width: 120,
+      height: 80,
+      fill: '#3b82f6',
+      stroke: '#1e40af',
+      strokeWidth: 2,
+      rx: 10,  // 圆角半径 x
+      ry: 10   // 圆角半径 y
     });
-    canvas.add(text);
 
-    // 2. 加载图片 (跨域图片需要注意 CORS)
-    // 这里我们用一个色块代替图片演示，原理一样，fabric.Image.fromURL 用法类似
-    const rectAsImage = new fabric.Rect({
-        left: 150,
-        top: 200,
-        fill: '#00b894',
-        width: 200,
-        height: 150,
-        rx: 10,
-        ry: 10,
-        opacity: 0.8
+    // 2. 圆形 (Circle)
+    const circle = new fabric.Circle({
+      left: 220,
+      top: 50,
+      radius: 50,
+      fill: '#10b981',
+      stroke: '#059669',
+      strokeWidth: 3
     });
-    
-    // 模拟图片对象的一些滤镜或操作
-    // 给它加一个标签
-    const label = new fabric.Text('假装我是张图片', {
-        fontSize: 20,
-        fill: 'white',
-        left: 170,
-        top: 260,
-        selectable: false
+
+    // 3. 三角形 (Triangle)
+    const triangle = new fabric.Triangle({
+      left: 380,
+      top: 50,
+      width: 100,
+      height: 100,
+      fill: '#f59e0b',
+      stroke: '#d97706',
+      strokeWidth: 2
     });
-    
-    // 组合 (Group)
-    const group = new fabric.Group([rectAsImage, label], {
-        left: 150,
-        top: 200,
-        angle: -10
+
+    // 4. 椭圆 (Ellipse)
+    const ellipse = new fabric.Ellipse({
+      left: 550,
+      top: 80,
+      rx: 60,  // x轴半径
+      ry: 40,  // y轴半径
+      fill: '#ec4899',
+      stroke: '#be185d',
+      strokeWidth: 2
     });
-    
-    canvas.add(group);
+
+    // 5. 线条 (Line)
+    const line = new fabric.Line([50, 200, 250, 300], {
+      stroke: '#6366f1',
+      strokeWidth: 4,
+      strokeDashArray: [10, 5]  // 虚线：10px实线，5px间隔
+    });
+
+    // 6. 多边形 (Polygon) - 五角星
+    const star = new fabric.Polygon([
+      {x: 0, y: -50},
+      {x: 14, y: -20},
+      {x: 47, y: -15},
+      {x: 23, y: 7},
+      {x: 29, y: 40},
+      {x: 0, y: 25},
+      {x: -29, y: 40},
+      {x: -23, y: 7},
+      {x: -47, y: -15},
+      {x: -14, y: -20}
+    ], {
+      left: 400,
+      top: 250,
+      fill: '#8b5cf6',
+      stroke: '#6d28d9',
+      strokeWidth: 2
+    });
+
+    // 7. 文本 (Text)
+    const text = new fabric.Text('Fabric.js', {
+      left: 520,
+      top: 280,
+      fontSize: 32,
+      fill: '#ef4444',
+      fontWeight: 'bold',
+      fontFamily: 'Arial'
+    });
+
+    canvas.add(rect, circle, triangle, ellipse, line, star, text);
 
     return () => canvas.dispose();
   }, []);
 
   return (
-    <div className="flex justify-center">
+    <div className="flex flex-col items-center gap-2">
       <canvas ref={canvasEl} />
+      <p className="text-sm text-gray-600">
+        💡 所有对象都可以拖拽、旋转、缩放
+      </p>
     </div>
   );
 }
 
-render(<FabricImageText />)`}
+render(<BasicShapes />)`}
 />
 
-## 4. 事件系统 (Events)
+### 对象的通用属性
 
-Fabric 拥有强大的事件系统，你可以监听鼠标事件（点击、移动、按下）、对象事件（选中、旋转、缩放、修改）等。
+每个 Fabric 对象都有这些核心属性：
 
-常见事件：
-*   `mouse:down`, `mouse:move`, `mouse:up`
-*   `object:added`, `object:removed`, `object:modified`
-*   `object:rotating`, `object:scaling`, `object:moving`
-*   `selection:created`, `selection:cleared`
+| 属性 | 说明 | 示例 |
+|------|------|------|
+| `left` / `top` | 位置（左上角坐标） | `left: 100, top: 50` |
+| `width` / `height` | 尺寸 | `width: 200, height: 100` |
+| `fill` | 填充颜色 | `fill: 'red'` 或 `fill: '#3b82f6'` |
+| `stroke` | 描边颜色 | `stroke: 'blue'` |
+| `strokeWidth` | 描边宽度 | `strokeWidth: 3` |
+| `opacity` | 透明度 (0-1) | `opacity: 0.5` |
+| `angle` | 旋转角度 | `angle: 45` |
+| `scaleX` / `scaleY` | 缩放比例 | `scaleX: 1.5, scaleY: 2` |
+| `selectable` | 是否可选中 | `selectable: false` |
+| `visible` | 是否可见 | `visible: false` |
+
+---
+
+## 文本对象：普通 vs 可编辑
+
+Fabric 提供了两种文本对象：
 
 <CodePenDemo
-  title="事件监听演示"
-  height="400px"
-  code={`const FabricEvents = () => {
+  title="文本对象对比"
+  height="350px"
+  code={`const TextDemo = () => {
   const canvasEl = React.useRef(null);
-  const [log, setLog] = React.useState('操作画布以查看事件...');
 
   React.useEffect(() => {
     const canvas = new fabric.Canvas(canvasEl.current, {
-        width: 500,
-        height: 300,
-        backgroundColor: '#eee'
+      width: 600,
+      height: 300,
+      backgroundColor: '#fff'
     });
 
-    const rect = new fabric.Rect({
-        left: 200, 
-        top: 100, 
-        width: 100, 
-        height: 100, 
-        fill: 'orange' 
-    });
-    canvas.add(rect);
-
-    // 辅助函数：更新日志
-    // 注意：React State 在 useEffect 闭包中可能是旧的，这里我们直接操作 DOM 或者用 useRef 也可以
-    // 为了演示简单，我们通过 dispatchEvent 或者直接 console
-    
-    const updateLog = (msg) => {
-        // 使用自定义事件通知 React 组件更新（或者这里简化处理）
-        setLog(prev => msg + '\\n' + prev.split('\\n').slice(0, 4).join('\\n'));
-    };
-
-    // 监听对象移动
-    canvas.on('object:moving', (e) => {
-        const obj = e.target;
-        updateLog(\`Moving: [x:\${Math.round(obj.left)}, y:\${Math.round(obj.top)}]\`);
+    // 1. 普通文本 (Text) - 不可编辑
+    const staticText = new fabric.Text('我是静态文本（不可编辑）', {
+      left: 100,
+      top: 50,
+      fontSize: 24,
+      fill: '#333',
+      fontFamily: 'Arial',
+      backgroundColor: '#fef3c7',
+      padding: 10
     });
 
-    // 监听对象旋转
-    canvas.on('object:rotating', (e) => {
-        const obj = e.target;
-        updateLog(\`Rotating: \${Math.round(obj.angle)}°\`);
+    // 2. 可编辑文本 (IText) - 双击可编辑！
+    const editableText = new fabric.IText('双击我可以编辑内容！', {
+      left: 100,
+      top: 150,
+      fontSize: 24,
+      fill: '#1e40af',
+      fontFamily: 'Arial',
+      backgroundColor: '#dbeafe',
+      padding: 10
     });
 
-    // 监听选中事件
-    canvas.on('selection:created', (e) => {
-        updateLog('对象被选中');
-        e.selected[0].set('fill', 'red');
-        canvas.requestRenderAll();
+    // 3. 多行文本框 (Textbox) - 支持自动换行
+    const textbox = new fabric.Textbox('我是文本框，支持自动换行。\\n输入很长的文字试试看！', {
+      left: 100,
+      top: 220,
+      width: 400,
+      fontSize: 18,
+      fill: '#059669',
+      fontFamily: 'Arial',
+      backgroundColor: '#d1fae5',
+      padding: 10
     });
-    
-    canvas.on('selection:cleared', (e) => {
-        updateLog('取消选中');
-        // 恢复颜色需要遍历，这里略过
-    });
+
+    canvas.add(staticText, editableText, textbox);
 
     return () => canvas.dispose();
-  }, []); // 依赖项为空，只运行一次
+  }, []);
 
   return (
-    <div className="flex flex-col items-center gap-4">
-      <div className="border border-neutral-300">
-          <canvas ref={canvasEl} />
-      </div>
-      <div className="w-full max-w-[500px] h-32 bg-gray-900 text-green-400 p-2 font-mono text-xs overflow-hidden rounded">
-        <pre>{log}</pre>
-      </div>
+    <div className="flex flex-col items-center gap-2">
+      <canvas ref={canvasEl} />
+      <p className="text-sm text-gray-600">
+        💡 双击蓝色和绿色文本试试！
+      </p>
     </div>
   );
 }
 
-render(<FabricEvents />)`}
+render(<TextDemo />)`}
 />
 
-## 5. 动画 (Animation)
+**三种文本对象的区别：**
+- **`fabric.Text`**: 静态文本，只能通过代码修改
+- **`fabric.IText`**: 可交互文本，用户可以双击编辑
+- **`fabric.Textbox`**: 文本框，支持固定宽度和自动换行
 
-Fabric 对象拥有 `animate` 方法，可以丝滑地改变属性值。
+---
 
-```javascript
-rect.animate('left', 500, {
-  onChange: canvas.renderAll.bind(canvas),
-  duration: 1000,
-  easing: fabric.util.ease.easeOutBounce
-});
-```
+## 图片对象
+
+加载和操作图片是 Fabric.js 的常见需求。
 
 <CodePenDemo
-  title="Fabric 动画"
-  height="300px"
-  code={`const FabricAnimate = () => {
+  title="图片加载与操作"
+  height="400px"
+  code={`const ImageDemo = () => {
   const canvasEl = React.useRef(null);
   const canvasRef = React.useRef(null);
 
   React.useEffect(() => {
     const canvas = new fabric.Canvas(canvasEl.current, {
-        width: 600,
-        height: 200,
-        backgroundColor: '#fff'
+      width: 600,
+      height: 350,
+      backgroundColor: '#f0f0f0'
     });
     canvasRef.current = canvas;
 
-    const rect = new fabric.Rect({
-        left: 50,
-        top: 50,
-        width: 100,
-        height: 100,
-        fill: 'purple',
-        rx: 10,
-        ry: 10
+    // 方法1: 使用 Data URL 创建图片
+    // 这里我们创建一个简单的渐变图作为演示
+    const imgCanvas = document.createElement('canvas');
+    imgCanvas.width = 200;
+    imgCanvas.height = 150;
+    const ctx = imgCanvas.getContext('2d');
+    
+    const gradient = ctx.createLinearGradient(0, 0, 200, 150);
+    gradient.addColorStop(0, '#667eea');
+    gradient.addColorStop(1, '#764ba2');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 200, 150);
+    
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 24px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('示例图片', 100, 80);
+
+    fabric.Image.fromObject({
+      src: imgCanvas.toDataURL(),
+      left: 50,
+      top: 50
+    }).then((img) => {
+      canvas.add(img);
+      canvas.requestRenderAll();
     });
-    canvas.add(rect);
+
+    // 添加说明文字
+    const text = new fabric.Text('图片也可以拖拽、旋转、缩放！', {
+      left: 50,
+      top: 250,
+      fontSize: 20,
+      fill: '#333'
+    });
+    canvas.add(text);
 
     return () => canvas.dispose();
   }, []);
 
-  const playAnimation = () => {
+  const addCircleImage = () => {
     const canvas = canvasRef.current;
-    const obj = canvas.getObjects()[0];
     
-    if (obj) {
-        // 确保先复位
-        obj.set({ left: 50, angle: 0 });
-        
-        obj.animate('left', 450, {
-            onChange: canvas.renderAll.bind(canvas),
-            duration: 1000,
-            easing: fabric.util.ease.easeOutBounce
-        });
-        
-        obj.animate('angle', 360, {
-            duration: 1000
-        });
-    }
+    // 创建一个圆形图片
+    const imgCanvas = document.createElement('canvas');
+    imgCanvas.width = 120;
+    imgCanvas.height = 120;
+    const ctx = imgCanvas.getContext('2d');
+    
+    const gradient = ctx.createRadialGradient(60, 60, 0, 60, 60, 60);
+    gradient.addColorStop(0, '#ffeaa7');
+    gradient.addColorStop(1, '#fd79a8');
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(60, 60, 60, 0, Math.PI * 2);
+    ctx.fill();
+
+    fabric.Image.fromObject({
+      src: imgCanvas.toDataURL(),
+      left: 350,
+      top: 100
+    }).then((img) => {
+      img.set({
+        clipPath: new fabric.Circle({
+          radius: 60,
+          originX: 'center',
+          originY: 'center'
+        })
+      });
+      canvas.add(img);
+      canvas.requestRenderAll();
+    });
   };
 
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex flex-col items-center gap-3">
       <canvas ref={canvasEl} />
       <button 
-        onClick={playAnimation}
-        className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 active:scale-95 transition"
+        onClick={addCircleImage}
+        className="px-4 py-2 bg-pink-500 text-white rounded hover:bg-pink-600 transition"
       >
-        播放动画
+        添加圆形图片
       </button>
     </div>
   );
 }
 
-render(<FabricAnimate />)`}
+render(<ImageDemo />)`}
 />
 
-## 6. 序列化与反序列化 (JSON)
+---
 
-这也是 Fabric 的核心优势之一。你可以将整个画布的状态保存为 JSON，然后在任何地方（甚至在 Node.js 服务端）恢复它。
+## 事件系统：让画布动起来
 
-*   `canvas.toJSON()`: 导出 JSON 对象。
-*   `canvas.loadFromJSON(json, callback)`: 从 JSON 恢复。
+Fabric.js 拥有强大的事件系统，你可以监听各种交互。
 
-这使得实现“保存草稿”、“撤销重做”等功能变得非常简单。
+<CodePenDemo
+  title="事件监听实战"
+  height="500px"
+  code={`const EventsDemo = () => {
+  const canvasEl = React.useRef(null);
+  const [log, setLog] = React.useState([]);
 
-## 结语
+  const addLog = (message) => {
+    setLog(prev => [
+      \`[\${new Date().toLocaleTimeString()}] \${message}\`,
+      ...prev.slice(0, 9)
+    ]);
+  };
 
-Fabric.js 极大地降低了 Canvas 的操作门槛，特别是对于需要用户交互（编辑器、绘图工具、配置器）的场景。如果你想做一个在线图片编辑器、海报设计工具或者拖拽式图形应用，Fabric.js 绝对是首选库之一。
+  React.useEffect(() => {
+    const canvas = new fabric.Canvas(canvasEl.current, {
+      width: 600,
+      height: 300,
+      backgroundColor: '#fafafa'
+    });
+
+    // 创建几个对象
+    const rect = new fabric.Rect({
+      left: 100,
+      top: 100,
+      width: 100,
+      height: 80,
+      fill: '#3b82f6'
+    });
+
+    const circle = new fabric.Circle({
+      left: 300,
+      top: 100,
+      radius: 50,
+      fill: '#10b981'
+    });
+
+    canvas.add(rect, circle);
+
+    // 1. 对象被选中
+    canvas.on('selection:created', (e) => {
+      addLog(\`✅ 选中了对象\`);
+    });
+
+    // 2. 对象移动中
+    canvas.on('object:moving', (e) => {
+      const obj = e.target;
+      addLog(\`🚚 移动中: (\${Math.round(obj.left)}, \${Math.round(obj.top)})\`);
+    });
+
+    // 3. 对象旋转中
+    canvas.on('object:rotating', (e) => {
+      const obj = e.target;
+      addLog(\`🔄 旋转中: \${Math.round(obj.angle)}°\`);
+    });
+
+    // 4. 对象缩放中
+    canvas.on('object:scaling', (e) => {
+      const obj = e.target;
+      addLog(\`📏 缩放中: \${(obj.scaleX * 100).toFixed(0)}%\`);
+    });
+
+    // 5. 对象修改完成
+    canvas.on('object:modified', (e) => {
+      addLog(\`✨ 修改完成\`);
+    });
+
+    // 6. 鼠标点击画布
+    canvas.on('mouse:down', (e) => {
+      if (!e.target) {
+        addLog(\`👆 点击了空白区域\`);
+      }
+    });
+
+    return () => canvas.dispose();
+  }, []);
+
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <canvas ref={canvasEl} />
+      <div className="w-full max-w-[600px] h-32 bg-gray-900 text-green-400 p-3 rounded font-mono text-xs overflow-auto">
+        {log.length === 0 ? (
+          <div className="text-gray-500">等待事件...</div>
+        ) : (
+          log.map((item, i) => <div key={i}>{item}</div>)
+        )}
+      </div>
+      <p className="text-sm text-gray-600">
+        💡 拖拽、旋转、缩放对象，观察事件日志
+      </p>
+    </div>
+  );
+}
+
+render(<EventsDemo />)`}
+/>
+
+**常用事件列表：**
+
+| 事件名 | 触发时机 |
+|--------|----------|
+| `selection:created` | 对象被选中 |
+| `selection:cleared` | 取消选中 |
+| `object:moving` | 对象移动中 |
+| `object:rotating` | 对象旋转中 |
+| `object:scaling` | 对象缩放中 |
+| `object:modified` | 对象修改完成 |
+| `mouse:down` | 鼠标按下 |
+| `mouse:move` | 鼠标移动 |
+| `mouse:up` | 鼠标抬起 |
+
+---
+
+## 组合对象：Group
+
+当你需要把多个对象当作一个整体操作时，使用 `fabric.Group`。
+
+<CodePenDemo
+  title="对象组合"
+  height="400px"
+  code={`const GroupDemo = () => {
+  const canvasEl = React.useRef(null);
+  const canvasRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const canvas = new fabric.Canvas(canvasEl.current, {
+      width: 600,
+      height: 350,
+      backgroundColor: '#fff'
+    });
+    canvasRef.current = canvas;
+
+    return () => canvas.dispose();
+  }, []);
+
+  const createCard = () => {
+    const canvas = canvasRef.current;
+
+    // 创建一个卡片组合
+    const background = new fabric.Rect({
+      width: 200,
+      height: 120,
+      fill: '#3b82f6',
+      rx: 10,
+      ry: 10
+    });
+
+    const title = new fabric.Text('用户卡片', {
+      fontSize: 20,
+      fill: 'white',
+      fontWeight: 'bold',
+      top: 20,
+      left: 20
+    });
+
+    const subtitle = new fabric.Text('Fabric.js Group', {
+      fontSize: 14,
+      fill: '#dbeafe',
+      top: 50,
+      left: 20
+    });
+
+    const icon = new fabric.Circle({
+      radius: 15,
+      fill: '#fbbf24',
+      top: 20,
+      left: 160
+    });
+
+    // 组合成一个整体
+    const group = new fabric.Group([background, title, subtitle, icon], {
+      left: 200,
+      top: 115
+    });
+
+    canvas.add(group);
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <canvas ref={canvasEl} />
+      <button 
+        onClick={createCard}
+        className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+      >
+        创建卡片组合
+      </button>
+      <p className="text-sm text-gray-600">
+        💡 组合后的对象可以作为整体移动、旋转、缩放
+      </p>
+    </div>
+  );
+}
+
+render(<GroupDemo />)`}
+/>
+
+---
+
+## 序列化：保存与加载
+
+Fabric.js 最强大的功能之一：可以将整个画布序列化为 JSON，然后在任何地方恢复。
+
+<CodePenDemo
+  title="序列化与反序列化"
+  height="500px"
+  code={`const SerializationDemo = () => {
+  const canvasEl = React.useRef(null);
+  const canvasRef = React.useRef(null);
+  const [jsonData, setJsonData] = React.useState('');
+
+  React.useEffect(() => {
+    const canvas = new fabric.Canvas(canvasEl.current, {
+      width: 600,
+      height: 300,
+      backgroundColor: '#f5f5f5'
+    });
+    canvasRef.current = canvas;
+
+    // 添加一些初始对象
+    const rect = new fabric.Rect({
+      left: 100,
+      top: 100,
+      width: 100,
+      height: 80,
+      fill: '#3b82f6'
+    });
+
+    const text = new fabric.Text('Hello Fabric', {
+      left: 250,
+      top: 120,
+      fontSize: 24,
+      fill: '#ef4444'
+    });
+
+    canvas.add(rect, text);
+
+    return () => canvas.dispose();
+  }, []);
+
+  const saveToJSON = () => {
+    const canvas = canvasRef.current;
+    const json = JSON.stringify(canvas.toJSON(), null, 2);
+    setJsonData(json);
+  };
+
+  const loadFromJSON = () => {
+    if (!jsonData) return;
+    const canvas = canvasRef.current;
+    
+    canvas.loadFromJSON(JSON.parse(jsonData)).then(() => {
+      canvas.requestRenderAll();
+    });
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    canvas.clear();
+    canvas.backgroundColor = '#f5f5f5';
+    canvas.requestRenderAll();
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <canvas ref={canvasEl} />
+      
+      <div className="flex gap-2">
+        <button 
+          onClick={saveToJSON}
+          className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition"
+        >
+          💾 保存为 JSON
+        </button>
+        <button 
+          onClick={clearCanvas}
+          className="px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600 transition"
+        >
+          🗑️ 清空画布
+        </button>
+        <button 
+          onClick={loadFromJSON}
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+          disabled={!jsonData}
+        >
+          📂 从 JSON 恢复
+        </button>
+      </div>
+
+      {jsonData && (
+        <div className="w-full max-w-[600px]">
+          <div className="text-sm font-medium mb-1">JSON 数据：</div>
+          <pre className="bg-gray-900 text-green-400 p-3 rounded text-xs overflow-auto max-h-40">
+            {jsonData}
+          </pre>
+        </div>
+      )}
+
+      <p className="text-sm text-gray-600">
+        💡 试试：修改画布 → 保存 → 清空 → 恢复
+      </p>
+    </div>
+  );
+}
+
+render(<SerializationDemo />)`}
+/>
+
+**序列化的应用场景：**
+- 💾 **保存草稿**：用户可以保存设计，下次继续编辑
+- ↩️ **撤销/重做**：记录每次操作的 JSON 快照
+- 🌐 **跨平台同步**：在服务器存储 JSON，多设备共享
+- 📤 **导出/导入**：让用户导出设计文件
+
+---
+
+## 实战：简易绘图板
+
+综合运用所学知识，创建一个功能完整的绘图板：
+
+<CodePenDemo
+  title="简易绘图板"
+  height="600px"
+  code={`const DrawingBoard = () => {
+  const canvasEl = React.useRef(null);
+  const canvasRef = React.useRef(null);
+  const [selectedColor, setSelectedColor] = React.useState('#3b82f6');
+
+  React.useEffect(() => {
+    const canvas = new fabric.Canvas(canvasEl.current, {
+      width: 700,
+      height: 450,
+      backgroundColor: '#ffffff'
+    });
+    canvasRef.current = canvas;
+
+    return () => canvas.dispose();
+  }, []);
+
+  const addShape = (type) => {
+    const canvas = canvasRef.current;
+    let shape;
+
+    switch(type) {
+      case 'rect':
+        shape = new fabric.Rect({
+          left: 50,
+          top: 50,
+          width: 100,
+          height: 80,
+          fill: selectedColor,
+          rx: 5,
+          ry: 5
+        });
+        break;
+      case 'circle':
+        shape = new fabric.Circle({
+          left: 50,
+          top: 50,
+          radius: 50,
+          fill: selectedColor
+        });
+        break;
+      case 'triangle':
+        shape = new fabric.Triangle({
+          left: 50,
+          top: 50,
+          width: 100,
+          height: 100,
+          fill: selectedColor
+        });
+        break;
+      case 'text':
+        shape = new fabric.IText('双击编辑', {
+          left: 50,
+          top: 50,
+          fontSize: 24,
+          fill: selectedColor
+        });
+        break;
+    }
+
+    if (shape) {
+      canvas.add(shape);
+      canvas.setActiveObject(shape);
+    }
+  };
+
+  const deleteSelected = () => {
+    const canvas = canvasRef.current;
+    const activeObject = canvas.getActiveObject();
+    if (activeObject) {
+      canvas.remove(activeObject);
+    }
+  };
+
+  const clearAll = () => {
+    const canvas = canvasRef.current;
+    canvas.clear();
+    canvas.backgroundColor = '#ffffff';
+    canvas.requestRenderAll();
+  };
+
+  const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <div className="border-2 border-gray-300 rounded shadow-lg">
+        <canvas ref={canvasEl} />
+      </div>
+
+      <div className="flex flex-wrap gap-3 items-center justify-center max-w-[700px] p-4 bg-gray-100 rounded">
+        <div className="flex gap-2">
+          <button onClick={() => addShape('rect')} className="px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm">
+            ⬜ 矩形
+          </button>
+          <button onClick={() => addShape('circle')} className="px-3 py-2 bg-green-500 text-white rounded hover:bg-green-600 text-sm">
+            ⭕ 圆形
+          </button>
+          <button onClick={() => addShape('triangle')} className="px-3 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 text-sm">
+            🔺 三角形
+          </button>
+          <button onClick={() => addShape('text')} className="px-3 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-sm">
+            📝 文字
+          </button>
+        </div>
+
+        <div className="w-px h-8 bg-gray-300"></div>
+
+        <div className="flex gap-2 items-center">
+          <span className="text-sm font-medium">颜色:</span>
+          {colors.map(color => (
+            <button
+              key={color}
+              onClick={() => setSelectedColor(color)}
+              className={\`w-8 h-8 rounded border-2 transition \${
+                selectedColor === color ? 'border-gray-800 scale-110' : 'border-gray-300'
+              }\`}
+              style={{ backgroundColor: color }}
+            />
+          ))}
+        </div>
+
+        <div className="w-px h-8 bg-gray-300"></div>
+
+        <div className="flex gap-2">
+          <button onClick={deleteSelected} className="px-3 py-2 bg-red-500 text-white rounded hover:bg-red-600 text-sm">
+            🗑️ 删除
+          </button>
+          <button onClick={clearAll} className="px-3 py-2 bg-orange-500 text-white rounded hover:bg-orange-600 text-sm">
+            🔄 清空
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+render(<DrawingBoard />)`}
+/>
+
+---
+
+## 总结
+
+通过本文，你已经掌握了 Fabric.js 的核心知识：
+
+✅ **为什么需要 Fabric.js**：从像素操作到对象操作的飞跃  
+✅ **画布初始化**：创建和配置 Fabric Canvas  
+✅ **基础对象**：矩形、圆形、文本、图片等  
+✅ **对象属性**：位置、尺寸、颜色、旋转等  
+✅ **事件系统**：监听用户交互  
+✅ **对象组合**：Group 的使用  
+✅ **序列化**：保存和加载画布状态  
+
+**下一步学习：**
+- 📚 阅读[《Fabric.js 进阶指南》](/posts/canvas/fabric/fabric-advanced)学习滤镜、自定义控制点等高级功能
+- 🎨 尝试构建自己的设计工具或图片编辑器
+- 📖 查阅 [Fabric.js 官方文档](http://fabricjs.com/docs/)
+
+Fabric.js 让 Canvas 开发变得简单而强大，现在你已经具备了构建交互式图形应用的能力！

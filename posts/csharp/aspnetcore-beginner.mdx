@@ -1,0 +1,969 @@
+---
+title: 'ASP.NET Core 入门教程：构建现代 Web 应用'
+date: '2025-02-07'
+excerpt: 'ASP.NET Core 是微软推出的跨平台、高性能 Web 框架。本文从零开始，带你掌握 ASP.NET Core 的核心概念，构建你的第一个 Web 应用。'
+tags: ['aspnetcore', 'csharp', 'web', 'backend']
+---
+
+# ASP.NET Core 入门教程
+
+## 什么是 ASP.NET Core？
+
+ASP.NET Core 是微软开发的**跨平台**、**高性能**、**开源**的 Web 框架，用于构建现代化的 Web 应用和 API。
+
+### 为什么选择 ASP.NET Core？
+
+✅ **跨平台**：可以在 Windows、Linux、macOS 上运行  
+✅ **高性能**：性能优于大多数 Web 框架  
+✅ **现代化**：内置依赖注入、配置管理、日志等  
+✅ **统一框架**：Web UI、API、实时通信都用同一个框架  
+✅ **云原生**：完美支持 Docker、Kubernetes  
+✅ **开源免费**：MIT 许可证  
+
+### ASP.NET Core 能做什么？
+
+- 🌐 **Web API**：RESTful API、GraphQL
+- 📄 **Web 应用**：MVC、Razor Pages
+- ⚡ **实时应用**：SignalR（WebSocket）
+- 🔐 **身份验证**：内置身份系统
+- 📱 **移动后端**：为移动应用提供 API
+
+---
+
+## 环境准备
+
+### 1. 安装 .NET SDK
+
+访问 [https://dotnet.microsoft.com/download](https://dotnet.microsoft.com/download) 下载并安装最新的 .NET SDK。
+
+验证安装：
+```bash
+dotnet --version
+```
+
+### 2. 选择 IDE
+
+推荐使用：
+- **Visual Studio 2022**（Windows/Mac）
+- **Visual Studio Code**（跨平台，需安装 C# 扩展）
+- **JetBrains Rider**（跨平台）
+
+---
+
+## 第一个 ASP.NET Core 应用
+
+### 创建项目
+
+```bash
+# 创建 Web API 项目
+dotnet new webapi -n MyFirstApi
+
+# 进入项目目录
+cd MyFirstApi
+
+# 运行项目
+dotnet run
+```
+
+访问 `https://localhost:5001/swagger` 查看 API 文档。
+
+### 项目结构
+
+```
+MyFirstApi/
+├── Controllers/          # 控制器（处理 HTTP 请求）
+│   └── WeatherForecastController.cs
+├── Properties/
+│   └── launchSettings.json  # 启动配置
+├── appsettings.json     # 应用配置
+├── Program.cs           # 程序入口
+└── MyFirstApi.csproj    # 项目文件
+```
+
+### Program.cs 解析
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+// 1. 添加服务到容器
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+// 2. 配置 HTTP 请求管道
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();
+```
+
+**关键概念：**
+- `WebApplicationBuilder`：配置服务和应用
+- `WebApplication`：配置中间件管道
+- 服务注册：`builder.Services.Add...`
+- 中间件：`app.Use...`
+
+---
+
+## 控制器（Controllers）
+
+控制器是处理 HTTP 请求的类。
+
+### 基础控制器
+
+```csharp
+using Microsoft.AspNetCore.Mvc;
+
+[ApiController]
+[Route("api/[controller]")]
+public class ProductsController : ControllerBase
+{
+    // GET: api/products
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        var products = new[]
+        {
+            new { Id = 1, Name = "笔记本电脑", Price = 5999 },
+            new { Id = 2, Name = "鼠标", Price = 99 },
+            new { Id = 3, Name = "键盘", Price = 299 }
+        };
+        
+        return Ok(products);
+    }
+    
+    // GET: api/products/1
+    [HttpGet("{id}")]
+    public IActionResult GetById(int id)
+    {
+        if (id <= 0)
+            return BadRequest("ID 必须大于 0");
+            
+        var product = new { Id = id, Name = "笔记本电脑", Price = 5999 };
+        return Ok(product);
+    }
+    
+    // POST: api/products
+    [HttpPost]
+    public IActionResult Create([FromBody] Product product)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+            
+        // 保存到数据库...
+        return CreatedAtAction(nameof(GetById), new { id = product.Id }, product);
+    }
+    
+    // PUT: api/products/1
+    [HttpPut("{id}")]
+    public IActionResult Update(int id, [FromBody] Product product)
+    {
+        if (id != product.Id)
+            return BadRequest();
+            
+        // 更新数据库...
+        return NoContent();
+    }
+    
+    // DELETE: api/products/1
+    [HttpDelete("{id}")]
+    public IActionResult Delete(int id)
+    {
+        // 从数据库删除...
+        return NoContent();
+    }
+}
+
+public class Product
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public decimal Price { get; set; }
+}
+```
+
+### HTTP 方法与返回类型
+
+| HTTP 方法 | 用途 | 返回类型 |
+|-----------|------|----------|
+| GET | 获取资源 | `Ok(data)` - 200 |
+| POST | 创建资源 | `CreatedAtAction()` - 201 |
+| PUT | 更新资源 | `NoContent()` - 204 |
+| DELETE | 删除资源 | `NoContent()` - 204 |
+| PATCH | 部分更新 | `NoContent()` - 204 |
+
+### 常用返回类型
+
+```csharp
+// 200 OK
+return Ok(data);
+
+// 201 Created
+return CreatedAtAction(nameof(GetById), new { id = 1 }, data);
+
+// 204 No Content
+return NoContent();
+
+// 400 Bad Request
+return BadRequest("错误信息");
+
+// 404 Not Found
+return NotFound();
+
+// 500 Internal Server Error
+return StatusCode(500, "服务器错误");
+```
+
+---
+
+## 依赖注入（DI）
+
+ASP.NET Core 内置了强大的依赖注入系统。
+
+### 注册服务
+
+```csharp
+// Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+// 注册服务
+builder.Services.AddSingleton<IProductService, ProductService>();
+builder.Services.AddScoped<IOrderService, OrderService>();
+builder.Services.AddTransient<IEmailService, EmailService>();
+```
+
+### 使用服务
+
+```csharp
+[ApiController]
+[Route("api/[controller]")]
+public class ProductsController : ControllerBase
+{
+    private readonly IProductService productService;
+    private readonly ILogger<ProductsController> logger;
+    
+    // 构造函数注入
+    public ProductsController(
+        IProductService productService,
+        ILogger<ProductsController> logger)
+    {
+        this.productService = productService;
+        this.logger = logger;
+    }
+    
+    [HttpGet]
+    public async Task<IActionResult> GetAll()
+    {
+        logger.LogInformation("获取所有产品");
+        var products = await productService.GetAllAsync();
+        return Ok(products);
+    }
+}
+```
+
+---
+
+## 模型绑定与验证
+
+### 模型绑定
+
+ASP.NET Core 自动将 HTTP 请求数据绑定到参数。
+
+```csharp
+// 从路由获取
+[HttpGet("{id}")]
+public IActionResult Get(int id) { }
+
+// 从查询字符串获取
+[HttpGet]
+public IActionResult Search([FromQuery] string keyword) { }
+
+// 从请求体获取
+[HttpPost]
+public IActionResult Create([FromBody] Product product) { }
+
+// 从表单获取
+[HttpPost]
+public IActionResult Upload([FromForm] IFormFile file) { }
+
+// 从请求头获取
+[HttpGet]
+public IActionResult Get([FromHeader] string authorization) { }
+```
+
+### 数据验证
+
+使用 Data Annotations 进行验证：
+
+```csharp
+using System.ComponentModel.DataAnnotations;
+
+public class Product
+{
+    public int Id { get; set; }
+    
+    [Required(ErrorMessage = "产品名称不能为空")]
+    [StringLength(100, MinimumLength = 2, ErrorMessage = "名称长度必须在 2-100 之间")]
+    public string Name { get; set; }
+    
+    [Range(0.01, 999999, ErrorMessage = "价格必须在 0.01-999999 之间")]
+    public decimal Price { get; set; }
+    
+    [EmailAddress(ErrorMessage = "邮箱格式不正确")]
+    public string ContactEmail { get; set; }
+    
+    [Url(ErrorMessage = "URL 格式不正确")]
+    public string Website { get; set; }
+}
+
+[ApiController]
+[Route("api/[controller]")]
+public class ProductsController : ControllerBase
+{
+    [HttpPost]
+    public IActionResult Create([FromBody] Product product)
+    {
+        // [ApiController] 特性会自动验证模型
+        // 如果验证失败，自动返回 400 Bad Request
+        
+        // 手动检查（可选）
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(ModelState);
+        }
+        
+        return Ok(product);
+    }
+}
+```
+
+---
+
+## 中间件（Middleware）
+
+中间件是处理 HTTP 请求和响应的组件，形成一个管道。
+
+### 内置中间件
+
+```csharp
+var app = builder.Build();
+
+// 1. 异常处理
+app.UseExceptionHandler("/error");
+
+// 2. HTTPS 重定向
+app.UseHttpsRedirection();
+
+// 3. 静态文件
+app.UseStaticFiles();
+
+// 4. 路由
+app.UseRouting();
+
+// 5. 跨域
+app.UseCors();
+
+// 6. 身份验证
+app.UseAuthentication();
+
+// 7. 授权
+app.UseAuthorization();
+
+// 8. 终结点
+app.MapControllers();
+
+app.Run();
+```
+
+**执行顺序很重要！** 中间件按注册顺序执行。
+
+### 自定义中间件
+
+```csharp
+// 中间件类
+public class RequestLoggingMiddleware
+{
+    private readonly RequestDelegate next;
+    private readonly ILogger<RequestLoggingMiddleware> logger;
+    
+    public RequestLoggingMiddleware(
+        RequestDelegate next,
+        ILogger<RequestLoggingMiddleware> logger)
+    {
+        this.next = next;
+        this.logger = logger;
+    }
+    
+    public async Task InvokeAsync(HttpContext context)
+    {
+        // 请求前
+        logger.LogInformation($"请求：{context.Request.Method} {context.Request.Path}");
+        
+        // 调用下一个中间件
+        await next(context);
+        
+        // 响应后
+        logger.LogInformation($"响应：{context.Response.StatusCode}");
+    }
+}
+
+// 扩展方法
+public static class RequestLoggingMiddlewareExtensions
+{
+    public static IApplicationBuilder UseRequestLogging(
+        this IApplicationBuilder builder)
+    {
+        return builder.UseMiddleware<RequestLoggingMiddleware>();
+    }
+}
+
+// 使用
+app.UseRequestLogging();
+```
+
+---
+
+## 配置管理
+
+ASP.NET Core 提供了强大的配置系统。
+
+### appsettings.json
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=localhost;Database=MyDb;User Id=sa;Password=***;"
+  },
+  "AppSettings": {
+    "ApplicationName": "我的应用",
+    "MaxItemsPerPage": 20,
+    "EnableCache": true
+  },
+  "EmailSettings": {
+    "SmtpServer": "smtp.gmail.com",
+    "Port": 587,
+    "SenderEmail": "noreply@example.com"
+  }
+}
+```
+
+### 读取配置
+
+```csharp
+// 方式 1：直接读取
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+var appName = builder.Configuration["AppSettings:ApplicationName"];
+
+// 方式 2：强类型配置
+public class AppSettings
+{
+    public string ApplicationName { get; set; }
+    public int MaxItemsPerPage { get; set; }
+    public bool EnableCache { get; set; }
+}
+
+public class EmailSettings
+{
+    public string SmtpServer { get; set; }
+    public int Port { get; set; }
+    public string SenderEmail { get; set; }
+}
+
+// 注册配置
+builder.Services.Configure<AppSettings>(
+    builder.Configuration.GetSection("AppSettings"));
+builder.Services.Configure<EmailSettings>(
+    builder.Configuration.GetSection("EmailSettings"));
+
+// 使用配置
+public class MyService
+{
+    private readonly AppSettings appSettings;
+    
+    public MyService(IOptions<AppSettings> options)
+    {
+        this.appSettings = options.Value;
+    }
+    
+    public void DoSomething()
+    {
+        Console.WriteLine(appSettings.ApplicationName);
+    }
+}
+```
+
+---
+
+## 日志记录
+
+ASP.NET Core 内置了日志系统。
+
+### 使用日志
+
+```csharp
+[ApiController]
+[Route("api/[controller]")]
+public class ProductsController : ControllerBase
+{
+    private readonly ILogger<ProductsController> logger;
+    
+    public ProductsController(ILogger<ProductsController> logger)
+    {
+        this.logger = logger;
+    }
+    
+    [HttpGet("{id}")]
+    public IActionResult Get(int id)
+    {
+        logger.LogTrace("Trace 日志");
+        logger.LogDebug("Debug 日志");
+        logger.LogInformation("获取产品 {ProductId}", id);
+        logger.LogWarning("警告：产品 {ProductId} 库存不足", id);
+        logger.LogError("错误：无法获取产品 {ProductId}", id);
+        logger.LogCritical("严重错误！");
+        
+        return Ok();
+    }
+}
+```
+
+### 日志级别
+
+| 级别 | 用途 |
+|------|------|
+| Trace | 最详细的信息 |
+| Debug | 调试信息 |
+| Information | 一般信息 |
+| Warning | 警告信息 |
+| Error | 错误信息 |
+| Critical | 严重错误 |
+
+---
+
+## 异常处理
+
+### 全局异常处理
+
+```csharp
+// 开发环境
+if (app.Environment.IsDevelopment())
+{
+    app.UseDeveloperExceptionPage();
+}
+else
+{
+    // 生产环境
+    app.UseExceptionHandler("/error");
+}
+
+// 错误处理端点
+[ApiController]
+public class ErrorController : ControllerBase
+{
+    [Route("/error")]
+    [ApiExplorerSettings(IgnoreApi = true)]
+    public IActionResult HandleError()
+    {
+        return Problem();
+    }
+}
+```
+
+### 自定义异常处理中间件
+
+```csharp
+public class ExceptionHandlingMiddleware
+{
+    private readonly RequestDelegate next;
+    private readonly ILogger<ExceptionHandlingMiddleware> logger;
+    
+    public ExceptionHandlingMiddleware(
+        RequestDelegate next,
+        ILogger<ExceptionHandlingMiddleware> logger)
+    {
+        this.next = next;
+        this.logger = logger;
+    }
+    
+    public async Task InvokeAsync(HttpContext context)
+    {
+        try
+        {
+            await next(context);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "发生未处理的异常");
+            await HandleExceptionAsync(context, ex);
+        }
+    }
+    
+    private static Task HandleExceptionAsync(HttpContext context, Exception exception)
+    {
+        context.Response.ContentType = "application/json";
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        
+        var response = new
+        {
+            error = "服务器内部错误",
+            message = exception.Message
+        };
+        
+        return context.Response.WriteAsJsonAsync(response);
+    }
+}
+
+// 使用
+app.UseMiddleware<ExceptionHandlingMiddleware>();
+```
+
+---
+
+## 实战：构建 Todo API
+
+让我们构建一个完整的 Todo API。
+
+### 1. 模型
+
+```csharp
+using System.ComponentModel.DataAnnotations;
+
+public class TodoItem
+{
+    public int Id { get; set; }
+    
+    [Required]
+    [StringLength(200)]
+    public string Title { get; set; }
+    
+    public string Description { get; set; }
+    
+    public bool IsCompleted { get; set; }
+    
+    public DateTime CreatedAt { get; set; }
+    
+    public DateTime? CompletedAt { get; set; }
+}
+
+public class CreateTodoDto
+{
+    [Required]
+    [StringLength(200)]
+    public string Title { get; set; }
+    
+    public string Description { get; set; }
+}
+
+public class UpdateTodoDto
+{
+    [Required]
+    [StringLength(200)]
+    public string Title { get; set; }
+    
+    public string Description { get; set; }
+    
+    public bool IsCompleted { get; set; }
+}
+```
+
+### 2. 服务接口
+
+```csharp
+public interface ITodoService
+{
+    Task<List<TodoItem>> GetAllAsync();
+    Task<TodoItem> GetByIdAsync(int id);
+    Task<TodoItem> CreateAsync(CreateTodoDto dto);
+    Task<TodoItem> UpdateAsync(int id, UpdateTodoDto dto);
+    Task<bool> DeleteAsync(int id);
+    Task<bool> ToggleCompleteAsync(int id);
+}
+```
+
+### 3. 服务实现
+
+```csharp
+public class TodoService : ITodoService
+{
+    private readonly List<TodoItem> todos = new();
+    private int nextId = 1;
+    private readonly ILogger<TodoService> logger;
+    
+    public TodoService(ILogger<TodoService> logger)
+    {
+        this.logger = logger;
+    }
+    
+    public Task<List<TodoItem>> GetAllAsync()
+    {
+        logger.LogInformation("获取所有待办事项");
+        return Task.FromResult(todos);
+    }
+    
+    public Task<TodoItem> GetByIdAsync(int id)
+    {
+        logger.LogInformation("获取待办事项 {TodoId}", id);
+        var todo = todos.FirstOrDefault(t => t.Id == id);
+        return Task.FromResult(todo);
+    }
+    
+    public Task<TodoItem> CreateAsync(CreateTodoDto dto)
+    {
+        var todo = new TodoItem
+        {
+            Id = nextId++,
+            Title = dto.Title,
+            Description = dto.Description,
+            IsCompleted = false,
+            CreatedAt = DateTime.Now
+        };
+        
+        todos.Add(todo);
+        logger.LogInformation("创建待办事项：{Title}", todo.Title);
+        
+        return Task.FromResult(todo);
+    }
+    
+    public Task<TodoItem> UpdateAsync(int id, UpdateTodoDto dto)
+    {
+        var todo = todos.FirstOrDefault(t => t.Id == id);
+        if (todo == null)
+            return Task.FromResult<TodoItem>(null);
+            
+        todo.Title = dto.Title;
+        todo.Description = dto.Description;
+        todo.IsCompleted = dto.IsCompleted;
+        
+        if (dto.IsCompleted && todo.CompletedAt == null)
+            todo.CompletedAt = DateTime.Now;
+        else if (!dto.IsCompleted)
+            todo.CompletedAt = null;
+            
+        logger.LogInformation("更新待办事项 {TodoId}", id);
+        return Task.FromResult(todo);
+    }
+    
+    public Task<bool> DeleteAsync(int id)
+    {
+        var todo = todos.FirstOrDefault(t => t.Id == id);
+        if (todo == null)
+            return Task.FromResult(false);
+            
+        todos.Remove(todo);
+        logger.LogInformation("删除待办事项 {TodoId}", id);
+        return Task.FromResult(true);
+    }
+    
+    public Task<bool> ToggleCompleteAsync(int id)
+    {
+        var todo = todos.FirstOrDefault(t => t.Id == id);
+        if (todo == null)
+            return Task.FromResult(false);
+            
+        todo.IsCompleted = !todo.IsCompleted;
+        todo.CompletedAt = todo.IsCompleted ? DateTime.Now : null;
+        
+        logger.LogInformation("切换待办事项 {TodoId} 完成状态", id);
+        return Task.FromResult(true);
+    }
+}
+```
+
+### 4. 控制器
+
+```csharp
+[ApiController]
+[Route("api/[controller]")]
+public class TodosController : ControllerBase
+{
+    private readonly ITodoService todoService;
+    
+    public TodosController(ITodoService todoService)
+    {
+        this.todoService = todoService;
+    }
+    
+    /// <summary>
+    /// 获取所有待办事项
+    /// </summary>
+    [HttpGet]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<List<TodoItem>>> GetAll()
+    {
+        var todos = await todoService.GetAllAsync();
+        return Ok(todos);
+    }
+    
+    /// <summary>
+    /// 获取指定待办事项
+    /// </summary>
+    [HttpGet("{id}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<TodoItem>> GetById(int id)
+    {
+        var todo = await todoService.GetByIdAsync(id);
+        if (todo == null)
+            return NotFound();
+            
+        return Ok(todo);
+    }
+    
+    /// <summary>
+    /// 创建待办事项
+    /// </summary>
+    [HttpPost]
+    [ProducesResponseType(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<TodoItem>> Create([FromBody] CreateTodoDto dto)
+    {
+        var todo = await todoService.CreateAsync(dto);
+        return CreatedAtAction(nameof(GetById), new { id = todo.Id }, todo);
+    }
+    
+    /// <summary>
+    /// 更新待办事项
+    /// </summary>
+    [HttpPut("{id}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<TodoItem>> Update(int id, [FromBody] UpdateTodoDto dto)
+    {
+        var todo = await todoService.UpdateAsync(id, dto);
+        if (todo == null)
+            return NotFound();
+            
+        return Ok(todo);
+    }
+    
+    /// <summary>
+    /// 删除待办事项
+    /// </summary>
+    [HttpDelete("{id}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(int id)
+    {
+        var success = await todoService.DeleteAsync(id);
+        if (!success)
+            return NotFound();
+            
+        return NoContent();
+    }
+    
+    /// <summary>
+    /// 切换完成状态
+    /// </summary>
+    [HttpPatch("{id}/toggle")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ToggleComplete(int id)
+    {
+        var success = await todoService.ToggleCompleteAsync(id);
+        if (!success)
+            return NotFound();
+            
+        return NoContent();
+    }
+}
+```
+
+### 5. 注册服务
+
+```csharp
+// Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// 注册 Todo 服务
+builder.Services.AddSingleton<ITodoService, TodoService>();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();
+```
+
+### 6. 测试 API
+
+```bash
+# 创建待办事项
+curl -X POST https://localhost:5001/api/todos \
+  -H "Content-Type: application/json" \
+  -d '{"title":"学习 ASP.NET Core","description":"完成入门教程"}'
+
+# 获取所有待办事项
+curl https://localhost:5001/api/todos
+
+# 获取指定待办事项
+curl https://localhost:5001/api/todos/1
+
+# 更新待办事项
+curl -X PUT https://localhost:5001/api/todos/1 \
+  -H "Content-Type: application/json" \
+  -d '{"title":"学习 ASP.NET Core","description":"已完成","isCompleted":true}'
+
+# 切换完成状态
+curl -X PATCH https://localhost:5001/api/todos/1/toggle
+
+# 删除待办事项
+curl -X DELETE https://localhost:5001/api/todos/1
+```
+
+---
+
+## 总结
+
+通过本教程，你已经学习了 ASP.NET Core 的核心知识：
+
+✅ **基础概念**：项目结构、Program.cs  
+✅ **控制器**：HTTP 方法、路由、返回类型  
+✅ **依赖注入**：服务注册与使用  
+✅ **模型绑定与验证**：数据绑定、Data Annotations  
+✅ **中间件**：内置中间件、自定义中间件  
+✅ **配置管理**：appsettings.json、强类型配置  
+✅ **日志记录**：ILogger 使用  
+✅ **异常处理**：全局异常处理  
+✅ **实战项目**：完整的 Todo API  
+
+**下一步学习：**
+- 📚 学习 **Entity Framework Core**（数据库访问）
+- 🔐 学习 **身份验证与授权**（JWT、OAuth）
+- 🌐 学习 **Razor Pages/MVC**（服务端渲染）
+- ⚡ 学习 **SignalR**（实时通信）
+- 🐳 学习 **Docker 部署**
+- ☁️ 学习 **Azure 部署**
+
+ASP.NET Core 是构建现代 Web 应用的强大框架，继续实践和探索吧！
+
+**推荐资源：**
+- [ASP.NET Core 官方文档](https://docs.microsoft.com/zh-cn/aspnet/core/)
+- [ASP.NET Core 教程](https://docs.microsoft.com/zh-cn/aspnet/core/tutorials/)
+- [Entity Framework Core](https://docs.microsoft.com/zh-cn/ef/core/)
