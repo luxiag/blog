@@ -30,13 +30,10 @@ const tools: Tool[] = [
   { id: 'diff-checker', name: '文本对比', description: '对比两个文本的差异', icon: 'git-compare', category: 'dev' },
   { id: 'color-picker', name: '颜色提取器', description: '从图片提取颜色主题', icon: 'pipette', category: 'design' },
   { id: 'icon-finder', name: '图标查找器', description: '搜索和下载各类图标', icon: 'search', category: 'design' },
-  { id: 'password-generator', name: '密码生成器', description: '生成安全随机密码', icon: 'key', category: 'productivity' },
   { id: 'url-encoder', name: 'URL 编码解码', description: 'URL 编码/解码工具', icon: 'link', category: 'productivity' },
   { id: 'base64', name: 'Base64 转换', description: 'Base64 编码解码工具', icon: 'binary', category: 'productivity' },
   { id: 'chatgpt', name: 'AI 对话', description: '与 AI 进行对话交流', icon: 'message-square', category: 'ai' },
-  { id: 'image-generator', name: 'AI 图像生成', description: '使用 AI 生成图像', icon: 'image', category: 'ai' },
   { id: 'qrcode', name: '二维码生成', description: '生成自定义二维码', icon: 'qr-code', category: 'other' },
-  { id: 'timestamp', name: '时间戳转换', description: '时间戳与日期互转', icon: 'clock', category: 'other' },
 ];
 
 const categoryIcons: Record<string, React.ReactElement> = {

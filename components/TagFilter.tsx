@@ -9,11 +9,13 @@ interface TagFilterProps {
 }
 
 export default function TagFilter({ posts, onFilter }: TagFilterProps) {
-  const allCategories = Array.from(
-    new Set(
-      posts.flatMap((post) => post.category ? [post.category] : [])
-    )
-  ).sort();
+  const categoriesWithCounts = Array.from(
+    posts.reduce((acc, post) => {
+      const cat = post.category || 'Article';
+      acc.set(cat, (acc.get(cat) || 0) + 1);
+      return acc;
+    }, new Map<string, number>())
+  ).sort((a, b) => b[1] - a[1]);
 
   const [selectedCategory, setSelectedCategory] = useState<string>('');
 
@@ -24,7 +26,7 @@ export default function TagFilter({ posts, onFilter }: TagFilterProps) {
     } else {
       setSelectedCategory(category);
       const filteredPosts = posts.filter((post) =>
-        post.category === category
+        (post.category || 'Article') === category
       );
       onFilter(filteredPosts);
     }
@@ -36,36 +38,37 @@ export default function TagFilter({ posts, onFilter }: TagFilterProps) {
   };
 
   return (
-    <div className="mb-8">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-semibold font-mono text-neutral-900 dark:text-neutral-100">筛选分类:</span>
-        {allCategories.length > 0 ? (
-          <>
-            {allCategories.map((category) => (
-              <button
-                key={category}
-                onClick={() => handleCategoryClick(category)}
-                className={`px-3 py-1.5 text-xs font-mono rounded transition-colors cursor-pointer border ${
-                  selectedCategory === category
-                    ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 border-neutral-900 dark:border-neutral-100'
-                    : 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-700'
+    <div className="flex flex-col gap-6 py-8 border-y border-neutral-100 dark:border-neutral-800/50">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-4">
+        <div className="flex items-center gap-2">
+          <div className="w-1.5 h-1.5 bg-orange-600 rounded-full" />
+          <span className="text-xs font-bold font-sans tracking-widest uppercase text-neutral-400">分类检索</span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={handleClearFilter}
+            className={`px-4 py-1.5 text-xs font-mono transition-all duration-300 border ${!selectedCategory
+                ? 'bg-neutral-900 border-neutral-900 text-white dark:bg-neutral-100 dark:border-neutral-100 dark:text-neutral-900 shadow-[4px_4px_0px_rgba(0,0,0,0.1)] dark:shadow-[4px_4px_0px_rgba(255,255,255,0.1)]'
+                : 'bg-transparent border-neutral-200 dark:border-neutral-700 text-neutral-500 hover:border-neutral-900 dark:hover:border-neutral-100 hover:text-neutral-900 dark:hover:text-neutral-100'
+              }`}
+          >
+            全部 {posts.length}
+          </button>
+
+          {categoriesWithCounts.map(([category, count]) => (
+            <button
+              key={category}
+              onClick={() => handleCategoryClick(category)}
+              className={`px-4 py-1.5 text-xs font-mono transition-all duration-300 border ${selectedCategory === category
+                  ? 'bg-orange-600 border-orange-600 text-white shadow-[4px_4px_0px_rgba(234,88,12,0.2)]'
+                  : 'bg-transparent border-neutral-200 dark:border-neutral-700 text-neutral-500 hover:border-orange-600 hover:text-orange-600'
                 }`}
-              >
-                {category}
-              </button>
-            ))}
-            {selectedCategory && (
-              <button
-                onClick={handleClearFilter}
-                className="px-3 py-1.5 text-xs font-mono rounded bg-white dark:bg-neutral-800 text-orange-600 dark:text-orange-400 border border-orange-600 dark:border-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors cursor-pointer"
-              >
-                清除筛选
-              </button>
-            )}
-          </>
-        ) : (
-          <span className="text-xs font-mono text-neutral-500">暂无分类</span>
-        )}
+            >
+              {category} <span className="opacity-50 ml-1">({count})</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
