@@ -49,9 +49,9 @@ export default function SqlSimulatorPage() {
                     <div className="space-y-8">
 
                         <SqlSimulator
-                            dataset="commerce"
-                            title="标准演练场"
-                            description="在此处自由编写 SQL。数据保存在内存中，刷新页面即重置。"
+                            dataset="comprehensive"
+                            title="综合数据库"
+                            description="包含电商、ERP、医疗三大业务模块，30+数据表，数千条数据。支持复杂 JOIN、聚合分析、子查询等高级 SQL 练习。"
                         />
                     </div>
                 </div>

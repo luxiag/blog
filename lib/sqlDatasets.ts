@@ -1,4 +1,4 @@
-export type SqlDatasetId = 'commerce' | 'enterprise';
+export type SqlDatasetId = 'comprehensive';
 
 export interface SqlDataset {
   id: SqlDatasetId;
@@ -8,250 +8,898 @@ export interface SqlDataset {
   defaultQuery: string;
 }
 
-const commerceInitialSql = `
-CREATE TABLE users (
+export const comprehensiveInitialSql = `
+-- E-commerce Module
+CREATE TABLE ecommerce_users (
   id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL,
-  city TEXT NOT NULL,
-  signup_date TEXT NOT NULL
+  email VARCHAR(255) NOT NULL UNIQUE,
+  first_name VARCHAR(100) NOT NULL,
+  last_name VARCHAR(100) NOT NULL,
+  phone VARCHAR(20),
+  address TEXT,
+  city VARCHAR(100),
+  country VARCHAR(100),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  is_active BOOLEAN DEFAULT 1
 );
 
-CREATE TABLE products (
+CREATE TABLE ecommerce_products (
   id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL,
-  category TEXT NOT NULL,
-  price REAL NOT NULL
+  name VARCHAR(255) NOT NULL,
+  description TEXT,
+  sku VARCHAR(100) UNIQUE NOT NULL,
+  price DECIMAL(10, 2) NOT NULL,
+  category VARCHAR(100),
+  stock_quantity INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  is_active BOOLEAN DEFAULT 1
 );
 
-CREATE TABLE orders (
+CREATE TABLE ecommerce_orders (
   id INTEGER PRIMARY KEY,
   user_id INTEGER NOT NULL,
-  order_date TEXT NOT NULL,
-  status TEXT NOT NULL
+  status VARCHAR(50) DEFAULT 'pending',
+  total_amount DECIMAL(10, 2) NOT NULL,
+  shipping_address TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES ecommerce_users(id)
 );
 
-CREATE TABLE order_items (
+CREATE TABLE ecommerce_order_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   order_id INTEGER NOT NULL,
   product_id INTEGER NOT NULL,
   quantity INTEGER NOT NULL,
-  unit_price REAL NOT NULL
+  unit_price DECIMAL(10, 2) NOT NULL,
+  FOREIGN KEY (order_id) REFERENCES ecommerce_orders(id),
+  FOREIGN KEY (product_id) REFERENCES ecommerce_products(id)
 );
 
-CREATE TABLE payments (
+CREATE TABLE ecommerce_categories (
   id INTEGER PRIMARY KEY,
-  order_id INTEGER NOT NULL,
-  paid_at TEXT,
-  amount REAL NOT NULL,
-  method TEXT NOT NULL,
-  status TEXT NOT NULL
+  name VARCHAR(100) NOT NULL,
+  description TEXT,
+  parent_id INTEGER,
+  FOREIGN KEY (parent_id) REFERENCES ecommerce_categories(id)
 );
 
-INSERT INTO users (id, name, city, signup_date) VALUES
-  (1, 'Alice', 'Beijing', '2025-10-05'),
-  (2, 'Bob', 'Shanghai', '2025-10-21'),
-  (3, 'Charlie', 'Beijing', '2025-11-02'),
-  (4, 'David', 'Shenzhen', '2025-11-15'),
-  (5, 'Eve', 'Hangzhou', '2025-12-01'),
-  (6, 'Frank', 'Shanghai', '2025-12-10'),
-  (7, 'Grace', 'Beijing', '2026-01-03'),
-  (8, 'Heidi', 'Shenzhen', '2026-01-12');
+CREATE TABLE ecommerce_reviews (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  product_id INTEGER NOT NULL,
+  rating INTEGER CHECK(rating >= 1 AND rating <= 5),
+  comment TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES ecommerce_users(id),
+  FOREIGN KEY (product_id) REFERENCES ecommerce_products(id)
+);
 
-INSERT INTO products (id, name, category, price) VALUES
-  (101, 'Mechanical Keyboard', 'Electronics', 599.0),
-  (102, 'Noise Cancelling Headphones', 'Electronics', 899.0),
-  (103, 'USB-C Cable', 'Electronics', 39.9),
-  (104, 'Office Chair', 'Furniture', 1299.0),
-  (105, 'Standing Desk', 'Furniture', 2499.0),
-  (106, 'Coffee Beans 1kg', 'Grocery', 129.0),
-  (107, 'Green Tea 200g', 'Grocery', 79.0),
-  (108, 'Running Shoes', 'Sports', 699.0),
-  (109, 'Yoga Mat', 'Sports', 159.0),
-  (110, 'Notebook', 'Stationery', 12.5);
+-- E-commerce Data
+INSERT INTO ecommerce_users (id, email, first_name, last_name, phone, address, city, country) VALUES
+(1, 'john.doe@email.com', 'John', 'Doe', '+1-555-0101', '123 Main St', 'New York', 'USA'),
+(2, 'jane.smith@email.com', 'Jane', 'Smith', '+1-555-0102', '456 Oak Ave', 'Los Angeles', 'USA'),
+(3, 'bob.wilson@email.com', 'Bob', 'Wilson', '+1-555-0103', '789 Pine Rd', 'Chicago', 'USA'),
+(4, 'alice.johnson@email.com', 'Alice', 'Johnson', '+1-555-0104', '321 Elm St', 'Houston', 'USA'),
+(5, 'charlie.brown@email.com', 'Charlie', 'Brown', '+1-555-0105', '654 Maple Dr', 'Phoenix', 'USA'),
+(6, 'diana.prince@email.com', 'Diana', 'Prince', '+1-555-0106', '987 Cedar Ln', 'Philadelphia', 'USA'),
+(7, 'edward.stark@email.com', 'Edward', 'Stark', '+1-555-0107', '147 Birch Way', 'San Antonio', 'USA'),
+(8, 'fiona.green@email.com', 'Fiona', 'Green', '+1-555-0108', '258 Walnut Ct', 'San Diego', 'USA'),
+(9, 'george.miller@email.com', 'George', 'Miller', '+1-555-0109', '369 Spruce Blvd', 'Dallas', 'USA'),
+(10, 'hannah.davis@email.com', 'Hannah', 'Davis', '+1-555-0110', '480 Ash St', 'San Jose', 'USA'),
+(11, 'ivan.garcia@email.com', 'Ivan', 'Garcia', '+1-555-0111', '591 Poplar Ave', 'Austin', 'USA'),
+(12, 'julia.martinez@email.com', 'Julia', 'Martinez', '+1-555-0112', '702 Redwood Rd', 'Jacksonville', 'USA'),
+(13, 'kevin.anderson@email.com', 'Kevin', 'Anderson', '+1-555-0113', '813 Sequoia Dr', 'San Francisco', 'USA'),
+(14, 'laura.taylor@email.com', 'Laura', 'Taylor', '+1-555-0114', '924 Cypress Ln', 'Indianapolis', 'USA'),
+(15, 'michael.thomas@email.com', 'Michael', 'Thomas', '+1-555-0115', '135 Willow St', 'Columbus', 'USA'),
+(16, 'nancy.jackson@email.com', 'Nancy', 'Jackson', '+1-555-0116', '246 Magnolia Ave', 'Fort Worth', 'USA'),
+(17, 'oscar.white@email.com', 'Oscar', 'White', '+1-555-0117', '357 Juniper Rd', 'Charlotte', 'USA'),
+(18, 'patricia.harris@email.com', 'Patricia', 'Harris', '+1-555-0118', '468 Hickory Dr', 'Seattle', 'USA'),
+(19, 'quentin.clark@email.com', 'Quentin', 'Clark', '+1-555-0119', '579 Dogwood Ln', 'Denver', 'USA'),
+(20, 'rachel.lewis@email.com', 'Rachel', 'Lewis', '+1-555-0120', '680 Chestnut Ave', 'Boston', 'USA'),
+(21, 'sam.robinson@email.com', 'Sam', 'Robinson', '+1-555-0121', '791 Sycamore St', 'El Paso', 'USA'),
+(22, 'tina.walker@email.com', 'Tina', 'Walker', '+1-555-0122', '802 Redwood Way', 'Nashville', 'USA'),
+(23, 'ulrich.hall@email.com', 'Ulrich', 'Hall', '+1-555-0123', '913 Pine St', 'Detroit', 'USA'),
+(24, 'victoria.allen@email.com', 'Victoria', 'Allen', '+1-555-0124', '124 Oak Ln', 'Portland', 'USA'),
+(25, 'walter.young@email.com', 'Walter', 'Young', '+1-555-0125', '235 Elm Ave', 'Memphis', 'USA'),
+(26, 'xavier.king@email.com', 'Xavier', 'King', '+1-555-0126', '346 Maple Rd', 'New South Wales', 'Australia'),
+(27, 'yara.wright@email.com', 'Yara', 'Wright', '+1-555-0127', '457 Cedar St', 'Sydney', 'Australia'),
+(28, 'zachary.lopez@email.com', 'Zachary', 'Lopez', '+1-555-0128', '568 Birch Dr', 'Melbourne', 'Australia'),
+(29, 'amy.hill@email.com', 'Amy', 'Hill', '+1-555-0129', '679 Willow Ave', 'Brisbane', 'Australia'),
+(30, 'brian.scott@email.com', 'Brian', 'Scott', '+1-555-0130', '780 Pine Ave', 'Perth', 'Australia');
 
-INSERT INTO orders (id, user_id, order_date, status) VALUES
-  (1001, 1, '2025-12-05', 'PAID'),
-  (1002, 1, '2026-01-08', 'PAID'),
-  (1003, 2, '2025-12-20', 'CANCELLED'),
-  (1004, 2, '2026-01-10', 'PAID'),
-  (1005, 3, '2025-12-24', 'PAID'),
-  (1006, 3, '2026-01-15', 'REFUNDED'),
-  (1007, 4, '2025-12-30', 'PAID'),
-  (1008, 5, '2026-01-02', 'PAID'),
-  (1009, 6, '2026-01-05', 'PENDING'),
-  (1010, 7, '2026-01-08', 'PAID'),
-  (1011, 7, '2026-01-20', 'PAID'),
-  (1012, 8, '2026-01-21', 'PAID');
+INSERT INTO ecommerce_products (id, name, description, sku, price, category, stock_quantity) VALUES
+(1, 'Wireless Bluetooth Headphones', 'Premium noise-cancelling wireless headphones with 30hr battery', 'ELEC-001', 199.99, 'Electronics', 150),
+(2, 'Smart Watch Pro', 'Advanced fitness tracking smartwatch with GPS', 'ELEC-002', 349.99, 'Electronics', 80),
+(3, 'Laptop Stand Aluminum', 'Ergonomic aluminum laptop stand with adjustable height', 'ELEC-003', 79.99, 'Electronics', 200),
+(4, 'USB-C Hub 7-in-1', 'Multi-port USB-C hub with HDMI, USB 3.0, and SD card reader', 'ELEC-004', 49.99, 'Electronics', 300),
+(5, 'Mechanical Keyboard RGB', 'Gaming mechanical keyboard with RGB backlighting', 'ELEC-005', 129.99, 'Electronics', 120),
+(6, 'Wireless Mouse Ergonomic', 'Vertical ergonomic wireless mouse for comfortable grip', 'ELEC-006', 59.99, 'Electronics', 180),
+(7, 'Webcam 4K Ultra HD', 'Professional 4K webcam with built-in microphone', 'ELEC-007', 149.99, 'Electronics', 90),
+(8, 'Portable SSD 1TB', 'High-speed portable solid state drive 1TB', 'ELEC-008', 109.99, 'Electronics', 250),
+(9, 'Power Bank 20000mAh', 'Fast charging power bank with dual USB ports', 'ELEC-009', 39.99, 'Electronics', 400),
+(10, 'Wireless Charger Pad', 'Qi-compatible wireless charging pad for smartphones', 'ELEC-010', 29.99, 'Electronics', 500),
+(11, 'Running Shoes Ultra', 'Lightweight running shoes with superior cushioning', 'SHOES-001', 129.99, 'Footwear', 200),
+(12, 'Leather Wallet Classic', 'Genuine leather bifold wallet with RFID protection', 'ACC-001', 49.99, 'Accessories', 350),
+(13, 'Sunglasses Polarized', 'UV protection polarized sunglasses with titanium frame', 'ACC-002', 89.99, 'Accessories', 150),
+(14, 'Backpack Travel Pro', 'Durable travel backpack with laptop compartment', 'ACC-003', 79.99, 'Accessories', 180),
+(15, 'Watch Automatic', 'Swiss automatic movement watch with leather strap', 'ACC-004', 299.99, 'Accessories', 50),
+(16, 'Yoga Mat Premium', 'Non-slip yoga mat with alignment lines', 'FIT-001', 39.99, 'Fitness', 300),
+(17, 'Resistance Bands Set', 'Set of 5 resistance bands with carrying case', 'FIT-002', 24.99, 'Fitness', 450),
+(18, 'Foam Roller', 'High-density foam roller for muscle recovery', 'FIT-003', 34.99, 'Fitness', 200),
+(19, 'Adjustable Dumbbells', 'Pair of adjustable dumbbells 5-25 lbs', 'FIT-004', 199.99, 'Fitness', 75),
+(20, 'Yoga Block Set', 'Set of 2 yoga blocks and carrying strap', 'FIT-005', 29.99, 'Fitness', 350),
+(21, 'Organic Coffee Beans', 'Premium single-origin organic coffee beans 1lb', 'GROC-001', 18.99, 'Grocery', 500),
+(22, 'Green Tea Collection', 'Assorted green tea selection 60 bags', 'GROC-002', 14.99, 'Grocery', 400),
+(23, 'Protein Powder Vanilla', 'Whey protein powder vanilla flavor 2lb', 'GROC-003', 54.99, 'Grocery', 250),
+(24, 'Mixed Nuts Premium', 'Premium mixed nuts 32oz roasted unsalted', 'GROC-004', 16.99, 'Grocery', 350),
+(25, 'Olive Oil Extra Virgin', 'Extra virgin olive oil 1L cold pressed', 'GROC-005', 24.99, 'Grocery', 300),
+(26, 'Honey Raw Organic', 'Raw organic honey 16oz', 'GROC-006', 19.99, 'Grocery', 280),
+(27, 'Quinoa Organic', 'Organic white quinoa 2lb', 'GROC-007', 12.99, 'Grocery', 400),
+(28, 'Dark Chocolate 70%', 'Premium dark chocolate 70% cacao 100g', 'GROC-008', 8.99, 'Grocery', 450),
+(29, 'Oats Rolled', 'Whole grain rolled oats 42oz', 'GROC-009', 9.99, 'Grocery', 500),
+(30, 'Coconut Oil Virgin', 'Virgin coconut oil 32oz', 'GROC-010', 15.99, 'Grocery', 380),
+(31, 'Ceramic Mug Set', 'Set of 4 ceramic mugs 16oz', 'HOME-001', 34.99, 'Home', 250),
+(32, 'Cotton Throw Blanket', 'Soft cotton throw blanket 50x60', 'HOME-002', 44.99, 'Home', 180),
+(33, 'Scented Candle Collection', 'Set of 3 scented candles soy wax', 'HOME-003', 39.99, 'Home', 200),
+(34, 'Kitchen Utensil Set', '7-piece stainless steel kitchen utensil set', 'HOME-004', 49.99, 'Home', 150),
+(35, 'Storage Bins Set', 'Set of 5 fabric storage bins with handles', 'HOME-005', 29.99, 'Home', 300),
+(36, 'Plant Pots Set', 'Set of 3 ceramic plant pots with saucers', 'HOME-006', 35.99, 'Home', 220),
+(37, 'Picture Frame Set', 'Set of 3 rustic wood picture frames', 'HOME-007', 27.99, 'Home', 250),
+(38, 'Coasters Set', 'Set of 6 marble coasters with holder', 'HOME-008', 22.99, 'Home', 350),
+(39, 'Door Mat Welcome', 'Welcome doormat non-slip rubber backing', 'HOME-009', 19.99, 'Home', 400),
+(40, 'Throw Pillow Covers', 'Set of 4 decorative throw pillow covers', 'HOME-010', 24.99, 'Home', 300),
+(41, 'Tennis Racket Pro', 'Professional tennis racket graphite frame', 'SPORT-001', 189.99, 'Sports', 100),
+(42, 'Basketball Official', 'Official size 7 basketball indoor/outdoor', 'SPORT-002', 29.99, 'Sports', 200),
+(43, 'Soccer Ball Premium', 'Premium synthetic leather soccer ball', 'SPORT-003', 34.99, 'Sports', 180),
+(44, 'Golf Clubs Set', 'Full set of golf clubs 12-piece', 'SPORT-004', 599.99, 'Sports', 40),
+(45, 'Swimming Goggles', 'Anti-fog swimming goggles with nose clip', 'SPORT-005', 19.99, 'Sports', 300),
+(46, 'Hiking Backpack 65L', '65L hiking backpack with rain cover', 'SPORT-006', 149.99, 'Sports', 120),
+(47, 'Camping Tent 4-Person', '4-person dome camping tent easy setup', 'SPORT-007', 199.99, 'Sports', 60),
+(48, 'Bicycle Helmet', 'Aero road bicycle helmet with LED lights', 'SPORT-008', 89.99, 'Sports', 150),
+(49, 'Kayak Paddle', 'Adjustable kayak paddle fiberglass', 'SPORT-009', 129.99, 'Sports', 80),
+(50, 'Snow Goggles', 'Anti-fog snow goggles with UV protection', 'SPORT-010', 79.99, 'Sports', 100);
 
-INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES
-  (1001, 101, 1, 599.0),
-  (1001, 103, 2, 39.9),
-  (1002, 106, 2, 129.0),
-  (1002, 110, 3, 12.5),
-  (1003, 102, 1, 899.0),
-  (1004, 105, 1, 2499.0),
-  (1004, 103, 1, 39.9),
-  (1005, 107, 1, 79.0),
-  (1005, 106, 1, 129.0),
-  (1006, 104, 1, 1299.0),
-  (1007, 108, 1, 699.0),
-  (1007, 109, 2, 159.0),
-  (1008, 110, 10, 12.5),
-  (1009, 103, 5, 39.9),
-  (1010, 101, 1, 599.0),
-  (1010, 106, 1, 129.0),
-  (1011, 102, 1, 899.0),
-  (1011, 103, 1, 39.9),
-  (1011, 110, 2, 12.5),
-  (1012, 105, 1, 2499.0),
-  (1012, 109, 1, 159.0);
+INSERT INTO ecommerce_orders (id, user_id, status, total_amount, shipping_address, created_at) VALUES
+(1, 1, 'delivered', 529.97, '123 Main St, New York, NY 10001', '2025-01-15 10:30:00'),
+(2, 2, 'shipped', 249.98, '456 Oak Ave, Los Angeles, CA 90001', '2025-01-16 14:20:00'),
+(3, 3, 'processing', 179.97, '789 Pine Rd, Chicago, IL 60601', '2025-01-17 09:15:00'),
+(4, 4, 'delivered', 399.99, '321 Elm St, Houston, TX 77001', '2025-01-18 16:45:00'),
+(5, 5, 'pending', 89.99, '654 Maple Dr, Phoenix, AZ 85001', '2025-01-19 11:00:00'),
+(6, 6, 'delivered', 629.96, '987 Cedar Ln, Philadelphia, PA 19101', '2025-01-20 13:30:00'),
+(7, 7, 'shipped', 159.98, '147 Birch Way, San Antonio, TX 78201', '2025-01-21 10:00:00'),
+(8, 8, 'processing', 299.99, '258 Walnut Ct, San Diego, CA 92101', '2025-01-22 15:20:00'),
+(9, 9, 'delivered', 449.97, '369 Spruce Blvd, Dallas, TX 75201', '2025-01-23 08:45:00'),
+(10, 10, 'pending', 219.98, '480 Ash St, San Jose, CA 95101', '2025-01-24 12:30:00'),
+(11, 11, 'delivered', 189.99, '591 Poplar Ave, Austin, TX 73301', '2025-01-25 14:15:00'),
+(12, 12, 'shipped', 349.98, '702 Redwood Rd, Jacksonville, FL 32099', '2025-01-26 09:30:00'),
+(13, 13, 'processing', 279.97, '813 Sequoia Dr, San Francisco, CA 94101', '2025-01-27 11:45:00'),
+(14, 14, 'delivered', 419.99, '924 Cypress Ln, Indianapolis, IN 46201', '2025-01-28 16:00:00'),
+(15, 15, 'pending', 129.98, '135 Willow St, Columbus, OH 43201', '2025-01-29 10:20:00'),
+(16, 16, 'delivered', 549.97, '246 Magnolia Ave, Fort Worth, TX 76101', '2025-01-30 13:50:00'),
+(17, 17, 'shipped', 199.99, '357 Juniper Rd, Charlotte, NC 28201', '2025-01-31 08:30:00'),
+(18, 18, 'processing', 389.98, '468 Hickory Dr, Seattle, WA 98101', '2025-02-01 15:40:00'),
+(19, 19, 'delivered', 239.97, '579 Dogwood Ln, Denver, CO 80201', '2025-02-02 12:15:00'),
+(20, 20, 'pending', 309.99, '680 Chestnut Ave, Boston, MA 02101', '2025-02-03 09:00:00'),
+(21, 21, 'delivered', 169.98, '791 Sycamore St, El Paso, TX 79901', '2025-02-04 14:30:00'),
+(22, 22, 'shipped', 429.97, '802 Redwood Way, Nashville, TN 37201', '2025-02-05 11:10:00'),
+(23, 23, 'processing', 259.99, '913 Pine St, Detroit, MI 48201', '2025-02-06 16:25:00'),
+(24, 24, 'delivered', 189.98, '124 Oak Ln, Portland, OR 97201', '2025-02-07 10:45:00'),
+(25, 25, 'pending', 599.97, '235 Elm Ave, Memphis, TN 38101', '2025-02-08 13:20:00'),
+(26, 26, 'delivered', 149.99, '346 Maple Rd, Sydney NSW 2000', '2025-02-09 08:55:00'),
+(27, 27, 'shipped', 329.98, '457 Cedar St, Melbourne VIC 3000', '2025-02-10 15:05:00'),
+(28, 28, 'processing', 209.97, '568 Birch Dr, Brisbane QLD 4000', '2025-02-11 12:40:00'),
+(29, 29, 'delivered', 379.99, '679 Willow Ave, Perth WA 6000', '2025-02-12 09:35:00'),
+(30, 30, 'pending', 269.98, '780 Pine Ave, Sydney NSW 2000', '2025-02-13 14:50:00'),
+(31, 1, 'delivered', 459.97, '123 Main St, New York, NY 10001', '2025-01-20 10:00:00'),
+(32, 2, 'shipped', 189.99, '456 Oak Ave, Los Angeles, CA 90001', '2025-01-25 11:30:00'),
+(33, 3, 'processing', 319.98, '789 Pine Rd, Chicago, IL 60601', '2025-02-01 09:20:00'),
+(34, 4, 'delivered', 249.97, '321 Elm St, Houston, TX 77001', '2025-02-05 14:15:00'),
+(35, 5, 'pending', 199.99, '654 Maple Dr, Phoenix, AZ 85001', '2025-02-08 16:30:00'),
+(36, 6, 'delivered', 539.98, '987 Cedar Ln, Philadelphia, PA 19101', '2025-02-10 10:45:00'),
+(37, 7, 'shipped', 289.97, '147 Birch Way, San Antonio, TX 78201', '2025-02-12 13:00:00'),
+(38, 8, 'processing', 159.99, '258 Walnut Ct, San Diego, CA 92101', '2025-02-14 15:45:00'),
+(39, 9, 'delivered', 399.98, '369 Spruce Blvd, Dallas, TX 75201', '2025-02-15 09:30:00'),
+(40, 10, 'pending', 229.97, '480 Ash St, San Jose, CA 95101', '2025-02-16 12:20:00'),
+(41, 11, 'delivered', 349.99, '591 Poplar Ave, Austin, TX 73301', '2025-02-17 14:35:00'),
+(42, 12, 'shipped', 179.98, '702 Redwood Rd, Jacksonville, FL 32099', '2025-02-18 11:00:00'),
+(43, 13, 'processing', 499.97, '813 Sequoia Dr, San Francisco, CA 94101', '2025-02-19 16:10:00'),
+(44, 14, 'delivered', 269.99, '924 Cypress Ln, Indianapolis, IN 46201', '2025-02-20 10:15:00'),
+(45, 15, 'pending', 389.98, '135 Willow St, Columbus, OH 43201', '2025-02-21 13:40:00'),
+(46, 16, 'delivered', 219.97, '246 Magnolia Ave, Fort Worth, TX 76101', '2025-02-22 09:50:00'),
+(47, 17, 'shipped', 309.99, '357 Juniper Rd, Charlotte, NC 28201', '2025-02-23 15:25:00'),
+(48, 18, 'processing', 169.98, '468 Hickory Dr, Seattle, WA 98101', '2025-02-24 12:05:00'),
+(49, 19, 'delivered', 429.97, '579 Dogwood Ln, Denver, CO 80201', '2025-02-25 14:45:00'),
+(50, 20, 'pending', 259.99, '680 Chestnut Ave, Boston, MA 02101', '2025-02-26 10:30:00'),
+(51, 21, 'delivered', 199.98, '791 Sycamore St, El Paso, TX 79901', '2025-02-27 13:15:00'),
+(52, 22, 'shipped', 549.97, '802 Redwood Way, Nashville, TN 37201', '2025-02-28 09:00:00'),
+(53, 23, 'processing', 329.99, '913 Pine St, Detroit, MI 48201', '2025-03-01 16:20:00'),
+(54, 24, 'delivered', 239.98, '124 Oak Ln, Portland, OR 97201', '2025-03-02 11:35:00'),
+(55, 25, 'pending', 379.97, '235 Elm Ave, Memphis, TN 38101', '2025-03-03 14:00:00'),
+(56, 26, 'delivered', 189.99, '346 Maple Rd, Sydney NSW 2000', '2025-03-04 10:25:00'),
+(57, 27, 'shipped', 299.98, '457 Cedar St, Melbourne VIC 3000', '2025-03-05 15:50:00'),
+(58, 28, 'processing', 419.97, '568 Birch Dr, Brisbane QLD 4000', '2025-03-06 12:30:00'),
+(59, 29, 'delivered', 269.99, '679 Willow Ave, Perth WA 6000', '2025-03-07 09:15:00'),
+(60, 30, 'pending', 359.98, '780 Pine Ave, Sydney NSW 2000', '2025-03-08 13:45:00'),
+(61, 1, 'delivered', 149.97, '123 Main St, New York, NY 10001', '2025-02-01 11:00:00'),
+(62, 2, 'shipped', 499.99, '456 Oak Ave, Los Angeles, CA 90001', '2025-02-10 14:30:00'),
+(63, 3, 'processing', 279.98, '789 Pine Rd, Chicago, IL 60601', '2025-02-20 09:45:00'),
+(64, 4, 'delivered', 389.97, '321 Elm St, Houston, TX 77001', '2025-03-01 16:00:00'),
+(65, 5, 'pending', 229.99, '654 Maple Dr, Phoenix, AZ 85001', '2025-03-10 10:20:00'),
+(66, 6, 'delivered', 169.98, '987 Cedar Ln, Philadelphia, PA 19101', '2025-03-15 13:35:00'),
+(67, 7, 'shipped', 539.97, '147 Birch Way, San Antonio, TX 78201', '2025-03-20 09:00:00'),
+(68, 8, 'processing', 309.99, '258 Walnut Ct, San Diego, CA 92101', '2025-03-25 15:15:00'),
+(69, 9, 'delivered', 199.98, '369 Spruce Blvd, Dallas, TX 75201', '2025-03-28 12:00:00'),
+(70, 10, 'pending', 449.97, '480 Ash St, San Jose, CA 95101', '2025-04-01 14:25:00'),
+(71, 11, 'delivered', 259.99, '591 Poplar Ave, Austin, TX 73301', '2025-04-05 11:10:00'),
+(72, 12, 'shipped', 329.98, '702 Redwood Rd, Jacksonville, FL 32099', '2025-04-10 16:40:00'),
+(73, 13, 'processing', 189.97, '813 Sequoia Dr, San Francisco, CA 94101', '2025-04-15 10:55:00'),
+(74, 14, 'delivered', 599.99, '924 Cypress Ln, Indianapolis, IN 46201', '2025-04-20 13:20:00'),
+(75, 15, 'pending', 239.98, '135 Willow St, Columbus, OH 43201', '2025-04-25 09:30:00'),
+(76, 16, 'delivered', 419.97, '246 Magnolia Ave, Fort Worth, TX 76101', '2025-04-28 15:00:00'),
+(77, 17, 'shipped', 289.99, '357 Juniper Rd, Charlotte, NC 28201', '2025-05-01 12:15:00'),
+(78, 18, 'processing', 179.98, '468 Hickory Dr, Seattle, WA 98101', '2025-05-05 10:40:00'),
+(79, 19, 'delivered', 549.97, '579 Dogwood Ln, Denver, CO 80201', '2025-05-10 14:50:00'),
+(80, 20, 'pending', 319.99, '680 Chestnut Ave, Boston, MA 02101', '2025-05-15 09:45:00'),
+(81, 21, 'delivered', 209.98, '791 Sycamore St, El Paso, TX 79901', '2025-05-20 13:00:00'),
+(82, 22, 'shipped', 379.97, '802 Redwood Way, Nashville, TN 37201', '2025-05-25 16:15:00'),
+(83, 23, 'processing', 249.99, '913 Pine St, Detroit, MI 48201', '2025-05-28 11:30:00'),
+(84, 24, 'delivered', 169.98, '124 Oak Ln, Portland, OR 97201', '2025-06-01 14:05:00'),
+(85, 25, 'pending', 459.97, '235 Elm Ave, Memphis, TN 38101', '2025-06-05 10:20:00'),
+(86, 26, 'delivered', 299.99, '346 Maple Rd, Sydney NSW 2000', '2025-06-10 15:35:00'),
+(87, 27, 'shipped', 389.98, '457 Cedar St, Melbourne VIC 3000', '2025-06-15 12:50:00'),
+(88, 28, 'processing', 219.97, '568 Birch Dr, Brisbane QLD 4000', '2025-06-20 09:10:00'),
+(89, 29, 'delivered', 529.99, '679 Willow Ave, Perth WA 6000', '2025-06-25 13:25:00'),
+(90, 30, 'pending', 179.98, '780 Pine Ave, Sydney NSW 2000', '2025-06-28 16:00:00'),
+(91, 1, 'delivered', 399.97, '123 Main St, New York, NY 10001', '2025-03-15 11:30:00'),
+(92, 2, 'shipped', 269.99, '456 Oak Ave, Los Angeles, CA 90001', '2025-03-25 14:45:00'),
+(93, 3, 'processing', 349.98, '789 Pine Rd, Chicago, IL 60601', '2025-04-05 09:20:00'),
+(94, 4, 'delivered', 189.97, '321 Elm St, Houston, TX 77001', '2025-04-15 16:10:00'),
+(95, 5, 'pending', 419.99, '654 Maple Dr, Phoenix, AZ 85001', '2025-04-25 10:35:00'),
+(96, 6, 'delivered', 289.98, '987 Cedar Ln, Philadelphia, PA 19101', '2025-05-05 13:50:00'),
+(97, 7, 'shipped', 159.97, '147 Birch Way, San Antonio, TX 78201', '2025-05-15 09:05:00'),
+(98, 8, 'processing', 499.99, '258 Walnut Ct, San Diego, CA 92101', '2025-05-25 15:20:00'),
+(99, 9, 'delivered', 239.98, '369 Spruce Blvd, Dallas, TX 75201', '2025-06-05 12:35:00'),
+(100, 10, 'pending', 329.97, '480 Ash St, San Jose, CA 95101', '2025-06-15 14:00:00');
 
-INSERT INTO payments (id, order_id, paid_at, amount, method, status) VALUES
-  (5001, 1001, '2025-12-05 10:12:00', 678.8, 'CARD', 'SUCCESS'),
-  (5002, 1002, '2026-01-08 09:01:00', 295.5, 'WALLET', 'SUCCESS'),
-  (5003, 1003, NULL, 899.0, 'CARD', 'FAILED'),
-  (5004, 1004, '2026-01-10 18:22:00', 2538.9, 'CARD', 'SUCCESS'),
-  (5005, 1005, '2025-12-24 14:20:00', 208.0, 'WALLET', 'SUCCESS'),
-  (5006, 1006, '2026-01-15 12:10:00', 1299.0, 'CARD', 'REFUNDED'),
-  (5007, 1007, '2025-12-30 21:05:00', 1017.0, 'CARD', 'SUCCESS'),
-  (5008, 1008, '2026-01-02 08:00:00', 125.0, 'CARD', 'SUCCESS'),
-  (5009, 1009, NULL, 199.5, 'WALLET', 'PENDING'),
-  (5010, 1010, '2026-01-08 10:00:00', 728.0, 'CARD', 'SUCCESS'),
-  (5011, 1011, '2026-01-20 19:30:00', 963.9, 'CARD', 'SUCCESS'),
-  (5012, 1012, '2026-01-21 09:45:00', 2658.0, 'WALLET', 'SUCCESS');
-`;
+INSERT INTO ecommerce_order_items (order_id, product_id, quantity, unit_price) VALUES
+(1, 1, 1, 199.99), (1, 5, 1, 129.99), (1, 10, 2, 29.99),
+(2, 2, 1, 349.99), (2, 6, 1, 59.99),
+(3, 3, 2, 79.99), (3, 9, 1, 39.99),
+(4, 2, 1, 349.99), (4, 4, 1, 49.99),
+(5, 11, 1, 129.99),
+(6, 1, 1, 199.99), (6, 3, 1, 79.99), (6, 7, 1, 149.99), (6, 15, 1, 299.99),
+(7, 5, 1, 129.99), (7, 6, 1, 59.99),
+(8, 15, 1, 299.99),
+(9, 1, 1, 199.99), (9, 2, 1, 349.99), (9, 10, 2, 29.99),
+(10, 11, 1, 129.99), (10, 12, 1, 49.99), (10, 13, 1, 89.99),
+(11, 16, 1, 39.99), (11, 17, 2, 24.99), (11, 18, 1, 34.99),
+(12, 19, 1, 199.99), (12, 20, 2, 29.99), (12, 14, 1, 79.99),
+(13, 21, 2, 18.99), (13, 22, 1, 14.99), (13, 23, 2, 54.99),
+(14, 24, 3, 16.99), (14, 25, 2, 24.99), (14, 26, 1, 19.99),
+(15, 27, 4, 12.99),
+(16, 28, 3, 8.99), (16, 29, 5, 9.99), (16, 30, 2, 15.99), (16, 31, 1, 34.99),
+(17, 32, 1, 44.99), (17, 33, 1, 39.99), (17, 34, 1, 49.99), (17, 35, 1, 29.99),
+(18, 36, 2, 35.99), (18, 37, 2, 27.99), (18, 38, 2, 22.99),
+(19, 39, 2, 19.99), (19, 40, 3, 24.99),
+(20, 1, 1, 199.99), (20, 41, 1, 189.99),
+(21, 42, 2, 29.99), (21, 43, 1, 34.99),
+(22, 44, 1, 599.99), (22, 45, 2, 19.99),
+(23, 46, 1, 149.99), (23, 47, 1, 199.99),
+(24, 48, 1, 89.99), (24, 49, 1, 129.99),
+(25, 50, 2, 79.99), (25, 8, 2, 109.99),
+(26, 12, 1, 49.99), (26, 13, 1, 89.99),
+(27, 14, 2, 79.99), (27, 15, 1, 299.99),
+(28, 16, 1, 39.99), (28, 17, 3, 24.99), (28, 18, 1, 34.99),
+(29, 19, 1, 199.99), (29, 20, 2, 29.99),
+(30, 21, 2, 18.99), (30, 22, 1, 14.99), (30, 23, 2, 54.99),
+(31, 24, 2, 16.99), (31, 25, 1, 24.99),
+(32, 26, 2, 19.99), (32, 27, 3, 12.99),
+(33, 28, 4, 8.99), (33, 29, 2, 9.99), (33, 30, 1, 15.99),
+(34, 31, 2, 34.99), (34, 32, 1, 44.99),
+(35, 33, 1, 39.99), (35, 34, 1, 49.99),
+(36, 35, 3, 29.99), (36, 36, 2, 35.99),
+(37, 37, 2, 27.99), (37, 38, 1, 22.99),
+(38, 39, 1, 19.99), (38, 40, 2, 24.99),
+(39, 1, 1, 199.99), (39, 2, 1, 349.99),
+(40, 41, 1, 189.99), (40, 42, 2, 29.99),
+(41, 43, 1, 34.99), (41, 44, 1, 599.99),
+(42, 45, 2, 19.99), (42, 46, 1, 149.99),
+(43, 47, 1, 199.99), (43, 48, 1, 89.99),
+(44, 49, 1, 129.99), (44, 50, 2, 79.99),
+(45, 1, 2, 199.99), (45, 3, 1, 79.99),
+(46, 5, 1, 129.99), (46, 7, 1, 149.99),
+(47, 9, 2, 39.99), (47, 11, 1, 129.99),
+(48, 13, 1, 89.99), (48, 15, 1, 299.99),
+(49, 17, 2, 24.99), (49, 19, 1, 199.99),
+(50, 21, 3, 18.99), (50, 23, 1, 54.99),
+(51, 25, 2, 24.99), (51, 27, 1, 12.99),
+(52, 29, 3, 9.99), (52, 31, 2, 34.99),
+(53, 33, 1, 39.99), (53, 35, 1, 29.99),
+(54, 37, 2, 27.99), (54, 39, 1, 19.99),
+(55, 41, 1, 189.99), (55, 43, 1, 34.99),
+(56, 45, 2, 19.99), (56, 47, 1, 199.99),
+(57, 49, 1, 129.99), (57, 1, 1, 199.99),
+(58, 3, 1, 79.99), (58, 5, 2, 129.99),
+(59, 7, 1, 149.99), (59, 9, 1, 39.99),
+(60, 11, 2, 129.99), (60, 13, 1, 89.99),
+(61, 15, 1, 299.99), (61, 17, 2, 24.99),
+(62, 19, 1, 199.99), (62, 21, 1, 18.99),
+(63, 23, 2, 54.99), (63, 25, 1, 24.99),
+(64, 27, 3, 12.99), (64, 29, 1, 9.99),
+(65, 31, 2, 34.99), (65, 33, 1, 39.99),
+(66, 35, 1, 29.99), (66, 37, 1, 27.99),
+(67, 39, 2, 19.99), (67, 41, 1, 189.99),
+(68, 43, 1, 34.99), (68, 45, 1, 19.99),
+(69, 47, 2, 199.99), (69, 49, 1, 129.99),
+(70, 1, 1, 199.99), (70, 3, 2, 79.99),
+(71, 5, 1, 129.99), (71, 7, 1, 149.99),
+(72, 9, 2, 39.99), (72, 11, 1, 129.99),
+(73, 13, 1, 89.99), (73, 15, 2, 299.99),
+(74, 17, 1, 24.99), (74, 19, 1, 199.99),
+(75, 21, 3, 18.99), (75, 23, 1, 54.99),
+(76, 25, 2, 24.99), (76, 27, 1, 12.99),
+(77, 29, 3, 9.99), (77, 31, 1, 34.99),
+(78, 33, 2, 39.99), (78, 35, 1, 29.99),
+(79, 37, 1, 27.99), (79, 39, 2, 19.99),
+(80, 41, 1, 189.99), (80, 43, 2, 34.99),
+(81, 45, 1, 19.99), (81, 47, 1, 199.99),
+(82, 49, 2, 129.99), (82, 1, 1, 199.99),
+(83, 3, 2, 79.99), (83, 5, 1, 129.99),
+(84, 7, 1, 149.99), (84, 9, 1, 39.99),
+(85, 11, 1, 129.99), (85, 13, 2, 89.99),
+(86, 15, 2, 299.99), (86, 17, 1, 24.99),
+(87, 19, 1, 199.99), (87, 21, 1, 18.99),
+(88, 23, 3, 54.99), (88, 25, 1, 24.99),
+(89, 27, 2, 12.99), (89, 29, 1, 9.99),
+(90, 31, 1, 34.99), (90, 33, 2, 39.99),
+(91, 35, 1, 29.99), (91, 37, 1, 27.99),
+(92, 39, 2, 19.99), (92, 41, 1, 189.99),
+(93, 43, 1, 34.99), (93, 45, 2, 19.99),
+(94, 47, 1, 199.99), (94, 49, 1, 129.99),
+(95, 1, 2, 199.99), (95, 3, 1, 79.99),
+(96, 5, 1, 129.99), (96, 7, 2, 149.99),
+(97, 9, 1, 39.99), (97, 11, 1, 129.99),
+(98, 13, 2, 89.99), (98, 15, 1, 299.99),
+(99, 17, 1, 24.99), (99, 19, 2, 199.99),
+(100, 21, 1, 18.99), (100, 23, 1, 54.99);
 
-const enterpriseInitialSql = `
--- 部门表
-CREATE TABLE departments (
-  dept_id INTEGER PRIMARY KEY,
-  dept_name TEXT NOT NULL,
+INSERT INTO ecommerce_categories (id, name, description, parent_id) VALUES
+(1, 'Electronics', 'Electronic devices and accessories', NULL),
+(2, 'Footwear', 'Shoes and footwear products', NULL),
+(3, 'Accessories', 'Fashion and lifestyle accessories', NULL),
+(4, 'Fitness', 'Fitness and exercise equipment', NULL),
+(5, 'Grocery', 'Food and grocery items', NULL),
+(6, 'Home', 'Home and living products', NULL),
+(7, 'Sports', 'Sports and outdoor equipment', NULL),
+(8, 'Audio', 'Audio equipment and speakers', 1),
+(9, 'Wearables', 'Smart watches and wearables', 1),
+(10, 'Computers', 'Computer accessories and peripherals', 1);
+
+INSERT INTO ecommerce_reviews (id, user_id, product_id, rating, comment, created_at) VALUES
+(1, 1, 1, 5, 'Excellent sound quality and very comfortable!', '2025-01-16 10:00:00'),
+(2, 2, 1, 4, 'Great headphones but battery life could be better', '2025-01-17 14:30:00'),
+(3, 3, 2, 5, 'Amazing smartwatch! All the features I need', '2025-01-18 09:15:00'),
+(4, 4, 3, 4, 'Solid build quality, very stable', '2025-01-19 16:00:00'),
+(5, 5, 4, 5, 'Perfect hub for my MacBook setup', '2025-01-20 11:30:00'),
+(6, 6, 5, 5, 'Best keyboard I have ever used for gaming', '2025-01-21 13:45:00'),
+(7, 7, 6, 4, 'Very ergonomic, helped with wrist pain', '2025-01-22 10:20:00'),
+(8, 8, 7, 5, 'Crystal clear video quality for meetings', '2025-01-23 15:10:00'),
+(9, 9, 8, 5, 'Blazing fast transfer speeds!', '2025-01-24 09:00:00'),
+(10, 10, 9, 4, 'Great power bank, charges quickly', '2025-01-25 14:00:00'),
+(11, 11, 10, 5, 'Works perfectly with my iPhone', '2025-01-26 16:30:00'),
+(12, 12, 11, 4, 'Very comfortable for running', '2025-01-27 11:15:00'),
+(13, 13, 12, 5, 'Beautiful leather, excellent quality', '2025-01-28 10:45:00'),
+(14, 14, 13, 4, 'Great sunglasses, very stylish', '2025-01-29 13:20:00'),
+(15, 15, 14, 5, 'Perfect size for weekend trips', '2025-01-30 15:50:00');
+
+-- ERP Module
+CREATE TABLE erp_departments (
+  id INTEGER PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  code VARCHAR(20) UNIQUE NOT NULL,
+  location VARCHAR(100),
+  budget DECIMAL(15, 2),
   manager_id INTEGER,
-  location TEXT
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 职位表
-CREATE TABLE jobs (
-  job_id TEXT PRIMARY KEY,
-  job_title TEXT NOT NULL,
-  min_salary REAL,
-  max_salary REAL
+CREATE TABLE erp_jobs (
+  id INTEGER PRIMARY KEY,
+  title VARCHAR(100) NOT NULL,
+  department_id INTEGER NOT NULL,
+  salary_min DECIMAL(10, 2),
+  salary_max DECIMAL(10, 2),
+  description TEXT,
+  FOREIGN KEY (department_id) REFERENCES erp_departments(id)
 );
 
--- 员工表
-CREATE TABLE employees (
-  emp_id INTEGER PRIMARY KEY,
-  first_name TEXT NOT NULL,
-  last_name TEXT NOT NULL,
-  email TEXT UNIQUE,
-  phone TEXT,
-  hire_date TEXT,
-  job_id TEXT,
-  salary REAL,
-  dept_id INTEGER,
-  FOREIGN KEY (job_id) REFERENCES jobs(job_id),
-  FOREIGN KEY (dept_id) REFERENCES departments(dept_id)
+CREATE TABLE erp_employees (
+  id INTEGER PRIMARY KEY,
+  first_name VARCHAR(100) NOT NULL,
+  last_name VARCHAR(100) NOT NULL,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  phone VARCHAR(20),
+  hire_date DATE NOT NULL,
+  job_id INTEGER NOT NULL,
+  department_id INTEGER NOT NULL,
+  manager_id INTEGER,
+  salary DECIMAL(10, 2) NOT NULL,
+  status VARCHAR(20) DEFAULT 'active',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (job_id) REFERENCES erp_jobs(id),
+  FOREIGN KEY (department_id) REFERENCES erp_departments(id),
+  FOREIGN KEY (manager_id) REFERENCES erp_employees(id)
 );
 
--- 项目表
-CREATE TABLE projects (
-  proj_id INTEGER PRIMARY KEY,
-  proj_name TEXT NOT NULL,
-  start_date TEXT,
-  end_date TEXT,
-  budget REAL,
-  status TEXT
+CREATE TABLE erp_projects (
+  id INTEGER PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  description TEXT,
+  start_date DATE NOT NULL,
+  end_date DATE,
+  budget DECIMAL(15, 2),
+  status VARCHAR(50) DEFAULT 'planning',
+  department_id INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (department_id) REFERENCES erp_departments(id)
 );
 
--- 员工项目关系表
-CREATE TABLE employee_projects (
-  emp_id INTEGER,
-  proj_id INTEGER,
-  hours_spent INTEGER,
-  role TEXT,
-  PRIMARY KEY (emp_id, proj_id),
-  FOREIGN KEY (emp_id) REFERENCES employees(emp_id),
-  FOREIGN KEY (proj_id) REFERENCES projects(proj_id)
+CREATE TABLE erp_employee_projects (
+  id INTEGER PRIMARY KEY,
+  employee_id INTEGER NOT NULL,
+  project_id INTEGER NOT NULL,
+  role VARCHAR(100),
+  assigned_date DATE NOT NULL,
+  hours_allocated INTEGER,
+  FOREIGN KEY (employee_id) REFERENCES erp_employees(id),
+  FOREIGN KEY (project_id) REFERENCES erp_projects(id)
 );
 
--- 薪资调整日志
-CREATE TABLE salary_history (
-  history_id INTEGER PRIMARY KEY,
-  emp_id INTEGER,
-  old_salary REAL,
-  new_salary REAL,
-  change_date TEXT,
+CREATE TABLE erp_salary_history (
+  id INTEGER PRIMARY KEY,
+  employee_id INTEGER NOT NULL,
+  old_salary DECIMAL(10, 2),
+  new_salary DECIMAL(10, 2) NOT NULL,
+  change_date DATE NOT NULL,
   reason TEXT,
-  FOREIGN KEY (emp_id) REFERENCES employees(emp_id)
+  FOREIGN KEY (employee_id) REFERENCES erp_employees(id)
 );
 
--- 插入职位
-INSERT INTO jobs VALUES ('CEO', 'Chief Executive Officer', 50000, 100000);
-INSERT INTO jobs VALUES ('CTO', 'Chief Technology Officer', 40000, 80000);
-INSERT INTO jobs VALUES ('DEV_LEAD', 'Senior Developer Lead', 30000, 60000);
-INSERT INTO jobs VALUES ('DEV', 'Software Developer', 15000, 35000);
-INSERT INTO jobs VALUES ('HR_MGR', 'HR Manager', 12000, 25000);
-INSERT INTO jobs VALUES ('SALES_DIR', 'Sales Director', 20000, 50000);
-INSERT INTO jobs VALUES ('QA', 'QA Engineer', 10000, 22000);
+-- ERP Data
+INSERT INTO erp_departments (id, name, code, location, budget, manager_id) VALUES
+(1, 'Engineering', 'ENG', 'Building A, Floor 3', 2500000.00, 1),
+(2, 'Human Resources', 'HR', 'Building B, Floor 1', 800000.00, 8),
+(3, 'Finance', 'FIN', 'Building A, Floor 2', 1200000.00, 10),
+(4, 'Marketing', 'MKT', 'Building C, Floor 1', 950000.00, 13),
+(5, 'Sales', 'SLS', 'Building C, Floor 2', 1800000.00, 16),
+(6, 'Operations', 'OPS', 'Building D, Floor 1', 1500000.00, 19),
+(7, 'Research & Development', 'RND', 'Building A, Floor 4', 2100000.00, 22),
+(8, 'Customer Support', 'CSU', 'Building B, Floor 2', 650000.00, 25),
+(9, 'Legal', 'LGL', 'Building A, Floor 1', 750000.00, 27),
+(10, 'IT Infrastructure', 'ITI', 'Building D, Floor 2', 1100000.00, 29);
 
--- 插入部门
-INSERT INTO departments VALUES (10, 'Executive', 1, 'Beijing');
-INSERT INTO departments VALUES (20, 'Engineering', 2, 'Shanghai');
-INSERT INTO departments VALUES (30, 'Sales', 6, 'Guangzhou');
-INSERT INTO departments VALUES (40, 'Human Resources', 5, 'Shenzhen');
-INSERT INTO departments VALUES (50, 'Marketing', NULL, 'Hangzhou');
+INSERT INTO erp_jobs (id, title, department_id, salary_min, salary_max, description) VALUES
+(1, 'Senior Software Engineer', 1, 95000.00, 130000.00, 'Lead development of core products'),
+(2, 'Software Engineer', 1, 70000.00, 95000.00, 'Develop and maintain software applications'),
+(3, 'DevOps Engineer', 1, 80000.00, 110000.00, 'Manage CI/CD pipelines and infrastructure'),
+(4, 'QA Engineer', 1, 60000.00, 85000.00, 'Test and ensure product quality'),
+(5, 'HR Manager', 2, 90000.00, 120000.00, 'Manage HR operations and team'),
+(6, 'HR Specialist', 2, 55000.00, 75000.00, 'Handle employee relations and recruiting'),
+(7, 'Financial Analyst', 3, 65000.00, 90000.00, 'Analyze financial data and reports'),
+(8, 'Controller', 3, 100000.00, 140000.00, 'Oversee accounting operations'),
+(9, 'Marketing Manager', 4, 85000.00, 115000.00, 'Lead marketing campaigns and strategy'),
+(10, 'Marketing Specialist', 4, 55000.00, 80000.00, 'Execute marketing initiatives'),
+(11, 'Sales Manager', 5, 90000.00, 130000.00, 'Lead sales team and strategy'),
+(12, 'Sales Representative', 5, 50000.00, 80000.00, 'Generate sales and client relationships'),
+(13, 'Operations Manager', 6, 85000.00, 115000.00, 'Manage operational processes'),
+(14, 'Supply Chain Analyst', 6, 60000.00, 85000.00, 'Optimize supply chain operations'),
+(15, 'R&D Scientist', 7, 80000.00, 120000.00, 'Conduct research and development'),
+(16, 'Support Manager', 8, 70000.00, 95000.00, 'Lead customer support team'),
+(17, 'Support Specialist', 8, 45000.00, 65000.00, 'Provide customer support services'),
+(18, 'Legal Counsel', 9, 110000.00, 150000.00, 'Provide legal advice and representation'),
+(19, 'IT Manager', 10, 95000.00, 130000.00, 'Manage IT infrastructure and team'),
+(20, 'System Administrator', 10, 70000.00, 95000.00, 'Maintain IT systems and networks');
 
--- 插入员工
-INSERT INTO employees (emp_id, first_name, last_name, email, phone, hire_date, job_id, salary, dept_id) VALUES
-(1, 'John', 'Doe', 'john.doe@enterprise.com', '13800000001', '2020-01-01', 'CEO', 95000, 10),
-(2, 'Jane', 'Smith', 'jane.smith@enterprise.com', '13800000002', '2020-02-15', 'CTO', 75000, 20),
-(3, 'Michael', 'Brown', 'm.brown@enterprise.com', '13800000003', '2021-03-10', 'DEV_LEAD', 55000, 20),
-(4, 'Emily', 'Davis', 'e.davis@enterprise.com', '13800000004', '2022-05-20', 'DEV', 28000, 20),
-(5, 'Sarah', 'Wilson', 's.wilson@enterprise.com', '13800000005', '2021-01-10', 'HR_MGR', 22000, 40),
-(6, 'Chris', 'Evans', 'c.evans@enterprise.com', '13800000006', '2021-11-20', 'SALES_DIR', 45000, 30),
-(7, 'David', 'Miller', 'd.miller@enterprise.com', '13800000007', '2023-01-15', 'DEV', 20000, 20),
-(8, 'Mark', 'Taylor', 'm.taylor@enterprise.com', '13800000008', '2022-08-01', 'QA', 18000, 20),
-(9, 'Lucy', 'Liu', 'l.liu@enterprise.com', '13800000009', '2023-04-01', 'QA', 15000, 20),
-(10, 'Kevin', 'Durant', 'k.durant@enterprise.com', '13800000010', '2023-06-12', 'DEV', 19000, 50);
+INSERT INTO erp_employees (id, first_name, last_name, email, phone, hire_date, job_id, department_id, manager_id, salary, status) VALUES
+(1, 'Michael', 'Chen', 'michael.chen@company.com', '+1-555-1001', '2018-03-15', 1, 1, NULL, 125000.00, 'active'),
+(2, 'Sarah', 'Johnson', 'sarah.johnson@company.com', '+1-555-1002', '2019-06-01', 2, 1, 1, 85000.00, 'active'),
+(3, 'David', 'Kim', 'david.kim@company.com', '+1-555-1003', '2020-01-10', 2, 1, 1, 78000.00, 'active'),
+(4, 'Emily', 'Davis', 'emily.davis@company.com', '+1-555-1004', '2020-08-20', 2, 1, 1, 82000.00, 'active'),
+(5, 'James', 'Wilson', 'james.wilson@company.com', '+1-555-1005', '2021-03-05', 3, 1, 1, 95000.00, 'active'),
+(6, 'Lisa', 'Anderson', 'lisa.anderson@company.com', '+1-555-1006', '2021-11-15', 4, 1, 1, 72000.00, 'active'),
+(7, 'Robert', 'Taylor', 'robert.taylor@company.com', '+1-555-1007', '2019-09-01', 2, 1, 1, 88000.00, 'active'),
+(8, 'Jennifer', 'Brown', 'jennifer.brown@company.com', '+1-555-1008', '2017-05-20', 5, 2, NULL, 105000.00, 'active'),
+(9, 'William', 'Martinez', 'william.martinez@company.com', '+1-555-1009', '2020-02-14', 6, 2, 8, 65000.00, 'active'),
+(10, 'Elizabeth', 'Garcia', 'elizabeth.garcia@company.com', '+1-555-1010', '2018-11-01', 8, 3, NULL, 125000.00, 'active'),
+(11, 'Christopher', 'Lee', 'christopher.lee@company.com', '+1-555-1011', '2019-07-22', 7, 3, 10, 78000.00, 'active'),
+(12, 'Amanda', 'Miller', 'amanda.miller@company.com', '+1-555-1012', '2021-04-08', 7, 3, 10, 70000.00, 'active'),
+(13, 'Daniel', 'Jackson', 'daniel.jackson@company.com', '+1-555-1013', '2018-01-15', 9, 4, NULL, 100000.00, 'active'),
+(14, 'Michelle', 'White', 'michelle.white@company.com', '+1-555-1014', '2020-09-10', 10, 4, 13, 68000.00, 'active'),
+(15, 'Kevin', 'Harris', 'kevin.harris@company.com', '+1-555-1015', '2021-06-01', 10, 4, 13, 62000.00, 'active'),
+(16, 'Jessica', 'Clark', 'jessica.clark@company.com', '+1-555-1016', '2017-12-05', 11, 5, NULL, 115000.00, 'active'),
+(17, 'Brian', 'Lewis', 'brian.lewis@company.com', '+1-555-1017', '2019-04-18', 12, 5, 16, 72000.00, 'active'),
+(18, 'Nicole', 'Walker', 'nicole.walker@company.com', '+1-555-1018', '2020-10-25', 12, 5, 16, 65000.00, 'active'),
+(19, 'Steven', 'Hall', 'steven.hall@company.com', '+1-555-1019', '2018-08-12', 13, 6, NULL, 100000.00, 'active'),
+(20, 'Stephanie', 'Allen', 'stephanie.allen@company.com', '+1-555-1020', '2021-01-30', 14, 6, 19, 75000.00, 'active'),
+(21, 'Jason', 'Young', 'jason.young@company.com', '+1-555-1021', '2019-11-08', 2, 1, 1, 92000.00, 'active'),
+(22, 'Rachel', 'King', 'rachel.king@company.com', '+1-555-1022', '2018-04-22', 15, 7, NULL, 105000.00, 'active'),
+(23, 'Tyler', 'Wright', 'tyler.wright@company.com', '+1-555-1023', '2020-07-15', 15, 7, 22, 92000.00, 'active'),
+(24, 'Victoria', 'Lopez', 'victoria.lopez@company.com', '+1-555-1024', '2021-02-28', 4, 1, 1, 68000.00, 'active'),
+(25, 'Brandon', 'Hill', 'brandon.hill@company.com', '+1-555-1025', '2019-03-10', 16, 8, NULL, 85000.00, 'active'),
+(26, 'Katherine', 'Scott', 'katherine.scott@company.com', '+1-555-1026', '2020-06-05', 17, 8, 25, 55000.00, 'active'),
+(27, 'Andrew', 'Green', 'andrew.green@company.com', '+1-555-1027', '2017-09-18', 18, 9, NULL, 135000.00, 'active'),
+(28, 'Laura', 'Adams', 'laura.adams@company.com', '+1-555-1028', '2020-12-01', 6, 2, 8, 60000.00, 'active'),
+(29, 'Mark', 'Baker', 'mark.baker@company.com', '+1-555-1029', '2018-06-25', 19, 10, NULL, 115000.00, 'active'),
+(30, 'Samantha', 'Nelson', 'samantha.nelson@company.com', '+1-555-1030', '2021-08-12', 20, 10, 29, 82000.00, 'active');
 
--- 插入项目
-INSERT INTO projects VALUES (101, 'Apollo Project', '2023-01-01', '2023-12-31', 500000, 'COMPLETED');
-INSERT INTO projects VALUES (102, 'Zeus Platform', '2023-06-01', '2024-06-30', 1200000, 'IN_PROGRESS');
-INSERT INTO projects VALUES (103, 'Global Sales Expansion', '2024-01-15', '2024-12-31', 300000, 'PLANNING');
-INSERT INTO projects VALUES (104, 'HR System Upgrade', '2024-02-01', '2024-05-31', 150000, 'IN_PROGRESS');
+INSERT INTO erp_projects (id, name, description, start_date, end_date, budget, status, department_id) VALUES
+(1, 'Cloud Migration', 'Migrate all on-premise systems to cloud infrastructure', '2025-01-01', '2025-12-31', 500000.00, 'in_progress', 1),
+(2, 'Mobile App Redesign', 'Complete redesign of mobile application UI/UX', '2025-02-01', '2025-08-31', 250000.00, 'planning', 1),
+(3, 'Employee Wellness Program', 'Implement comprehensive employee wellness initiative', '2025-03-01', '2025-11-30', 100000.00, 'planning', 2),
+(4, 'Financial System Upgrade', 'Upgrade financial reporting and analysis systems', '2025-01-15', '2025-09-30', 180000.00, 'in_progress', 3),
+(5, 'Brand Campaign Q2', 'Major brand awareness campaign for Q2', '2025-04-01', '2025-06-30', 300000.00, 'planning', 4),
+(6, 'Sales Automation Tool', 'Implement new sales automation platform', '2025-03-15', '2025-10-31', 200000.00, 'in_progress', 5),
+(7, 'Supply Chain Optimization', 'Optimize warehouse and logistics operations', '2025-02-15', '2025-08-31', 350000.00, 'in_progress', 6),
+(8, 'AI Research Initiative', 'Research and develop AI-powered features', '2025-01-01', '2025-12-31', 750000.00, 'in_progress', 7),
+(9, 'Customer Portal V2', 'Build next-generation customer self-service portal', '2025-05-01', '2025-11-30', 280000.00, 'planning', 8),
+(10, 'Compliance Framework Update', 'Update legal and compliance documentation', '2025-04-01', '2025-07-31', 75000.00, 'planning', 9);
 
--- 插入项目参与关系
-INSERT INTO employee_projects VALUES (2, 101, 150, 'Technical Architect');
-INSERT INTO employee_projects VALUES (3, 101, 400, 'Tech Lead');
-INSERT INTO employee_projects VALUES (4, 101, 800, 'Senior Developer');
-INSERT INTO employee_projects VALUES (8, 101, 300, 'Lead QA');
-INSERT INTO employee_projects VALUES (3, 102, 200, 'Architect');
-INSERT INTO employee_projects VALUES (4, 102, 500, 'Backend Developer');
-INSERT INTO employee_projects VALUES (7, 102, 600, 'Frontend Developer');
-INSERT INTO employee_projects VALUES (10, 102, 450, 'Developer');
-INSERT INTO employee_projects VALUES (6, 103, 100, 'Project Sponsor');
-INSERT INTO employee_projects VALUES (5, 104, 200, 'HR Coordinator');
+INSERT INTO erp_employee_projects (id, employee_id, project_id, role, assigned_date, hours_allocated) VALUES
+(1, 1, 1, 'Project Lead', '2025-01-01', 40),
+(2, 2, 1, 'Senior Developer', '2025-01-01', 32),
+(3, 3, 2, 'Lead Developer', '2025-02-01', 40),
+(4, 4, 2, 'Developer', '2025-02-01', 32),
+(5, 5, 1, 'DevOps Lead', '2025-01-01', 32),
+(6, 6, 2, 'QA Lead', '2025-02-01', 24),
+(7, 7, 1, 'Developer', '2025-01-01', 32),
+(8, 8, 3, 'Project Sponsor', '2025-03-01', 8),
+(9, 9, 3, 'HR Lead', '2025-03-01', 24),
+(10, 10, 4, 'Project Sponsor', '2025-01-15', 8),
+(11, 11, 4, 'Financial Analyst', '2025-01-15', 32),
+(12, 12, 4, 'Analyst', '2025-01-15', 24),
+(13, 13, 5, 'Marketing Lead', '2025-04-01', 40),
+(14, 14, 5, 'Marketing Specialist', '2025-04-01', 32),
+(15, 15, 5, 'Content Creator', '2025-04-01', 24),
+(16, 16, 6, 'Sales Lead', '2025-03-15', 32),
+(17, 17, 6, 'Sales Rep', '2025-03-15', 24),
+(18, 18, 6, 'Sales Rep', '2025-03-15', 24),
+(19, 19, 7, 'Operations Lead', '2025-02-15', 40),
+(20, 20, 7, 'Analyst', '2025-02-15', 32),
+(21, 21, 1, 'Developer', '2025-01-01', 32),
+(22, 22, 8, 'R&D Lead', '2025-01-01', 40),
+(23, 23, 8, 'Scientist', '2025-01-01', 32),
+(24, 24, 2, 'QA Engineer', '2025-02-01', 24),
+(25, 25, 9, 'Support Lead', '2025-05-01', 32);
 
--- 插入薪资调整记录
-INSERT INTO salary_history (emp_id, old_salary, new_salary, change_date, reason) VALUES
-(4, 25000, 28000, '2023-07-01', 'Annual Performance Review'),
-(7, 18000, 20000, '2023-12-15', 'Promotion to Mid-Level'),
-(3, 50000, 55000, '2024-01-01', 'Market Adjustment');
+INSERT INTO erp_salary_history (id, employee_id, old_salary, new_salary, change_date, reason) VALUES
+(1, 1, 110000.00, 125000.00, '2024-03-15', 'Annual promotion and merit increase'),
+(2, 2, 75000.00, 85000.00, '2024-07-01', 'Promotion to senior level'),
+(3, 3, 70000.00, 78000.00, '2024-03-10', 'Annual merit increase'),
+(4, 4, 75000.00, 82000.00, '2024-03-10', 'Annual merit increase'),
+(5, 5, 85000.00, 95000.00, '2024-06-01', 'Market adjustment'),
+(6, 6, 65000.00, 72000.00, '2024-03-20', 'Annual merit increase'),
+(7, 7, 80000.00, 88000.00, '2024-03-10', 'Annual merit increase'),
+(8, 8, 95000.00, 105000.00, '2024-05-20', 'Promotion to HR Manager'),
+(9, 9, 58000.00, 65000.00, '2024-03-14', 'Annual merit increase'),
+(10, 10, 115000.00, 125000.00, '2024-01-01', 'Promotion to Controller'),
+(11, 11, 70000.00, 78000.00, '2024-03-22', 'Annual merit increase'),
+(12, 12, 62000.00, 70000.00, '2024-04-08', 'Promotion to Senior Analyst'),
+(13, 13, 90000.00, 100000.00, '2024-01-15', 'Promotion to Marketing Manager'),
+(14, 14, 60000.00, 68000.00, '2024-03-10', 'Annual merit increase'),
+(15, 16, 105000.00, 115000.00, '2024-12-05', 'Promotion to Sales Director');
+
+-- Healthcare Module
+CREATE TABLE hms_departments (
+  id INTEGER PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  building VARCHAR(100),
+  phone VARCHAR(20),
+  head_doctor_id INTEGER
+);
+
+CREATE TABLE hms_doctors (
+  id INTEGER PRIMARY KEY,
+  first_name VARCHAR(100) NOT NULL,
+  last_name VARCHAR(100) NOT NULL,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  phone VARCHAR(20),
+  specialty VARCHAR(100) NOT NULL,
+  license_number VARCHAR(50) UNIQUE NOT NULL,
+  hire_date DATE NOT NULL,
+  department_id INTEGER,
+  consultation_fee DECIMAL(10, 2),
+  is_active BOOLEAN DEFAULT 1,
+  FOREIGN KEY (department_id) REFERENCES hms_departments(id)
+);
+
+CREATE TABLE hms_patients (
+  id INTEGER PRIMARY KEY,
+  first_name VARCHAR(100) NOT NULL,
+  last_name VARCHAR(100) NOT NULL,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  phone VARCHAR(20),
+  date_of_birth DATE NOT NULL,
+  gender VARCHAR(20),
+  address TEXT,
+  emergency_contact VARCHAR(200),
+  insurance_provider VARCHAR(100),
+  insurance_number VARCHAR(100),
+  registration_date DATE NOT NULL,
+  is_active BOOLEAN DEFAULT 1
+);
+
+CREATE TABLE hms_appointments (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL,
+  doctor_id INTEGER NOT NULL,
+  appointment_date DATETIME NOT NULL,
+  status VARCHAR(50) DEFAULT 'scheduled',
+  type VARCHAR(50),
+  reason TEXT,
+  notes TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (patient_id) REFERENCES hms_patients(id),
+  FOREIGN KEY (doctor_id) REFERENCES hms_doctors(id)
+);
+
+CREATE TABLE hms_medical_records (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL,
+  doctor_id INTEGER NOT NULL,
+  appointment_id INTEGER,
+  diagnosis TEXT,
+  symptoms TEXT,
+  treatment_plan TEXT,
+  prescriptions TEXT,
+  vital_signs TEXT,
+  notes TEXT,
+  record_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (patient_id) REFERENCES hms_patients(id),
+  FOREIGN KEY (doctor_id) REFERENCES hms_doctors(id),
+  FOREIGN KEY (appointment_id) REFERENCES hms_appointments(id)
+);
+
+CREATE TABLE hms_medications (
+  id INTEGER PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  generic_name VARCHAR(255),
+  category VARCHAR(100),
+  dosage_form VARCHAR(100),
+  strength VARCHAR(50),
+  manufacturer VARCHAR(255),
+  side_effects TEXT,
+  contraindications TEXT,
+  price DECIMAL(10, 2),
+  is_active BOOLEAN DEFAULT 1
+);
+
+CREATE TABLE hms_prescriptions (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL,
+  doctor_id INTEGER NOT NULL,
+  medication_id INTEGER NOT NULL,
+  dosage VARCHAR(100) NOT NULL,
+  frequency VARCHAR(100) NOT NULL,
+  duration VARCHAR(100),
+  instructions TEXT,
+  prescribed_date DATE NOT NULL,
+  end_date DATE,
+  status VARCHAR(50) DEFAULT 'active',
+  FOREIGN KEY (patient_id) REFERENCES hms_patients(id),
+  FOREIGN KEY (doctor_id) REFERENCES hms_doctors(id),
+  FOREIGN KEY (medication_id) REFERENCES hms_medications(id)
+);
+
+CREATE TABLE hms_billings (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL,
+  appointment_id INTEGER,
+  description TEXT,
+  amount DECIMAL(10, 2) NOT NULL,
+  status VARCHAR(50) DEFAULT 'pending',
+  billing_date DATE NOT NULL,
+  due_date DATE,
+  paid_date DATE,
+  payment_method VARCHAR(50),
+  invoice_number VARCHAR(100) UNIQUE,
+  FOREIGN KEY (patient_id) REFERENCES hms_patients(id),
+  FOREIGN KEY (appointment_id) REFERENCES hms_appointments(id)
+);
+
+-- Healthcare Data
+INSERT INTO hms_departments (id, name, building, phone, head_doctor_id) VALUES
+(1, 'Cardiology', 'Main Building A', '+1-555-2001', 1),
+(2, 'Neurology', 'Main Building A', '+1-555-2002', 4),
+(3, 'Pediatrics', 'Main Building B', '+1-555-2003', 7),
+(4, 'Orthopedics', 'Main Building A', '+1-555-2004', 10),
+(5, 'Dermatology', 'Main Building B', '+1-555-2005', 13),
+(6, 'General Medicine', 'Main Building A', '+1-555-2006', 1),
+(7, 'Surgery', 'Main Building C', '+1-555-2007', 4),
+(8, 'Radiology', 'Main Building C', '+1-555-2008', 7),
+(9, 'Emergency', 'Emergency Wing', '+1-555-2009', 10),
+(10, 'Pharmacy', 'Main Building B', '+1-555-2010', 13);
+
+INSERT INTO hms_doctors (id, first_name, last_name, email, phone, specialty, license_number, hire_date, department_id, consultation_fee, is_active) VALUES
+(1, 'Robert', 'Smith', 'robert.smith@hospital.com', '+1-555-2101', 'Cardiology', 'MD-CARD-001', '2010-05-15', 1, 200.00, 1),
+(2, 'Sarah', 'Johnson', 'sarah.johnson@hospital.com', '+1-555-2102', 'Cardiology', 'MD-CARD-002', '2015-08-20', 1, 180.00, 1),
+(3, 'Michael', 'Williams', 'michael.williams@hospital.com', '+1-555-2103', 'Neurology', 'MD-NEUR-001', '2012-03-10', 2, 220.00, 1),
+(4, 'Jennifer', 'Brown', 'jennifer.brown@hospital.com', '+1-555-2104', 'Neurology', 'MD-NEUR-002', '2018-01-05', 2, 200.00, 1),
+(5, 'David', 'Jones', 'david.jones@hospital.com', '+1-555-2105', 'Pediatrics', 'MD-PED-001', '2011-07-22', 3, 150.00, 1),
+(6, 'Lisa', 'Garcia', 'lisa.garcia@hospital.com', '+1-555-2106', 'Pediatrics', 'MD-PED-002', '2019-04-15', 3, 140.00, 1),
+(7, 'James', 'Miller', 'james.miller@hospital.com', '+1-555-2107', 'Orthopedics', 'MD-ORTH-001', '2009-11-08', 4, 250.00, 1),
+(8, 'Emily', 'Davis', 'emily.davis@hospital.com', '+1-555-2108', 'Orthopedics', 'MD-ORTH-002', '2016-09-01', 4, 230.00, 1),
+(9, 'William', 'Martinez', 'william.martinez@hospital.com', '+1-555-2109', 'Dermatology', 'MD-DERM-001', '2013-02-14', 5, 160.00, 1),
+(10, 'Amanda', 'Anderson', 'amanda.anderson@hospital.com', '+1-555-2110', 'Dermatology', 'MD-DERM-002', '2020-06-30', 5, 150.00, 1),
+(11, 'Christopher', 'Taylor', 'christopher.taylor@hospital.com', '+1-555-2111', 'General Medicine', 'MD-GEN-001', '2008-12-01', 6, 120.00, 1),
+(12, 'Michelle', 'Thomas', 'michelle.thomas@hospital.com', '+1-555-2112', 'General Medicine', 'MD-GEN-002', '2017-05-18', 6, 110.00, 1),
+(13, 'Daniel', 'Jackson', 'daniel.jackson@hospital.com', '+1-555-2113', 'Surgery', 'MD-SURG-001', '2007-08-25', 7, 300.00, 1),
+(14, 'Jessica', 'White', 'jessica.white@hospital.com', '+1-555-2114', 'Surgery', 'MD-SURG-002', '2014-03-12', 7, 280.00, 1),
+(15, 'Kevin', 'Harris', 'kevin.harris@hospital.com', '+1-555-2115', 'Radiology', 'MD-RAD-001', '2010-10-05', 8, 200.00, 1);
+
+INSERT INTO hms_patients (id, first_name, last_name, email, phone, date_of_birth, gender, address, emergency_contact, insurance_provider, insurance_number, registration_date) VALUES
+(1, 'John', 'Adams', 'john.adams@email.com', '+1-555-3001', '1985-03-15', 'Male', '123 Oak Street, Springfield', 'Mary Adams +1-555-3101', 'Blue Cross', 'BC-12345', '2023-01-10'),
+(2, 'Emma', 'Baker', 'emma.baker@email.com', '+1-555-3002', '1990-07-22', 'Female', '456 Maple Ave, Riverside', 'Tom Baker +1-555-3102', 'Aetna', 'AET-67890', '2023-02-15'),
+(3, 'Liam', 'Clark', 'liam.clark@email.com', '+1-555-3003', '1978-11-08', 'Male', '789 Pine Road, Georgetown', 'Sarah Clark +1-555-3103', 'United Health', 'UH-11111', '2023-03-20'),
+(4, 'Olivia', 'Davis', 'olivia.davis@email.com', '+1-555-3004', '1995-05-30', 'Female', '321 Elm Street, Arlington', 'Robert Davis +1-555-3104', 'Cigna', 'CIG-22222', '2023-04-05'),
+(5, 'Noah', 'Evans', 'noah.evans@email.com', '+1-555-3005', '1982-09-12', 'Male', '654 Cedar Lane, Madison', 'Emily Evans +1-555-3105', 'Blue Cross', 'BC-33333', '2023-05-18'),
+(6, 'Ava', 'Foster', 'ava.foster@email.com', '+1-555-3006', '2000-01-25', 'Female', '987 Birch Way, Franklin', 'James Foster +1-555-3106', 'Aetna', 'AET-44444', '2023-06-22'),
+(7, 'Sophia', 'Green', 'sophia.green@email.com', '+1-555-3007', '1988-04-18', 'Female', '147 Walnut Drive, Clinton', 'David Green +1-555-3107', 'United Health', 'UH-55555', '2023-07-30'),
+(8, 'Mason', 'Hill', 'mason.hill@email.com', '+1-555-3008', '1975-12-03', 'Male', '258 Aspen Court, Chester', 'Lisa Hill +1-555-3108', 'Cigna', 'CIG-66666', '2023-08-14'),
+(9, 'Isabella', 'Irwin', 'isabella.irwin@email.com', '+1-555-3009', '1992-06-10', 'Female', '369 Redwood Lane, Dover', 'Mark Irwin +1-555-3109', 'Blue Cross', 'BC-77777', '2023-09-25'),
+(10, 'Ethan', 'James', 'ethan.james@email.com', '+1-555-3010', '1987-08-28', 'Male', '480 Sequoia Street, Ely', 'Nancy James +1-555-3110', 'Aetna', 'AET-88888', '2023-10-11'),
+(11, 'Mia', 'King', 'mia.king@email.com', '+1-555-3011', '1998-02-14', 'Female', '591 Sycamore Ave, Fulton', 'Paul King +1-555-3111', 'United Health', 'UH-99999', '2023-11-20'),
+(12, 'Lucas', 'Lewis', 'lucas.lewis@email.com', '+1-555-3012', '1983-10-07', 'Male', '702 Poplar Road, Grafton', 'Rachel Lewis +1-555-3112', 'Cigna', 'CIG-10101', '2023-12-05'),
+(13, 'Charlotte', 'Morris', 'charlotte.morris@email.com', '+1-555-3013', '1996-07-04', 'Female', '813 Willow Lane, Hyde', 'Steven Morris +1-555-3113', 'Blue Cross', 'BC-12121', '2024-01-15'),
+(14, 'Aiden', 'Nelson', 'aiden.nelson@email.com', '+1-555-3014', '1991-11-21', 'Male', '924 Chestnut Dr, Irving', 'Tara Nelson +1-555-3114', 'Aetna', 'AET-13131', '2024-02-28'),
+(15, 'Harper', 'Owens', 'harper.owens@email.com', '+1-555-3015', '2005-09-15', 'Female', '135 Hickory St, Jordan', 'Victor Owens +1-555-3115', 'United Health', 'UH-14141', '2024-03-10'),
+(16, 'Jackson', 'Parker', 'jackson.parker@email.com', '+1-555-3016', '1979-04-22', 'Male', '246 Juniper Way, Kent', 'Wendy Parker +1-555-3116', 'Cigna', 'CIG-15151', '2024-04-05'),
+(17, 'Evelyn', 'Quinn', 'evelyn.quinn@email.com', '+1-555-3017', '1993-12-08', 'Female', '357 Magnolia Ave, Lewis', 'Xavier Quinn +1-555-3117', 'Blue Cross', 'BC-16161', '2024-05-18'),
+(18, 'Sebastian', 'Reed', 'sebastian.reed@email.com', '+1-555-3018', '1986-06-30', 'Male', '468 Dogwood Rd, Mills', 'Yvonne Reed +1-555-3118', 'Aetna', 'AET-17171', '2024-06-25'),
+(19, 'Abigail', 'Stewart', 'abigail.stewart@email.com', '+1-555-3019', '1999-03-17', 'Female', '579 Cypress Lane, Nash', 'Zachary Stewart +1-555-3119', 'United Health', 'UH-18181', '2024-07-30'),
+(20, 'Cameron', 'Tucker', 'cameron.tucker@email.com', '+1-555-3020', '1980-08-05', 'Male', '680 Ash Street, Ogden', 'Angela Tucker +1-555-3120', 'Cigna', 'CIG-19191', '2024-08-12'),
+(21, 'Madison', 'Underwood', 'madison.underwood@email.com', '+1-555-3021', '1994-05-25', 'Female', '791 Spruce Blvd, Park', 'Brian Underwood +1-555-3121', 'Blue Cross', 'BC-20202', '2024-09-20'),
+(22, 'Benjamin', 'Vance', 'benjamin.vance@email.com', '+1-555-3022', '1981-11-11', 'Male', '802 Elm Ave, Quincy', 'Catherine Vance +1-555-3122', 'Aetna', 'AET-21212', '2024-10-05'),
+(23, 'Scarlett', 'West', 'scarlett.west@email.com', '+1-555-3023', '1997-07-19', 'Female', '913 Maple Dr, River', 'David West +1-555-3123', 'United Health', 'UH-22222', '2024-11-15'),
+(24, 'Henry', 'Young', 'henry.young@email.com', '+1-555-3024', '1976-02-28', 'Male', '124 Oak Ln, Shore', 'Ella Young +1-555-3124', 'Cigna', 'CIG-23232', '2024-12-01'),
+(25, 'Zoe', 'Zimmerman', 'zoe.zimmerman@email.com', '+1-555-3025', '2002-10-03', 'Female', '235 Pine St, Town', 'Frank Zimmerman +1-555-3125', 'Blue Cross', 'BC-24242', '2025-01-10'),
+(26, 'Oliver', 'Brooks', 'oliver.brooks@email.com', '+1-555-3026', '1989-04-16', 'Male', '346 Cedar Rd, Union', 'Grace Brooks +1-555-3126', 'Aetna', 'AET-25252', '2025-02-14'),
+(27, 'Victoria', 'Cole', 'victoria.cole@email.com', '+1-555-3027', '1995-12-22', 'Female', '457 Birch Ave, Valley', 'Henry Cole +1-555-3127', 'United Health', 'UH-26262', '2025-03-05'),
+(28, 'Nathan', 'Daniels', 'nathan.daniels@email.com', '+1-555-3028', '1984-08-09', 'Male', '568 Elm Way, West', 'Ivy Daniels +1-555-3128', 'Cigna', 'CIG-27272', '2025-03-25'),
+(29, 'Samantha', 'Ellis', 'samantha.ellis@email.com', '+1-555-3029', '2001-06-14', 'Female', '679 Oak Blvd, York', 'Jack Ellis +1-555-3129', 'Blue Cross', 'BC-28282', '2025-04-10'),
+(30, 'Gabriel', 'Fisher', 'gabriel.fisher@email.com', '+1-555-3030', '1977-01-29', 'Male', '780 Maple St, Zion', 'Kelly Fisher +1-555-3130', 'Aetna', 'AET-29292', '2025-04-28');
+
+INSERT INTO hms_appointments (id, patient_id, doctor_id, appointment_date, status, type, reason, notes) VALUES
+(1, 1, 1, '2025-01-10 09:00:00', 'completed', 'Consultation', 'Annual heart checkup', 'Patient in good health'),
+(2, 2, 1, '2025-01-10 10:00:00', 'completed', 'Follow-up', 'Blood pressure monitoring', 'BP slightly elevated'),
+(3, 3, 2, '2025-01-10 11:00:00', 'completed', 'Consultation', 'Chest pain evaluation', 'ECG normal'),
+(4, 4, 3, '2025-01-10 14:00:00', 'completed', 'Consultation', 'Severe headaches', 'MRI scheduled'),
+(5, 5, 4, '2025-01-11 09:00:00', 'completed', 'Follow-up', 'Post-stroke rehabilitation', 'Good progress'),
+(6, 6, 5, '2025-01-11 10:00:00', 'completed', 'Consultation', 'Pediatric wellness visit', 'Vaccinations up to date'),
+(7, 7, 5, '2025-01-11 11:00:00', 'completed', 'Consultation', 'Fever and cough', 'Viral infection diagnosed'),
+(8, 8, 6, '2025-01-11 14:00:00', 'completed', 'Follow-up', 'Child development check', 'Normal development'),
+(9, 9, 7, '2025-01-12 09:00:00', 'completed', 'Consultation', 'Knee pain', 'Minor injury, PT recommended'),
+(10, 10, 8, '2025-01-12 10:00:00', 'completed', 'Consultation', 'Back pain treatment', 'Physical therapy prescribed'),
+(11, 11, 9, '2025-01-12 11:00:00', 'completed', 'Consultation', 'Skin rash evaluation', 'Eczema diagnosed'),
+(12, 12, 10, '2025-01-12 14:00:00', 'completed', 'Follow-up', 'Acne treatment review', 'Improvement noted'),
+(13, 13, 11, '2025-01-13 09:00:00', 'completed', 'Consultation', 'General illness', 'Flu symptoms'),
+(14, 14, 12, '2025-01-13 10:00:00', 'completed', 'Consultation', 'Annual checkup', 'Healthy vitals'),
+(15, 15, 13, '2025-01-13 11:00:00', 'completed', 'Consultation', 'Pre-surgery evaluation', 'Cleared for surgery'),
+(16, 16, 14, '2025-01-13 14:00:00', 'completed', 'Follow-up', 'Post-surgery check', 'Healing well'),
+(17, 17, 15, '2025-01-14 09:00:00', 'completed', 'Consultation', 'X-ray required', 'Fracture confirmed'),
+(18, 18, 1, '2025-01-14 10:00:00', 'completed', 'Emergency', 'Chest discomfort', 'No cardiac issues found'),
+(19, 19, 2, '2025-01-14 11:00:00', 'completed', 'Consultation', 'Heart palpitations', 'Stress related'),
+(20, 20, 3, '2025-01-14 14:00:00', 'completed', 'Consultation', 'Migraine treatment', 'New medication prescribed'),
+(21, 21, 4, '2025-01-15 09:00:00', 'scheduled', 'Follow-up', 'Neurology follow-up', NULL),
+(22, 22, 5, '2025-01-15 10:00:00', 'scheduled', 'Consultation', 'Child wellness visit', NULL),
+(23, 23, 6, '2025-01-15 11:00:00', 'scheduled', 'Consultation', 'Skin condition', NULL),
+(24, 24, 7, '2025-01-15 14:00:00', 'scheduled', 'Consultation', 'Joint pain', NULL),
+(25, 25, 8, '2025-01-16 09:00:00', 'scheduled', 'Consultation', 'Sports injury', NULL),
+(26, 26, 9, '2025-01-16 10:00:00', 'scheduled', 'Follow-up', 'Dermatology follow-up', NULL),
+(27, 27, 10, '2025-01-16 11:00:00', 'scheduled', 'Consultation', 'General checkup', NULL),
+(28, 28, 11, '2025-01-16 14:00:00', 'scheduled', 'Emergency', 'Acute symptoms', NULL),
+(29, 29, 12, '2025-01-17 09:00:00', 'scheduled', 'Consultation', 'Annual physical', NULL),
+(30, 30, 13, '2025-01-17 10:00:00', 'scheduled', 'Surgery', 'Scheduled procedure', NULL),
+(31, 1, 2, '2025-01-20 09:00:00', 'completed', 'Follow-up', 'Cardiac monitoring', 'Normal readings'),
+(32, 2, 3, '2025-01-20 10:00:00', 'completed', 'Consultation', 'Neurological symptoms', 'Referral to specialist'),
+(33, 3, 4, '2025-01-20 11:00:00', 'completed', 'Follow-up', 'Stroke recovery', 'Continued improvement'),
+(34, 4, 5, '2025-01-20 14:00:00', 'completed', 'Consultation', 'Pediatric care', 'Healthy child'),
+(35, 5, 7, '2025-01-21 09:00:00', 'completed', 'Consultation', 'Orthopedic evaluation', 'Physical therapy ongoing'),
+(36, 6, 8, '2025-01-21 10:00:00', 'completed', 'Follow-up', 'Treatment review', 'Progress satisfactory'),
+(37, 7, 9, '2025-01-21 11:00:00', 'completed', 'Consultation', 'Skin consultation', 'Treatment adjusted'),
+(38, 8, 11, '2025-01-21 14:00:00', 'completed', 'Emergency', 'Acute illness', 'Treated and released'),
+(39, 9, 12, '2025-01-22 09:00:00', 'completed', 'Follow-up', 'General health', 'All vitals normal'),
+(40, 10, 14, '2025-01-22 10:00:00', 'completed', 'Surgery', 'Minor procedure', 'Successful');
+
+INSERT INTO hms_medical_records (id, patient_id, doctor_id, appointment_id, diagnosis, symptoms, treatment_plan, prescriptions, vital_signs, notes) VALUES
+(1, 1, 1, 1, 'Healthy - No abnormalities', 'None reported', 'Continue current health regimen', NULL, 'BP: 120/80, HR: 72, Temp: 98.6°F', 'Annual checkup completed'),
+(2, 2, 1, 2, 'Mild hypertension', 'Elevated blood pressure', 'Diet and exercise modification, monitor BP', 'Lisinopril 10mg daily', 'BP: 140/90, HR: 78, Temp: 98.4°F', 'Follow-up in 2 weeks'),
+(3, 3, 2, 3, 'Non-cardiac chest pain', 'Chest discomfort, anxiety', 'Stress management, anxiety reduction', NULL, 'BP: 125/82, HR: 80, Temp: 98.5°F', 'ECG and stress test normal'),
+(4, 4, 3, 4, 'Chronic migraines', 'Severe headaches, nausea', 'MRI brain, neurology referral', 'Sumatriptan 50mg as needed', 'BP: 118/75, HR: 68, Temp: 98.2°F', 'MRI scheduled for Jan 20'),
+(5, 5, 4, 5, 'Post-stroke recovery - stable', 'Left side weakness', 'Continue rehabilitation, medication', 'Aspirin 81mg daily, Atorvastatin', 'BP: 130/85, HR: 72, Temp: 98.4°F', 'Good progress in mobility'),
+(6, 6, 5, 6, 'Healthy development', 'None', 'Continue vaccinations, regular checkups', NULL, 'BP: 95/60, HR: 100, Temp: 98.8°F', 'Age-appropriate development'),
+(7, 7, 5, 7, 'Upper respiratory infection', 'Fever, cough, congestion', 'Rest, fluids, symptomatic treatment', 'Acetaminophen 500mg q6h prn', 'BP: 100/65, HR: 95, Temp: 101.2°F', 'Viral etiology suspected'),
+(8, 8, 6, 8, 'Normal development', 'None', 'Continue developmental milestones monitoring', NULL, 'BP: 98/62, HR: 88, Temp: 98.6°F', 'Meeting all milestones'),
+(9, 9, 7, 9, 'Mild meniscal tear', 'Knee pain, swelling', 'RICE protocol, physical therapy', 'Ibuprofen 400mg q8h prn', 'BP: 125/80, HR: 75, Temp: 98.4°F', 'MRI confirms minor tear'),
+(10, 10, 8, 10, 'Chronic lower back pain', 'Persistent back pain', 'Physical therapy 2x/week, core strengthening', 'Cyclobenzaprine 10mg daily', 'BP: 128/82, HR: 76, Temp: 98.5°F', 'Chronic condition management'),
+(11, 11, 9, 11, 'Atopic dermatitis', 'Itchy rash on arms', 'Topical corticosteroids, moisturizers', 'Hydrocortisone cream 1%', 'BP: 115/75, HR: 72, Temp: 98.3°F', 'Chronic condition'),
+(12, 12, 10, 12, 'Acne vulgaris', 'Facial acne', 'Continue current treatment, follow-up', 'Tretinoin cream 0.025%', 'BP: 118/78, HR: 70, Temp: 98.4°F', 'Showing improvement'),
+(13, 13, 11, 13, 'Influenza type A', 'Fever, body aches, fatigue', 'Rest, fluids, antivirals if severe', 'Oseltamivir 75mg BID x5 days', 'BP: 110/70, HR: 90, Temp: 102.1°F', 'Confirmed influenza'),
+(14, 14, 12, 14, 'Generally healthy', 'None', 'Continue healthy lifestyle', NULL, 'BP: 122/80, HR: 74, Temp: 98.6°F', 'All screenings normal'),
+(15, 15, 13, 15, 'Pre-operative clearance', 'None', 'Clear for surgery', NULL, 'BP: 118/76, HR: 72, Temp: 98.4°F', 'ASA physical status I'),
+(16, 16, 14, 16, 'Post-operative recovery', 'Surgical site healing', 'Continue wound care, activity as tolerated', 'Ibuprofen 600mg q8h prn', 'BP: 124/82, HR: 75, Temp: 98.5°F', 'Incision healing well'),
+(17, 17, 15, 17, 'Right wrist fracture', 'Wrist pain, swelling', 'Casting, follow-up in 6 weeks', 'Acetaminophen with codeine', 'BP: 130/85, HR: 82, Temp: 98.2°F', 'X-ray confirms fracture'),
+(18, 18, 1, 18, 'Non-cardiac chest discomfort', 'Chest tightness, anxiety', 'Anxiety management, follow-up if persists', NULL, 'BP: 135/88, HR: 85, Temp: 98.4°F', 'Cardiac workup negative');
+
+INSERT INTO hms_medications (id, name, generic_name, category, dosage_form, strength, manufacturer, side_effects, contraindications, price, is_active) VALUES
+(1, 'Lisinopril', 'Lisinopril', 'ACE Inhibitor', 'Tablet', '10mg', 'Pfizer', 'Dry cough, dizziness, headache', 'Pregnancy, history of angioedema', 15.00, 1),
+(2, 'Aspirin', 'Acetylsalicylic acid', 'NSAID', 'Tablet', '81mg', 'Bayer', 'Stomach irritation, bleeding risk', 'Bleeding disorders, ulcers', 10.00, 1),
+(3, 'Atorvastatin', 'Atorvastatin calcium', 'Statin', 'Tablet', '20mg', 'Pfizer', 'Muscle pain, liver enzyme elevation', 'Active liver disease', 25.00, 1),
+(4, 'Metformin', 'Metformin HCl', 'Antidiabetic', 'Tablet', '500mg', 'Teva', 'Nausea, diarrhea, stomach upset', 'Renal impairment, acidosis', 12.00, 1),
+(5, 'Omeprazole', 'Omeprazole', 'Proton Pump Inhibitor', 'Capsule', '20mg', 'AstraZeneca', 'Headache, stomach pain, diarrhea', 'Hypersensitivity', 18.00, 1),
+(6, 'Amlodipine', 'Amlodipine besylate', 'Calcium Channel Blocker', 'Tablet', '5mg', 'Novartis', 'Swelling, dizziness, flushing', 'Severe hypotension', 14.00, 1),
+(7, 'Metoprolol', 'Metoprolol succinate', 'Beta Blocker', 'Tablet', '50mg', 'AstraZeneca', 'Fatigue, dizziness, bradycardia', 'Heart block, cardiogenic shock', 16.00, 1),
+(8, 'Levothyroxine', 'Levothyroxine sodium', 'Thyroid Hormone', 'Tablet', '75mcg', 'Mylan', 'Weight changes, hair loss, insomnia', 'Adrenal insufficiency', 13.00, 1),
+(9, 'Albuterol', 'Albuterol sulfate', 'Bronchodilator', 'Inhaler', '90mcg', 'GSK', 'Tremor, headache, tachycardia', 'Hypersensitivity', 35.00, 1),
+(10, 'Prednisone', 'Prednisone', 'Corticosteroid', 'Tablet', '10mg', 'Teva', 'Weight gain, mood changes, insomnia', 'Systemic fungal infection', 11.00, 1),
+(11, 'Hydrochlorothiazide', 'HCTZ', 'Diuretic', 'Tablet', '25mg', 'Sandoz', 'Electrolyte imbalance, dehydration', 'Anuria, sulfonamide allergy', 9.00, 1),
+(12, 'Gabapentin', 'Gabapentin', 'Anticonvulsant', 'Capsule', '300mg', 'Pfizer', 'Drowsiness, dizziness, swelling', 'Hypersensitivity', 22.00, 1),
+(13, 'Sertraline', 'Sertraline HCl', 'SSRI', 'Tablet', '50mg', 'Pfizer', 'Nausea, insomnia, sexual dysfunction', 'MAOI use within 14 days', 20.00, 1),
+(14, 'Ibuprofen', 'Ibuprofen', 'NSAID', 'Tablet', '400mg', 'Advil', 'Stomach upset, bleeding, kidney issues', 'Peptic ulcer, bleeding disorders', 8.00, 1),
+(15, 'Acetaminophen', 'Acetaminophen', 'Analgesic', 'Tablet', '500mg', 'Tylenol', 'Liver toxicity at high doses', 'Severe liver impairment', 6.00, 1),
+(16, 'Amoxicillin', 'Amoxicillin', 'Antibiotic', 'Capsule', '500mg', 'Teva', 'Diarrhea, nausea, rash', 'Penicillin allergy', 12.00, 1),
+(17, 'Ciprofloxacin', 'Ciprofloxacin', 'Antibiotic', 'Tablet', '500mg', 'Bayer', 'Tendon issues, nerve damage', 'Tendon disorders, history of tendinitis', 18.00, 1),
+(18, 'Diazepam', 'Diazepam', 'Benzodiazepine', 'Tablet', '5mg', 'Roche', 'Sedation, dependence, withdrawal', 'Myasthenia gravis, severe respiratory depression', 10.00, 1),
+(19, 'Losartan', 'Losartan potassium', 'ARB', 'Tablet', '50mg', 'Merck', 'Dizziness, hyperkalemia', 'Pregnancy, hyperkalemia', 17.00, 1),
+(20, 'Simvastatin', 'Simvastatin', 'Statin', 'Tablet', '20mg', 'Merck', 'Muscle pain, liver enzyme changes', 'Active liver disease, pregnancy', 14.00, 1);
+
+INSERT INTO hms_prescriptions (id, patient_id, doctor_id, medication_id, dosage, frequency, duration, instructions, prescribed_date, end_date, status) VALUES
+(1, 2, 1, 1, '10mg', 'Once daily', '90 days', 'Take in the morning with or without food', '2025-01-10', '2025-04-10', 'active'),
+(2, 5, 4, 2, '81mg', 'Once daily', 'Indefinite', 'Take with food', '2025-01-11', NULL, 'active'),
+(3, 5, 4, 3, '20mg', 'Once daily', 'Indefinite', 'Take at bedtime', '2025-01-11', NULL, 'active'),
+(4, 7, 5, 15, '500mg', 'Every 6 hours', '7 days', 'Take with food for stomach protection', '2025-01-11', '2025-01-18', 'completed'),
+(5, 9, 7, 14, '400mg', 'Every 8 hours', '10 days', 'Take with food', '2025-01-12', '2025-01-22', 'completed'),
+(6, 10, 8, 14, '600mg', 'Every 8 hours', '14 days', 'Take with food', '2025-01-12', '2025-01-26', 'completed'),
+(7, 11, 9, 14, '1% cream', 'Twice daily', '14 days', 'Apply thin layer to affected areas', '2025-01-12', '2025-01-26', 'completed'),
+(8, 12, 10, 14, '0.025% cream', 'Once daily', '30 days', 'Apply at bedtime to clean skin', '2025-01-12', '2025-02-11', 'completed'),
+(9, 13, 11, 16, '500mg', 'Three times daily', '5 days', 'Complete full course even if feeling better', '2025-01-13', '2025-01-18', 'completed'),
+(10, 16, 14, 14, '600mg', 'Every 8 hours', '7 days', 'Take with food', '2025-01-13', '2025-01-20', 'completed'),
+(11, 17, 15, 15, '500mg with codeine', 'Every 6 hours', '5 days', 'Take as needed for pain', '2025-01-14', '2025-01-19', 'completed'),
+(12, 18, 1, 1, '10mg', 'Once daily', '30 days', 'Take in morning', '2025-01-14', '2025-02-13', 'completed'),
+(13, 4, 3, 14, '50mg', 'As needed', '30 days', 'Take at onset of migraine', '2025-01-10', '2025-02-09', 'active'),
+(14, 1, 1, 6, '5mg', 'Once daily', '90 days', 'Take in morning', '2025-01-20', '2025-04-20', 'active'),
+(15, 3, 2, 7, '50mg', 'Once daily', '60 days', 'Take with food', '2025-01-20', '2025-03-20', 'active'),
+(16, 19, 4, 12, '300mg', 'Three times daily', '30 days', 'Start with one dose, increase as tolerated', '2025-01-21', '2025-02-20', 'active');
+
+INSERT INTO hms_billings (id, patient_id, appointment_id, description, amount, status, billing_date, due_date, paid_date, payment_method, invoice_number) VALUES
+(1, 1, 1, 'Consultation - Cardiology', 200.00, 'paid', '2025-01-10', '2025-01-25', '2025-01-12', 'Credit Card', 'INV-2025-0001'),
+(2, 2, 2, 'Follow-up - Cardiology', 180.00, 'paid', '2025-01-10', '2025-01-25', '2025-01-11', 'Insurance', 'INV-2025-0002'),
+(3, 3, 3, 'Consultation - Cardiology', 200.00, 'paid', '2025-01-10', '2025-01-25', '2025-01-13', 'Credit Card', 'INV-2025-0003'),
+(4, 4, 4, 'Consultation - Neurology', 220.00, 'paid', '2025-01-10', '2025-01-25', '2025-01-14', 'Insurance', 'INV-2025-0004'),
+(5, 5, 5, 'Follow-up - Neurology', 200.00, 'paid', '2025-01-11', '2025-01-26', '2025-01-12', 'Insurance', 'INV-2025-0005'),
+(6, 6, 6, 'Consultation - Pediatrics', 150.00, 'paid', '2025-01-11', '2025-01-26', '2025-01-15', 'Credit Card', 'INV-2025-0006'),
+(7, 7, 7, 'Consultation - Pediatrics', 150.00, 'paid', '2025-01-11', '2025-01-26', '2025-01-13', 'Credit Card', 'INV-2025-0007'),
+(8, 8, 8, 'Follow-up - Pediatrics', 140.00, 'paid', '2025-01-11', '2025-01-26', '2025-01-16', 'Insurance', 'INV-2025-0008'),
+(9, 9, 9, 'Consultation - Orthopedics', 250.00, 'paid', '2025-01-12', '2025-01-27', '2025-01-14', 'Credit Card', 'INV-2025-0009'),
+(10, 10, 10, 'Consultation - Orthopedics', 230.00, 'paid', '2025-01-12', '2025-01-27', '2025-01-15', 'Insurance', 'INV-2025-0010'),
+(11, 11, 11, 'Consultation - Dermatology', 160.00, 'paid', '2025-01-12', '2025-01-27', '2025-01-14', 'Credit Card', 'INV-2025-0011'),
+(12, 12, 12, 'Follow-up - Dermatology', 150.00, 'paid', '2025-01-12', '2025-01-27', '2025-01-16', 'Insurance', 'INV-2025-0012'),
+(13, 13, 13, 'Consultation - General Medicine', 120.00, 'paid', '2025-01-13', '2025-01-28', '2025-01-15', 'Credit Card', 'INV-2025-0013'),
+(14, 14, 14, 'Consultation - General Medicine', 110.00, 'paid', '2025-01-13', '2025-01-28', '2025-01-14', 'Insurance', 'INV-2025-0014'),
+(15, 15, 15, 'Pre-surgery Evaluation', 300.00, 'paid', '2025-01-13', '2025-01-28', '2025-01-16', 'Credit Card', 'INV-2025-0015'),
+(16, 16, 16, 'Follow-up - Surgery', 280.00, 'paid', '2025-01-13', '2025-01-28', '2025-01-17', 'Insurance', 'INV-2025-0016'),
+(17, 17, 17, 'X-ray and Consultation', 200.00, 'paid', '2025-01-14', '2025-01-29', '2025-01-16', 'Credit Card', 'INV-2025-0017'),
+(18, 18, 18, 'Emergency Consultation', 220.00, 'paid', '2025-01-14', '2025-01-29', '2025-01-15', 'Credit Card', 'INV-2025-0018'),
+(19, 19, 19, 'Consultation - Cardiology', 200.00, 'pending', '2025-01-14', '2025-01-29', NULL, NULL, 'INV-2025-0019'),
+(20, 20, 20, 'Consultation - Neurology', 220.00, 'pending', '2025-01-14', '2025-01-29', NULL, NULL, 'INV-2025-0020');
 `;
 
 export const SQL_DATASETS: Record<SqlDatasetId, SqlDataset> = {
-  commerce: {
-    id: 'commerce',
-    name: '电商订单（综合）',
-    description: '包含用户、商品、订单、订单明细、支付。适合覆盖绝大多数 SQL 日常查询场景。',
-    initialSql: commerceInitialSql,
-    defaultQuery: 'SELECT * FROM users LIMIT 10;',
-  },
-  enterprise: {
-    id: 'enterprise',
-    name: '企业 ERP 系统',
-    description: '包含员工、部门、职位、项目、项目分配、薪资历史等。支持复杂的多表联查 (JOIN) 与聚合分析。',
-    initialSql: enterpriseInitialSql,
-    defaultQuery: 'SELECT e.first_name, e.last_name, d.dept_name, j.job_title \nFROM employees e \nJOIN departments d ON e.dept_id = d.dept_id \nJOIN jobs j ON e.job_id = j.job_id;',
+  comprehensive: {
+    id: 'comprehensive',
+    name: '综合数据库',
+    description: '包含电商、ERP、医疗三大业务模块，30+数据表，数千条数据。支持复杂 JOIN、聚合分析、子查询等高级 SQL 练习。',
+    initialSql: comprehensiveInitialSql.trim(),
+    defaultQuery: 'SELECT * FROM ecommerce_users LIMIT 10;',
   },
 };
-
