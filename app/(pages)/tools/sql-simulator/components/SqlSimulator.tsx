@@ -102,7 +102,7 @@ export default function SqlSimulator({
     dataset: initialDatasetId,
     showSchema = true,
 }: SqlSimulatorProps) {
-    const [currentDatasetId, setCurrentDatasetId] = useState<SqlDatasetId | 'custom'>(initialDatasetId || 'commerce');
+    const [currentDatasetId, setCurrentDatasetId] = useState<SqlDatasetId | 'custom'>(initialDatasetId || 'comprehensive');
     const [customInitialSql, setCustomInitialSql] = useState<string>('');
 
     const resolvedDataset = useMemo(() => {
