@@ -1,0 +1,156 @@
+{
+  "pdfs": [
+    {
+      "id": "public_3D Math Primer for Graphics and Game Development (2nd Ed)(gnv64)",
+      "name": "3D Math Primer for Graphics and Game Development (2nd Ed)(gnv64).pdf",
+      "url": "/pdf/3D Math Primer for Graphics and Game Development (2nd Ed)(gnv64).pdf",
+      "size": 21395465,
+      "addedAt": 1768440808796,
+      "isPublic": true
+    },
+    {
+      "id": "public_你不知道的JavaScript(上卷)",
+      "name": "你不知道的JavaScript(上卷).pdf",
+      "url": "/pdf/你不知道的JavaScript(上卷).pdf",
+      "size": 17133791,
+      "addedAt": 1768440810783,
+      "isPublic": true
+    },
+    {
+      "id": "public_你不知道的JavaScript(下卷)",
+      "name": "你不知道的JavaScript(下卷).pdf",
+      "url": "/pdf/你不知道的JavaScript(下卷).pdf",
+      "size": 8652215,
+      "addedAt": 1768440810824,
+      "isPublic": true
+    },
+    {
+      "id": "public_你不知道的JavaScript(中卷)",
+      "name": "你不知道的JavaScript(中卷).pdf",
+      "url": "/pdf/你不知道的JavaScript(中卷).pdf",
+      "size": 36652865,
+      "addedAt": 1768440810989,
+      "isPublic": true
+    },
+    {
+      "id": "public_算法图解",
+      "name": "算法图解.pdf",
+      "url": "/pdf/算法图解.pdf",
+      "size": 18197231,
+      "addedAt": 1768440811110,
+      "isPublic": true
+    },
+    {
+      "id": "public_算法心得：高效算法的奥秘（原书第2版）",
+      "name": "算法心得：高效算法的奥秘（原书第2版）.pdf",
+      "url": "/pdf/算法心得：高效算法的奥秘（原书第2版）.pdf",
+      "size": 7764567,
+      "addedAt": 1768440811147,
+      "isPublic": true
+    },
+    {
+      "id": "public_网络是怎样连接的",
+      "name": "网络是怎样连接的.pdf",
+      "url": "/pdf/网络是怎样连接的.pdf",
+      "size": 19594367,
+      "addedAt": 1768440811229,
+      "isPublic": true
+    },
+    {
+      "id": "public_学习js数据结构与算法",
+      "name": "学习js数据结构与算法.pdf",
+      "url": "/pdf/学习js数据结构与算法.pdf",
+      "size": 10384289,
+      "addedAt": 1768440811041,
+      "isPublic": true
+    },
+    {
+      "id": "public_ASP.NET Core技术内幕与项目实战 基于DDD与前后端分离 (杨中科) (Z-Library)",
+      "name": "ASP.NET Core技术内幕与项目实战 基于DDD与前后端分离 (杨中科) (Z-Library).pdf",
+      "url": "/pdf/ASP.NET Core技术内幕与项目实战 基于DDD与前后端分离 (杨中科) (Z-Library).pdf",
+      "size": 30183379,
+      "addedAt": 1768440808919,
+      "isPublic": true
+    },
+    {
+      "id": "public_C# 10 and .NET 6 – Modern Cross-Platform Development",
+      "name": "C# 10 and .NET 6 – Modern Cross-Platform Development.PDF",
+      "url": "/pdf/C# 10 and .NET 6 – Modern Cross-Platform Development.PDF",
+      "size": 16058521,
+      "addedAt": 1768440808993,
+      "isPublic": true
+    },
+    {
+      "id": "public_CSS揭秘",
+      "name": "CSS揭秘.pdf",
+      "url": "/pdf/CSS揭秘.pdf",
+      "size": 40994687,
+      "addedAt": 1768440809329,
+      "isPublic": true
+    },
+    {
+      "id": "public_CSS权威指南-第三版",
+      "name": "CSS权威指南-第三版.pdf",
+      "url": "/pdf/CSS权威指南-第三版.pdf",
+      "size": 62876388,
+      "addedAt": 1768440809618,
+      "isPublic": true
+    },
+    {
+      "id": "public_CSS世界-张鑫旭",
+      "name": "CSS世界-张鑫旭.pdf",
+      "url": "/pdf/CSS世界-张鑫旭.pdf",
+      "size": 47598956,
+      "addedAt": 1768440809182,
+      "isPublic": true
+    },
+    {
+      "id": "public_dotnet-csharp",
+      "name": "dotnet-csharp.pdf",
+      "url": "/pdf/dotnet-csharp.pdf",
+      "size": 35540417,
+      "addedAt": 1768440810641,
+      "isPublic": true
+    },
+    {
+      "id": "public_dotnet开发手册",
+      "name": "dotnet开发手册.pdf",
+      "url": "/pdf/dotnet开发手册.pdf",
+      "size": 15728324,
+      "addedAt": 1768440810711,
+      "isPublic": true
+    },
+    {
+      "id": "public_JavaScript高级程序设计（第4版）",
+      "name": "JavaScript高级程序设计（第4版）.pdf",
+      "url": "/pdf/JavaScript高级程序设计（第4版）.pdf",
+      "size": 14750250,
+      "addedAt": 1768440810032,
+      "isPublic": true
+    },
+    {
+      "id": "public_JavaScript权威指南（原书第7版）（经典的JavaScript犀牛书全新升级） (O''''Reilly精品图书系列) - 大卫·弗拉纳根(David Flanagan)",
+      "name": "JavaScript权威指南（原书第7版）（经典的JavaScript犀牛书全新升级） (O''''Reilly精品图书系列) - 大卫·弗拉纳根(David Flanagan).pdf",
+      "url": "/pdf/JavaScript权威指南（原书第7版）（经典的JavaScript犀牛书全新升级） (O''''Reilly精品图书系列) - 大卫·弗拉纳根(David Flanagan).pdf",
+      "size": 63693475,
+      "addedAt": 1768440809958,
+      "isPublic": true
+    },
+    {
+      "id": "public_Vue.js设计与实现",
+      "name": "Vue.js设计与实现.pdf",
+      "url": "/pdf/Vue.js设计与实现.pdf",
+      "size": 20405656,
+      "addedAt": 1768440810120,
+      "isPublic": true
+    },
+    {
+      "id": "public_WebGL编程指南",
+      "name": "WebGL编程指南.pdf",
+      "url": "/pdf/WebGL编程指南.pdf",
+      "size": 85355031,
+      "addedAt": 1768440810524,
+      "isPublic": true
+    }
+  ]
+}

@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "node scripts/copy-images.js && next build",
+    "dev": "node scripts/scan-pdfs.js && next dev",
+    "build": "node scripts/scan-pdfs.js && node scripts/copy-images.js && next build",
     "start": "next start",
     "lint": "eslint . --ext .ts,.tsx,.js,.jsx",
-    "export": "node scripts/copy-images.js && next build",
+    "export": "node scripts/scan-pdfs.js && node scripts/copy-images.js && next build",
     "copy:images": "node scripts/copy-images.js",
+    "scan-pdfs": "node scripts/scan-pdfs.js",
     "generate-posts": "tsx scripts/generate-posts-json.ts"
   },
   "dependencies": {
