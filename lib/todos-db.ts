@@ -5,19 +5,110 @@ const DB_VERSION = 1;
 const STORE_CATEGORIES = 'categories';
 const STORE_TODOS = 'todos';
 
-export type RepeatType = 'none' | 'daily' | 'interval';
+// 莫兰迪色系配色方案
+export const TODO_TYPE_COLORS = {
+  onetime: {
+    name: '一次性',
+    color: '#7c9cb5',      // 雾蓝
+    bgLight: 'bg-slate-200',
+    bgDark: 'bg-slate-800/50',
+    textLight: 'text-slate-700',
+    textDark: 'text-slate-300',
+    dot: 'bg-slate-400',
+  },
+  fixedRepeat: {
+    name: '固定重复',
+    color: '#9b8aa5',      // 藕紫
+    bgLight: 'bg-purple-200',
+    bgDark: 'bg-purple-900/30',
+    textLight: 'text-purple-700',
+    textDark: 'text-purple-300',
+    dot: 'bg-purple-400',
+  },
+  allDayRepeat: {
+    name: '全天候',
+    color: '#8db4a0',      // 豆绿
+    bgLight: 'bg-emerald-200',
+    bgDark: 'bg-emerald-900/30',
+    textLight: 'text-emerald-700',
+    textDark: 'text-emerald-300',
+    dot: 'border-2 border-emerald-400 bg-transparent',
+  },
+  planned: {
+    name: '计划',
+    color: '#c9a86c',      // 暖黄
+    bgLight: 'bg-amber-200',
+    bgDark: 'bg-amber-900/30',
+    textLight: 'text-amber-700',
+    textDark: 'text-amber-300',
+    dot: 'bg-amber-400',
+    underline: true,
+  },
+  yearly: {
+    name: '全年',
+    color: '#b0706e',      // 砖红
+    bgLight: 'bg-rose-200',
+    bgDark: 'bg-rose-900/30',
+    textLight: 'text-rose-700',
+    textDark: 'text-rose-300',
+    dot: 'border-2 border-rose-400 bg-transparent',
+  },
+} as const;
+
+export type TodoType = keyof typeof TODO_TYPE_COLORS;
+
+// 时间段配置
+export interface TimeSlot {
+  startTime: string;    // HH:mm
+  endTime: string;      // HH:mm
+}
+
+// 计划节点
+export interface PlanNode {
+  date: string;
+  time?: string;
+  notificationType: 'once' | 'daily';
+}
 
 export interface Todo {
   id: number;
   title: string;
   category: string;
-  date: string;
   completed: boolean;
   isImportant: boolean;
-  isDaily?: boolean;
-  repeatType?: RepeatType;
+  
+  // 新类型系统
+  todoType: TodoType;
+  
+  // 通知开关
+  enableNotification: boolean;
+  
+  // 基础时间（一次性、全天候使用）
+  date: string;
+  
+  // 结束日期（计划类型使用）
+  endDate?: string;
+  
+  // 是否为全天
+  isAllDay?: boolean;
+  
+  // 具体时间
+  specificTime?: string;
+  
+  // 固定时间重复专用
+  timeSlots?: TimeSlot[];
   repeatInterval?: number;
   repeatUnit?: 'minutes' | 'hours';
+  
+  // 计划类型专用
+  planNodes?: PlanNode[];
+  
+  // 全年计划专用
+  year?: number;
+  
+  // 兼容旧数据（可选）
+  isDaily?: boolean;
+  repeatType?: 'none' | 'daily' | 'interval';
   reminderTime?: string;
 }
 
@@ -198,15 +289,15 @@ export async function initializeData(): Promise<{ categories: Category[]; todos:
   
   const today = new Date().toISOString().split('T')[0];
   const defaultTodos: Todo[] = [
-    { id: 1, title: 'Make UI design', category: 'personal', date: today, completed: false, isImportant: true },
-    { id: 2, title: 'Code prototype', category: 'work', date: today, completed: false, isImportant: true },
-    { id: 3, title: 'User testing', category: 'work', date: today, completed: true, isImportant: false },
-    { id: 4, title: 'Handover', category: 'work', date: today, completed: false, isImportant: true },
-    { id: 5, title: 'Team sync', category: 'work', date: today, completed: false, isImportant: false },
-    { id: 6, title: 'Read book', category: 'personal', date: today, completed: false, isImportant: false },
-    { id: 7, title: 'Exercise', category: 'personal', date: today, completed: false, isImportant: true },
-    { id: 8, title: 'Morning Standup', category: 'work', date: today, completed: false, isImportant: true, isDaily: true, reminderTime: '09:00' },
-    { id: 9, title: 'Drink Water', category: 'personal', date: today, completed: false, isImportant: false, isDaily: true, reminderTime: '10:30' },
+    { id: 1, title: 'Make UI design', category: 'personal', date: today, completed: false, isImportant: true, todoType: 'onetime', enableNotification: false },
+    { id: 2, title: 'Code prototype', category: 'work', date: today, completed: false, isImportant: true, todoType: 'onetime', enableNotification: false },
+    { id: 3, title: 'User testing', category: 'work', date: today, completed: true, isImportant: false, todoType: 'planned', enableNotification: false, endDate: today },
+    { id: 4, title: 'Handover', category: 'work', date: today, completed: false, isImportant: true, todoType: 'yearly', enableNotification: true, year: new Date().getFullYear() },
+    { id: 5, title: 'Team sync', category: 'work', date: today, completed: false, isImportant: false, todoType: 'fixedRepeat', enableNotification: true, timeSlots: [{ startTime: '09:00', endTime: '10:00' }], repeatInterval: 30, repeatUnit: 'minutes' },
+    { id: 6, title: 'Read book', category: 'personal', date: today, completed: false, isImportant: false, todoType: 'onetime', enableNotification: false },
+    { id: 7, title: 'Exercise', category: 'personal', date: today, completed: false, isImportant: true, todoType: 'allDayRepeat', enableNotification: true, specificTime: '18:00' },
+    { id: 8, title: 'Morning Standup', category: 'work', date: today, completed: false, isImportant: true, todoType: 'allDayRepeat', enableNotification: true, specificTime: '09:00' },
+    { id: 9, title: 'Drink Water', category: 'personal', date: today, completed: false, isImportant: false, todoType: 'fixedRepeat', enableNotification: true, timeSlots: [{ startTime: '08:00', endTime: '20:00' }], repeatInterval: 60, repeatUnit: 'minutes' },
   ];
 
   const existingCategories = await getCategories();
@@ -229,13 +320,25 @@ export async function initializeData(): Promise<{ categories: Category[]; todos:
 
 export async function getDailyTodos(): Promise<Todo[]> {
   const todos = await getTodos();
-  return todos.filter(todo => todo.isDaily || todo.repeatType === 'daily' || todo.repeatType === 'interval');
+  return todos.filter(todo => 
+    todo.todoType === 'allDayRepeat' || 
+    todo.todoType === 'fixedRepeat' ||
+    todo.isDaily || 
+    todo.repeatType === 'daily' || 
+    todo.repeatType === 'interval'
+  );
 }
 
 export async function resetDailyTodosForNewDay(): Promise<void> {
   const todos = await getTodos();
   const today = new Date().toISOString().split('T')[0];
-  const repeatingTodos = todos.filter(todo => todo.isDaily || todo.repeatType === 'daily' || todo.repeatType === 'interval');
+  const repeatingTodos = todos.filter(todo => 
+    todo.todoType === 'allDayRepeat' || 
+    todo.todoType === 'fixedRepeat' ||
+    todo.isDaily || 
+    todo.repeatType === 'daily' || 
+    todo.repeatType === 'interval'
+  );
 
   for (const todo of repeatingTodos) {
     const updatedTodo = { ...todo, date: today, completed: false };

@@ -14,7 +14,8 @@ import {
   ChevronRight, 
   AlertCircle, 
   Trash2,
-  Loader2
+  Loader2,
+  LayoutGrid
 } from 'lucide-react';
 
 interface UserPdf {
@@ -34,7 +35,7 @@ interface PdfOutlineItem {
 }
 
 export default function PdfViewerPage() {
-  const [activeTab, setActiveTab] = useState<'outline' | 'library'>('library');
+  const [activeTab, setActiveTab] = useState<'outline' | 'library' | 'thumbnails'>('library');
   const [userPdfs, setUserPdfs] = useState<UserPdf[]>([]);
   const [currentPdf, setCurrentPdf] = useState<{ id: string; name: string; url: string } | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -48,6 +49,9 @@ export default function PdfViewerPage() {
   const [showMemoryPrompt, setShowMemoryPrompt] = useState(false);
   const [savedPage, setSavedPage] = useState<number | null>(null);
   const [countdown, setCountdown] = useState(5);
+  const [thumbnails, setThumbnails] = useState<{ page: number; url: string }[]>([]);
+  const [thumbnailsLoading, setThumbnailsLoading] = useState(false);
+  const [pageInput, setPageInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -167,6 +171,7 @@ export default function PdfViewerPage() {
       setCurrentPdf({ id: pdfId, name, url });
       setTotalPages(pdf.numPages);
       setOutline([]);
+      setThumbnails([]);
       
       // Try to get outline (handle gracefully if no outline)
       try {
@@ -531,6 +536,71 @@ export default function PdfViewerPage() {
     }
   };
 
+  // Generate thumbnail for a specific page
+  const generateThumbnail = async (pageNum: number): Promise<string> => {
+    if (!pdfDocRef.current) return '';
+    
+    try {
+      const page = await pdfDocRef.current.getPage(pageNum);
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      
+      if (!context) return '';
+      
+      // Small scale for thumbnail
+      const thumbScale = 0.2;
+      const viewport = page.getViewport({ scale: thumbScale });
+      
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      
+      await page.render({
+        canvasContext: context,
+        viewport: viewport
+      }).promise;
+      
+      return canvas.toDataURL('image/jpeg', 0.7);
+    } catch (err) {
+      console.error('Failed to generate thumbnail:', err);
+      return '';
+    }
+  };
+
+  // Load thumbnails when PDF is loaded and tab is active
+  useEffect(() => {
+    if (activeTab === 'thumbnails' && pdfDocRef.current && totalPages > 0) {
+      const loadThumbnails = async () => {
+        setThumbnailsLoading(true);
+        const thumbList: { page: number; url: string }[] = [];
+        // Generate all thumbnails
+        const maxThumbs = totalPages;
+        
+        for (let i = 1; i <= maxThumbs; i++) {
+          const url = await generateThumbnail(i);
+          if (url) {
+            thumbList.push({ page: i, url });
+          }
+        }
+        
+        setThumbnails(thumbList);
+        setThumbnailsLoading(false);
+      };
+      
+      loadThumbnails();
+    }
+  }, [activeTab, totalPages]);
+
+  // Handle page input submission
+  const handlePageInputSubmit = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      const page = parseInt(pageInput, 10);
+      if (!isNaN(page) && page >= 1 && page <= totalPages) {
+        setCurrentPage(page);
+        setPageInput('');
+      }
+    }
+  };
+
   if (!isDBReady) {
     return (
       <div className="min-h-screen bg-[#f5f5f5] flex items-center justify-center">
@@ -643,6 +713,18 @@ export default function PdfViewerPage() {
               Outline
             </button>
             <button
+              onClick={() => setActiveTab('thumbnails')}
+              disabled={!currentPdf}
+              className={`flex-1 px-3 py-3 text-xs font-mono font-bold uppercase flex items-center justify-center gap-2 transition-colors ${
+                activeTab === 'thumbnails' 
+                  ? 'bg-[oklch(0.145_0_0)] text-white' 
+                  : 'hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed'
+              }`}
+            >
+              <LayoutGrid className="w-3 h-3" />
+              Pages
+            </button>
+            <button
               onClick={() => setActiveTab('library')}
               className={`flex-1 px-3 py-3 text-xs font-mono font-bold uppercase flex items-center justify-center gap-2 transition-colors ${
                 activeTab === 'library' 
@@ -657,7 +739,7 @@ export default function PdfViewerPage() {
 
           {/* Tab Content */}
           <div className="flex-1 overflow-auto">
-            {activeTab === 'outline' ? (
+            {activeTab === 'outline' && (
               <div className="p-3">
                 {outline.length > 0 ? (
                   <div className="space-y-1">
@@ -670,7 +752,8 @@ export default function PdfViewerPage() {
                   </div>
                 )}
               </div>
-            ) : (
+            )}
+            {activeTab === 'library' && (
               <div className="p-3 space-y-3">
                 {/* Add PDF Button */}
                 <button
@@ -747,6 +830,48 @@ export default function PdfViewerPage() {
                 )}
               </div>
             )}
+            {activeTab === 'thumbnails' && currentPdf && (
+              <div className="p-3">
+                {thumbnailsLoading ? (
+                  <div className="flex flex-col items-center justify-center py-8 text-gray-400">
+                    <Loader2 className="w-8 h-8 animate-spin mb-2" />
+                    <span className="text-xs font-mono">Generating thumbnails...</span>
+                  </div>
+                ) : thumbnails.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    {thumbnails.map((thumb) => (
+                      <button
+                        key={thumb.page}
+                        onClick={() => {
+                          setCurrentPage(thumb.page);
+                        }}
+                        className={`border-2 rounded-lg overflow-hidden transition-all ${
+                          currentPage === thumb.page
+                            ? 'border-[#ea580c] shadow-md'
+                            : 'border-gray-200 hover:border-gray-400'
+                        }`}
+                      >
+                        <img
+                          src={thumb.url}
+                          alt={`Page ${thumb.page}`}
+                          className="w-full h-auto block"
+                        />
+                        <div className={`text-center text-[10px] font-mono py-1 ${
+                          currentPage === thumb.page ? 'bg-[#ea580c] text-white' : 'bg-gray-100'
+                        }`}>
+                          {thumb.page}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 opacity-40">
+                    <LayoutGrid className="w-8 h-8 mx-auto mb-2" />
+                    <p className="text-xs font-mono">No thumbnails available</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -762,6 +887,7 @@ export default function PdfViewerPage() {
               </div>
               
               <div className="flex items-center gap-2">
+
                 <button
                   onClick={prevPage}
                   disabled={currentPage <= 1}
@@ -770,9 +896,21 @@ export default function PdfViewerPage() {
                   <ChevronLeftIcon className="w-4 h-4" />
                 </button>
                 
-                <span className="text-xs font-mono px-3 py-1 bg-gray-100 rounded">
-                  {currentPage} / {totalPages}
-                </span>
+                {/* Page input field */}
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalPages}
+                    value={pageInput}
+                    onChange={(e) => setPageInput(e.target.value)}
+                    onKeyDown={handlePageInputSubmit}
+                    onBlur={() => setPageInput('')}
+                    placeholder={currentPage.toString()}
+                    className="w-12 px-2 py-1 border border-[oklch(0.145_0_0)] rounded text-xs font-mono text-center focus:outline-none focus:border-[#ea580c]"
+                  />
+                  <span className="text-xs font-mono text-gray-500">/ {totalPages}</span>
+                </div>
                 
                 <button
                   onClick={nextPage}
@@ -799,6 +937,8 @@ export default function PdfViewerPage() {
               </div>
             </div>
           )}
+
+
 
           {/* PDF Viewer Area */}
           <div className="flex-1 overflow-auto p-8">

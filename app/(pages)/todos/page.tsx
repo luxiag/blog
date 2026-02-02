@@ -16,7 +16,10 @@ import {
   resetDailyTodosForNewDay,
   Category,
   Todo,
-  RepeatType,
+  TodoType,
+  TODO_TYPE_COLORS,
+  TimeSlot,
+  PlanNode,
   openDB,
 } from '@/lib/todos-db';
 
@@ -95,6 +98,148 @@ function getMonthName(month: number): string {
   return months[month];
 }
 
+// 时间段选择组件
+function TimeSlotEditor({
+  slots,
+  onChange,
+}: {
+  slots: TimeSlot[];
+  onChange: (slots: TimeSlot[]) => void;
+}) {
+  const addSlot = () => {
+    onChange([...slots, { startTime: '09:00', endTime: '17:00' }]);
+  };
+
+  const removeSlot = (index: number) => {
+    onChange(slots.filter((_, i) => i !== index));
+  };
+
+  const updateSlot = (index: number, field: keyof TimeSlot, value: string) => {
+    const newSlots = [...slots];
+    newSlots[index] = { ...newSlots[index], [field]: value };
+    onChange(newSlots);
+  };
+
+  return (
+    <div className="space-y-2">
+      {slots.map((slot, index) => (
+        <div key={index} className="flex items-center gap-2">
+          <input
+            type="time"
+            value={slot.startTime}
+            onChange={(e) => updateSlot(index, 'startTime', e.target.value)}
+            className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+          />
+          <span className="text-neutral-500">-</span>
+          <input
+            type="time"
+            value={slot.endTime}
+            onChange={(e) => updateSlot(index, 'endTime', e.target.value)}
+            className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+          />
+          {slots.length > 1 && (
+            <button
+              onClick={() => removeSlot(index)}
+              className="p-1 text-neutral-400 hover:text-red-500 transition-colors"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+      ))}
+      <button
+        onClick={addSlot}
+        className="flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+        添加时间段
+      </button>
+    </div>
+  );
+}
+
+// 计划节点编辑器
+function PlanNodeEditor({
+  nodes,
+  onChange,
+  startDate,
+  endDate,
+}: {
+  nodes: PlanNode[];
+  onChange: (nodes: PlanNode[]) => void;
+  startDate: string;
+  endDate: string;
+}) {
+  const addNode = () => {
+    onChange([...nodes, { date: startDate, notificationType: 'once' }]);
+  };
+
+  const removeNode = (index: number) => {
+    onChange(nodes.filter((_, i) => i !== index));
+  };
+
+  const updateNode = (index: number, field: keyof PlanNode, value: string) => {
+    const newNodes = [...nodes];
+    newNodes[index] = { ...newNodes[index], [field]: value };
+    onChange(newNodes);
+  };
+
+  return (
+    <div className="space-y-2">
+      {nodes.map((node, index) => (
+        <div key={index} className="flex items-center gap-2 p-2 border border-neutral-200 dark:border-neutral-700 rounded-lg">
+          <span className="text-xs font-mono text-neutral-500">节点 {index + 1}</span>
+          <input
+            type="date"
+            value={node.date}
+            min={startDate}
+            max={endDate}
+            onChange={(e) => updateNode(index, 'date', e.target.value)}
+            className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+          />
+          <input
+            type="time"
+            value={node.time || ''}
+            onChange={(e) => updateNode(index, 'time', e.target.value)}
+            className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 w-24"
+          />
+          <select
+            value={node.notificationType}
+            onChange={(e) => updateNode(index, 'notificationType', e.target.value as 'once' | 'daily')}
+            className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+          >
+            <option value="once">单次</option>
+            <option value="daily">每日</option>
+          </select>
+          <button
+            onClick={() => removeNode(index)}
+            className="p-1 text-neutral-400 hover:text-red-500 transition-colors"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      ))}
+      <button
+        onClick={addNode}
+        className="flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+        添加时间节点
+      </button>
+    </div>
+  );
+}
+
 export default function TodosPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -121,13 +266,29 @@ export default function TodosPage() {
   const [showAddTodo, setShowAddTodo] = useState(false);
   const [newTodoTitle, setNewTodoTitle] = useState('');
   const [newTodoCategory, setNewTodoCategory] = useState('personal');
+  const [newTodoType, setNewTodoType] = useState<TodoType>('onetime');
+  const [newTodoEnableNotification, setNewTodoEnableNotification] = useState(false);
+  
+  // 时间相关状态
   const [newTodoDate, setNewTodoDate] = useState(new Date().toISOString().split('T')[0]);
-  const [newTodoImportant, setNewTodoImportant] = useState(false);
-  const [newTodoDaily, setNewTodoDaily] = useState(false);
-  const [newTodoRepeatType, setNewTodoRepeatType] = useState<RepeatType>('none');
+  const [newTodoEndDate, setNewTodoEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newTodoIsAllDay, setNewTodoIsAllDay] = useState(true);
+  const [newTodoSpecificTime, setNewTodoSpecificTime] = useState('');
+  
+  // 固定时间重复专用
+  const [newTodoTimeSlots, setNewTodoTimeSlots] = useState<TimeSlot[]>([{ startTime: '09:00', endTime: '17:00' }]);
   const [newTodoRepeatInterval, setNewTodoRepeatInterval] = useState(30);
   const [newTodoRepeatUnit, setNewTodoRepeatUnit] = useState<'minutes' | 'hours'>('minutes');
-  const [newTodoReminderTime, setNewTodoReminderTime] = useState('');
+  
+  // 计划类型专用
+  const [newTodoPlanNodes, setNewTodoPlanNodes] = useState<PlanNode[]>([]);
+  const [newTodoHasPlanNodes, setNewTodoHasPlanNodes] = useState(false);
+  
+  // 全年计划专用
+  const [newTodoYear, setNewTodoYear] = useState(new Date().getFullYear());
+  
+  // 兼容旧数据的状态（保留）
+  const [newTodoImportant, setNewTodoImportant] = useState(false);
 
   // 右键菜单状态
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: string; data: any } | null>(null);
@@ -174,7 +335,7 @@ export default function TodosPage() {
 
     // 注册 Service Worker 用于后台通知
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/todo-notification-sw.js')
+      navigator.serviceWorker.register('/blog/js/todo-notification-sw.js')
         .then((registration) => {
           console.log('Service Worker registered:', registration);
           // 通知 Service Worker 开始检查提醒
@@ -194,19 +355,63 @@ export default function TodosPage() {
       const now = new Date();
       const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
       const currentDate = now.toISOString().split('T')[0];
-      const currentTimestamp = now.getTime();
 
       const dailyTodos = await getDailyTodos();
 
       for (const todo of dailyTodos) {
-        if (todo.reminderTime && todo.reminderTime === currentTime && todo.date === currentDate && !todo.completed) {
+        // 检查是否启用通知
+        if (!todo.enableNotification) continue;
+
+        // 根据类型检查提醒
+        let shouldNotify = false;
+
+        switch (todo.todoType) {
+          case 'onetime':
+            if (todo.date === currentDate && todo.specificTime === currentTime) {
+              shouldNotify = true;
+            }
+            break;
+          case 'allDayRepeat':
+            if (todo.specificTime === currentTime && !todo.completed) {
+              shouldNotify = true;
+            }
+            break;
+          case 'fixedRepeat':
+            if (todo.timeSlots && todo.repeatInterval) {
+              for (const slot of todo.timeSlots) {
+                if (currentTime >= slot.startTime && currentTime <= slot.endTime) {
+                  // 检查是否在间隔时间点
+                  const startMinutes = parseInt(slot.startTime.split(':')[0]) * 60 + parseInt(slot.startTime.split(':')[1]);
+                  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+                  const intervalMinutes = todo.repeatUnit === 'hours' ? todo.repeatInterval * 60 : todo.repeatInterval;
+                  
+                  if ((currentMinutes - startMinutes) % intervalMinutes === 0) {
+                    shouldNotify = true;
+                  }
+                }
+              }
+            }
+            break;
+          case 'planned':
+            if (todo.planNodes) {
+              for (const node of todo.planNodes) {
+                if (node.date === currentDate && node.time === currentTime) {
+                  shouldNotify = true;
+                }
+              }
+            }
+            break;
+          case 'yearly':
+            // 全年计划暂不设置具体时间点提醒，可扩展
+            break;
+        }
+
+        if (shouldNotify && !todo.completed) {
           if (Notification.permission === 'granted') {
             new Notification(`提醒: ${todo.title}`, {
               body: `时间到了！${now.toLocaleTimeString()}`,
               icon: '/favicon.ico',
             });
-          } else if (Notification.permission === 'default') {
-            Notification.requestPermission();
           }
         }
       }
@@ -218,6 +423,41 @@ export default function TodosPage() {
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
   const calendarDays = getCalendarData(year, month);
+
+  // 检查 Todo 是否在指定日期范围内应该显示
+  const isTodoVisibleOnDate = useCallback((todo: Todo, dateStr: string): boolean => {
+    // 一次性：只在指定日期显示
+    if (todo.todoType === 'onetime') {
+      return todo.date === dateStr;
+    }
+    
+    // 固定时间重复：每天都显示（无限循环）
+    if (todo.todoType === 'fixedRepeat') {
+      return true;
+    }
+    
+    // 全天候重复：每天都显示
+    if (todo.todoType === 'allDayRepeat') {
+      return true;
+    }
+    
+    // 计划：在日期范围内显示
+    if (todo.todoType === 'planned') {
+      if (todo.date && todo.endDate) {
+        return dateStr >= todo.date && dateStr <= todo.endDate;
+      }
+      return todo.date === dateStr;
+    }
+    
+    // 全年计划：在指定年份内显示
+    if (todo.todoType === 'yearly') {
+      const year = parseInt(dateStr.split('-')[0]);
+      return todo.year === year;
+    }
+    
+    // 兼容旧数据（没有 todoType 的）
+    return todo.date === dateStr;
+  }, []);
 
   // 筛选逻辑
   const filteredTodos = useCallback(() => {
@@ -231,7 +471,8 @@ export default function TodosPage() {
       if (filter === 'completed' && !todo.completed) {
         return false;
       }
-      if (selectedDate && todo.date !== selectedDate) {
+      // 日期筛选：根据类型判断是否在当前选中日期范围内
+      if (selectedDate && !isTodoVisibleOnDate(todo, selectedDate)) {
         return false;
       }
       if (searchQuery && !todo.title.toLowerCase().includes(searchQuery.toLowerCase())) {
@@ -239,7 +480,7 @@ export default function TodosPage() {
       }
       return true;
     });
-  }, [todos, selectedCategory, filter, selectedDate, searchQuery]);
+  }, [todos, selectedCategory, filter, selectedDate, searchQuery, isTodoVisibleOnDate]);
 
   // 统计
   const completedCount = todos.filter(t => t.completed).length;
@@ -247,15 +488,25 @@ export default function TodosPage() {
   const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
   // 获取某日期是否有待办
-  const hasTodoOnDate = useCallback((day: number) => {
+  const getTodosOnDate = useCallback((day: number) => {
     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    return todos.some(t => t.date === dateStr);
-  }, [todos, year, month]);
-
-  // 获取某日期是否有每日待办
-  const hasDailyTodoOnDate = useCallback((day: number) => {
-    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    return todos.some(t => t.date === dateStr && (t.isDaily || t.repeatType === 'daily' || t.repeatType === 'interval'));
+    return todos.filter(t => {
+      // 一次性
+      if (t.todoType === 'onetime' && t.date === dateStr) return true;
+      // 固定重复（每天都显示）
+      if (t.todoType === 'fixedRepeat') return true;
+      // 全天候重复（每天都显示）
+      if (t.todoType === 'allDayRepeat') return true;
+      // 计划（日期范围内）
+      if (t.todoType === 'planned' && t.date && t.endDate) {
+        return dateStr >= t.date && dateStr <= t.endDate;
+      }
+      // 全年（当年内）
+      if (t.todoType === 'yearly' && t.year === year) return true;
+      // 兼容旧数据
+      if (t.date === dateStr) return true;
+      return false;
+    });
   }, [todos, year, month]);
 
   // 同步待办数据到 Service Worker
@@ -361,33 +612,69 @@ export default function TodosPage() {
   const handleAddTodo = async () => {
     if (newTodoTitle.trim()) {
       const today = new Date().toISOString().split('T')[0];
-      const finalDate = newTodoDaily ? today : (newTodoDate || today);
-
-      const newTodo: Todo = {
+      
+      // 根据类型构建 todo 数据
+      const baseTodo: Partial<Todo> = {
         id: Date.now(),
         title: newTodoTitle,
         category: newTodoCategory,
-        date: finalDate,
         completed: false,
         isImportant: newTodoImportant,
-        isDaily: newTodoDaily,
-        repeatType: newTodoRepeatType,
-        repeatInterval: newTodoRepeatType === 'interval' ? newTodoRepeatInterval : undefined,
-        repeatUnit: newTodoRepeatType === 'interval' ? newTodoRepeatUnit : undefined,
-        reminderTime: (newTodoDaily || newTodoRepeatType === 'daily') ? newTodoReminderTime : undefined,
+        todoType: newTodoType,
+        enableNotification: newTodoEnableNotification,
       };
+
+      // 根据类型填充特定字段
+      switch (newTodoType) {
+        case 'onetime':
+          baseTodo.date = newTodoDate || today;
+          baseTodo.isAllDay = newTodoIsAllDay;
+          baseTodo.specificTime = newTodoIsAllDay ? undefined : newTodoSpecificTime;
+          break;
+        case 'fixedRepeat':
+          baseTodo.date = today;
+          baseTodo.timeSlots = newTodoTimeSlots;
+          baseTodo.repeatInterval = newTodoRepeatInterval;
+          baseTodo.repeatUnit = newTodoRepeatUnit;
+          break;
+        case 'allDayRepeat':
+          baseTodo.date = today;
+          baseTodo.specificTime = newTodoSpecificTime;
+          break;
+        case 'planned':
+          baseTodo.date = newTodoDate || today;
+          baseTodo.endDate = newTodoEndDate;
+          if (newTodoHasPlanNodes && newTodoPlanNodes.length > 0) {
+            baseTodo.planNodes = newTodoPlanNodes;
+          }
+          break;
+        case 'yearly':
+          baseTodo.date = today;
+          baseTodo.year = newTodoYear;
+          break;
+      }
+
+      const newTodo = baseTodo as Todo;
       await addTodo(newTodo);
       const newTodos = [...todos, newTodo];
       setTodos(newTodos);
       syncTodosToSW(newTodos);
+      
+      // 重置表单
       setNewTodoTitle('');
-      setNewTodoDate('');
-      setNewTodoImportant(false);
-      setNewTodoDaily(false);
-      setNewTodoRepeatType('none');
+      setNewTodoType('onetime');
+      setNewTodoEnableNotification(false);
+      setNewTodoDate(new Date().toISOString().split('T')[0]);
+      setNewTodoEndDate(new Date().toISOString().split('T')[0]);
+      setNewTodoIsAllDay(true);
+      setNewTodoSpecificTime('');
+      setNewTodoTimeSlots([{ startTime: '09:00', endTime: '17:00' }]);
       setNewTodoRepeatInterval(30);
       setNewTodoRepeatUnit('minutes');
-      setNewTodoReminderTime('');
+      setNewTodoPlanNodes([]);
+      setNewTodoHasPlanNodes(false);
+      setNewTodoYear(new Date().getFullYear());
+      setNewTodoImportant(false);
       setShowAddTodo(false);
     }
   };
@@ -616,59 +903,60 @@ export default function TodosPage() {
         <div className="flex-1 overflow-auto px-6 py-4">
           {filteredTodos().length > 0 ? (
             <div className="flex flex-col gap-3">
-              {filteredTodos().map(todo => (
-                <div
-                  key={todo.id}
-                  onContextMenu={(e) => handleTodoContextMenu(e, todo)}
-                  className="flex items-center gap-3 px-3 py-3 bg-white border border-neutral-200 dark:border-neutral-700 rounded-lg cursor-context-menu transition-all"
-                >
-                  <button
-                    onClick={() => toggleTodo(todo.id)}
-                    className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all ${
-                      todo.completed
-                        ? 'bg-neutral-900 dark:bg-neutral-100 border-neutral-900 dark:border-neutral-100'
-                        : 'bg-white border-neutral-300 dark:border-neutral-600'
-                    }`}
+              {filteredTodos().map(todo => {
+                const typeConfig = TODO_TYPE_COLORS[todo.todoType] || TODO_TYPE_COLORS.onetime;
+                return (
+                  <div
+                    key={todo.id}
+                    onContextMenu={(e) => handleTodoContextMenu(e, todo)}
+                    className="flex items-center gap-3 px-3 py-3 bg-white border border-neutral-200 dark:border-neutral-700 rounded-lg cursor-context-menu transition-all"
                   >
-                    {todo.completed && (
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3">
-                        <path d="M5 12l5 5L20 7" />
-                      </svg>
-                    )}
-                  </button>
+                    <button
+                      onClick={() => toggleTodo(todo.id)}
+                      className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+                        todo.completed
+                          ? 'bg-neutral-900 dark:bg-neutral-100 border-neutral-900 dark:border-neutral-100'
+                          : 'bg-white border-neutral-300 dark:border-neutral-600'
+                      }`}
+                    >
+                      {todo.completed && (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3">
+                          <path d="M5 12l5 5L20 7" />
+                        </svg>
+                      )}
+                    </button>
 
-                  <span className={`flex-1 text-sm font-medium font-sans ${todo.completed ? 'line-through' : ''} text-neutral-900 dark:text-neutral-100`}>
-                    {todo.title}
-                    {todo.isDaily && (
-                      <span className="ml-2 inline-flex items-center px-1.5 py-0.5 text-xs font-mono rounded bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-300">
-                        Daily
+                    <span className={`flex-1 text-sm font-medium font-sans ${todo.completed ? 'line-through' : ''} text-neutral-900 dark:text-neutral-100`}>
+                      {todo.title}
+                      {/* 类型标签 */}
+                      <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 text-xs font-mono rounded ${typeConfig.bgLight} dark:${typeConfig.bgDark} ${typeConfig.textLight} dark:${typeConfig.textDark}`}>
+                        {typeConfig.name}
                       </span>
-                    )}
-                    {todo.repeatType === 'daily' && !todo.isDaily && (
-                      <span className="ml-2 inline-flex items-center px-1.5 py-0.5 text-xs font-mono rounded bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300">
-                        Daily
-                      </span>
-                    )}
-                    {todo.repeatType === 'interval' && (
-                      <span className="ml-2 inline-flex items-center px-1.5 py-0.5 text-xs font-mono rounded bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300">
-                        {todo.repeatInterval}{todo.repeatUnit === 'minutes' ? 'm' : 'h'}
-                      </span>
-                    )}
-                  </span>
+                      {/* 通知指示 */}
+                      {todo.enableNotification && (
+                        <span className="ml-1 inline-flex items-center text-neutral-400" title="已启用通知">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                            <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+                          </svg>
+                        </span>
+                      )}
+                    </span>
 
-                  <span className={`px-2 py-1 text-xs font-mono rounded ${
-                    todo.isImportant
-                      ? 'bg-orange-800 text-white border-none'
-                      : 'bg-transparent text-neutral-500 border border-neutral-300 dark:border-neutral-600'
-                  }`}>
-                    {todo.category}
-                  </span>
+                    <span className={`px-2 py-1 text-xs font-mono rounded ${
+                      todo.isImportant
+                        ? 'bg-orange-800 text-white border-none'
+                        : 'bg-transparent text-neutral-500 border border-neutral-300 dark:border-neutral-600'
+                    }`}>
+                      {todo.category}
+                    </span>
 
-                  <span className="text-xs font-mono text-neutral-500">
-                    {todo.date}
-                  </span>
-                </div>
-              ))}
+                    <span className="text-xs font-mono text-neutral-500">
+                      {todo.date}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="text-center py-15 text-sm text-neutral-500">
@@ -766,8 +1054,8 @@ export default function TodosPage() {
 
               const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
               const isSelected = selectedDate === dateStr;
-              const hasTodo = hasTodoOnDate(day);
-              const hasDaily = hasDailyTodoOnDate(day);
+              const dayTodos = getTodosOnDate(day);
+              const hasTodo = dayTodos.length > 0;
 
               return (
                 <button
@@ -782,13 +1070,22 @@ export default function TodosPage() {
                   }`}
                 >
                   {day}
-                  {/* 每日待办显示橙色方块 */}
-                  {hasDaily && !isSelected && (
-                    <div className="absolute bottom-1 w-1.5 h-1 bg-orange-600 rounded-sm" />
-                  )}
-                  {/* 非每日待办显示圆点 */}
-                  {hasTodo && !hasDaily && !isSelected && (
-                    <div className="absolute bottom-1.5 w-1 h-1 rounded-full bg-orange-800" />
+                  {/* 显示所有不同类型的标记（去重，全部使用实心圆） */}
+                  {hasTodo && !isSelected && (
+                    <div className="absolute bottom-1 flex gap-0.5 flex-wrap justify-center max-w-[90%]">
+                      {(() => {
+                        // 提取当天所有存在的类型（去重）
+                        const types = [...new Set(dayTodos.map(t => t.todoType))];
+                        
+                        return types.map((type, idx) => {
+                          const typeConfig = TODO_TYPE_COLORS[type] || TODO_TYPE_COLORS.onetime;
+                          const color = typeConfig.color;
+                          
+                          // 所有类型都使用实心圆
+                          return <div key={idx} className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} title={typeConfig.name} />;
+                        });
+                      })()}
+                    </div>
                   )}
                 </button>
               );
@@ -905,17 +1202,18 @@ export default function TodosPage() {
       {/* 新增待办弹窗 */}
       {showAddTodo && (
         <div
-          className="fixed inset-0 flex items-center justify-center z-50 bg-black/50"
+          className="fixed inset-0 flex items-center justify-center z-50 bg-black/50 overflow-y-auto"
           onClick={() => setShowAddTodo(false)}
         >
         <div
-          className="bg-white dark:bg-neutral-800 rounded-xl p-6 w-96 max-w-[90vw]"
+          className="bg-white dark:bg-neutral-800 rounded-xl p-6 w-[500px] max-w-[90vw] my-8"
           onClick={(e) => e.stopPropagation()}
         >
             <h3 className="text-lg font-semibold mb-4 text-neutral-900 dark:text-neutral-100">
               Add Todo
             </h3>
 
+            {/* 标题输入 */}
             <div className="mb-4">
               <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
                 Title
@@ -930,6 +1228,7 @@ export default function TodosPage() {
               />
             </div>
 
+            {/* 分类和类型选择 */}
             <div className="flex gap-3 mb-4">
               <div className="flex-1">
                 <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
@@ -945,26 +1244,213 @@ export default function TodosPage() {
                   ))}
                 </select>
               </div>
+            </div>
 
-              <div className="flex-1">
-                <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
-                  Date {!newTodoDaily && '(Optional)'}
-                </label>
-                <input
-                  type="date"
-                  value={newTodoDate}
-                  onChange={(e) => setNewTodoDate(e.target.value)}
-                  disabled={newTodoDaily}
-                  className={`w-full px-3 py-2.5 text-sm border rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 ${
-                    newTodoDaily
-                      ? 'border-neutral-200 dark:border-neutral-600 text-neutral-400 cursor-not-allowed'
-                      : 'border-neutral-300 dark:border-neutral-600'
-                  }`}
-                />
+            {/* Todo 类型选择 */}
+            <div className="mb-4">
+              <label className="block text-xs font-medium mb-2 text-neutral-900 dark:text-neutral-100">
+                Type
+              </label>
+              <div className="grid grid-cols-5 gap-2">
+                {(Object.keys(TODO_TYPE_COLORS) as TodoType[]).map((type) => {
+                  const config = TODO_TYPE_COLORS[type];
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setNewTodoType(type)}
+                      className={`px-2 py-2 text-xs font-mono rounded-lg border transition-all flex flex-col items-center gap-1 ${
+                        newTodoType === type
+                          ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 border-neutral-900 dark:border-neutral-100'
+                          : 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-700'
+                      }`}
+                    >
+                      <span 
+                        className="w-2 h-2 rounded-full"
+                        style={{ backgroundColor: config.color }}
+                      />
+                      {config.name}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-             <div className="mb-5 space-y-3">
+            {/* 通知开关 */}
+            <div className="mb-4 p-3 border border-neutral-200 dark:border-neutral-700 rounded-lg">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newTodoEnableNotification}
+                  onChange={(e) => setNewTodoEnableNotification(e.target.checked)}
+                  className="w-4 h-4 cursor-pointer accent-neutral-900 dark:accent-neutral-100"
+                />
+                <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                  启用通知
+                </span>
+              </label>
+            </div>
+
+            {/* 根据类型显示不同配置 */}
+            <div className="mb-4 space-y-3">
+              {/* 一次性类型 */}
+              {newTodoType === 'onetime' && (
+                <div className="space-y-3">
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
+                        日期
+                      </label>
+                      <input
+                        type="date"
+                        value={newTodoDate}
+                        onChange={(e) => setNewTodoDate(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                      />
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newTodoIsAllDay}
+                      onChange={(e) => setNewTodoIsAllDay(e.target.checked)}
+                      className="w-4 h-4 cursor-pointer accent-neutral-900 dark:accent-neutral-100"
+                    />
+                    <span className="text-sm text-neutral-900 dark:text-neutral-100">全天</span>
+                  </label>
+                  {!newTodoIsAllDay && (
+                    <div>
+                      <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
+                        具体时间
+                      </label>
+                      <input
+                        type="time"
+                        value={newTodoSpecificTime}
+                        onChange={(e) => setNewTodoSpecificTime(e.target.value)}
+                        className="px-3 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 固定时间重复 */}
+              {newTodoType === 'fixedRepeat' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium mb-2 text-neutral-900 dark:text-neutral-100">
+                      时间段
+                    </label>
+                    <TimeSlotEditor slots={newTodoTimeSlots} onChange={setNewTodoTimeSlots} />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-900 dark:text-neutral-100">每隔</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="999"
+                      value={newTodoRepeatInterval}
+                      onChange={(e) => setNewTodoRepeatInterval(parseInt(e.target.value) || 1)}
+                      className="w-16 px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                    />
+                    <select
+                      value={newTodoRepeatUnit}
+                      onChange={(e) => setNewTodoRepeatUnit(e.target.value as 'minutes' | 'hours')}
+                      className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 cursor-pointer text-neutral-900 dark:text-neutral-100"
+                    >
+                      <option value="minutes">分钟</option>
+                      <option value="hours">小时</option>
+                    </select>
+                    <span className="text-sm text-neutral-900 dark:text-neutral-100">提醒一次</span>
+                  </div>
+                </div>
+              )}
+
+              {/* 全天候重复 */}
+              {newTodoType === 'allDayRepeat' && (
+                <div>
+                  <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
+                    每日提醒时间
+                  </label>
+                  <input
+                    type="time"
+                    value={newTodoSpecificTime}
+                    onChange={(e) => setNewTodoSpecificTime(e.target.value)}
+                    className="px-3 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                  />
+                </div>
+              )}
+
+              {/* 计划类型 */}
+              {newTodoType === 'planned' && (
+                <div className="space-y-3">
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
+                        开始日期
+                      </label>
+                      <input
+                        type="date"
+                        value={newTodoDate}
+                        onChange={(e) => setNewTodoDate(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
+                        结束日期
+                      </label>
+                      <input
+                        type="date"
+                        value={newTodoEndDate}
+                        onChange={(e) => setNewTodoEndDate(e.target.value)}
+                        min={newTodoDate}
+                        className="w-full px-3 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                      />
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newTodoHasPlanNodes}
+                      onChange={(e) => setNewTodoHasPlanNodes(e.target.checked)}
+                      className="w-4 h-4 cursor-pointer accent-neutral-900 dark:accent-neutral-100"
+                    />
+                    <span className="text-sm text-neutral-900 dark:text-neutral-100">设置时间节点</span>
+                  </label>
+                  {newTodoHasPlanNodes && (
+                    <PlanNodeEditor
+                      nodes={newTodoPlanNodes}
+                      onChange={setNewTodoPlanNodes}
+                      startDate={newTodoDate}
+                      endDate={newTodoEndDate}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* 全年计划 */}
+              {newTodoType === 'yearly' && (
+                <div>
+                  <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
+                    选择年份
+                  </label>
+                  <select
+                    value={newTodoYear}
+                    onChange={(e) => setNewTodoYear(parseInt(e.target.value))}
+                    className="px-3 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 cursor-pointer text-neutral-900 dark:text-neutral-100"
+                  >
+                    {[...Array(5)].map((_, i) => {
+                      const year = new Date().getFullYear() + i;
+                      return <option key={year} value={year}>{year}年</option>;
+                    })}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* 重要标记 */}
+            <div className="mb-4">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -973,92 +1459,9 @@ export default function TodosPage() {
                   className="w-4 h-4 cursor-pointer accent-neutral-900 dark:accent-neutral-100"
                 />
                 <span className="text-sm text-neutral-900 dark:text-neutral-100">
-                  Mark as Important
+                  标记为重要
                 </span>
               </label>
-
-              <div className="pt-2 border-t border-neutral-200 dark:border-neutral-700">
-                <label className="block text-xs font-medium mb-2 text-neutral-900 dark:text-neutral-100">
-                  Repeat Type
-                </label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setNewTodoRepeatType('none')}
-                    className={`flex-1 px-3 py-2 text-xs font-mono rounded-lg border transition-all ${
-                      newTodoRepeatType === 'none'
-                        ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 border-neutral-900 dark:border-neutral-100'
-                        : 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-700'
-                    }`}
-                  >
-                    None
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewTodoRepeatType('daily');
-                      setNewTodoDaily(true);
-                    }}
-                    className={`flex-1 px-3 py-2 text-xs font-mono rounded-lg border transition-all ${
-                      newTodoRepeatType === 'daily'
-                        ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 border-neutral-900 dark:border-neutral-100'
-                        : 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-700'
-                    }`}
-                  >
-                    Daily
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewTodoRepeatType('interval');
-                      setNewTodoDaily(false);
-                    }}
-                    className={`flex-1 px-3 py-2 text-xs font-mono rounded-lg border transition-all ${
-                      newTodoRepeatType === 'interval'
-                        ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 border-neutral-900 dark:border-neutral-100'
-                        : 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-700'
-                    }`}
-                  >
-                    Interval
-                  </button>
-                </div>
-              </div>
-
-              {newTodoRepeatType === 'daily' && (
-                <div className="ml-6">
-                  <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
-                    Reminder Time
-                  </label>
-                  <input
-                    type="time"
-                    value={newTodoReminderTime}
-                    onChange={(e) => setNewTodoReminderTime(e.target.value)}
-                    className="px-3 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
-                  />
-                </div>
-              )}
-
-              {newTodoRepeatType === 'interval' && (
-                <div className="ml-6 flex items-center gap-2">
-                  <span className="text-sm text-neutral-900 dark:text-neutral-100">Every</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="999"
-                    value={newTodoRepeatInterval}
-                    onChange={(e) => setNewTodoRepeatInterval(parseInt(e.target.value) || 1)}
-                    className="w-16 px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
-                  />
-                  <select
-                    value={newTodoRepeatUnit}
-                    onChange={(e) => setNewTodoRepeatUnit(e.target.value as 'minutes' | 'hours')}
-                    className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 cursor-pointer text-neutral-900 dark:text-neutral-100"
-                  >
-                    <option value="minutes">Minutes</option>
-                    <option value="hours">Hours</option>
-                  </select>
-                </div>
-              )}
             </div>
 
             <div className="flex gap-2 justify-end mt-6">
