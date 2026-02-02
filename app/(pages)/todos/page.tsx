@@ -16,6 +16,8 @@ import {
   resetDailyTodosForNewDay,
   Category,
   Todo,
+  RepeatType,
+  openDB,
 } from '@/lib/todos-db';
 
 // 右键菜单组件
@@ -122,6 +124,9 @@ export default function TodosPage() {
   const [newTodoDate, setNewTodoDate] = useState(new Date().toISOString().split('T')[0]);
   const [newTodoImportant, setNewTodoImportant] = useState(false);
   const [newTodoDaily, setNewTodoDaily] = useState(false);
+  const [newTodoRepeatType, setNewTodoRepeatType] = useState<RepeatType>('none');
+  const [newTodoRepeatInterval, setNewTodoRepeatInterval] = useState(30);
+  const [newTodoRepeatUnit, setNewTodoRepeatUnit] = useState<'minutes' | 'hours'>('minutes');
   const [newTodoReminderTime, setNewTodoReminderTime] = useState('');
 
   // 右键菜单状态
@@ -142,6 +147,16 @@ export default function TodosPage() {
         const data = await initializeData();
         setCategories(data.categories);
         setTodos(data.todos);
+
+        // 保存到 localStorage 供 Service Worker 使用
+        localStorage.setItem('todos', JSON.stringify(data.todos));
+
+        // 通过 BroadcastChannel 通知 Service Worker
+        if ('BroadcastChannel' in window) {
+          const bc = new BroadcastChannel('todo-reminder-channel');
+          bc.postMessage({ type: 'TODOS_UPDATED', todos: data.todos });
+          bc.close();
+        }
       } catch (error) {
         console.error('Failed to load data:', error);
       } finally {
@@ -156,6 +171,21 @@ export default function TodosPage() {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
+
+    // 注册 Service Worker 用于后台通知
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/todo-notification-sw.js')
+        .then((registration) => {
+          console.log('Service Worker registered:', registration);
+          // 通知 Service Worker 开始检查提醒
+          navigator.serviceWorker.ready.then((swRegistration) => {
+            swRegistration.active?.postMessage('start');
+          });
+        })
+        .catch((error) => {
+          console.error('Service Worker registration failed:', error);
+        });
+    }
   }, []);
 
   // 定时检查提醒
@@ -164,6 +194,7 @@ export default function TodosPage() {
       const now = new Date();
       const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
       const currentDate = now.toISOString().split('T')[0];
+      const currentTimestamp = now.getTime();
 
       const dailyTodos = await getDailyTodos();
 
@@ -224,16 +255,28 @@ export default function TodosPage() {
   // 获取某日期是否有每日待办
   const hasDailyTodoOnDate = useCallback((day: number) => {
     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    return todos.some(t => t.date === dateStr && t.isDaily);
+    return todos.some(t => t.date === dateStr && (t.isDaily || t.repeatType === 'daily' || t.repeatType === 'interval'));
   }, [todos, year, month]);
+
+  // 同步待办数据到 Service Worker
+  const syncTodosToSW = useCallback((todosData: Todo[]) => {
+    localStorage.setItem('todos', JSON.stringify(todosData));
+    if ('BroadcastChannel' in window) {
+      const bc = new BroadcastChannel('todo-reminder-channel');
+      bc.postMessage({ type: 'TODOS_UPDATED', todos: todosData });
+      bc.close();
+    }
+  }, []);
 
   // 切换待办完成状态
   const toggleTodo = async (id: number) => {
     const todo = todos.find(t => t.id === id);
     if (todo) {
       const updatedTodo = { ...todo, completed: !todo.completed };
-      setTodos(prev => prev.map(t => t.id === id ? updatedTodo : t));
+      const newTodos = todos.map(t => t.id === id ? updatedTodo : t);
+      setTodos(newTodos);
       await updateTodo(updatedTodo);
+      syncTodosToSW(newTodos);
     }
   };
 
@@ -289,7 +332,9 @@ export default function TodosPage() {
   // 删除待办
   const handleDeleteTodo = async (todoId: number) => {
     await deleteTodo(todoId);
-    setTodos(prev => prev.filter(t => t.id !== todoId));
+    const newTodos = todos.filter(t => t.id !== todoId);
+    setTodos(newTodos);
+    syncTodosToSW(newTodos);
   };
 
   // 执行重命名
@@ -302,7 +347,9 @@ export default function TodosPage() {
       } else {
         const updatedTodo = { ...todos.find(t => t.id === renameTarget.id)!, title: renameValue.trim() };
         await updateTodo(updatedTodo);
-        setTodos(prev => prev.map(t => t.id === renameTarget.id ? updatedTodo : t));
+        const newTodos = todos.map(t => t.id === renameTarget.id ? updatedTodo : t);
+        setTodos(newTodos);
+        syncTodosToSW(newTodos);
       }
     }
     setShowRenameModal(false);
@@ -324,14 +371,22 @@ export default function TodosPage() {
         completed: false,
         isImportant: newTodoImportant,
         isDaily: newTodoDaily,
-        reminderTime: newTodoDaily ? newTodoReminderTime : undefined,
+        repeatType: newTodoRepeatType,
+        repeatInterval: newTodoRepeatType === 'interval' ? newTodoRepeatInterval : undefined,
+        repeatUnit: newTodoRepeatType === 'interval' ? newTodoRepeatUnit : undefined,
+        reminderTime: (newTodoDaily || newTodoRepeatType === 'daily') ? newTodoReminderTime : undefined,
       };
       await addTodo(newTodo);
-      setTodos(prev => [...prev, newTodo]);
+      const newTodos = [...todos, newTodo];
+      setTodos(newTodos);
+      syncTodosToSW(newTodos);
       setNewTodoTitle('');
       setNewTodoDate('');
       setNewTodoImportant(false);
       setNewTodoDaily(false);
+      setNewTodoRepeatType('none');
+      setNewTodoRepeatInterval(30);
+      setNewTodoRepeatUnit('minutes');
       setNewTodoReminderTime('');
       setShowAddTodo(false);
     }
@@ -587,6 +642,16 @@ export default function TodosPage() {
                     {todo.isDaily && (
                       <span className="ml-2 inline-flex items-center px-1.5 py-0.5 text-xs font-mono rounded bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-300">
                         Daily
+                      </span>
+                    )}
+                    {todo.repeatType === 'daily' && !todo.isDaily && (
+                      <span className="ml-2 inline-flex items-center px-1.5 py-0.5 text-xs font-mono rounded bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300">
+                        Daily
+                      </span>
+                    )}
+                    {todo.repeatType === 'interval' && (
+                      <span className="ml-2 inline-flex items-center px-1.5 py-0.5 text-xs font-mono rounded bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300">
+                        {todo.repeatInterval}{todo.repeatUnit === 'minutes' ? 'm' : 'h'}
                       </span>
                     )}
                   </span>
@@ -899,7 +964,7 @@ export default function TodosPage() {
               </div>
             </div>
 
-            <div className="mb-5 space-y-3">
+             <div className="mb-5 space-y-3">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -912,19 +977,54 @@ export default function TodosPage() {
                 </span>
               </label>
 
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={newTodoDaily}
-                  onChange={(e) => setNewTodoDaily(e.target.checked)}
-                  className="w-4 h-4 cursor-pointer accent-neutral-900 dark:accent-neutral-100"
-                />
-                <span className="text-sm text-neutral-900 dark:text-neutral-100">
-                  Daily Repeat
-                </span>
-              </label>
+              <div className="pt-2 border-t border-neutral-200 dark:border-neutral-700">
+                <label className="block text-xs font-medium mb-2 text-neutral-900 dark:text-neutral-100">
+                  Repeat Type
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewTodoRepeatType('none')}
+                    className={`flex-1 px-3 py-2 text-xs font-mono rounded-lg border transition-all ${
+                      newTodoRepeatType === 'none'
+                        ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 border-neutral-900 dark:border-neutral-100'
+                        : 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-700'
+                    }`}
+                  >
+                    None
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewTodoRepeatType('daily');
+                      setNewTodoDaily(true);
+                    }}
+                    className={`flex-1 px-3 py-2 text-xs font-mono rounded-lg border transition-all ${
+                      newTodoRepeatType === 'daily'
+                        ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 border-neutral-900 dark:border-neutral-100'
+                        : 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-700'
+                    }`}
+                  >
+                    Daily
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewTodoRepeatType('interval');
+                      setNewTodoDaily(false);
+                    }}
+                    className={`flex-1 px-3 py-2 text-xs font-mono rounded-lg border transition-all ${
+                      newTodoRepeatType === 'interval'
+                        ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 border-neutral-900 dark:border-neutral-100'
+                        : 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-700'
+                    }`}
+                  >
+                    Interval
+                  </button>
+                </div>
+              </div>
 
-              {newTodoDaily && (
+              {newTodoRepeatType === 'daily' && (
                 <div className="ml-6">
                   <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
                     Reminder Time
@@ -935,6 +1035,28 @@ export default function TodosPage() {
                     onChange={(e) => setNewTodoReminderTime(e.target.value)}
                     className="px-3 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
                   />
+                </div>
+              )}
+
+              {newTodoRepeatType === 'interval' && (
+                <div className="ml-6 flex items-center gap-2">
+                  <span className="text-sm text-neutral-900 dark:text-neutral-100">Every</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="999"
+                    value={newTodoRepeatInterval}
+                    onChange={(e) => setNewTodoRepeatInterval(parseInt(e.target.value) || 1)}
+                    className="w-16 px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                  />
+                  <select
+                    value={newTodoRepeatUnit}
+                    onChange={(e) => setNewTodoRepeatUnit(e.target.value as 'minutes' | 'hours')}
+                    className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 cursor-pointer text-neutral-900 dark:text-neutral-100"
+                  >
+                    <option value="minutes">Minutes</option>
+                    <option value="hours">Hours</option>
+                  </select>
                 </div>
               )}
             </div>

@@ -5,6 +5,8 @@ const DB_VERSION = 1;
 const STORE_CATEGORIES = 'categories';
 const STORE_TODOS = 'todos';
 
+export type RepeatType = 'none' | 'daily' | 'interval';
+
 export interface Todo {
   id: number;
   title: string;
@@ -13,6 +15,9 @@ export interface Todo {
   completed: boolean;
   isImportant: boolean;
   isDaily?: boolean;
+  repeatType?: RepeatType;
+  repeatInterval?: number;
+  repeatUnit?: 'minutes' | 'hours';
   reminderTime?: string;
 }
 
@@ -24,7 +29,7 @@ export interface Category {
 }
 
 // 打开数据库
-function openDB(): Promise<IDBDatabase> {
+export function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
@@ -224,15 +229,15 @@ export async function initializeData(): Promise<{ categories: Category[]; todos:
 
 export async function getDailyTodos(): Promise<Todo[]> {
   const todos = await getTodos();
-  return todos.filter(todo => todo.isDaily);
+  return todos.filter(todo => todo.isDaily || todo.repeatType === 'daily' || todo.repeatType === 'interval');
 }
 
 export async function resetDailyTodosForNewDay(): Promise<void> {
   const todos = await getTodos();
   const today = new Date().toISOString().split('T')[0];
-  const dailyTodos = todos.filter(todo => todo.isDaily);
+  const repeatingTodos = todos.filter(todo => todo.isDaily || todo.repeatType === 'daily' || todo.repeatType === 'interval');
 
-  for (const todo of dailyTodos) {
+  for (const todo of repeatingTodos) {
     const updatedTodo = { ...todo, date: today, completed: false };
     await updateTodo(updatedTodo);
   }
