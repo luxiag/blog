@@ -4,11 +4,10 @@ import React from 'react';
 import { LiveProvider, LiveEditor, LiveError, LivePreview } from 'react-live';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { OrbitControls, PerspectiveCamera, OrthographicCamera, Html, Environment, ContactShadows } from '@react-three/drei';
-import { EffectComposer, Bloom } from '@react-three/postprocessing';
+import { OrbitControls, PerspectiveCamera, Stats, OrthographicCamera, Html, Environment, MeshReflectorMaterial, Float, Sphere, Stars,ContactShadows } from '@react-three/drei';
 import { themes } from 'prism-react-renderer';
-import { Stats } from '@react-three/drei';
 import * as fabric from 'fabric';
+import { DepthOfField, Pixelation, Noise, Vignette, EffectComposer, Bloom, ChromaticAberration, Scanline,SMAA,BrightnessContrast  } from '@react-three/postprocessing'
 
 // OpenLayers imports
 import Map from 'ol/Map';
@@ -59,6 +58,7 @@ const scope = {
   useEffect: React.useEffect,
   useMemo: React.useMemo,
   useCallback: React.useCallback,
+  useLayoutEffect: React.useLayoutEffect,
   Canvas,
   useFrame,
   useThree,
@@ -74,11 +74,15 @@ const scope = {
   Stats,
   fabric,
   ol,
-  Cesium
+  Cesium,
+  DepthOfField,
+  Pixelation, Noise, Vignette, ChromaticAberration, Scanline,SMAA,BrightnessContrast ,
+  MeshReflectorMaterial, Float, Sphere,Stars
 };
 
 interface CodePenDemoProps {
-  code: string;
+  children?: React.ReactNode;
+  code?: string;
   title?: string;
   height?: string;
 }
@@ -133,10 +137,47 @@ const codeHighlightTheme = {
   ],
 };
 
-export default function CodePenDemo({ code, title = "Live Demo", height = "400px" }: CodePenDemoProps) {
-  // Ensure code is a string
-  const codeString = typeof code === 'string' ? code : '';
+export default function CodePenDemo({ children, code, title = "Live Demo", height = "400px" }: CodePenDemoProps) {
   const [activeTab, setActiveTab] = React.useState<'preview' | 'code'>('preview');
+
+
+  const codeString = React.useMemo(() => {
+    if (code) return code.trim();
+
+    if (children) {
+      const extractText = (node: any): string => {
+        if (!node) return "";
+        // 如果是纯文本
+        if (typeof node === "string") return node;
+        if (typeof node === "number") return String(node);
+
+        // 如果是数组（MDX 常将代码块分成多行 span）
+        if (Array.isArray(node)) {
+          return node.map(extractText).join("");
+        }
+
+        // 如果是 React 元素 (如 <pre>, <code>, <span>)
+        if (React.isValidElement(node)) {
+          const props = node.props as any;
+          // 排除掉可能存在的语言标签文本（如 "jsx"）
+          if (props.className?.includes('language-')) {
+            // 有些解析器会把 "jsx" 作为第一个子元素，这里视情况处理
+          }
+          return extractText(props.children);
+        }
+        return "";
+      };
+
+      const text = extractText(children);
+
+      // 清理 Markdown 代码块残留的符号
+      return text
+        .replace(/^```[a-z]*\n/i, "") // 移除开头的 ```jsx
+        .replace(/\n```$/g, "")      // 移除结尾的 ```
+        .trim();
+    }
+    return "";
+  }, [children, code]);
 
   return (
     <div
@@ -190,7 +231,7 @@ export default function CodePenDemo({ code, title = "Live Demo", height = "400px
               }`}
           >
             <div className="flex-1 relative w-full h-full overflow-auto flex items-center justify-center p-4">
-              <LivePreview className="flex justify-center items-center w-full min-h-full" />
+              <LivePreview className="flex justify-center items-center w-full h-full" />
             </div>
             {/* Error overlay at bottom */}
             <LiveError className="absolute bottom-0 left-0 right-0 max-h-[200px] overflow-auto bg-red-900/90 text-red-100 p-3 text-xs font-mono backdrop-blur-sm border-t border-red-700" />

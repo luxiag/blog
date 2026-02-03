@@ -456,6 +456,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     InteractiveComponent,
     ShaderPreview,
     CodePenDemo,
+    codependemo: CodePenDemo,
     SqlSimulator,
   };
 
