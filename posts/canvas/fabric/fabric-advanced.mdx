@@ -758,155 +758,181 @@ const canvas = new fabric.StaticCanvas('canvas');
 让我们综合运用这些知识，创建一个功能完整的小型图片编辑器：
 
 <CodePenDemo
-  title="简易图片编辑器"
-  height="600px"
+  title="高级图片编辑器 Pro"
+  height="700px"
   code={`const ImageEditor = () => {
   const canvasEl = React.useRef(null);
   const canvasRef = React.useRef(null);
-  const [tool, setTool] = React.useState('select');
+  const [selectedObj, setSelectedObj] = React.useState(null);
+  const [attributes, setAttributes] = React.useState({ fill: '#3b82f6', opacity: 1, strokeWidth: 0 });
 
   React.useEffect(() => {
+    // 初始化画布
     const canvas = new fabric.Canvas(canvasEl.current, {
-      width: 700,
+      width: 600,
       height: 450,
-      backgroundColor: '#ffffff'
+      backgroundColor: '#f8fafc',
+      preserveObjectStacking: true // 选中物体时不自动置顶
     });
     canvasRef.current = canvas;
 
-    // 添加一个示例矩形
-    const rect = new fabric.Rect({
-      left: 100,
-      top: 100,
-      width: 150,
-      height: 100,
-      fill: '#3b82f6',
-      rx: 5,
-      ry: 5
-    });
-    canvas.add(rect);
+    // 事件监听：选中物体
+    canvas.on('selection:created', (e) => updateSelection(e.selected[0]));
+    canvas.on('selection:updated', (e) => updateSelection(e.selected[0]));
+    canvas.on('selection:cleared', () => setSelectedObj(null));
+    
+    // 监听物体修改（用于实时同步属性面板）
+    canvas.on('object:modified', (e) => updateSelection(e.target));
 
-    return () => canvas.dispose();
+    // 添加默认元素
+    const welcomeText = new fabric.IText('Fabric.js Pro', {
+      left: 100, top: 100, fontSize: 40, fill: '#1e293b', fontFamily: 'Arial'
+    });
+    canvas.add(welcomeText);
+    
+    // 快捷键支持
+    const handleKeyDown = (e) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const active = canvas.getActiveObject();
+        if (active && !active.isEditing) canvas.remove(active);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      canvas.dispose();
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
-  const addShape = (type) => {
+  const updateSelection = (obj) => {
+    if (!obj) return;
+    setSelectedObj(obj);
+    setAttributes({
+      fill: obj.fill || '#000000',
+      opacity: obj.opacity || 1,
+      strokeWidth: obj.strokeWidth || 0
+    });
+  };
+
+  const handleAttrChange = (key, value) => {
     const canvas = canvasRef.current;
-    let shape;
-
-    switch(type) {
-      case 'rect':
-        shape = new fabric.Rect({
-          left: 50,
-          top: 50,
-          width: 100,
-          height: 80,
-          fill: '#' + Math.floor(Math.random()*16777215).toString(16)
-        });
-        break;
-      case 'circle':
-        shape = new fabric.Circle({
-          left: 50,
-          top: 50,
-          radius: 50,
-          fill: '#' + Math.floor(Math.random()*16777215).toString(16)
-        });
-        break;
-      case 'triangle':
-        shape = new fabric.Triangle({
-          left: 50,
-          top: 50,
-          width: 100,
-          height: 100,
-          fill: '#' + Math.floor(Math.random()*16777215).toString(16)
-        });
-        break;
-      case 'text':
-        shape = new fabric.IText('双击编辑', {
-          left: 50,
-          top: 50,
-          fontSize: 24,
-          fill: '#000000'
-        });
-        break;
-    }
-
-    if (shape) {
-      canvas.add(shape);
-      canvas.setActiveObject(shape);
+    const obj = canvas.getActiveObject();
+    if (obj) {
+      obj.set(key, key === 'opacity' || key === 'strokeWidth' ? parseFloat(value) : value);
+      setAttributes(prev => ({ ...prev, [key]: value }));
       canvas.requestRenderAll();
     }
   };
 
-  const deleteSelected = () => {
-    const canvas = canvasRef.current;
-    const activeObject = canvas.getActiveObject();
-    if (activeObject) {
-      canvas.remove(activeObject);
-    }
+  const addImage = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (f) => {
+      fabric.Image.fromURL(f.target.result, (img) => {
+        img.scaleToWidth(200);
+        canvasRef.current.add(img).centerObject(img).setActiveObject(img);
+      });
+    };
+    reader.readAsDataURL(file);
   };
 
-  const toggleDrawing = () => {
-    const canvas = canvasRef.current;
-    const newMode = tool !== 'draw';
-    canvas.isDrawingMode = newMode;
-    setTool(newMode ? 'draw' : 'select');
-  };
-
-  const exportJSON = () => {
-    const canvas = canvasRef.current;
-    const json = JSON.stringify(canvas.toJSON());
-    console.log('Canvas JSON:', json);
-    alert('JSON 已输出到控制台');
-  };
-
-  const clearAll = () => {
-    const canvas = canvasRef.current;
-    canvas.clear();
-    canvas.backgroundColor = '#ffffff';
-    canvas.requestRenderAll();
+  const changeStack = (dir) => {
+    const obj = canvasRef.current.getActiveObject();
+    if (!obj) return;
+    if (dir === 'front') obj.bringToFront();
+    if (dir === 'back') obj.sendToBack();
+    canvasRef.current.requestRenderAll();
   };
 
   return (
-    <div className="flex flex-col items-center gap-4">
-      <div className="border-2 border-gray-300 rounded shadow-lg">
-        <canvas ref={canvasEl} />
+    <div className="flex bg-gray-50 rounded-lg overflow-hidden border border-gray-200">
+      {/* 工具栏 */}
+      <div className="w-16 bg-white border-r flex flex-col items-center py-4 gap-4 shadow-sm">
+        <button onClick={() => {
+          const r = new fabric.Rect({ left: 50, top: 50, width: 100, height: 100, fill: '#3b82f6' });
+          canvasRef.current.add(r).setActiveObject(r);
+        }} title="矩形" className="p-2 hover:bg-blue-50 rounded text-xl">🟦</button>
+        <button onClick={() => {
+          const c = new fabric.Circle({ left: 50, top: 50, radius: 50, fill: '#10b981' });
+          canvasRef.current.add(c).setActiveObject(c);
+        }} title="圆形" className="p-2 hover:bg-green-50 rounded text-xl">🟢</button>
+        <button onClick={() => {
+          const t = new fabric.IText('新文字', { left: 50, top: 50, fontSize: 20 });
+          canvasRef.current.add(t).setActiveObject(t);
+        }} title="文字" className="p-2 hover:bg-yellow-50 rounded text-xl">✍️</button>
+        <label className="p-2 hover:bg-purple-50 rounded text-xl cursor-pointer">
+          🖼️<input type="file" hidden onChange={addImage} accept="image/*" />
+        </label>
       </div>
 
-      <div className="flex flex-wrap gap-2 max-w-[700px] justify-center p-4 bg-gray-100 rounded">
-        <div className="flex gap-2">
-          <button onClick={() => addShape('rect')} className="px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm">
-            ➕ 矩形
-          </button>
-          <button onClick={() => addShape('circle')} className="px-3 py-2 bg-green-500 text-white rounded hover:bg-green-600 text-sm">
-            ➕ 圆形
-          </button>
-          <button onClick={() => addShape('triangle')} className="px-3 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 text-sm">
-            ➕ 三角形
-          </button>
-          <button onClick={() => addShape('text')} className="px-3 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-sm">
-            ➕ 文字
-          </button>
+      {/* 画布区域 */}
+      <div className="flex-1 p-6 flex justify-center bg-gray-200">
+        <div className="shadow-2xl bg-white leading-[0]">
+          <canvas ref={canvasEl} />
         </div>
+      </div>
 
-        <div className="w-px bg-gray-300"></div>
+      {/* 属性面板 */}
+      <div className="w-64 bg-white border-l p-4 flex flex-col gap-6">
+        <h3 className="font-bold text-gray-700 border-b pb-2">属性编辑器</h3>
+        
+        {selectedObj ? (
+          <div className="flex flex-col gap-4">
+            <div className="space-y-2">
+              <label className="text-xs text-gray-500 uppercase font-semibold">填充颜色</label>
+              <input 
+                type="color" 
+                className="w-full h-8 rounded border"
+                value={attributes.fill} 
+                onChange={(e) => handleAttrChange('fill', e.target.value)} 
+              />
+            </div>
 
-        <div className="flex gap-2">
-          <button onClick={toggleDrawing} className={\`px-3 py-2 rounded text-sm \${tool === 'draw' ? 'bg-red-500 text-white' : 'bg-gray-300 hover:bg-gray-400'}\`}>
-            ✏️ {tool === 'draw' ? '停止绘制' : '自由绘制'}
-          </button>
-          <button onClick={deleteSelected} className="px-3 py-2 bg-red-500 text-white rounded hover:bg-red-600 text-sm">
-            🗑️ 删除
-          </button>
-        </div>
+            <div className="space-y-2">
+              <label className="text-xs text-gray-500 uppercase font-semibold">不透明度 ({Math.round(attributes.opacity * 100)}%)</label>
+              <input 
+                type="range" min="0" max="1" step="0.1" className="w-full"
+                value={attributes.opacity} 
+                onChange={(e) => handleAttrChange('opacity', e.target.value)} 
+              />
+            </div>
 
-        <div className="w-px bg-gray-300"></div>
+            <div className="space-y-2">
+              <label className="text-xs text-gray-500 uppercase font-semibold">层级管理</label>
+              <div className="flex gap-2">
+                <button onClick={() => changeStack('front')} className="flex-1 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs">置于顶层</button>
+                <button onClick={() => changeStack('back')} className="flex-1 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs">置于底层</button>
+              </div>
+            </div>
 
-        <div className="flex gap-2">
-          <button onClick={exportJSON} className="px-3 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600 text-sm">
-            💾 导出JSON
-          </button>
-          <button onClick={clearAll} className="px-3 py-2 bg-orange-500 text-white rounded hover:bg-orange-600 text-sm">
-            🔄 清空
-          </button>
+            <button 
+              onClick={() => canvasRef.current.remove(selectedObj)}
+              className="mt-4 w-full py-2 bg-red-50 text-red-600 hover:bg-red-100 rounded text-sm font-medium transition-colors"
+            >
+              删除选中元素
+            </button>
+          </div>
+        ) : (
+          <div className="text-center py-20 text-gray-400 italic text-sm">
+            请选中画布上的元素进行编辑
+          </div>
+        )}
+
+        <div className="mt-auto border-t pt-4 space-y-2">
+           <button onClick={() => {
+             const data = canvasRef.current.toDataURL({ format: 'png' });
+             const link = document.createElement('a');
+             link.download = 'export.png';
+             link.href = data;
+             link.click();
+           }} className="w-full py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm font-medium shadow-sm">
+             🚀 导出为 PNG
+           </button>
+           <button onClick={() => canvasRef.current.clear().set({backgroundColor: '#f8fafc'})} className="w-full py-2 text-gray-500 hover:text-gray-700 text-sm">
+             清空画布
+           </button>
         </div>
       </div>
     </div>

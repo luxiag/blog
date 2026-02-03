@@ -1,6 +1,6 @@
 
-import fs from 'fs';
-import path from 'path';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // 日志级别
 export enum LogLevel {
@@ -75,12 +75,32 @@ function writeToFile(level: string, message: string, data?: any) {
     rotateLog();
 
     const timestamp = new Date().toISOString();
-    const logEntry = {
+    const callerFile = getCallerFile();
+    const errorFile = extractFileFromError(data);
+    
+    const logEntry: any = {
       timestamp,
       level,
+      callerFile,
       message,
-      ...(data && { data })
     };
+    
+    // 如果有错误文件信息，单独记录
+    if (errorFile) {
+      logEntry.errorFile = errorFile;
+    }
+    
+    // 添加错误位置信息
+    if (data?.line || data?.column) {
+      logEntry.location = {
+        line: data.line,
+        column: data.column
+      };
+    }
+    
+    if (data) {
+      logEntry.data = data;
+    }
 
     fs.appendFileSync(logConfig.logFile, `${JSON.stringify(logEntry)}
 `);
@@ -89,16 +109,90 @@ function writeToFile(level: string, message: string, data?: any) {
   }
 }
 
-// 格式化日志消息
-function formatMessage(message: string, data?: any): string {
-  if (data) {
-    try {
-      return `${message} ${JSON.stringify(data, null, 2)}`;
-    } catch (e) {
-      return `${message} [无法序列化数据]`;
+// 获取调用者文件名
+function getCallerFile(): string {
+  try {
+    const err = new Error();
+    const stack = err.stack || '';
+    // 跳过 Error 构造函数和 logger 内部函数，找到实际调用者
+    const lines = stack.split('\n');
+    // 从第4行开始查找（跳过 Error、getCallerFile、log、logger.xxx）
+    for (let i = 4; i < lines.length; i++) {
+      const line = lines[i];
+      const match = line.match(/at\s+(?:.*?\s+)?\(?(.+?):\d+:\d+\)?$/);
+      if (match) {
+        const fullPath = match[1];
+        // 提取文件名（不包含路径）
+        const fileName = path.basename(fullPath);
+        // 如果是 node_modules 或 logger.ts 本身，继续查找
+        if (fileName.includes('node_modules') || fileName === 'logger.ts') {
+          continue;
+        }
+        return fileName;
+      }
+    }
+    return 'unknown';
+  } catch (e) {
+    return 'unknown';
+  }
+}
+
+// 从错误对象中提取文件信息
+function extractFileFromError(data: any): string | null {
+  if (!data) return null;
+  
+  // MDX 编译错误通常有 file/line/column 信息
+  if (data.file && typeof data.file === 'string') {
+    return data.file;
+  }
+  
+  // 检查 message 中是否包含文件路径
+  if (data.message && typeof data.message === 'string') {
+    const fileMatch = data.message.match(/(?:in|at)\s+([\w\-./\\]+\.(?:mdx?|tsx?|jsx?|ts|js))/i);
+    if (fileMatch) return fileMatch[1];
+  }
+  
+  // 检查 stack trace
+  if (data.stack && typeof data.stack === 'string') {
+    const lines = data.stack.split('\n');
+    for (const line of lines) {
+      const match = line.match(/\s*at\s+.*\s*\(?(.+?):\d+:\d+\)?/);
+      if (match) {
+        const filePath = match[1];
+        // 排除 node_modules 和内部文件
+        if (!filePath.includes('node_modules') && !filePath.includes('logger.ts')) {
+          return path.basename(filePath);
+        }
+      }
     }
   }
-  return message;
+  
+  return null;
+}
+
+// 格式化日志消息
+function formatMessage(message: string, data?: any): string {
+  const callerFile = getCallerFile();
+  const errorFile = extractFileFromError(data);
+  
+  // 如果有错误相关的文件信息，优先显示
+  const prefix = errorFile && errorFile !== callerFile 
+    ? `[${callerFile}] [错误文件: ${errorFile}]`
+    : `[${callerFile}]`;
+    
+  if (data) {
+    try {
+      // 对于 MDX 错误，添加行号信息
+      if (data.line || data.column) {
+        const location = `Line ${data.line || '?'}:${data.column || '?'}`;
+        return `${prefix} ${message} (${location}) ${JSON.stringify(data, null, 2)}`;
+      }
+      return `${prefix} ${message} ${JSON.stringify(data, null, 2)}`;
+    } catch (e) {
+      return `${prefix} ${message} [无法序列化数据]`;
+    }
+  }
+  return `${prefix} ${message}`;
 }
 
 // 日志记录函数

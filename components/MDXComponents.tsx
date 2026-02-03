@@ -78,7 +78,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
         imageName = imageName.replace(/^images\//, '');
       }
       // Always use /posts/... path since images are served from public directory
-      return `/posts/${category}/images/${imageName}`;
+      // Add basePath prefix for static export
+      return `/blog/posts/${category}/images/${imageName}`;
     }
     return src;
   };
@@ -189,11 +190,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
             />
             <span className="absolute inset-0 bg-black/0 group-hover:bg-black/5 rounded-lg transition-colors" />
           </span>
-          {alt && (
-            <p className="text-center text-sm mt-3 italic text-neutral-500">
-              {alt}
-            </p>
-          )}
+
         </>
       );
     },
@@ -226,7 +223,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
               </span>
             )}
           </span>
-          {controls && <p className="text-sm text-neutral-500 mt-2 text-center">点击播放视频</p>}
+          {controls && <span className="block text-sm text-neutral-500 mt-2 text-center">点击播放视频</span>}
         </>
       );
     },

@@ -149,7 +149,15 @@ export async function getPostData(slug: string): Promise<Post> {
         compiledContent = String(compiled);
         isMdxCompiled = true;
       } catch (e) {
-        logger.error('Error compiling MDX:', e);
+        const errorDetails = e instanceof Error ? {
+          message: e.message,
+          name: e.name,
+          stack: e.stack,
+          file: fullPath,
+          postSlug: slug,
+          postCategory: postFile.category,
+        } : { error: String(e), file: fullPath, postSlug: slug, postCategory: postFile.category };
+        logger.error(`Error compiling MDX for file: ${fullPath} (slug: ${slug}):`, errorDetails);
         compiledContent = processedContent;
       }
     } else {
