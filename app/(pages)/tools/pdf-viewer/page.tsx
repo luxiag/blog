@@ -45,48 +45,6 @@ interface PageInfo {
 
 type PreviewMode = 'normal' | 'eink';
 
-// Simple virtual list hook
-function useVirtualList<T>(
-  items: T[],
-  containerRef: React.RefObject<HTMLElement>,
-  itemHeight: number,
-  overscan: number = 3
-) {
-  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 10 });
-  const [scrollTop, setScrollTop] = useState(0);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const handleScroll = () => {
-      const scrollTop = container.scrollTop;
-      const containerHeight = container.clientHeight;
-      
-      const startIndex = Math.floor(scrollTop / itemHeight);
-      const visibleCount = Math.ceil(containerHeight / itemHeight);
-      
-      const start = Math.max(0, startIndex - overscan);
-      const end = Math.min(items.length, startIndex + visibleCount + overscan);
-      
-      setVisibleRange({ start, end });
-      setScrollTop(scrollTop);
-    };
-
-    handleScroll();
-    container.addEventListener('scroll', handleScroll);
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [items.length, itemHeight, overscan, containerRef]);
-
-  const visibleItems = useMemo(() => {
-    return items.slice(visibleRange.start, visibleRange.end);
-  }, [items, visibleRange]);
-
-  const totalHeight = items.length * itemHeight;
-
-  return { visibleItems, visibleRange, totalHeight, scrollTop };
-}
-
 export default function PdfViewerPage() {
   const [activeTab, setActiveTab] = useState<'outline' | 'library' | 'thumbnails'>('library');
   const [userPdfs, setUserPdfs] = useState<UserPdf[]>([]);
@@ -109,6 +67,7 @@ export default function PdfViewerPage() {
   const [renderedPages, setRenderedPages] = useState<Set<number>>(new Set());
   const [previewMode, setPreviewMode] = useState<PreviewMode>('normal');
   const [publicPdfs, setPublicPdfs] = useState<{ id: string; name: string; url: string; size: number }[]>([]);
+  const [pdfjsLibLoaded, setPdfjsLibLoaded] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -116,33 +75,73 @@ export default function PdfViewerPage() {
   const pageCanvasesRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
   const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const renderTasksRef = useRef<Map<number, any>>(new Map());
+  const pdfjsLibRef = useRef<any>(null);
 
   // Initialize DB and load user PDFs
   useEffect(() => {
+    let isMounted = true;
+    
     const init = async () => {
       try {
         await pdfDB.init();
+        if (!isMounted) return;
         setIsDBReady(true);
         await loadUserPdfs();
         await loadPublicPdfs();
       } catch (err) {
         console.error('Failed to initialize IndexedDB:', err);
-        setError('Failed to initialize database. Please check browser compatibility.');
+        if (isMounted) {
+          setError('Failed to initialize database. Please check browser compatibility.');
+        }
       }
     };
+    
+    // Initialize PDF.js
+    const initPdfJs = async () => {
+      if (typeof window === 'undefined') return;
+      
+      try {
+        const pdfjs = await import('pdfjs-dist');
+        if (!isMounted) return;
+        
+        pdfjsLibRef.current = pdfjs;
+        
+        // Initialize worker with local file (version 5.4.296)
+        pdfjs.GlobalWorkerOptions.workerSrc = `${process.env.NEXT_PUBLIC_BASE_PATH || ''}/js/pdf.worker.min.mjs`;
+        
+        if (isMounted) {
+          setPdfjsLibLoaded(true);
+        }
+      } catch (err) {
+        console.error('Failed to load pdfjs-dist:', err);
+        if (isMounted) {
+          setError('Failed to initialize PDF viewer library');
+        }
+      }
+    };
+    
     init();
+    initPdfJs();
+    
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Load public PDFs from /public/pdf directory
   const loadPublicPdfs = async () => {
     try {
-      const response = await fetch('/json/pdf-list.json');
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/json/pdf-list.json?t=${Date.now()}`);
       if (response.ok) {
         const data = await response.json();
         setPublicPdfs(data.pdfs || []);
+      } else if (response.status === 404) {
+        console.log('pdf-list.json not found, public PDFs will not be available');
+        setPublicPdfs([]);
       }
     } catch (err) {
       console.error('Failed to load public PDFs:', err);
+      setPublicPdfs([]);
     }
   };
 
@@ -184,28 +183,6 @@ export default function PdfViewerPage() {
       setShowMemoryPrompt(false);
     }
   }, [showMemoryPrompt, countdown, savedPage]);
-
-  // Initialize PDF.js
-  const initPdfJs = async () => {
-    if (typeof window === 'undefined') return null;
-    
-    const pdfjsLib = await import('pdfjs-dist');
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `${process.env.NEXT_PUBLIC_BASE_PATH || ''}/js/pdf.worker.min.mjs`;
-    return pdfjsLib;
-  };
-
-  // Get saved page from memory
-  const getSavedPage = useCallback((pdfId: string): number => {
-    const memory = localStorage.getItem('pdfViewer_pageMemory');
-    if (memory) {
-      const parsed: PdfPageMemory = JSON.parse(memory);
-      const saved = parsed[pdfId];
-      if (saved && saved > 1) {
-        return saved;
-      }
-    }
-    return 1;
-  }, []);
 
   // Scroll to specific page
   const scrollToPage = (pageNum: number) => {
@@ -310,17 +287,14 @@ export default function PdfViewerPage() {
       const b = data[i + 2];
       
       // Use luminance formula for better grayscale conversion
-      // Higher weights for green as human eyes are more sensitive to it
       const gray = Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
       
       // Quantize to 16 levels for e-ink look while keeping font clarity
-      // This creates 16 shades: 0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255
       const einkValue = Math.round(gray / step) * step;
       
       data[i] = einkValue;
       data[i + 1] = einkValue;
       data[i + 2] = einkValue;
-      // Keep original alpha channel (data[i + 3])
     }
     
     ctx.putImageData(imageData, 0, 0);
@@ -329,10 +303,8 @@ export default function PdfViewerPage() {
   // Re-render all pages when preview mode changes
   useEffect(() => {
     if (currentPdf && pagesInfo.length > 0) {
-      // Clear rendered pages to force re-render with new mode
       setRenderedPages(new Set());
       
-      // Re-render visible pages
       const container = scrollContainerRef.current;
       if (container) {
         const scrollTop = container.scrollTop;
@@ -360,8 +332,13 @@ export default function PdfViewerPage() {
     }
   }, [previewMode]);
 
-  // Load PDF from IndexedDB or public URL
+  // Load PDF (from DB or public)
   const loadPdf = async (pdfId: string, name: string, url: string, isPublic: boolean = false) => {
+    if (!pdfjsLibLoaded || !pdfjsLibRef.current) {
+      setError('PDF viewer library not loaded yet. Please wait a moment and try again.');
+      return;
+    }
+    
     setLoading(true);
     setError('');
     setShowMemoryPrompt(false);
@@ -386,10 +363,8 @@ export default function PdfViewerPage() {
       let pdfUrl: string;
       
       if (isPublic) {
-        // For public PDFs, use the provided URL directly
         pdfUrl = url;
       } else {
-        // For user PDFs, load from IndexedDB
         const pdfRecord = await pdfDB.getPdf(pdfId);
         if (!pdfRecord) {
           setError('PDF not found in database');
@@ -400,10 +375,7 @@ export default function PdfViewerPage() {
         pdfUrl = URL.createObjectURL(blob);
       }
       
-      const pdfjsLib = await initPdfJs();
-      if (!pdfjsLib) throw new Error('PDF.js not loaded');
-      
-      const loadingTask = pdfjsLib.getDocument(pdfUrl);
+      const loadingTask = pdfjsLibRef.current.getDocument(pdfUrl);
       const pdf = await loadingTask.promise;
       pdfDocRef.current = pdf;
       
@@ -442,14 +414,12 @@ export default function PdfViewerPage() {
       
       setLoading(false);
       
-      // Scroll to saved page after a delay (only for user PDFs)
-      if (!isPublic) {
-        const saved = getSavedPage(pdfId);
-        if (saved > 1 && pdf.numPages > 1) {
-          setSavedPage(saved);
-          setCountdown(5);
-          setShowMemoryPrompt(true);
-        }
+      // Scroll to saved page after a delay
+      const saved = getSavedPage(pdfId);
+      if (saved > 1 && pdf.numPages > 1) {
+        setSavedPage(saved);
+        setCountdown(5);
+        setShowMemoryPrompt(true);
       }
       
       // Initial render of first few pages
@@ -464,6 +434,19 @@ export default function PdfViewerPage() {
       setLoading(false);
     }
   };
+
+  // Get saved page from memory
+  const getSavedPage = useCallback((pdfId: string): number => {
+    const memory = localStorage.getItem('pdfViewer_pageMemory');
+    if (memory) {
+      const parsed: PdfPageMemory = JSON.parse(memory);
+      const saved = parsed[pdfId];
+      if (saved && saved > 1) {
+        return saved;
+      }
+    }
+    return 1;
+  }, []);
 
   // Handle file upload
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -524,7 +507,7 @@ export default function PdfViewerPage() {
         setPagesInfo([]);
         setRenderedPages(new Set());
         pageCanvasesRef.current.clear();
-        // Only revoke object URL for user PDFs, not for public PDFs
+        
         if (!currentPdf.isPublic) {
           URL.revokeObjectURL(currentPdf.url);
         }
@@ -714,7 +697,6 @@ export default function PdfViewerPage() {
       const pageTop = accumulatedHeight;
       const pageBottom = pageTop + pageHeight;
       
-      // Check if page is visible (with some buffer)
       if (pageBottom > scrollTop - 200 && pageTop < scrollTop + containerHeight + 200) {
         visiblePages.push(i + 1);
       }
@@ -722,7 +704,6 @@ export default function PdfViewerPage() {
       accumulatedHeight += pageHeight;
     }
     
-    // Render visible pages
     visiblePages.forEach(pageNum => {
       if (!renderedPages.has(pageNum)) {
         renderPage(pageNum);
@@ -941,6 +922,7 @@ export default function PdfViewerPage() {
             
             {activeTab === 'library' && (
               <div className="p-3 space-y-3">
+                {/* Add PDF Button */}
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={loading}
@@ -965,6 +947,7 @@ export default function PdfViewerPage() {
                   className="hidden"
                 />
 
+                {/* Public PDFs */}
                 {publicPdfs.length > 0 && (
                   <div>
                     <h3 className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-500 mb-2 px-1">
@@ -972,23 +955,28 @@ export default function PdfViewerPage() {
                     </h3>
                     <div className="space-y-1">
                       {publicPdfs.map((pdf) => (
-                        <button
+                        <div
                           key={pdf.id}
-                          onClick={() => loadPdf(pdf.id, pdf.name, pdf.url, true)}
-                          className={`w-full px-3 py-2 flex items-center gap-2 rounded-lg text-left text-xs transition-all ${
+                          className={`w-full px-3 py-2 flex items-center gap-2 rounded-lg text-left text-xs transition-all group ${
                             currentPdf?.id === pdf.id && currentPdf?.isPublic
                               ? 'bg-[#ea580c] text-white'
-                              : 'hover:bg-orange-50'
+                              : 'hover:bg-gray-100'
                           }`}
                         >
-                          <FileText className="w-4 h-4 flex-shrink-0" />
-                          <span className="truncate font-mono text-left">{pdf.name}</span>
-                        </button>
+                          <button
+                            onClick={() => loadPdf(pdf.id, pdf.name, pdf.url, true)}
+                            className="flex items-center gap-2 flex-1 min-w-0"
+                          >
+                            <FileText className="w-4 h-4 flex-shrink-0" />
+                            <span className="truncate font-mono text-left">{pdf.name}</span>
+                          </button>
+                        </div>
                       ))}
                     </div>
                   </div>
                 )}
 
+                {/* User PDFs */}
                 {userPdfs.length > 0 && (
                   <div>
                     <h3 className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-500 mb-2 px-1">
@@ -1028,7 +1016,7 @@ export default function PdfViewerPage() {
                   </div>
                 )}
 
-                {publicPdfs.length === 0 && userPdfs.length === 0 && (
+                {userPdfs.length === 0 && publicPdfs.length === 0 && (
                   <div className="px-3 py-8 text-center opacity-40">
                     <Folder className="w-8 h-8 mx-auto mb-2" />
                     <p className="text-[10px] font-mono">No PDFs yet</p>
@@ -1162,7 +1150,6 @@ export default function PdfViewerPage() {
                             ref={(el) => {
                               if (el) {
                                 pageCanvasesRef.current.set(pageNum, el);
-                                // Trigger render if not already rendered
                                 if (!renderedPages.has(pageNum)) {
                                   setTimeout(() => renderPage(pageNum), 0);
                                 }

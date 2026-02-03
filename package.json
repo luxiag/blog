@@ -44,7 +44,7 @@
     "next": "16.1.1",
     "ol": "^10.7.0",
     "pdf-parse": "^2.4.5",
-    "pdfjs-dist": "^5.4.624",
+    "pdfjs-dist": "^5.4.296",
     "prism-react-renderer": "^2.4.1",
     "qrcode.react": "^4.2.0",
     "react": "19.2.3",

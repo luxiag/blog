@@ -35,7 +35,7 @@ function scanPdfDirectory() {
       return {
         id: `public_${file.replace(/\.pdf$/i, '')}`,
         name: file,
-        url: `/pdf/${file}`,
+        url: `/blog/pdf/${file}`,
         size: stats.size,
         addedAt: stats.mtime.getTime(),
         isPublic: true
