@@ -77,7 +77,7 @@ const cssVariableTheme = {
 };
 export function ShaderEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <div className="w-full h-[300px]     overflow-hidden  relative">
+    <div className="w-full h-[300px] overflow-hidden  relative">
       <Editor
         code={value}
         onChange={onChange}
