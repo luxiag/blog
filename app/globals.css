@@ -394,3 +394,27 @@ pre code {
   border: none !important;
   padding: 0 !important;
 }
+
+/* Hide default browser icons for date and time inputs */
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  position: absolute !important;
+  pointer-events: none !important;
+}
+
+/* Firefox specific */
+input[type="date"],
+input[type="time"] {
+  -moz-appearance: textfield;
+}
+
+/* Ensure custom inputs are clickable */
+input[type="date"],
+input[type="time"] {
+  cursor: pointer;
+}

@@ -65,6 +65,7 @@ export default function PdfViewerPage() {
   const [pageInput, setPageInput] = useState('');
   const [pagesInfo, setPagesInfo] = useState<PageInfo[]>([]);
   const [renderedPages, setRenderedPages] = useState<Set<number>>(new Set());
+  const renderedScaleRef = useRef<Map<number, number>>(new Map());
   const [previewMode, setPreviewMode] = useState<PreviewMode>('normal');
   const [publicPdfs, setPublicPdfs] = useState<{ id: string; name: string; url: string; size: number }[]>([]);
   const [pdfjsLibLoaded, setPdfjsLibLoaded] = useState(false);
@@ -213,7 +214,11 @@ export default function PdfViewerPage() {
 
   // Render a single page
   const renderPage = async (pageNum: number) => {
-    if (!pdfDocRef.current || renderedPages.has(pageNum)) return;
+    if (!pdfDocRef.current) return;
+    
+    // Check if already rendered at current scale
+    const renderedScale = renderedScaleRef.current.get(pageNum);
+    if (renderedPages.has(pageNum) && renderedScale === scale) return;
     
     const canvas = pageCanvasesRef.current.get(pageNum);
     if (!canvas) return;
@@ -229,25 +234,41 @@ export default function PdfViewerPage() {
 
     try {
       const page = await pdfDocRef.current.getPage(pageNum);
-      const context = canvas.getContext('2d');
+      const context = canvas.getContext('2d', { alpha: false });
       if (!context) return;
 
+      // Get page info from pagesInfo array
+      const pageInfo = pagesInfo.find(p => p.page === pageNum);
+      if (!pageInfo) return;
+
+      // Get device pixel ratio for crisp rendering on HiDPI/Retina displays
       const dpr = window.devicePixelRatio || 1;
+      
+      // Calculate logical (CSS) dimensions
+      const logicalWidth = pageInfo.width * scale;
+      const logicalHeight = pageInfo.height * scale;
+      
+      // Set actual canvas size (physical pixels)
+      canvas.width = Math.floor(logicalWidth * dpr);
+      canvas.height = Math.floor(logicalHeight * dpr);
+      
+      // Set CSS display size (logical pixels)
+      canvas.style.width = `${logicalWidth}px`;
+      canvas.style.height = `${logicalHeight}px`;
+      
+      // Create viewport at the scaled resolution
       const viewport = page.getViewport({ scale: scale * dpr });
       
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      canvas.style.width = `${viewport.width / dpr}px`;
-      canvas.style.height = `${viewport.height / dpr}px`;
+      // Clear canvas
+      context.fillStyle = 'white';
+      context.fillRect(0, 0, canvas.width, canvas.height);
       
-      context.setTransform(1, 0, 0, 1, 0, 0);
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // Create render task
+      // Create render task with high quality settings
       const renderTask = page.render({
         canvasContext: context,
         viewport: viewport,
-        intent: 'display'
+        intent: 'display',
+        background: 'white'
       });
       
       renderTasksRef.current.set(pageNum, renderTask);
@@ -260,6 +281,7 @@ export default function PdfViewerPage() {
       }
       
       renderTasksRef.current.delete(pageNum);
+      renderedScaleRef.current.set(pageNum, scale);
       setRenderedPages(prev => new Set([...prev, pageNum]));
     } catch (err) {
       if (err && typeof err === 'object' && 'name' in err && err.name === 'RenderingCancelledException') {
@@ -300,10 +322,13 @@ export default function PdfViewerPage() {
     ctx.putImageData(imageData, 0, 0);
   };
 
-  // Re-render all pages when preview mode changes
+  // Re-render all pages when preview mode or scale changes
   useEffect(() => {
     if (currentPdf && pagesInfo.length > 0) {
+      // Clear rendered pages to force re-render with new scale/mode
       setRenderedPages(new Set());
+      renderedScaleRef.current.clear();
+      pageCanvasesRef.current.clear();
       
       const container = scrollContainerRef.current;
       if (container) {
@@ -325,12 +350,15 @@ export default function PdfViewerPage() {
           accumulatedHeight += pageHeight;
         }
         
-        visiblePages.forEach(pageNum => {
-          setTimeout(() => renderPage(pageNum), 0);
-        });
+        // Small delay to allow React to clear the old canvases
+        setTimeout(() => {
+          visiblePages.forEach(pageNum => {
+            renderPage(pageNum);
+          });
+        }, 50);
       }
     }
-  }, [previewMode]);
+  }, [previewMode, scale, currentPdf?.id]);
 
   // Load PDF (from DB or public)
   const loadPdf = async (pdfId: string, name: string, url: string, isPublic: boolean = false) => {
@@ -353,6 +381,7 @@ export default function PdfViewerPage() {
       }
     });
     renderTasksRef.current.clear();
+    renderedScaleRef.current.clear();
     pageCanvasesRef.current.clear();
     
     if (renderTimeoutRef.current) {
@@ -506,6 +535,7 @@ export default function PdfViewerPage() {
         setOutline([]);
         setPagesInfo([]);
         setRenderedPages(new Set());
+        renderedScaleRef.current.clear();
         pageCanvasesRef.current.clear();
         
         if (!currentPdf.isPublic) {
@@ -1020,7 +1050,7 @@ export default function PdfViewerPage() {
                   <div className="px-3 py-8 text-center opacity-40">
                     <Folder className="w-8 h-8 mx-auto mb-2" />
                     <p className="text-[10px] font-mono">No PDFs yet</p>
-                    <p className="text-[9px] font-mono mt-1">Click "Add PDF" to upload</p>
+                    <p className="text-[9px] font-mono mt-1">Click &quot;Add PDF&quot; to upload</p>
                   </div>
                 )}
               </div>
@@ -1156,10 +1186,6 @@ export default function PdfViewerPage() {
                               }
                             }}
                             className="block"
-                            style={{
-                              width: `${pageInfo.width * scale}px`,
-                              height: `${pageInfo.height * scale}px`,
-                            }}
                           />
                         </div>
                       </div>

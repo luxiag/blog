@@ -10,33 +10,63 @@ channel.onmessage = (event) => {
   }
 };
 
-// 从 BroadcastChannel 获取 todos（Service Worker 不能访问 localStorage）
+// Get todos from BroadcastChannel (Service Worker cannot access localStorage)
 function getTodos() {
   return pendingTodos || [];
 }
 
-// 更新新的 Todo 类型检查逻辑
+// Update new Todo type checking logic
 function shouldNotifyTodo(todo, currentTime, currentDate) {
   if (todo.completed) return false;
   if (!todo.enableNotification) return false;
 
   switch (todo.todoType) {
     case 'onetime':
-      // 一次性：在指定日期和具体时间提醒
-      if (todo.date === currentDate && todo.specificTime === currentTime) {
-        return true;
+      // One-time: check based on time mode
+      if (todo.date !== currentDate) return false;
+      
+      switch (todo.dateTimeMode) {
+        case 'full_day':
+          // All-day mode: only remind on specified date (can set a default reminder time, e.g., 9 AM)
+          if (currentTime === '09:00') {
+            return true;
+          }
+          break;
+        case 'specific_time':
+          // Specific time point mode: both date and time match
+          if (todo.specificTime === currentTime) {
+            return true;
+          }
+          break;
+        case 'time_range':
+          // Time range mode: date matches and within time range
+          if (todo.startTime && todo.endTime) {
+            if (currentTime >= todo.startTime && currentTime <= todo.endTime) {
+              // Can remind once at start time
+              if (currentTime === todo.startTime) {
+                return true;
+              }
+            }
+          }
+          break;
+        default:
+          // Legacy compatibility (using specificTime)
+          if (todo.specificTime === currentTime) {
+            return true;
+          }
+          break;
       }
       break;
       
     case 'allDayRepeat':
-      // 全天候重复：每天到时间就提醒
+      // All-day repeat: remind at the same time every day
       if (todo.specificTime === currentTime) {
         return true;
       }
       break;
       
     case 'fixedRepeat':
-      // 固定时间重复：在时间段内按间隔提醒
+      // Fixed time repeat: remind at intervals within time slots
       if (todo.timeSlots && todo.repeatInterval) {
         for (const slot of todo.timeSlots) {
           if (currentTime >= slot.startTime && currentTime <= slot.endTime) {
@@ -53,15 +83,15 @@ function shouldNotifyTodo(todo, currentTime, currentDate) {
       break;
       
     case 'planned':
-      // 计划类型：在节点日期和时间提醒
+      // Plan type: remind at node date and time
       if (todo.planNodes) {
         for (const node of todo.planNodes) {
           if (node.date === currentDate && node.time === currentTime) {
             return true;
           }
-          // 如果节点是 daily 类型，每天到时间都提醒
+          // If node is daily type, remind at the same time every day
           if (node.notificationType === 'daily' && node.time === currentTime) {
-            // 检查是否在计划日期范围内
+            // Check if within plan date range
             if (todo.date && todo.endDate) {
               if (currentDate >= todo.date && currentDate <= todo.endDate) {
                 return true;
@@ -73,11 +103,11 @@ function shouldNotifyTodo(todo, currentTime, currentDate) {
       break;
       
     case 'yearly':
-      // 全年计划暂不设置具体时间点提醒
+      // Yearly plan: no specific time reminders set yet
       break;
       
     default:
-      // 兼容旧数据
+      // Legacy compatibility
       if (todo.isDaily || todo.repeatType === 'daily') {
         if (todo.reminderTime && todo.reminderTime === currentTime && todo.date === currentDate) {
           return true;
@@ -101,12 +131,12 @@ async function checkReminders() {
   for (const todo of todos) {
     if (shouldNotifyTodo(todo, currentTime, currentDate)) {
       const key = `${todo.id}-${currentDate}-${currentTime}`;
-      // 避免同一分钟内重复提醒
+      // Avoid duplicate reminders within the same minute
       if (!lastNotifiedDates[key]) {
         lastNotifiedDates[key] = true;
-        showNotification(`提醒: ${todo.title}`, `时间到了！${currentTime}`);
+        showNotification(`Reminder: ${todo.title}`, `Time is up! ${currentTime}`);
         
-        // 清理旧的记录（保留最近100条）
+        // Clean up old records (keep recent 100)
         const keys = Object.keys(lastNotifiedDates);
         if (keys.length > 100) {
           delete lastNotifiedDates[keys[0]];

@@ -1,69 +1,82 @@
-// IndexedDB Todo 应用数据库
+// IndexedDB Todo Application Database
 
 const DB_NAME = 'TodoAppDB';
 const DB_VERSION = 1;
 const STORE_CATEGORIES = 'categories';
 const STORE_TODOS = 'todos';
 
-// 莫兰迪色系配色方案
+// 新颜色方案（根据设计文档）
 export const TODO_TYPE_COLORS = {
   onetime: {
-    name: '一次性',
-    color: '#7c9cb5',      // 雾蓝
-    bgLight: 'bg-slate-200',
-    bgDark: 'bg-slate-800/50',
-    textLight: 'text-slate-700',
-    textDark: 'text-slate-300',
-    dot: 'bg-slate-400',
+    name: 'One-time',
+    color: '#6366F1',      // Indigo
+    bgLight: 'bg-indigo-100',
+    bgDark: 'bg-indigo-900/30',
+    textLight: 'text-indigo-800',
+    textDark: 'text-indigo-300',
+    lightBg: '#EEF2FF',
+    darkMain: '#4F46E5',
+    textColor: '#4338CA',
   },
   fixedRepeat: {
-    name: '固定重复',
-    color: '#9b8aa5',      // 藕紫
-    bgLight: 'bg-purple-200',
-    bgDark: 'bg-purple-900/30',
-    textLight: 'text-purple-700',
-    textDark: 'text-purple-300',
-    dot: 'bg-purple-400',
+    name: 'Fixed Repeat',
+    color: '#10B981',      // Emerald
+    bgLight: 'bg-emerald-100',
+    bgDark: 'bg-emerald-900/30',
+    textLight: 'text-emerald-800',
+    textDark: 'text-emerald-300',
+    lightBg: '#ECFDF5',
+    darkMain: '#059669',
+    textColor: '#047857',
   },
   allDayRepeat: {
-    name: '全天候',
-    color: '#8db4a0',      // 豆绿
-    bgLight: 'bg-emerald-200',
-    bgDark: 'bg-emerald-900/30',
-    textLight: 'text-emerald-700',
-    textDark: 'text-emerald-300',
-    dot: 'border-2 border-emerald-400 bg-transparent',
+    name: 'All-day Repeat',
+    color: '#F59E0B',      // Amber
+    bgLight: 'bg-amber-100',
+    bgDark: 'bg-amber-900/30',
+    textLight: 'text-amber-800',
+    textDark: 'text-amber-300',
+    lightBg: '#FEF3C7',
+    darkMain: '#D97706',
+    textColor: '#B45309',
   },
   planned: {
-    name: '计划',
-    color: '#c9a86c',      // 暖黄
-    bgLight: 'bg-amber-200',
-    bgDark: 'bg-amber-900/30',
-    textLight: 'text-amber-700',
-    textDark: 'text-amber-300',
-    dot: 'bg-amber-400',
-    underline: true,
+    name: 'Plan',
+    color: '#3B82F6',      // Blue
+    bgLight: 'bg-blue-100',
+    bgDark: 'bg-blue-900/30',
+    textLight: 'text-blue-800',
+    textDark: 'text-blue-300',
+    lightBg: '#EFF6FF',
+    darkMain: '#2563EB',
+    textColor: '#1D4ED8',
   },
   yearly: {
-    name: '全年',
-    color: '#b0706e',      // 砖红
-    bgLight: 'bg-rose-200',
-    bgDark: 'bg-rose-900/30',
-    textLight: 'text-rose-700',
-    textDark: 'text-rose-300',
-    dot: 'border-2 border-rose-400 bg-transparent',
+    name: 'Yearly',
+    color: '#EAB308',      // Yellow
+    bgLight: 'bg-yellow-100',
+    bgDark: 'bg-yellow-900/30',
+    textLight: 'text-yellow-800',
+    textDark: 'text-yellow-300',
+    lightBg: '#FEFCE8',
+    darkMain: '#CA8A04',
+    textColor: '#A16207',
   },
 } as const;
 
 export type TodoType = keyof typeof TODO_TYPE_COLORS;
 
-// 时间段配置
+// One-time task time mode
+export type DateTimeMode = 'full_day' | 'specific_time' | 'time_range';
+
+// Time slot configuration
 export interface TimeSlot {
   startTime: string;    // HH:mm
   endTime: string;      // HH:mm
+  label?: string;       // Time slot label (e.g. "Morning Work")
 }
 
-// 计划节点
+// Plan node
 export interface PlanNode {
   date: string;
   time?: string;
@@ -77,36 +90,41 @@ export interface Todo {
   completed: boolean;
   isImportant: boolean;
   
-  // 新类型系统
+  // New type system
   todoType: TodoType;
   
-  // 通知开关
+  // Notification toggle
   enableNotification: boolean;
   
-  // 基础时间（一次性、全天候使用）
+  // Base date
   date: string;
   
-  // 结束日期（计划类型使用）
+  // End date (used by plan type)
   endDate?: string;
   
-  // 是否为全天
-  isAllDay?: boolean;
+  // One-time task specific: time mode
+  dateTimeMode?: DateTimeMode;
   
-  // 具体时间
-  specificTime?: string;
+  // One-time task specific: time range (start and end time)
+  startTime?: string;   // HH:mm
+  endTime?: string;     // HH:mm
   
-  // 固定时间重复专用
+  // All-day repeat specific: daily time point
+  specificTime?: string; // HH:mm
+  
+  // Fixed time repeat specific
   timeSlots?: TimeSlot[];
   repeatInterval?: number;
   repeatUnit?: 'minutes' | 'hours';
   
-  // 计划类型专用
+  // Plan type specific
   planNodes?: PlanNode[];
   
-  // 全年计划专用
+  // Yearly plan specific
   year?: number;
   
-  // 兼容旧数据（可选）
+  // Legacy compatibility (optional)
+  isAllDay?: boolean;
   isDaily?: boolean;
   repeatType?: 'none' | 'daily' | 'interval';
   reminderTime?: string;
@@ -119,7 +137,7 @@ export interface Category {
   isCustom?: boolean;
 }
 
-// 打开数据库
+// Open database
 export function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -130,13 +148,13 @@ export function openDB(): Promise<IDBDatabase> {
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
 
-      // 创建分类存储
+      // Create category store
       if (!db.objectStoreNames.contains(STORE_CATEGORIES)) {
         const categoryStore = db.createObjectStore(STORE_CATEGORIES, { keyPath: 'id' });
         categoryStore.createIndex('name', 'name', { unique: false });
       }
 
-      // 创建待办存储
+      // Create todo store
       if (!db.objectStoreNames.contains(STORE_TODOS)) {
         const todoStore = db.createObjectStore(STORE_TODOS, { keyPath: 'id' });
         todoStore.createIndex('category', 'category', { unique: false });
@@ -147,7 +165,7 @@ export function openDB(): Promise<IDBDatabase> {
   });
 }
 
-// 分类操作
+// Category operations
 export async function getCategories(): Promise<Category[]> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -166,10 +184,10 @@ export async function saveCategories(categories: Category[]): Promise<void> {
     const transaction = db.transaction(STORE_CATEGORIES, 'readwrite');
     const store = transaction.objectStore(STORE_CATEGORIES);
 
-    // 清空现有数据
+    // Clear existing data
     store.clear();
 
-    // 批量添加
+    // Batch add
     categories.forEach((cat) => store.put(cat));
 
     transaction.onerror = () => reject(transaction.error);
@@ -213,7 +231,7 @@ export async function updateCategory(category: Category): Promise<void> {
   });
 }
 
-// 待办操作
+// Todo operations
 export async function getTodos(): Promise<Todo[]> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -232,10 +250,10 @@ export async function saveTodos(todos: Todo[]): Promise<void> {
     const transaction = db.transaction(STORE_TODOS, 'readwrite');
     const store = transaction.objectStore(STORE_TODOS);
 
-    // 清空现有数据
+    // Clear existing data
     store.clear();
 
-    // 批量添加
+    // Batch add
     todos.forEach((todo) => store.put(todo));
 
     transaction.onerror = () => reject(transaction.error);
@@ -279,7 +297,7 @@ export async function updateTodo(todo: Todo): Promise<void> {
   });
 }
 
-// 初始化默认数据
+// Initialize default data
 export async function initializeData(): Promise<{ categories: Category[]; todos: Todo[] }> {
   const defaultCategories: Category[] = [
     { id: 'all', name: 'All', icon: 'grid' },
@@ -303,7 +321,7 @@ export async function initializeData(): Promise<{ categories: Category[]; todos:
   const existingCategories = await getCategories();
   const existingTodos = await getTodos();
 
-  // 如果没有数据，初始化默认数据
+  // If no data, initialize default data
   if (existingCategories.length === 0) {
     await saveCategories(defaultCategories);
   }
