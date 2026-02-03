@@ -4,10 +4,12 @@ import React from 'react';
 import { LiveProvider, LiveEditor, LiveError, LivePreview } from 'react-live';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { OrbitControls, PerspectiveCamera, Stats, OrthographicCamera, Html, Environment, MeshReflectorMaterial, Float, Sphere, Stars,ContactShadows } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, Stats, OrthographicCamera, Html, Environment, MeshReflectorMaterial, Float, Sphere, Stars,ContactShadows,CameraControls } from '@react-three/drei';
 import { themes } from 'prism-react-renderer';
 import * as fabric from 'fabric';
 import { DepthOfField, Pixelation, Noise, Vignette, EffectComposer, Bloom, ChromaticAberration, Scanline,SMAA,BrightnessContrast  } from '@react-three/postprocessing'
+import { animated, useSpring } from '@react-spring/three'
+import { useDrag } from '@use-gesture/react'
 
 // OpenLayers imports
 import Map from 'ol/Map';
@@ -76,8 +78,9 @@ const scope = {
   ol,
   Cesium,
   DepthOfField,
-  Pixelation, Noise, Vignette, ChromaticAberration, Scanline,SMAA,BrightnessContrast ,
-  MeshReflectorMaterial, Float, Sphere,Stars
+  Pixelation, Noise, Vignette, ChromaticAberration, Scanline,SMAA,BrightnessContrast ,CameraControls,
+  MeshReflectorMaterial, Float, Sphere,Stars,
+  animated,useSpring,useDrag
 };
 
 interface CodePenDemoProps {

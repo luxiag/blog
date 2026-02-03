@@ -242,7 +242,9 @@ Web 3D 最大的优势就是能混合 HTML/CSS UI。
 *   **解法**: 给 Canvas 容器设置 `pointer-events: none`，然后给需要交互的 3D 物体（通过 Raycaster）和 UI 按钮设置 `pointer-events: auto`。
 *   或者使用 R3F 的 `eventSource` 属性，将事件监听绑定到父级容器上。
 
-<CodePenDemo title="3D Annotations" code={`
+<CodePenDemo title="3D Annotations">
+
+```jsx
 function Annotation({ children, ...props }) {
   const [occluded, setOccluded] = useState(false)
   
@@ -300,7 +302,8 @@ render(
     <AnnotatedScene />
   </Canvas>
 )
-`} />
+```
+</CodePenDemo>
 
 ## 总结
 
