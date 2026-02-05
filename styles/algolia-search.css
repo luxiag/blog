@@ -103,6 +103,35 @@
   color: #ea580c;
 }
 
+/* Dark mode icons */
+.dark .DocSearch-Hit-icon {
+  border-color: oklch(0.4 0 0);
+  background: oklch(0.2 0 0);
+}
+
+.dark .DocSearch-Hit-icon::before {
+  border-color: oklch(0.4 0 0);
+  background: oklch(0.2 0 0);
+}
+
+.dark .DocSearch-Hit-icon svg {
+  color: #ffffff;
+}
+
+.dark .DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-icon {
+  border-color: oklch(0.6 0 0);
+  background: #ffffff;
+}
+
+.dark .DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-icon::before {
+  border-color: oklch(0.6 0 0);
+  background: #ffffff;
+}
+
+.dark .DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-icon svg {
+  color: oklch(0.145 0 0);
+}
+
 .dark .DocSearch-Hit-title {
   color: #ffffff;
 }
@@ -331,6 +360,7 @@
   padding: 12px 16px;
   text-decoration: none;
   transition: background-color 0.2s ease;
+  position: relative;
 }
 
 /* Hit hover state */
@@ -356,12 +386,7 @@
   color: #ffab70;
 }
 
-/* Hit content structure */
-.DocSearch-Hit-Container {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
+
 
 .DocSearch-Hit-title {
   font-family: "Inter", system-ui, sans-serif;
@@ -386,13 +411,110 @@
   text-decoration: none;
 }
 
-/* Hit icons */
-.DocSearch-Hit-icon {
-  display: none;
+/* Hit icons - Layout with icon, content, and action in a row */
+.DocSearch-Hit a {
+  display: block;
 }
 
+.DocSearch-Hit-Container {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.DocSearch-Hit-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px dashed oklch(0.3 0 0);
+  background: #ffffff;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.DocSearch-Hit-icon::before {
+  content: '';
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid oklch(0.3 0 0);
+  background: #ffffff;
+}
+
+.DocSearch-Hit-icon svg {
+  width: 16px;
+  height: 16px;
+  color: oklch(0.145 0 0);
+  position: relative;
+  z-index: 1;
+  display: block;
+  flex-shrink: 0;
+}
+
+.DocSearch-Hit-icon svg path,
+.DocSearch-Hit-icon svg rect,
+.DocSearch-Hit-icon svg circle,
+.DocSearch-Hit-icon svg line,
+.DocSearch-Hit-icon svg polyline {
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+/* Content wrapper takes remaining space */
+.DocSearch-Hit-content-wrapper {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Hit action (Enter arrow) */
 .DocSearch-Hit-action {
-  display: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  flex-shrink: 0;
+}
+
+.DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-action {
+  opacity: 1;
+}
+
+.DocSearch-Hit-action svg {
+  width: 16px;
+  height: 16px;
+  color: oklch(0.55 0 0);
+  display: block;
+  flex-shrink: 0;
+}
+
+.DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-action svg {
+  color: #ffffff;
+}
+
+/* Selected state icons */
+.DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-icon {
+  border-color: oklch(0.5 0 0);
+  background: oklch(0.2 0 0);
+}
+
+.DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-icon::before {
+  border-color: oklch(0.5 0 0);
+  background: oklch(0.2 0 0);
+}
+
+.DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-icon svg {
+  color: #ffffff;
 }
 
 /* ========== Start Screen ========== */
