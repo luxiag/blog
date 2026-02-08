@@ -1,0 +1,739 @@
+---
+title: 'Nginx 从入门到精通：高性能 Web 服务器完全指南'
+date: '2026-02-08'
+excerpt: 'Nginx 是全球最流行的 Web 服务器之一，为互联网上超过 40% 的网站提供服务。本文将带你系统学习 Nginx 的核心概念、配置技巧、反向代理、负载均衡以及性能优化，让你从零开始掌握这个强大的工具。'
+tags: ['nginx', 'web-server', 'reverse-proxy', 'linux']
+---
+
+# Nginx 从入门到精通
+
+当你访问淘宝、京东、Netflix 这些大型网站时，很可能就是 Nginx 在为你提供服务。作为全球使用最广泛的 Web 服务器之一，Nginx 以其**高性能、低资源占用、高并发处理能力**而闻名。
+
+本文将带你从零开始，系统地掌握 Nginx 的方方面面。
+
+---
+
+## 1. 什么是 Nginx？
+
+**Nginx**（发音：engine-x）是一个开源的高性能 HTTP 服务器和反向代理服务器。它由俄罗斯程序员 Igor Sysoev 于 2004 年开发，最初是为了解决 C10K 问题（即如何在单台服务器上同时处理 10,000 个并发连接）。
+
+### Nginx 能做什么？
+
+1. **Web 服务器**：托管静态网站（HTML、CSS、JS、图片）
+2. **反向代理**：隐藏后端服务器，统一入口
+3. **负载均衡**：将流量分发到多台服务器
+4. **HTTP 缓存**：缓存静态资源，加速访问
+5. **SSL/TLS 终止**：处理 HTTPS 加密
+6. **API 网关**：统一管理微服务接口
+
+### Nginx vs Apache
+
+| 特性 | Nginx | Apache |
+| :--- | :--- | :--- |
+| **架构** | 事件驱动（异步） | 进程/线程驱动（同步） |
+| **并发性能** | 极高（可处理数万并发） | 较低（数千并发） |
+| **内存占用** | 低 | 高 |
+| **静态文件** | 非常快 | 较慢 |
+| **动态内容** | 需要配合 PHP-FPM 等 | 原生支持（mod_php） |
+| **配置** | 简洁 | 复杂（.htaccess） |
+
+---
+
+## 2. 安装 Nginx
+
+### Ubuntu/Debian
+
+```bash
+# 更新包索引
+sudo apt update
+
+# 安装 Nginx
+sudo apt install nginx
+
+# 启动 Nginx
+sudo systemctl start nginx
+
+# 设置开机自启
+sudo systemctl enable nginx
+
+# 查看状态
+sudo systemctl status nginx
+```
+
+### CentOS/RHEL
+
+```bash
+sudo yum install nginx
+sudo systemctl start nginx
+sudo systemctl enable nginx
+```
+
+### 验证安装
+
+打开浏览器，访问 `http://你的服务器IP`，如果看到 "Welcome to nginx!" 页面，说明安装成功。
+
+```bash
+# 查看版本
+nginx -v
+
+# 测试配置文件是否正确
+sudo nginx -t
+```
+
+---
+
+## 3. 核心概念与架构
+
+### 3.1 主进程与工作进程
+
+Nginx 采用**主进程 + 多个工作进程**的架构：
+
+- **主进程（Master Process）**：读取配置、管理工作进程
+- **工作进程（Worker Process）**：处理实际的网络请求
+
+```bash
+# 查看 Nginx 进程
+ps aux | grep nginx
+```
+
+输出示例：
+```
+root      1234  0.0  0.1  nginx: master process
+www-data  1235  0.0  0.3  nginx: worker process
+www-data  1236  0.0  0.3  nginx: worker process
+```
+
+### 3.2 事件驱动模型
+
+Nginx 使用**异步非阻塞**的事件驱动模型，这让它能够用极少的资源处理大量并发连接。
+
+**传统模型（Apache）**：
+- 一个连接 = 一个进程/线程
+- 10,000 个连接 = 10,000 个进程（资源消耗巨大）
+
+**Nginx 模型**：
+- 一个工作进程可以处理数千个连接
+- 使用 epoll（Linux）/ kqueue（BSD）等高效 I/O 多路复用机制
+
+---
+
+## 4. 配置文件结构
+
+Nginx 的配置文件通常位于 `/etc/nginx/nginx.conf`。
+
+### 4.1 基本结构
+
+```nginx
+# 全局块：影响整个 Nginx 服务器
+user www-data;
+worker_processes auto;
+error_log /var/log/nginx/error.log;
+
+# events 块：影响网络连接
+events {
+    worker_connections 1024;  # 每个工作进程的最大连接数
+}
+
+# http 块：HTTP 服务器配置
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    # 日志格式
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent"';
+
+    access_log /var/log/nginx/access.log main;
+
+    # server 块：虚拟主机配置
+    server {
+        listen 80;
+        server_name example.com;
+
+        # location 块：URL 匹配规则
+        location / {
+            root /var/www/html;
+            index index.html;
+        }
+    }
+}
+```
+
+### 4.2 配置文件层级
+
+```
+全局块
+├── events 块
+└── http 块
+    ├── upstream 块（负载均衡）
+    └── server 块（虚拟主机）
+        └── location 块（URL 路由）
+```
+
+---
+
+## 5. 静态网站托管
+
+### 5.1 基础配置
+
+创建配置文件 `/etc/nginx/sites-available/mysite`：
+
+```nginx
+server {
+    listen 80;
+    server_name mysite.com www.mysite.com;
+
+    # 网站根目录
+    root /var/www/mysite;
+    index index.html index.htm;
+
+    # 日志
+    access_log /var/log/nginx/mysite_access.log;
+    error_log /var/log/nginx/mysite_error.log;
+
+    # 主路由
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    # 静态资源缓存
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+}
+```
+
+### 5.2 启用配置
+
+```bash
+# 创建软链接
+sudo ln -s /etc/nginx/sites-available/mysite /etc/nginx/sites-enabled/
+
+# 测试配置
+sudo nginx -t
+
+# 重新加载配置
+sudo systemctl reload nginx
+```
+
+---
+
+## 6. 反向代理
+
+**反向代理**是 Nginx 最强大的功能之一。客户端以为在直接访问服务器，实际上 Nginx 在背后转发请求。
+
+### 6.1 基础反向代理
+
+假设你有一个运行在 `localhost:3000` 的 Node.js 应用：
+
+```nginx
+server {
+    listen 80;
+    server_name api.example.com;
+
+    location / {
+        # 转发到后端服务
+        proxy_pass http://localhost:3000;
+
+        # 传递真实客户端信息
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### 6.2 多服务反向代理
+
+```nginx
+server {
+    listen 80;
+    server_name myapp.com;
+
+    # 前端静态文件
+    location / {
+        root /var/www/frontend;
+        try_files $uri /index.html;
+    }
+
+    # API 请求转发到后端
+    location /api/ {
+        proxy_pass http://localhost:5000/;
+    }
+
+    # WebSocket 支持
+    location /ws/ {
+        proxy_pass http://localhost:8080/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+---
+
+## 7. 负载均衡
+
+当一台服务器不够用时，Nginx 可以将流量分发到多台服务器。
+
+### 7.1 基础负载均衡
+
+```nginx
+# 定义后端服务器组
+upstream backend {
+    server 192.168.1.10:3000;
+    server 192.168.1.11:3000;
+    server 192.168.1.12:3000;
+}
+
+server {
+    listen 80;
+    server_name app.example.com;
+
+    location / {
+        proxy_pass http://backend;
+    }
+}
+```
+
+### 7.2 负载均衡策略
+
+**1. 轮询（默认）**：
+```nginx
+upstream backend {
+    server server1.com;
+    server server2.com;
+}
+```
+
+**2. 加权轮询**：
+```nginx
+upstream backend {
+    server server1.com weight=3;  # 70% 流量
+    server server2.com weight=1;  # 30% 流量
+}
+```
+
+**3. IP 哈希（同一客户端总是访问同一服务器）**：
+```nginx
+upstream backend {
+    ip_hash;
+    server server1.com;
+    server server2.com;
+}
+```
+
+**4. 最少连接**：
+```nginx
+upstream backend {
+    least_conn;
+    server server1.com;
+    server server2.com;
+}
+```
+
+### 7.3 健康检查
+
+```nginx
+upstream backend {
+    server server1.com max_fails=3 fail_timeout=30s;
+    server server2.com max_fails=3 fail_timeout=30s;
+    server server3.com backup;  # 备用服务器
+}
+```
+
+---
+
+## 8. HTTPS 配置
+
+### 8.1 使用 Let's Encrypt 免费证书
+
+```bash
+# 安装 Certbot
+sudo apt install certbot python3-certbot-nginx
+
+# 自动配置 HTTPS
+sudo certbot --nginx -d example.com -d www.example.com
+```
+
+### 8.2 手动配置 HTTPS
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name example.com;
+
+    # SSL 证书
+    ssl_certificate /etc/nginx/ssl/example.com.crt;
+    ssl_certificate_key /etc/nginx/ssl/example.com.key;
+
+    # SSL 优化
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    location / {
+        root /var/www/html;
+        index index.html;
+    }
+}
+
+# HTTP 自动跳转到 HTTPS
+server {
+    listen 80;
+    server_name example.com;
+    return 301 https://$server_name$request_uri;
+}
+```
+
+---
+
+## 9. Location 匹配规则
+
+Location 是 Nginx 配置的核心，决定了如何处理不同的 URL。
+
+### 9.1 匹配优先级
+
+```nginx
+# 1. 精确匹配（优先级最高）
+location = /exact {
+    return 200 "精确匹配";
+}
+
+# 2. 正则匹配（区分大小写）
+location ~ \.php$ {
+    return 200 "PHP 文件";
+}
+
+# 3. 正则匹配（不区分大小写）
+location ~* \.(jpg|png|gif)$ {
+    return 200 "图片文件";
+}
+
+# 4. 前缀匹配（优先）
+location ^~ /static/ {
+    return 200 "静态资源";
+}
+
+# 5. 普通前缀匹配（优先级最低）
+location / {
+    return 200 "默认匹配";
+}
+```
+
+### 9.2 实战示例
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    # 首页
+    location = / {
+        root /var/www/html;
+        index index.html;
+    }
+
+    # 静态资源
+    location ^~ /static/ {
+        alias /var/www/static/;
+        expires 1y;
+    }
+
+    # API 接口
+    location /api/ {
+        proxy_pass http://localhost:3000/;
+    }
+
+    # 图片处理
+    location ~* \.(jpg|jpeg|png|gif)$ {
+        root /var/www/images;
+        expires 30d;
+    }
+
+    # 禁止访问隐藏文件
+    location ~ /\. {
+        deny all;
+    }
+}
+```
+
+---
+
+## 10. 性能优化
+
+### 10.1 Gzip 压缩
+
+```nginx
+http {
+    # 启用 Gzip
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
+}
+```
+
+### 10.2 缓存配置
+
+```nginx
+# 浏览器缓存
+location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+
+# Nginx 缓存
+proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=my_cache:10m max_size=1g inactive=60m;
+
+server {
+    location / {
+        proxy_cache my_cache;
+        proxy_cache_valid 200 1h;
+        proxy_cache_use_stale error timeout updating;
+        proxy_pass http://backend;
+    }
+}
+```
+
+### 10.3 连接优化
+
+```nginx
+http {
+    # 长连接
+    keepalive_timeout 65;
+    keepalive_requests 100;
+
+    # 文件传输优化
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+
+    # 客户端缓冲区
+    client_body_buffer_size 128k;
+    client_max_body_size 10m;
+}
+```
+
+---
+
+## 11. 安全配置
+
+### 11.1 基础安全
+
+```nginx
+server {
+    # 隐藏版本号
+    server_tokens off;
+
+    # 防止点击劫持
+    add_header X-Frame-Options "SAMEORIGIN";
+
+    # XSS 保护
+    add_header X-XSS-Protection "1; mode=block";
+
+    # 内容类型嗅探保护
+    add_header X-Content-Type-Options "nosniff";
+
+    # 限制请求方法
+    if ($request_method !~ ^(GET|POST|HEAD)$) {
+        return 405;
+    }
+}
+```
+
+### 11.2 访问控制
+
+```nginx
+# IP 白名单
+location /admin/ {
+    allow 192.168.1.0/24;
+    deny all;
+}
+
+# 基础认证
+location /private/ {
+    auth_basic "Restricted Area";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+}
+```
+
+### 11.3 限流
+
+```nginx
+# 限制请求速率
+http {
+    limit_req_zone $binary_remote_addr zone=mylimit:10m rate=10r/s;
+
+    server {
+        location /api/ {
+            limit_req zone=mylimit burst=20 nodelay;
+        }
+    }
+}
+```
+
+---
+
+## 12. 常用实战场景
+
+### 12.1 单页应用（SPA）
+
+```nginx
+server {
+    listen 80;
+    server_name app.example.com;
+    root /var/www/app/dist;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # API 代理
+    location /api/ {
+        proxy_pass http://localhost:3000/;
+    }
+}
+```
+
+### 12.2 前后端分离
+
+```nginx
+server {
+    listen 80;
+    server_name myapp.com;
+
+    # 前端
+    location / {
+        root /var/www/frontend/dist;
+        try_files $uri /index.html;
+    }
+
+    # 后端 API
+    location /api/ {
+        proxy_pass http://backend_servers/;
+    }
+
+    # 静态资源
+    location /uploads/ {
+        alias /var/www/uploads/;
+        expires 30d;
+    }
+}
+```
+
+### 12.3 多域名配置
+
+```nginx
+# 主站
+server {
+    listen 80;
+    server_name example.com www.example.com;
+    root /var/www/main;
+}
+
+# 博客
+server {
+    listen 80;
+    server_name blog.example.com;
+    root /var/www/blog;
+}
+
+# API
+server {
+    listen 80;
+    server_name api.example.com;
+    location / {
+        proxy_pass http://localhost:3000;
+    }
+}
+```
+
+---
+
+## 13. 日志管理
+
+### 13.1 自定义日志格式
+
+```nginx
+http {
+    log_format detailed '$remote_addr - $remote_user [$time_local] '
+                       '"$request" $status $body_bytes_sent '
+                       '"$http_referer" "$http_user_agent" '
+                       '$request_time $upstream_response_time';
+
+    access_log /var/log/nginx/access.log detailed;
+}
+```
+
+### 13.2 日志分析
+
+```bash
+# 查看访问最多的 IP
+awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head -10
+
+# 查看最慢的请求
+awk '{print $NF, $7}' /var/log/nginx/access.log | sort -rn | head -10
+
+# 统计状态码
+awk '{print $9}' /var/log/nginx/access.log | sort | uniq -c | sort -rn
+```
+
+---
+
+## 14. 常见问题排查
+
+### 14.1 配置测试
+
+```bash
+# 测试配置文件
+sudo nginx -t
+
+# 查看配置文件路径
+sudo nginx -V
+```
+
+### 14.2 重启与重载
+
+```bash
+# 重新加载配置（不中断服务）
+sudo systemctl reload nginx
+
+# 重启服务
+sudo systemctl restart nginx
+
+# 停止服务
+sudo systemctl stop nginx
+```
+
+### 14.3 查看错误日志
+
+```bash
+# 实时查看错误日志
+sudo tail -f /var/log/nginx/error.log
+
+# 查看访问日志
+sudo tail -f /var/log/nginx/access.log
+```
+
+---
+
+## 总结
+
+Nginx 是现代 Web 架构的基石：
+
+- ✅ **高性能**：轻松处理数万并发连接
+- ✅ **多功能**：Web 服务器 + 反向代理 + 负载均衡
+- ✅ **易配置**：简洁的配置语法
+- ✅ **资源友好**：低内存占用，高效率
+
+从简单的静态网站托管，到复杂的微服务架构，Nginx 都能胜任。掌握 Nginx，你就掌握了现代 Web 服务的核心技能。
+
+现在，打开你的服务器，开始配置你的第一个 Nginx 站点吧！
