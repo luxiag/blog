@@ -298,7 +298,20 @@
   color: oklch(0.55 0 0);
 }
 
-.DocSearch-LoadingIndicator,
+/* Loading Indicator - Hidden by default, shown when aria-hidden="false" */
+.DocSearch-LoadingIndicator {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: oklch(0.55 0 0);
+  padding: 4px;
+  margin-left: 8px;
+}
+
+.DocSearch-LoadingIndicator[aria-hidden="false"] {
+  display: flex;
+}
+
 .DocSearch-Reset {
   display: flex;
   align-items: center;

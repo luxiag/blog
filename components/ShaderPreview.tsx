@@ -158,7 +158,7 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
         </div>
       </div>
 
-      <div className="grid md:grid-cols-2 grid-cols-1 border-b border-neutral-200 dark:border-neutral-700">
+      <div className="grid md:grid-cols-2 grid-cols-1 ">
         {/* Code Editor Area */}
         <div className="relative group min-h-[300px] border-b md:border-b-0 md:border-r border-neutral-200 dark:border-neutral-700">
           {editable ? (

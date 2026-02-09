@@ -38,54 +38,128 @@ export default function BlogList({ posts }: { posts: Post[] }) {
 
   return (
     <div className="flex flex-col gap-12">
-      <div className="bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] p-6 rounded-2xl">
+      <div className="p-6">
         <TagFilter posts={posts} onFilter={handleFilter} />
       </div>
 
       {postsByYear.length > 0 ? (
-        <div className="flex flex-col gap-24">
+        <div className="flex flex-col gap-32 px-6">
           {postsByYear.map(([year, yearPosts]) => (
             <section key={year} className="relative">
-              <div className="flex items-center gap-6 mb-12 overflow-hidden">
-                <h2
-                  className="text-8xl md:text-[120px] font-black leading-none tracking-tighter"
-                  style={{
-                    background: 'repeating-linear-gradient(0deg, oklch(0.145 0 0) 0px, oklch(0.145 0 0) 4px, transparent 4px, transparent 8px)',
-                    WebkitBackgroundClip: 'text',
-                    backgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
-                  }}
+              {/* 立体年份设计 */}
+              <div className="relative mb-10">
+                {/* 背景装饰层 */}
+                <div
+                  className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                  style={{ transform: 'translateY(10px)' }}
                 >
-                  {year}
-                </h2>
-                <div className="flex-1 h-px bg-[oklch(0.145_0_0)] opacity-20" />
-                <div className="hidden md:flex items-center gap-2 font-mono text-[10px] font-bold opacity-40 uppercase tracking-widest">
-                  <Calendar className="w-3 h-3" />
-                  TEMPORAL_MARKER
+                  <span
+                    className="text-transparent font-black font-sans tracking-tighter select-none"
+                    style={{
+                      fontSize: 'clamp(80px, 15vw, 160px)',
+                      WebkitTextStroke: '2px rgba(234, 88, 12, 0.1)',
+                      transform: 'perspective(500px) rotateX(10deg)',
+                    }}
+                  >
+                    {year}
+                  </span>
+                </div>
+
+                {/* 主要年份堆叠 */}
+                <div className="text-center relative z-10">
+                  <span
+                    className="flex flex-col items-center leading-none font-black font-sans tracking-tighter"
+                    style={{
+                      fontSize: 'clamp(80px, 15vw, 160px)',
+                      filter: 'drop-shadow(0 10px 20px rgba(0,0,0,0.1))',
+                    }}
+                  >
+                    {/* 多层描边堆叠 */}
+                    {[...Array(4)].map((_, i) => (
+                      <span
+                        key={i}
+                        className="text-transparent relative"
+                        style={{
+                          WebkitTextStroke: `${1 + i * 0.3}px rgba(0, 0, 0, ${0.06 + i * 0.04})`,
+                          marginTop: i === 0 ? 0 : '-0.65em',
+                          transform: `translateZ(${i * 2}px)`,
+                        }}
+                        aria-hidden="true"
+                      >
+                        {year}
+                      </span>
+                    ))}
+                    {/* 实心顶层 */}
+                    <span
+                      className="relative"
+                      style={{
+                        marginTop: '-0.65em',
+                        background: 'linear-gradient(180deg, oklch(0.145 0 0) 0%, oklch(0.3 0 0) 100%)',
+                        WebkitBackgroundClip: 'text',
+                        backgroundClip: 'text',
+                        WebkitTextFillColor: 'transparent',
+                        filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.2))',
+                      }}
+                    >
+                      {year}
+                    </span>
+                  </span>
+
+                  {/* 年份统计徽章 */}
+                  <div className="mt-4 flex justify-center">
+                    <div
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-[oklch(0.145_0_0)] rounded-full shadow-[4px_4px_0_rgba(0,0,0,0.15)]"
+                      style={{ transform: 'translateY(-10px)' }}
+                    >
+                      <span className="w-4 h-4 rounded-full bg-[#ea580c] animate-pulse" />
+                      <span className="text-xs font-mono font-bold uppercase tracking-widest text-[oklch(0.145_0_0)]">
+                        {yearPosts.length} Records
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              {/* 文章网格 - 立体卡片 */}
+              <div
+                className="grid grid-cols-1 md:grid-cols-2 gap-8"
+                style={{ perspective: '1000px' }}
+              >
                 {yearPosts.map((post, idx) => (
                   <Link
                     key={post.slug}
                     href={`/posts/${post.slug}`}
                     className="group"
+                    style={{ transformStyle: 'preserve-3d' }}
                   >
-                    <div className="h-full flex flex-col bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl overflow-hidden shadow-[4px_4px_0_oklch(0.145_0_0)] group-hover:translate-x-[-2px] group-hover:translate-y-[-2px] group-hover:shadow-[8px_8px_0_oklch(0.145_0_0)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0_oklch(0.145_0_0)] transition-all">
-                      <div className="px-5 py-3 border-b border-[oklch(0.145_0_0)] flex items-center justify-between bg-[#f5f5f5] dark:bg-neutral-800/50">
+                    <div
+                      className="h-full flex flex-col bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl overflow-hidden transition-all duration-300 group-hover:[transform:translateZ(20px)_rotateX(2deg)_rotateY(-2deg)] group-hover:shadow-[8px_8px_0_rgba(0,0,0,0.15),16px_16px_0_rgba(234,88,12,0.12)]"
+                      style={{
+                        boxShadow: '6px 6px 0 rgba(0, 0, 0, 0.12), 12px 12px 0 rgba(234, 88, 12, 0.08)',
+                        transform: 'translateZ(0)',
+                        transformStyle: 'preserve-3d',
+                      }}
+                    >
+                      {/* 卡片头部 */}
+                      <div className="px-5 py-3 border-b border-[oklch(0.145_0_0)] flex items-center justify-between bg-gradient-to-r from-[#f5f5f5] to-white dark:from-neutral-800 dark:to-neutral-900 group-hover:[transform:translateZ(10px)] transition-transform duration-300">
                         <div className="flex items-center gap-2">
-                          <Hash className="w-3 h-3 text-[#ea580c]" />
-                          <span className="text-[10px] font-mono font-bold uppercase tracking-widest">Entry_{String(idx + 1).padStart(3, '0')}</span>
+                          <Hash className="w-4 h-4 text-[#ea580c]" />
+                          <span className="text-[10px] font-mono uppercase tracking-widest text-[oklch(0.145_0_0)]">
+                            Entry_{String(idx + 1).padStart(3, '0')}
+                          </span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-                          <span className="text-[9px] font-mono font-bold opacity-40 uppercase">LIVE_CONTENT</span>
+                          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
+                          <span className="text-[9px] font-mono opacity-60 uppercase">Active</span>
                         </div>
                       </div>
 
-                      <div className="p-8 flex-1 flex flex-col justify-between">
-                        <div>
+                      {/* 卡片内容 */}
+                      <div className="p-8 flex-1 flex flex-col justify-between relative overflow-hidden group-hover:[transform:translateZ(15px)] transition-transform duration-300">
+                        {/* 背景装饰 */}
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-[#ea580c]/5 to-transparent rounded-full blur-2xl" />
+
+                        <div className="relative z-10">
                           <h3 className="text-xl font-bold mb-4 font-sans text-[oklch(0.145_0_0)] group-hover:text-[#ea580c] transition-colors leading-tight">
                             {post.title}
                           </h3>
@@ -96,46 +170,73 @@ export default function BlogList({ posts }: { posts: Post[] }) {
                           )}
                         </div>
 
-                        <div className="flex items-center justify-between mt-auto">
+                        <div className="flex items-center justify-between mt-auto relative z-10">
                           <div className="flex gap-2">
                             {post.tags?.slice(0, 2).map((tag) => (
-                              <span key={tag} className="px-2 py-0.5 border border-[oklch(0.145_0_0)] text-[9px] font-mono font-bold uppercase rounded bg-white">
+                              <span
+                                key={tag}
+                                className="px-3 py-1 border border-[oklch(0.145_0_0)] text-[10px] font-mono uppercase rounded-full bg-white shadow-[2px_2px_0_rgba(0,0,0,0.12)] group-hover:[transform:translateZ(25px)] transition-transform duration-300 hover:shadow-[3px_3px_0_rgba(234,88,12,0.3)]"
+                              >
                                 {tag}
                               </span>
                             ))}
                           </div>
-                          <div className="flex items-center gap-2 text-[10px] font-mono font-bold opacity-60">
+                          <div className="flex items-center gap-2 text-[11px] font-mono text-[oklch(0.145_0_0)]">
                             {post.date.replace(/-/g, '.')}
-                            <ArrowRight className="w-3 h-3 transform group-hover:translate-x-1 transition-transform" />
+                            <ArrowRight className="w-4 h-4 text-[oklch(0.145_0_0)] transform group-hover:translate-x-1 transition-transform group-hover:[transform:translateZ(30px)_scale(1.1)]" />
                           </div>
                         </div>
                       </div>
+
+                      {/* 悬停时的3D效果覆盖层 */}
+                      <div
+                        className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300 group-hover:[transform:translateZ(5px)]"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(255,255,255,0.3) 0%, transparent 40%, rgba(234,88,12,0.05) 100%)',
+                        }}
+                      />
                     </div>
                   </Link>
                 ))}
               </div>
+
+              {/* 年份底部装饰线 */}
+              <div className="mt-16 flex items-center justify-center gap-4">
+                <div className="h-px flex-1 max-w-[200px] bg-gradient-to-r from-transparent via-[oklch(0.145_0_0)]/20 to-transparent" />
+                <div className="w-2 h-2 rounded-full bg-[oklch(0.145_0_0)]/20" />
+                <div className="h-px flex-1 max-w-[200px] bg-gradient-to-r from-transparent via-[oklch(0.145_0_0)]/20 to-transparent" />
+              </div>
             </section>
           ))}
 
+          {/* 加载更多按钮 */}
           {hasMore && (
-            <div className="text-center pt-12 pb-24 border-t border-[oklch(0.145_0_0)] border-dashed">
+            <div className="text-center pt-12 pb-24">
               <button
                 onClick={loadMore}
-                className="inline-flex items-center gap-3 px-12 py-5 bg-[oklch(0.145_0_0)] text-white font-mono font-bold text-xs uppercase tracking-[0.2em] rounded-xl shadow-[6px_6px_0_#ea580c] hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[10px_10px_0_#ea580c] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0_#ea580c] transition-all"
+                className="relative inline-flex items-center gap-3 px-12 py-5 bg-[oklch(0.145_0_0)] text-white font-mono font-bold text-xs uppercase tracking-[0.2em] rounded-xl transition-all duration-300 hover:scale-105"
+                style={{
+                  boxShadow: '0 10px 30px rgba(0,0,0,0.3), 0 0 0 4px rgba(234, 88, 12, 0.3)',
+                }}
               >
                 <Terminal className="w-4 h-4" />
-                FETCH_ADDITIONAL_RECORDS ({filteredPosts.length - visibleCount})
+                Fetch More ({filteredPosts.length - visibleCount})
+                {/* 按钮光效 */}
+                <div className="absolute inset-0 rounded-xl overflow-hidden">
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-100%] hover:translate-x-[100%] transition-transform duration-700" />
+                </div>
               </button>
             </div>
           )}
         </div>
       ) : (
-        <div className="bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl p-20 flex flex-col items-center justify-center text-center">
-          <div className="w-16 h-16 rounded-full border border-dashed border-[oklch(0.145_0_0)] flex items-center justify-center mb-6 opacity-20 text-[oklch(0.145_0_0)]">
-            <Calendar className="w-8 h-8" />
+        /* 空状态 */
+        <div className="bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl p-20 flex flex-col items-center justify-center text-center shadow-[6px_6px_0_rgba(0,0,0,0.12)]">
+          <div className="w-20 h-20 rounded-full border border-dashed border-[oklch(0.145_0_0)] flex items-center justify-center mb-6 opacity-30">
+            <Calendar className="w-10 h-10 text-[oklch(0.145_0_0)]" />
           </div>
           <p className="font-mono text-xs font-bold uppercase tracking-[0.3em] opacity-40">
-            {posts.length > 0 ? 'NULL_RESULT: NO_MATCH_FOUND' : 'NULL_POINTER: NO_POSTS_INITIALIZED'}
+            No Results Found
           </p>
         </div>
       )}

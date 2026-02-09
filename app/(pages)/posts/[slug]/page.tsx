@@ -7,7 +7,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { logger } from '@/lib/logger';
 import PageTitle from '@/components/PageTitle';
-import { ChevronLeft, Calendar, Clock, User, Bookmark, MoreHorizontal } from 'lucide-react';
+import { ChevronLeft } from 'lucide-react';
 
 export async function generateStaticParams() {
   try {
@@ -42,101 +42,86 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
   const toc = extractToc(post.rawContent || post.content);
 
   return (
-    <div className="min-h-screen bg-[#f5f5f5] dark:bg-neutral-950 font-sans text-[oklch(0.145_0_0)] dark:text-neutral-100 selection:bg-orange-500/20">
+    <div className="min-h-screen bg-[#f5f5f5] font-sans text-[oklch(0.145_0_0)] selection:bg-orange-500/20">
       <PageTitle title={post.title} />
       <TableOfContents toc={toc} />
 
-      <div className="max-w-5xl mx-auto px-6 py-12">
-        {/* Back Link */}
-        <div className="mb-12">
+      <div className="max-w-4xl mx-auto px-6 py-12">
+        {/* Nav */}
+        <nav className="mb-8">
           <Link
             href="/posts"
-            className="inline-flex items-center text-[11px] font-mono font-bold uppercase tracking-[0.2em] text-[#ea580c] group"
+            className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-[#ea580c] hover:opacity-70"
           >
-            <ChevronLeft className="w-3 h-3 mr-2 group-hover:-translate-x-1 transition-transform" />
-            BACK_TO_ARCHIVE
+            <ChevronLeft className="w-4 h-4" />
+            Back
           </Link>
-        </div>
+        </nav>
 
-        <article className="bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-3xl overflow-hidden shadow-[8px_8px_0_oklch(0.145_0_0)]">
-          {/* Article Header */}
-          <header className="p-8 md:p-12 border-b border-[oklch(0.145_0_0)] bg-[#f5f5f5] dark:bg-neutral-800/50">
-            <div className="flex flex-wrap items-center gap-4 mb-8">
-              <div className="flex items-center gap-2 px-3 py-1 bg-[oklch(0.145_0_0)] text-white text-[9px] font-mono font-bold uppercase tracking-widest rounded shadow-[2px_2px_0_#ea580c]">
-                <Bookmark className="w-3 h-3" />
-                {post.category?.toUpperCase() || 'GENERAL'}
-              </div>
-              <div className="h-px w-8 bg-[oklch(0.145_0_0)] opacity-20" />
-              <div className="text-[10px] font-mono font-bold opacity-40 uppercase tracking-widest">
-                VER_2.4.0_STABLE
-              </div>
-            </div>
+        {/* Article */}
+        <article>
+          {/* Header */}
+          <div className="py-8 border-b border-[oklch(0.145_0_0)]">
 
-            <h1 className="text-4xl md:text-6xl font-black tracking-tighter leading-tight mb-10 uppercase italic">
+            <h1 className="text-3xl md:text-4xl font-bold tracking-tight leading-tight mb-6">
               {post.title}
             </h1>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-              {[
-                { icon: Calendar, label: 'PUBLISHED_AT', value: post.date.replace(/-/g, '.') },
-                { icon: Clock, label: 'READ_TIME', value: post.readingTime || '---' },
-                { icon: User, label: 'AUTHOR_UID', value: post.author?.name?.toUpperCase() || 'SYSTEM' },
-                { icon: MoreHorizontal, label: 'DATA_INTEGRITY', value: 'VERIFIED' }
-              ].map((meta, i) => (
-                <div key={i} className="flex flex-col gap-1">
-                  <div className="flex items-center gap-1.5 text-[9px] font-mono font-bold opacity-40 uppercase tracking-widest">
-                    <meta.icon className="w-3 h-3" />
-                    {meta.label}
-                  </div>
-                  <div className="text-[11px] font-mono font-bold">{meta.value}</div>
-                </div>
-              ))}
+            <div className="text-xs font-mono opacity-50">
+              {post.date} · {post.readingTime || '---'} · {post.category}
             </div>
-          </header>
+          </div>
 
-          <div className="p-8 md:p-16">
-            {post.coverImage && (
-              <div className="relative aspect-video w-full mb-12 border border-[oklch(0.145_0_0)] rounded-2xl overflow-hidden shadow-[4px_4px_0_oklch(0.145_0_0)]">
+          {/* Cover */}
+          {post.coverImage && (
+            <div className="border-b border-[oklch(0.145_0_0)]">
+              <div className="relative aspect-video w-full">
                 <Image
                   src={post.coverImage}
                   alt={post.title}
                   fill
-                  className="object-cover grayscale hover:grayscale-0 transition-all duration-700"
+                  className="object-cover"
                 />
               </div>
-            )}
+            </div>
+          )}
 
-            {/* Post Content */}
-            <div className="prose prose-neutral dark:prose-invert max-w-none prose-headings:font-black prose-headings:tracking-tighter prose-headings:uppercase prose-blockquote:border-l-orange-600 prose-a:text-orange-600">
+          {/* Content */}
+          <div className="py-8">
+            <div className="prose prose-neutral max-w-none prose-headings:font-bold prose-blockquote:border-l-[#ea580c] prose-a:text-[#ea580c] prose-pre:border prose-pre:border-[oklch(0.145_0_0)] prose-pre:rounded-lg prose-pre:bg-white">
               <MDXComponents content={post.content} isMdxCompiled={post.isMdxCompiled} category={post.category} />
             </div>
 
             {/* Tags */}
             {post.tags && post.tags.length > 0 && (
-              <div className="mt-16 pt-8 border-t border-[oklch(0.145_0_0)] border-dashed flex flex-wrap gap-3">
-                {post.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="px-4 py-1.5 text-[10px] font-mono font-bold uppercase tracking-widest border border-[oklch(0.145_0_0)] rounded-full hover:bg-[oklch(0.145_0_0)] hover:text-white transition-colors cursor-default"
-                  >
-                    #{tag}
-                  </span>
-                ))}
+              <div className="mt-12 pt-8 border-t border-[oklch(0.145_0_0)]">
+                <div className="text-[10px] font-mono uppercase tracking-widest opacity-40 mb-4">
+                  Tags
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {post.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="px-3 py-1 text-xs font-mono border border-[oklch(0.145_0_0)] rounded hover:bg-[oklch(0.145_0_0)] hover:text-white transition-colors"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
           </div>
         </article>
 
-        {/* Footer Navigation */}
-        <div className="mt-12 flex justify-center">
+        {/* Footer Nav */}
+        <nav className="mt-8">
           <Link
             href="/posts"
-            className="flex items-center gap-3 px-8 py-4 border border-[oklch(0.145_0_0)] rounded-2xl font-mono font-bold text-xs uppercase tracking-widest hover:bg-white transition-all shadow-[4px_4px_0_oklch(0.145_0_0)] active:shadow-none active:translate-x-1 active:translate-y-1"
+            className="inline-flex items-center gap-2 px-4 py-2 border border-[oklch(0.145_0_0)] rounded text-xs font-mono uppercase tracking-widest hover:bg-[#f5f5f5] transition-colors"
           >
             <ChevronLeft className="w-4 h-4" />
-            RETURN_TO_ARCHIVES
+            Back to Archive
           </Link>
-        </div>
+        </nav>
       </div>
     </div>
   );

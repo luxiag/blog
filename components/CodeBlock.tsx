@@ -133,7 +133,7 @@ export default function CodeBlock({ children, className, codeContent: propCodeCo
         </>
       ) : (
         <>
-          <div className={`overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 ${!isExpanded ? 'max-h-[400px]' : ''}`}>
+          <div className={`overflow-hidden rounded-lg  border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 ${!isExpanded ? 'max-h-[400px]' : ''}`}>
             <pre
               className="p-4 overflow-x-auto font-mono text-sm leading-6 text-neutral-800 dark:text-neutral-200 m-0"
               {...props}
