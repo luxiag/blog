@@ -6,6 +6,7 @@ import { calculateReadingTime } from './reading-time';
 import { Post, PostFrontMatter } from '@/types/blog';
 import { logger } from './logger';
 import jsYaml from 'js-yaml';
+import { slugify } from './slugify';
 
 const postsDirectory = path.join(process.cwd(), 'posts');
 
@@ -221,7 +222,7 @@ export interface TocItem {
 
 export function extractToc(content: string): TocItem[] {
   const toc: TocItem[] = [];
-  const headingRegex = /^(#{2,3})\s+(.+)$/gm;
+  const headingRegex = /^(#{2,4})\s+(.+)$/gm;
   let match;
 
   // 用于追踪 ID 出现的次数
@@ -231,11 +232,8 @@ export function extractToc(content: string): TocItem[] {
     const level = match[1].length;
     const text = match[2].trim();
 
-    // 基础 ID 生成逻辑
-    let baseId = text
-      .toLowerCase()
-      .replace(/[^\u4e00-\u9fa5a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '');
+    // 使用统一的 slugify 函数生成基础 ID
+    let baseId = slugify(text);
 
     // 如果 ID 为空（例如标题全是特殊符号），给个默认值
     if (!baseId) baseId = 'section';

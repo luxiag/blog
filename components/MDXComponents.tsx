@@ -16,6 +16,26 @@ import CodeBlock from './CodeBlock';
 import 'highlight.js/styles/github.css';
 import '../styles/code-highlight.css';
 import 'katex/dist/katex.min.css';
+import { slugify } from '@/lib/slugify';
+
+// 用于追踪已使用的 heading ID，确保唯一性
+// 使用 Map 来跟踪每个 baseId 出现的次数，与 extractToc 保持一致
+const usedHeadingIds = new Map<string, number>();
+
+function generateHeadingId(text: string): string {
+  const baseId = slugify(text) || 'section';
+  
+  // 处理重复 - 使用与 extractToc 相同的逻辑
+  const count = usedHeadingIds.get(baseId) || 0;
+  let finalId = baseId;
+  
+  if (count > 0) {
+    finalId = `${baseId}-${count}`;
+  }
+  
+  usedHeadingIds.set(baseId, count + 1);
+  return finalId;
+}
 
 const CodeRunner = dynamic(() => import('./CodeRunner'), { ssr: false });
 const InteractiveComponent = dynamic(() => import('./InteractiveComponent'), { ssr: false });
@@ -63,6 +83,11 @@ interface MDXContentProps {
 
 export default function MDXContent({ content, isMdxCompiled, category }: MDXContentProps) {
   const lightbox = useLightbox();
+
+  // 每次渲染新内容时清空已使用的 heading IDs
+  useEffect(() => {
+    usedHeadingIds.clear();
+  }, [content]);
 
   const resolveImagePath = (src: string): string => {
     if (!src) return src;
@@ -142,33 +167,42 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       // </h1>
       null
     ),
-    h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => (
-      <h2
-        id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-        className="font-sans text-2xl font-semibold text-neutral-900 dark:text-neutral-100 mt-12 mb-4 border-b border-neutral-200 dark:border-neutral-700 pb-2"
-        {...props}
-      >
-        {children}
-      </h2>
-    ),
-    h3: ({ children, ...props }: React.ComponentPropsWithoutRef<'h3'>) => (
-      <h3
-        id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-        className="font-sans text-xl font-semibold text-neutral-900 dark:text-neutral-100 mt-10 mb-3"
-        {...props}
-      >
-        {children}
-      </h3>
-    ),
-    h4: ({ children, ...props }: React.ComponentPropsWithoutRef<'h4'>) => (
-      <h4
-        id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
-        className="font-sans text-lg font-semibold text-neutral-900 dark:text-neutral-100 mt-8 mb-2"
-        {...props}
-      >
-        {children}
-      </h4>
-    ),
+h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
+      const id = slugify(extractText(children));
+      return (
+        <h2
+          id={id}
+          className="font-sans text-2xl font-semibold text-neutral-900 dark:text-neutral-100 mt-12 mb-4 border-b border-neutral-200 dark:border-neutral-700 pb-2"
+          {...props}
+        >
+          {children}
+        </h2>
+      );
+    },
+    h3: ({ children, ...props }: React.ComponentPropsWithoutRef<'h3'>) => {
+      const id = slugify(extractText(children));
+      return (
+        <h3
+          id={id}
+          className="font-sans text-xl font-semibold text-neutral-900 dark:text-neutral-100 mt-10 mb-3"
+          {...props}
+        >
+          {children}
+        </h3>
+      );
+    },
+    h4: ({ children, ...props }: React.ComponentPropsWithoutRef<'h4'>) => {
+      const id = slugify(extractText(children));
+      return (
+        <h4
+          id={id}
+          className="font-sans text-lg font-semibold text-neutral-900 dark:text-neutral-100 mt-8 mb-2"
+          {...props}
+        >
+          {children}
+        </h4>
+      );
+    },
     p: ({ children, ...props }: React.ComponentPropsWithoutRef<'p'>) => (
       <p className="text-neutral-700 dark:text-neutral-300 leading-7 mb-4" {...props}>
         {children}
