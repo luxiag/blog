@@ -1,4 +1,4 @@
-export type SqlDatasetId = 'comprehensive';
+export type SqlDatasetId = 'comprehensive' | 'commerce';
 
 export interface SqlDataset {
   id: SqlDatasetId;
@@ -894,6 +894,379 @@ INSERT INTO hms_billings (id, patient_id, appointment_id, description, amount, s
 (20, 20, 20, 'Consultation - Neurology', 220.00, 'pending', '2025-01-14', '2025-01-29', NULL, NULL, 'INV-2025-0020');
 `;
 
+export const commerceInitialSql = `
+-- 用户表
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  city VARCHAR(100),
+  signup_date DATE NOT NULL
+);
+
+-- 商品表
+CREATE TABLE products (
+  id INTEGER PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  category VARCHAR(100),
+  price DECIMAL(10, 2) NOT NULL
+);
+
+-- 订单表
+CREATE TABLE orders (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  order_date DATE NOT NULL,
+  status VARCHAR(50) DEFAULT 'PENDING',
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- 订单明细表
+CREATE TABLE order_items (
+  order_id INTEGER NOT NULL,
+  product_id INTEGER NOT NULL,
+  quantity INTEGER NOT NULL,
+  unit_price DECIMAL(10, 2) NOT NULL,
+  PRIMARY KEY (order_id, product_id),
+  FOREIGN KEY (order_id) REFERENCES orders(id),
+  FOREIGN KEY (product_id) REFERENCES products(id)
+);
+
+-- 支付表
+CREATE TABLE payments (
+  id INTEGER PRIMARY KEY,
+  order_id INTEGER NOT NULL,
+  paid_at DATETIME,
+  amount DECIMAL(10, 2) NOT NULL,
+  method VARCHAR(50),
+  status VARCHAR(50) DEFAULT 'PENDING',
+  FOREIGN KEY (order_id) REFERENCES orders(id)
+);
+
+-- 插入用户数据 (30个用户)
+INSERT INTO users (id, name, city, signup_date) VALUES
+(1, 'Alice', 'Beijing', '2025-12-01'),
+(2, 'Bob', 'Shanghai', '2025-11-15'),
+(3, 'Charlie', 'Beijing', '2026-01-10'),
+(4, 'Diana', 'Guangzhou', '2025-10-20'),
+(5, 'Eve', 'Shenzhen', '2025-12-25'),
+(6, 'Frank', 'Beijing', '2025-09-15'),
+(7, 'Grace', 'Shanghai', '2026-01-05'),
+(8, 'Henry', 'Beijing', '2025-11-01'),
+(9, 'Ivy', 'Guangzhou', '2025-08-20'),
+(10, 'Jack', 'Shenzhen', '2025-12-10'),
+(11, 'Kelly', 'Beijing', '2025-10-05'),
+(12, 'Leo', 'Shanghai', '2026-01-15'),
+(13, 'Mia', 'Guangzhou', '2025-09-30'),
+(14, 'Nathan', 'Shenzhen', '2025-11-25'),
+(15, 'Olivia', 'Beijing', '2025-08-10'),
+(16, 'Paul', 'Shanghai', '2026-01-20'),
+(17, 'Quinn', 'Guangzhou', '2025-10-15'),
+(18, 'Ryan', 'Shenzhen', '2025-12-05'),
+(19, 'Sophie', 'Beijing', '2025-09-01'),
+(20, 'Tom', 'Shanghai', '2026-01-25'),
+(21, 'Ursula', 'Guangzhou', '2025-11-10'),
+(22, 'Victor', 'Shenzhen', '2025-08-25'),
+(23, 'Wendy', 'Beijing', '2025-10-30'),
+(24, 'Xavier', 'Shanghai', '2026-01-30'),
+(25, 'Yolanda', 'Guangzhou', '2025-09-20'),
+(26, 'Zack', 'Shenzhen', '2025-11-20'),
+(27, 'Anna', 'Beijing', '2025-08-05'),
+(28, 'Ben', 'Shanghai', '2026-02-01'),
+(29, 'Cathy', 'Guangzhou', '2025-10-10'),
+(30, 'David', 'Shenzhen', '2025-12-30');
+
+-- 插入商品数据 (40个商品)
+INSERT INTO products (id, name, category, price) VALUES
+(1, 'iPhone 15 Pro', 'Electronics', 7999.00),
+(2, 'MacBook Pro 16', 'Electronics', 18999.00),
+(3, 'AirPods Pro 2', 'Electronics', 1999.00),
+(4, 'iPad Air', 'Electronics', 4799.00),
+(5, 'Apple Watch Ultra', 'Electronics', 6299.00),
+(6, 'Sony WH-1000XM5', 'Electronics', 2499.00),
+(7, 'Samsung Galaxy S24', 'Electronics', 6999.00),
+(8, 'Dell XPS 15', 'Electronics', 12999.00),
+(9, 'Nintendo Switch OLED', 'Electronics', 2599.00),
+(10, 'Canon EOS R6', 'Electronics', 15999.00),
+(11, 'Ergonomic Office Chair', 'Furniture', 1299.00),
+(12, 'Standing Desk Pro', 'Furniture', 2499.00),
+(13, 'Bookshelf Oak', 'Furniture', 899.00),
+(14, 'Sofa 3-Seater', 'Furniture', 3999.00),
+(15, 'Dining Table Set', 'Furniture', 2899.00),
+(16, 'Wardrobe Modern', 'Furniture', 1899.00),
+(17, 'Coffee Table', 'Furniture', 599.00),
+(18, 'Bed Frame King', 'Furniture', 3299.00),
+(19, 'Nightstand Pair', 'Furniture', 799.00),
+(20, 'TV Stand', 'Furniture', 1099.00),
+(21, 'Espresso Machine', 'Home Appliances', 3499.00),
+(22, 'Robot Vacuum', 'Home Appliances', 2499.00),
+(23, 'Air Purifier Pro', 'Home Appliances', 1899.00),
+(24, 'Microwave Oven', 'Home Appliances', 699.00),
+(25, 'Blender Professional', 'Home Appliances', 1299.00),
+(26, 'Rice Cooker Smart', 'Home Appliances', 899.00),
+(27, 'Water Filter Pitcher', 'Home Appliances', 299.00),
+(28, 'Electric Kettle', 'Home Appliances', 399.00),
+(29, 'Toaster 4-Slice', 'Home Appliances', 499.00),
+(30, 'Slow Cooker', 'Home Appliances', 599.00),
+(31, 'Nike Air Max', 'Sports', 899.00),
+(32, 'Adidas Ultraboost', 'Sports', 1099.00),
+(33, 'Yoga Mat Premium', 'Sports', 299.00),
+(34, 'Dumbbell Set 20kg', 'Sports', 699.00),
+(35, 'Treadmill Home', 'Sports', 4999.00),
+(36, 'Basketball Official', 'Sports', 299.00),
+(37, 'Tennis Racket Pro', 'Sports', 1299.00),
+(38, 'Camping Tent 4P', 'Sports', 1599.00),
+(39, 'Bicycle Helmet', 'Sports', 399.00),
+(40, 'Fitness Tracker', 'Sports', 599.00);
+
+-- 插入订单数据 (50笔订单)
+INSERT INTO orders (id, user_id, order_date, status) VALUES
+(1, 1, '2025-12-01', 'PAID'),
+(2, 1, '2025-12-15', 'PAID'),
+(3, 1, '2026-01-05', 'PAID'),
+(4, 2, '2025-11-20', 'PAID'),
+(5, 2, '2025-12-10', 'PAID'),
+(6, 2, '2026-01-08', 'CANCELLED'),
+(7, 3, '2025-12-05', 'PAID'),
+(8, 3, '2025-12-25', 'PAID'),
+(9, 3, '2026-01-18', 'PAID'),
+(10, 4, '2025-11-15', 'PAID'),
+(11, 4, '2025-12-20', 'PAID'),
+(12, 4, '2026-01-02', 'PAID'),
+(13, 5, '2025-12-30', 'PAID'),
+(14, 5, '2026-01-10', 'PENDING'),
+(15, 6, '2025-11-25', 'PAID'),
+(16, 6, '2025-12-28', 'PAID'),
+(17, 7, '2025-12-15', 'PAID'),
+(18, 7, '2026-01-12', 'REFUNDED'),
+(19, 8, '2025-11-30', 'PAID'),
+(20, 8, '2025-12-30', 'PAID'),
+(21, 9, '2025-12-08', 'PAID'),
+(22, 9, '2026-01-15', 'PAID'),
+(23, 10, '2025-12-18', 'PAID'),
+(24, 10, '2026-01-20', 'PENDING'),
+(25, 11, '2025-11-10', 'PAID'),
+(26, 11, '2025-12-22', 'PAID'),
+(27, 12, '2025-12-01', 'PAID'),
+(28, 12, '2026-01-25', 'PAID'),
+(29, 13, '2025-11-28', 'PAID'),
+(30, 13, '2025-12-12', 'CANCELLED'),
+(31, 14, '2025-12-05', 'PAID'),
+(32, 14, '2026-01-05', 'PAID'),
+(33, 15, '2025-11-18', 'PAID'),
+(34, 15, '2025-12-28', 'PAID'),
+(35, 16, '2025-12-10', 'PAID'),
+(36, 16, '2026-01-15', 'PAID'),
+(37, 17, '2025-11-22', 'PAID'),
+(38, 17, '2025-12-30', 'REFUNDED'),
+(39, 18, '2025-12-15', 'PAID'),
+(40, 18, '2026-01-08', 'PAID'),
+(41, 19, '2025-11-05', 'PAID'),
+(42, 19, '2025-12-20', 'PAID'),
+(43, 20, '2025-12-25', 'PAID'),
+(44, 20, '2026-01-18', 'PENDING'),
+(45, 21, '2025-11-15', 'PAID'),
+(46, 22, '2025-12-05', 'PAID'),
+(47, 23, '2025-12-18', 'PAID'),
+(48, 24, '2026-01-10', 'PAID'),
+(49, 25, '2025-11-30', 'PAID'),
+(50, 26, '2025-12-22', 'PAID');
+
+-- 插入订单明细 (150条)
+INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES
+-- Order 1: Alice - Electronics
+(1, 1, 1, 7999.00),
+(1, 3, 1, 1999.00),
+-- Order 2: Alice - Home
+(2, 11, 1, 1299.00),
+(2, 21, 1, 3499.00),
+-- Order 3: Alice - More Electronics
+(3, 2, 1, 18999.00),
+-- Order 4: Bob - Sports
+(4, 31, 1, 899.00),
+(4, 33, 2, 299.00),
+-- Order 5: Bob - Electronics
+(5, 6, 1, 2499.00),
+(5, 9, 1, 2599.00),
+-- Order 6: Bob - Cancelled
+(6, 4, 1, 4799.00),
+-- Order 7: Charlie - Furniture
+(7, 12, 1, 2499.00),
+(7, 13, 1, 899.00),
+-- Order 8: Charlie - Appliances
+(8, 22, 1, 2499.00),
+(8, 23, 1, 1899.00),
+-- Order 9: Charlie - Sports
+(9, 35, 1, 4999.00),
+-- Order 10: Diana - Mixed
+(10, 14, 1, 3999.00),
+(10, 28, 1, 399.00),
+-- Order 11: Diana - Electronics
+(11, 7, 1, 6999.00),
+(11, 40, 1, 599.00),
+-- Order 12: Diana - Home
+(12, 24, 1, 699.00),
+(12, 26, 1, 899.00),
+-- Order 13: Eve - Furniture
+(13, 15, 1, 2899.00),
+(13, 17, 1, 599.00),
+-- Order 14: Eve - Pending
+(14, 1, 1, 7999.00),
+-- Order 15: Frank - Sports
+(15, 32, 1, 1099.00),
+(15, 34, 1, 699.00),
+-- Order 16: Frank - Electronics
+(16, 8, 1, 12999.00),
+-- Order 17: Grace - Appliances
+(17, 25, 1, 1299.00),
+(17, 29, 1, 499.00),
+-- Order 18: Grace - Refunded
+(18, 5, 1, 6299.00),
+-- Order 19: Henry - Furniture
+(19, 16, 1, 1899.00),
+(19, 19, 1, 799.00),
+-- Order 20: Henry - Electronics
+(20, 10, 1, 15999.00),
+-- Order 21: Ivy - Mixed
+(21, 18, 1, 3299.00),
+(21, 27, 1, 299.00),
+-- Order 22: Ivy - Sports
+(22, 36, 2, 299.00),
+(22, 39, 1, 399.00),
+-- Order 23: Jack - Appliances
+(23, 21, 1, 3499.00),
+(23, 30, 1, 599.00),
+-- Order 24: Jack - Pending
+(24, 2, 1, 18999.00),
+-- Order 25: Kelly - Furniture
+(25, 11, 1, 1299.00),
+(25, 20, 1, 1099.00),
+-- Order 26: Kelly - Electronics
+(26, 3, 1, 1999.00),
+(26, 40, 1, 599.00),
+-- Order 27: Leo - Sports
+(27, 37, 1, 1299.00),
+(27, 38, 1, 1599.00),
+-- Order 28: Leo - Appliances
+(28, 22, 1, 2499.00),
+(28, 24, 1, 699.00),
+-- Order 29: Mia - Electronics
+(29, 4, 1, 4799.00),
+(29, 9, 1, 2599.00),
+-- Order 30: Mia - Cancelled
+(30, 6, 1, 2499.00),
+-- Order 31: Nathan - Furniture
+(31, 12, 1, 2499.00),
+(31, 14, 1, 3999.00),
+-- Order 32: Nathan - Home
+(32, 25, 1, 1299.00),
+(32, 26, 1, 899.00),
+-- Order 33: Olivia - Sports
+(33, 31, 1, 899.00),
+(33, 35, 1, 4999.00),
+-- Order 34: Olivia - Mixed
+(34, 7, 1, 6999.00),
+(34, 28, 1, 399.00),
+-- Order 35: Paul - Appliances
+(35, 23, 1, 1899.00),
+(35, 29, 1, 499.00),
+-- Order 36: Paul - Electronics
+(36, 5, 1, 6299.00),
+-- Order 37: Quinn - Furniture
+(37, 13, 2, 899.00),
+(37, 17, 1, 599.00),
+-- Order 38: Quinn - Refunded
+(38, 1, 1, 7999.00),
+-- Order 39: Ryan - Sports
+(39, 32, 1, 1099.00),
+(39, 34, 1, 699.00),
+-- Order 40: Ryan - Appliances
+(40, 21, 1, 3499.00),
+-- Order 41: Sophie - Electronics
+(41, 8, 1, 12999.00),
+-- Order 42: Sophie - Home
+(42, 15, 1, 2899.00),
+(42, 20, 1, 1099.00),
+-- Order 43: Tom - Mixed
+(43, 16, 1, 1899.00),
+(43, 27, 1, 299.00),
+(43, 33, 1, 299.00),
+-- Order 44: Tom - Pending
+(44, 10, 1, 15999.00),
+-- Order 45: Ursula - Sports
+(45, 36, 1, 299.00),
+(45, 37, 1, 1299.00),
+(45, 39, 2, 399.00),
+-- Order 46: Victor - Appliances
+(46, 30, 1, 599.00),
+(46, 22, 1, 2499.00),
+-- Order 47: Wendy - Electronics
+(47, 2, 1, 18999.00),
+-- Order 48: Xavier - Furniture
+(48, 11, 1, 1299.00),
+(48, 18, 1, 3299.00),
+-- Order 49: Yolanda - Mixed
+(49, 19, 1, 799.00),
+(49, 24, 1, 699.00),
+(49, 38, 1, 1599.00),
+-- Order 50: Zack - Sports & Appliances
+(50, 34, 1, 699.00),
+(50, 25, 1, 1299.00);
+
+-- 插入支付数据
+INSERT INTO payments (id, order_id, paid_at, amount, method, status) VALUES
+(1, 1, '2025-12-01 10:30:00', 9998.00, 'Credit Card', 'SUCCESS'),
+(2, 2, '2025-12-15 14:20:00', 4798.00, 'Alipay', 'SUCCESS'),
+(3, 3, '2026-01-05 09:15:00', 18999.00, 'Credit Card', 'SUCCESS'),
+(4, 4, '2025-11-20 16:45:00', 1497.00, 'WeChat Pay', 'SUCCESS'),
+(5, 5, '2025-12-10 11:00:00', 5098.00, 'Alipay', 'SUCCESS'),
+(6, 7, '2025-12-05 13:30:00', 3398.00, 'Credit Card', 'SUCCESS'),
+(7, 8, '2025-12-25 10:00:00', 4398.00, 'WeChat Pay', 'SUCCESS'),
+(8, 9, '2026-01-18 15:20:00', 4999.00, 'Credit Card', 'SUCCESS'),
+(9, 10, '2025-11-15 09:00:00', 4398.00, 'Alipay', 'SUCCESS'),
+(10, 11, '2025-12-20 14:30:00', 7598.00, 'Credit Card', 'SUCCESS'),
+(11, 12, '2026-01-02 11:30:00', 1598.00, 'WeChat Pay', 'SUCCESS'),
+(12, 13, '2025-12-30 16:00:00', 3498.00, 'Alipay', 'SUCCESS'),
+(13, 15, '2025-11-25 10:15:00', 1798.00, 'Credit Card', 'SUCCESS'),
+(14, 16, '2025-12-28 13:45:00', 12999.00, 'Alipay', 'SUCCESS'),
+(15, 17, '2025-12-15 09:30:00', 1798.00, 'WeChat Pay', 'SUCCESS'),
+(16, 19, '2025-11-30 15:00:00', 2698.00, 'Credit Card', 'SUCCESS'),
+(17, 20, '2025-12-30 11:30:00', 15999.00, 'Alipay', 'SUCCESS'),
+(18, 21, '2025-12-08 10:00:00', 3598.00, 'WeChat Pay', 'SUCCESS'),
+(19, 22, '2026-01-15 14:15:00', 997.00, 'Credit Card', 'SUCCESS'),
+(20, 23, '2025-12-18 09:45:00', 4098.00, 'Alipay', 'SUCCESS'),
+(21, 25, '2025-11-10 13:00:00', 2398.00, 'WeChat Pay', 'SUCCESS'),
+(22, 26, '2025-12-22 10:30:00', 2598.00, 'Credit Card', 'SUCCESS'),
+(23, 27, '2025-12-01 15:30:00', 2898.00, 'Alipay', 'SUCCESS'),
+(24, 28, '2026-01-25 11:00:00', 3198.00, 'WeChat Pay', 'SUCCESS'),
+(25, 29, '2025-11-28 14:00:00', 7398.00, 'Credit Card', 'SUCCESS'),
+(26, 31, '2025-12-05 09:30:00', 6498.00, 'Alipay', 'SUCCESS'),
+(27, 32, '2026-01-05 16:00:00', 2198.00, 'WeChat Pay', 'SUCCESS'),
+(28, 33, '2025-11-18 10:45:00', 5898.00, 'Credit Card', 'SUCCESS'),
+(29, 34, '2025-12-28 13:15:00', 7398.00, 'Alipay', 'SUCCESS'),
+(30, 35, '2025-12-10 11:30:00', 2398.00, 'WeChat Pay', 'SUCCESS'),
+(31, 36, '2026-01-15 15:00:00', 6299.00, 'Credit Card', 'SUCCESS'),
+(32, 37, '2025-11-22 09:00:00', 2397.00, 'Alipay', 'SUCCESS'),
+(33, 39, '2025-12-15 14:30:00', 1798.00, 'WeChat Pay', 'SUCCESS'),
+(34, 40, '2026-01-08 10:15:00', 3499.00, 'Credit Card', 'SUCCESS'),
+(35, 41, '2025-11-05 16:30:00', 12999.00, 'Alipay', 'SUCCESS'),
+(36, 42, '2025-12-20 11:45:00', 3998.00, 'WeChat Pay', 'SUCCESS'),
+(37, 43, '2025-12-25 13:30:00', 2497.00, 'Credit Card', 'SUCCESS'),
+(38, 45, '2025-11-15 10:00:00', 2396.00, 'Alipay', 'SUCCESS'),
+(39, 46, '2025-12-05 15:15:00', 3098.00, 'WeChat Pay', 'SUCCESS'),
+(40, 47, '2025-12-18 09:30:00', 18999.00, 'Credit Card', 'SUCCESS'),
+(41, 48, '2026-01-10 14:00:00', 4598.00, 'Alipay', 'SUCCESS'),
+(42, 49, '2025-11-30 11:30:00', 3097.00, 'WeChat Pay', 'SUCCESS'),
+(43, 50, '2025-12-22 16:00:00', 1998.00, 'Credit Card', 'SUCCESS'),
+-- Failed/Cancelled orders
+(44, 6, NULL, 0.00, NULL, 'FAILED'),
+(45, 14, NULL, 0.00, NULL, 'PENDING'),
+(46, 18, '2025-12-15 10:00:00', 6299.00, 'Credit Card', 'REFUNDED'),
+(47, 24, NULL, 0.00, NULL, 'PENDING'),
+(48, 30, NULL, 0.00, NULL, 'FAILED'),
+(49, 38, '2026-01-02 09:00:00', 7999.00, 'Alipay', 'REFUNDED'),
+(50, 44, NULL, 0.00, NULL, 'PENDING');
+`;
+
 export const SQL_DATASETS: Record<SqlDatasetId, SqlDataset> = {
   comprehensive: {
     id: 'comprehensive',
@@ -901,5 +1274,12 @@ export const SQL_DATASETS: Record<SqlDatasetId, SqlDataset> = {
     description: '包含电商、ERP、医疗三大业务模块，30+数据表，数千条数据。支持复杂 JOIN、聚合分析、子查询等高级 SQL 练习。',
     initialSql: comprehensiveInitialSql.trim(),
     defaultQuery: 'SELECT * FROM ecommerce_users LIMIT 10;',
+  },
+  commerce: {
+    id: 'commerce',
+    name: '电商数据集',
+    description: '精简版电商数据：users、products、orders、order_items、payments 5张表，适合 SQL 入门到进阶练习。',
+    initialSql: commerceInitialSql.trim(),
+    defaultQuery: 'SELECT * FROM users LIMIT 5;',
   },
 };

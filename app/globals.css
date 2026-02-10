@@ -372,16 +372,20 @@ pre code {
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: var(--color-neutral-200);
+  background: rgba(0, 0, 0, 0.08);
   border-radius: 10px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: var(--color-neutral-300);
+  background: rgba(0, 0, 0, 0.15);
 }
 
 .dark .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #333;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 /* Fix for CodePenDemo editor highlighting */

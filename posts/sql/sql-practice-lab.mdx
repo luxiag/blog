@@ -1,5 +1,5 @@
 ---
-title: 'SQL 练习实验室：从入门到进阶'
+title: 'SQL 练习 二：从入门到进阶'
 date: '2026-01-23'
 description: '一套电商数据集覆盖查询、聚合、JOIN、子查询、CTE、窗口函数与报表实战。无需安装数据库，浏览器里直接跑 SQL。'
 tags: ['SQL', 'Exercises', 'Interactive', 'SQLite']
@@ -37,52 +37,56 @@ tags: ['SQL', 'Exercises', 'Interactive', 'SQLite']
 
 目标：查出 `users` 表全部字段，按 `id` 升序。
 
-::: details 参考答案
-```sql
-SELECT *
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：users"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT *
 FROM users
-ORDER BY id;
-```
-:::
+ORDER BY id;`}
+/>
 
 ### 练习 2：条件过滤（WHERE）
 
 目标：找出 `city = 'Beijing'` 的用户，返回 `id, name, signup_date`。
 
-::: details 参考答案
-```sql
-SELECT id, name, signup_date
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：users"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT id, name, signup_date
 FROM users
 WHERE city = 'Beijing'
-ORDER BY id;
-```
-:::
+ORDER BY id;`}
+/>
 
 ### 练习 3：范围过滤（BETWEEN）
 
 目标：找出注册日期在 `2025-12-01` 到 `2026-01-31` 的用户。
 
-::: details 参考答案
-```sql
-SELECT *
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：users"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT *
 FROM users
 WHERE signup_date BETWEEN '2025-12-01' AND '2026-01-31'
-ORDER BY signup_date;
-```
-:::
+ORDER BY signup_date;`}
+/>
 
 ### 练习 4：排序与分页（ORDER BY + LIMIT）
 
 目标：查询最贵的 3 个商品，返回 `name, category, price`。
 
-::: details 参考答案
-```sql
-SELECT name, category, price
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：products"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT name, category, price
 FROM products
 ORDER BY price DESC
-LIMIT 3;
-```
-:::
+LIMIT 3;`}
+/>
 
 ---
 
@@ -92,53 +96,57 @@ LIMIT 3;
 
 目标：统计每个城市有多少用户，返回 `city, user_cnt`，按 `user_cnt` 降序。
 
-::: details 参考答案
-```sql
-SELECT city, COUNT(*) AS user_cnt
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：users"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT city, COUNT(*) AS user_cnt
 FROM users
 GROUP BY city
-ORDER BY user_cnt DESC, city;
-```
-:::
+ORDER BY user_cnt DESC, city;`}
+/>
 
 ### 练习 6：分组后过滤（HAVING）
 
 目标：找出用户数不少于 2 的城市。
 
-::: details 参考答案
-```sql
-SELECT city, COUNT(*) AS user_cnt
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：users"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT city, COUNT(*) AS user_cnt
 FROM users
 GROUP BY city
 HAVING COUNT(*) >= 2
-ORDER BY user_cnt DESC, city;
-```
-:::
+ORDER BY user_cnt DESC, city;`}
+/>
 
 ### 练习 7：订单状态分布
 
 目标：统计 `orders` 每种 `status` 的订单数。
 
-::: details 参考答案
-```sql
-SELECT status, COUNT(*) AS order_cnt
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：orders"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT status, COUNT(*) AS order_cnt
 FROM orders
 GROUP BY status
-ORDER BY order_cnt DESC, status;
-```
-:::
+ORDER BY order_cnt DESC, status;`}
+/>
 
 ### 练习 8：只统计成功支付的收入
 
 目标：计算 `payments` 中 `status = 'SUCCESS'` 的总收入（sum(amount)）。
 
-::: details 参考答案
-```sql
-SELECT SUM(amount) AS revenue
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：payments"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT SUM(amount) AS revenue
 FROM payments
-WHERE status = 'SUCCESS';
-```
-:::
+WHERE status = 'SUCCESS';`}
+/>
 
 ---
 
@@ -148,9 +156,11 @@ WHERE status = 'SUCCESS';
 
 目标：列出每笔订单的 `order_id, user_name, city, order_date, status`。
 
-::: details 参考答案
-```sql
-SELECT
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：orders、users"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT
   o.id AS order_id,
   u.name AS user_name,
   u.city,
@@ -158,17 +168,18 @@ SELECT
   o.status
 FROM orders o
 JOIN users u ON u.id = o.user_id
-ORDER BY o.order_date, o.id;
-```
-:::
+ORDER BY o.order_date, o.id;`}
+/>
 
 ### 练习 10：订单明细（JOIN 多表）
 
 目标：列出订单明细行：`order_id, user_name, product_name, quantity, unit_price`。
 
-::: details 参考答案
-```sql
-SELECT
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：order_items、orders、users、products"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT
   oi.order_id,
   u.name AS user_name,
   p.name AS product_name,
@@ -178,32 +189,34 @@ FROM order_items oi
 JOIN orders o ON o.id = oi.order_id
 JOIN users u ON u.id = o.user_id
 JOIN products p ON p.id = oi.product_id
-ORDER BY oi.order_id, p.id;
-```
-:::
+ORDER BY oi.order_id, p.id;`}
+/>
 
 ### 练习 11：计算每笔订单的订单金额
 
 目标：每笔订单的金额 = `SUM(quantity * unit_price)`，输出 `order_id, order_amount`。
 
-::: details 参考答案
-```sql
-SELECT
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：order_items"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT
   order_id,
   SUM(quantity * unit_price) AS order_amount
 FROM order_items
 GROUP BY order_id
-ORDER BY order_id;
-```
-:::
+ORDER BY order_id;`}
+/>
 
 ### 练习 12：订单金额 + 用户信息
 
 目标：输出 `order_id, user_name, order_date, order_amount`。
 
-::: details 参考答案
-```sql
-SELECT
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：orders、users、order_items"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT
   o.id AS order_id,
   u.name AS user_name,
   o.order_date,
@@ -212,9 +225,8 @@ FROM orders o
 JOIN users u ON u.id = o.user_id
 JOIN order_items oi ON oi.order_id = o.id
 GROUP BY o.id, u.name, o.order_date
-ORDER BY o.order_date, o.id;
-```
-:::
+ORDER BY o.order_date, o.id;`}
+/>
 
 ---
 
@@ -224,51 +236,54 @@ ORDER BY o.order_date, o.id;
 
 目标：输出 `user_id, name`。
 
-::: details 参考答案（NOT EXISTS）
-```sql
-SELECT u.id, u.name
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：users、orders"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT u.id, u.name
 FROM users u
 WHERE NOT EXISTS (
   SELECT 1
   FROM orders o
   WHERE o.user_id = u.id
 )
-ORDER BY u.id;
-```
-:::
+ORDER BY u.id;`}
+/>
 
 ### 练习 14：找出从未被购买过的商品
 
 目标：输出 `product_id, name`。
 
-::: details 参考答案
-```sql
-SELECT p.id AS product_id, p.name
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：products、order_items"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT p.id AS product_id, p.name
 FROM products p
 WHERE NOT EXISTS (
   SELECT 1
   FROM order_items oi
   WHERE oi.product_id = p.id
 )
-ORDER BY p.id;
-```
-:::
+ORDER BY p.id;`}
+/>
 
 ### 练习 15：下过“Furniture”类商品的用户
 
 目标：输出去重后的 `user_id, name`。
 
-::: details 参考答案
-```sql
-SELECT DISTINCT u.id, u.name
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：users、orders、order_items、products"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`SELECT DISTINCT u.id, u.name
 FROM users u
 JOIN orders o ON o.user_id = u.id
 JOIN order_items oi ON oi.order_id = o.id
 JOIN products p ON p.id = oi.product_id
 WHERE p.category = 'Furniture'
-ORDER BY u.id;
-```
-:::
+ORDER BY u.id;`}
+/>
 
 ---
 
@@ -278,9 +293,11 @@ ORDER BY u.id;
 
 目标：用 `WITH order_amounts AS (...)` 先算订单金额，再关联 `orders` 输出 `order_id, user_id, order_date, status, order_amount`。
 
-::: details 参考答案
-```sql
-WITH order_amounts AS (
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：order_items、orders"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`WITH order_amounts AS (
   SELECT
     order_id,
     SUM(quantity * unit_price) AS order_amount
@@ -295,17 +312,18 @@ SELECT
   oa.order_amount
 FROM orders o
 JOIN order_amounts oa ON oa.order_id = o.id
-ORDER BY o.order_date, o.id;
-```
-:::
+ORDER BY o.order_date, o.id;`}
+/>
 
 ### 练习 17：对账：支付金额是否等于订单金额
 
 目标：输出 `order_id, order_amount, paid_amount, diff`，只看支付 `status='SUCCESS'`。
 
-::: details 参考答案
-```sql
-WITH order_amounts AS (
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：order_items、payments"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`WITH order_amounts AS (
   SELECT order_id, SUM(quantity * unit_price) AS order_amount
   FROM order_items
   GROUP BY order_id
@@ -322,9 +340,8 @@ SELECT
   (p.paid_amount - oa.order_amount) AS diff
 FROM order_amounts oa
 JOIN paid p ON p.order_id = oa.order_id
-ORDER BY ABS(diff) DESC, oa.order_id;
-```
-:::
+ORDER BY ABS(diff) DESC, oa.order_id;`}
+/>
 
 ---
 
@@ -334,9 +351,11 @@ ORDER BY ABS(diff) DESC, oa.order_id;
 
 目标：输出 `user_id, user_name, order_cnt, rank`（按下单次数从多到少排名）。
 
-::: details 参考答案
-```sql
-WITH user_orders AS (
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：orders、users"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`WITH user_orders AS (
   SELECT user_id, COUNT(*) AS order_cnt
   FROM orders
   GROUP BY user_id
@@ -348,17 +367,18 @@ SELECT
   RANK() OVER (ORDER BY COALESCE(uo.order_cnt, 0) DESC) AS rank
 FROM users u
 LEFT JOIN user_orders uo ON uo.user_id = u.id
-ORDER BY rank, user_id;
-```
-:::
+ORDER BY rank, user_id;`}
+/>
 
 ### 练习 19：每个用户最近一笔订单
 
 目标：输出每个用户的 `user_id, name, last_order_id, last_order_date`，没有订单的用户也要保留。
 
-::: details 参考答案
-```sql
-WITH ranked_orders AS (
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：orders、users"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`WITH ranked_orders AS (
   SELECT
     o.*,
     ROW_NUMBER() OVER (PARTITION BY o.user_id ORDER BY o.order_date DESC, o.id DESC) AS rn
@@ -372,17 +392,18 @@ SELECT
 FROM users u
 LEFT JOIN ranked_orders ro
   ON ro.user_id = u.id AND ro.rn = 1
-ORDER BY u.id;
-```
-:::
+ORDER BY u.id;`}
+/>
 
 ### 练习 20：按日期的累计收入（Running Total）
 
 目标：只统计 `payments.status='SUCCESS'`，按天汇总收入，再做累计和，输出 `day, revenue, revenue_cum`。
 
-::: details 参考答案
-```sql
-WITH daily AS (
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：payments"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`WITH daily AS (
   SELECT
     date(paid_at) AS day,
     SUM(amount) AS revenue
@@ -395,9 +416,8 @@ SELECT
   revenue,
   SUM(revenue) OVER (ORDER BY day) AS revenue_cum
 FROM daily
-ORDER BY day;
-```
-:::
+ORDER BY day;`}
+/>
 
 ---
 
@@ -414,9 +434,11 @@ ORDER BY day;
 
 要求：按 `success_payment_amount` 降序。
 
-::: details 参考答案
-```sql
-WITH city_users AS (
+<SqlSimulator
+  dataset="commerce"
+  description="涉及表：users、orders、payments"
+  defaultQuery="-- 在此输入你的 SQL 查询"
+  answerSql={`WITH city_users AS (
   SELECT city, COUNT(*) AS user_cnt
   FROM users
   GROUP BY city
@@ -442,9 +464,8 @@ SELECT
 FROM city_users cu
 LEFT JOIN city_paid_orders cpo ON cpo.city = cu.city
 LEFT JOIN city_payments cp ON cp.city = cu.city
-ORDER BY success_payment_amount DESC, cu.city;
-```
-:::
+ORDER BY success_payment_amount DESC, cu.city;`}
+/>
 
 ---
 
