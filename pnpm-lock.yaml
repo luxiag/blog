@@ -59,6 +59,9 @@ importers:
       '@types/three':
         specifier: ^0.182.0
         version: 0.182.0
+      '@use-gesture/react':
+        specifier: ^10.3.1
+        version: 10.3.1(react@19.2.3)
       cesium:
         specifier: ^1.137.0
         version: 1.137.0

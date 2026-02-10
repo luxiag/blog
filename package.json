@@ -31,6 +31,7 @@
     "@types/pdf-parse": "^1.1.5",
     "@types/qrcode.react": "^3.0.0",
     "@types/three": "^0.182.0",
+    "@use-gesture/react": "^10.3.1",
     "cesium": "^1.137.0",
     "diff": "^8.0.3",
     "fabric": "^7.1.0",
