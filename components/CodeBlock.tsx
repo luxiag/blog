@@ -17,6 +17,29 @@ const MAX_CODE_LINES = 15;
 // 创建 lowlight 实例，包含所有语言
 const lowlight = createLowlight(all);
 
+const LANGUAGE_ALIASES: Record<string, string> = {
+  redis: 'bash',
+  shell: 'bash',
+  sh: 'bash',
+  cs: 'csharp',
+  yml: 'yaml',
+  plain: 'plaintext',
+  text: 'plaintext',
+};
+
+function resolveLanguage(className?: string) {
+  const match = /language-(\w+)/.exec(className || '');
+  const rawLanguage = match ? match[1].toLowerCase() : 'plaintext';
+
+  if (rawLanguage === 'mermaid') {
+    return 'mermaid';
+  }
+
+  const normalizedLanguage = LANGUAGE_ALIASES[rawLanguage] || rawLanguage;
+
+  return lowlight.registered(normalizedLanguage) ? normalizedLanguage : 'plaintext';
+}
+
 export default function CodeBlock({ children, className, codeContent: propCodeContent, ...props }: {
   children?: React.ReactNode;
   className?: string;
@@ -45,8 +68,7 @@ export default function CodeBlock({ children, className, codeContent: propCodeCo
 
     try {
       // 提取语言
-      const match = /language-(\w+)/.exec(className || '');
-      const language = match ? match[1] : 'plaintext';
+      const language = resolveLanguage(className);
       const isMermaid = language === 'mermaid';
 
       if (isMermaid) {
@@ -90,8 +112,7 @@ export default function CodeBlock({ children, className, codeContent: propCodeCo
   }, []);
 
   // 检查是否为 Mermaid 代码
-  const match = /language-(\w+)/.exec(className || '');
-  const language = match ? match[1] : 'plaintext';
+  const language = resolveLanguage(className);
   const isMermaid = language === 'mermaid';
 
   return (
