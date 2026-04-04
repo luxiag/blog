@@ -1,0 +1,325 @@
+---
+title: 'Envoy + Consul 服务发现与负载均衡实战（含 Nginx 对比）'
+date: '2026-04-02'
+excerpt: '这篇文章从实战角度讲解 Envoy + Consul 的服务发现与负载均衡方案，并和 Nginx 做定位对比，帮助你在微服务场景下做出合适选型。'
+tags: ['network', 'envoy', 'consul', 'service-discovery', 'load-balancing']
+---
+
+# Envoy + Consul 服务发现与负载均衡实战（含 Nginx 对比）
+
+当系统从“几台服务”走向“几十上百个服务实例”时，静态写死上游地址会很痛苦：
+
+- 扩容要改配置
+- 缩容要改配置
+- 节点挂了还可能继续被转发
+
+这时候你需要动态服务发现。
+
+`Envoy + Consul` 是一套常见组合：
+
+- Consul 负责“谁在线”
+- Envoy 负责“流量怎么转”
+
+---
+
+## 一、先说结论：Nginx 和 Envoy 不是谁替代谁
+
+### Nginx 更适合
+
+1. 简单稳定入口层
+2. 静态 upstream 场景
+3. 团队运维成本优先
+
+### Envoy 更适合
+
+1. 微服务动态发现
+2. 细粒度流量治理（重试、熔断、超时、金丝雀）
+3. Service Mesh / xDS 生态
+
+实际项目里常是组合关系：
+
+- 外网入口 Nginx
+- 服务网格/内网流量 Envoy
+
+---
+
+## 二、架构图（典型）
+
+```text
+Client
+  -> Nginx (optional)
+  -> Envoy Gateway / Sidecar
+      -> Consul Catalog / Health Checks
+      -> Upstream Services (order, payment, inventory)
+```
+
+流程是：
+
+1. 服务向 Consul 注册
+2. Consul维护健康状态
+3. Envoy 从 Consul 获取服务实例
+4. Envoy 按策略负载均衡并做流量治理
+
+---
+
+## 三、Consul 基础：注册、发现、健康检查
+
+### 1. 服务注册示例
+
+`order-service.json`：
+
+```json
+{
+  "service": {
+    "name": "order-service",
+    "id": "order-service-1",
+    "address": "10.0.1.21",
+    "port": 3000,
+    "checks": [
+      {
+        "name": "order-health",
+        "http": "http://10.0.1.21:3000/health",
+        "interval": "10s",
+        "timeout": "2s"
+      }
+    ]
+  }
+}
+```
+
+注册：
+
+```bash
+consul services register order-service.json
+```
+
+### 2. 查询服务
+
+```bash
+consul catalog services
+consul health checks -service=order-service
+```
+
+---
+
+## 四、Envoy 静态示例（入门）
+
+`envoy.yaml`（简化）：
+
+```yaml
+static_resources:
+  listeners:
+    - name: listener_http
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8080
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: order_host
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route:
+                            cluster: order_cluster
+                            timeout: 3s
+                http_filters:
+                  - name: envoy.filters.http.router
+
+  clusters:
+    - name: order_cluster
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: LEAST_REQUEST
+      load_assignment:
+        cluster_name: order_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: order.service.consul
+                      port_value: 3000
+
+admin:
+  access_log_path: /tmp/admin_access.log
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901
+```
+
+这个配置演示了：
+
+1. HTTP 监听
+2. 路由转发到 cluster
+3. `LEAST_REQUEST` 负载策略
+4. 通过 Consul DNS 发现服务
+
+---
+
+## 五、进阶：Envoy + Consul Connect（Service Mesh 思路）
+
+在 Consul Connect 模式下，常见是 sidecar：
+
+1. 每个服务旁边有 Envoy
+2. 服务间走本地 sidecar 通信
+3. Consul 下发服务意图和证书
+
+价值：
+
+1. mTLS 默认化
+2. 服务间访问策略统一
+3. 流量治理能力下沉到数据面
+
+---
+
+## 六、负载均衡策略怎么选
+
+Envoy 常见策略：
+
+1. `ROUND_ROBIN`：均匀分配，简单
+2. `LEAST_REQUEST`：适合请求耗时波动大
+3. `RING_HASH`：一致性哈希，适合粘性会话
+4. `MAGLEV`：高性能一致性哈希场景
+
+微服务 API 常见默认：`LEAST_REQUEST`。
+
+---
+
+## 七、超时、重试、熔断（必须配置）
+
+只配负载均衡不配治理，等于没上保险。
+
+### 建议最小配置
+
+1. 每跳调用超时
+2. 重试次数上限
+3. 重试条件白名单
+4. 熔断阈值（并发、队列、失败率）
+
+原则：
+
+- 重试要有限制
+- 熔断要能快速失败
+
+---
+
+## 八、金丝雀发布与流量拆分
+
+Envoy 在路由层可以按权重分流：
+
+1. `v1` 95%
+2. `v2` 5%
+
+逐步放量到 20%、50%、100%。
+
+核心观察指标：
+
+1. 新版本 5xx
+2. 新版本 P99
+3. 业务成功率
+
+异常直接把权重切回旧版本。
+
+---
+
+## 九、与 Nginx 的关键差异（实战角度）
+
+### 1. 服务发现
+
+- Nginx：偏静态配置（可借助外部模板动态生成）
+- Envoy：天然面向动态发现（xDS/Consul）
+
+### 2. 流量治理颗粒度
+
+- Nginx：能做但通常更偏配置层
+- Envoy：治理能力更细，更适合微服务场景
+
+### 3. 运维复杂度
+
+- Nginx：简单、成熟
+- Envoy：能力强，但学习和运维成本更高
+
+选型重点不是“谁更强”，而是“谁更匹配当前阶段”。
+
+---
+
+## 十、可观测性建议
+
+Envoy 至少监控：
+
+1. 下游请求量与状态码
+2. 上游连接失败与超时
+3. 各 cluster 延迟分位数
+4. 重试次数与熔断触发次数
+
+并把指标接到 Prometheus/Grafana。
+
+---
+
+## 十一、常见故障排查
+
+### 1. 服务已注册但不可达
+
+检查：
+
+1. Consul 健康检查状态
+2. Envoy cluster 端点
+3. 网络 ACL / 安全组
+
+### 2. 间歇性 503
+
+检查：
+
+1. 上游实例是否频繁 flap
+2. 超时和重试是否配置冲突
+3. 熔断阈值是否过严
+
+### 3. 发布后局部异常
+
+检查：
+
+1. 路由匹配规则
+2. 权重配置是否生效
+3. Header 条件路由是否误命中
+
+---
+
+## 十二、落地建议（分阶段）
+
+### 阶段 1
+
+1. 入口仍用 Nginx
+2. 内部服务先接 Consul 注册发现
+
+### 阶段 2
+
+1. 关键服务前加 Envoy（网关模式）
+2. 上线超时、重试、熔断
+
+### 阶段 3
+
+1. 逐步演进 sidecar / mesh
+2. 建立统一流量治理规范
+
+---
+
+## 总结
+
+`Envoy + Consul` 的价值，在于把“服务发现 + 负载均衡 + 流量治理”做成动态能力。
+
+最实用的理解是：
+
+1. Nginx 适合稳定入口
+2. Envoy 适合动态微服务流量
+3. 两者可组合，不必二选一
+
+按业务阶段逐步演进，比一步到位更稳。

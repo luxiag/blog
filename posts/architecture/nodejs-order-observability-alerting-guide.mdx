@@ -1,0 +1,324 @@
+---
+title: 'Node.js 订单系统全链路监控与告警实战：Prometheus + Grafana + OpenTelemetry'
+date: '2026-04-02'
+excerpt: '这篇文章聚焦 Node.js 订单系统可观测性落地，系统讲解日志、指标、链路追踪如何统一建设，并给出 Prometheus 指标、Grafana 看板与告警规则的实战示例。'
+tags: ['nodejs', 'observability', 'prometheus', 'grafana', 'opentelemetry']
+---
+
+# Node.js 订单系统全链路监控与告警实战：Prometheus + Grafana + OpenTelemetry
+
+订单系统最怕的不是报错，而是“用户说有问题，你却看不出来哪里有问题”。
+
+可观测性的目标就是把黑盒变透明。
+
+---
+
+## 一、先明确三件套
+
+1. 日志（Logs）：发生了什么
+2. 指标（Metrics）：系统现在怎么样
+3. 链路（Traces）：问题出在哪一跳
+
+这三者必须通过同一个 `traceId` 关联起来。
+
+---
+
+## 二、Node.js 订单系统最小观测架构
+
+```text
+Node.js Services
+  -> /metrics (Prometheus)
+  -> OTLP Exporter (OpenTelemetry)
+  -> Structured Logs (JSON)
+
+Prometheus -> Grafana
+OTel Collector -> Tempo/Jaeger
+Logs -> Loki/ELK
+```
+
+---
+
+## 三、指标埋点（Prometheus）
+
+### 1. 建议指标
+
+1. HTTP 请求总数（按路由、状态码）
+2. HTTP 延迟直方图（P95/P99）
+3. 下单成功率
+4. 支付回调失败率
+5. Outbox 待发送数
+6. MQ 消费积压
+7. Event Loop Delay
+
+### 2. Node.js 示例（`prom-client`）
+
+```ts
+import client from 'prom-client'
+
+client.collectDefaultMetrics()
+
+export const httpDuration = new client.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'HTTP request duration',
+  labelNames: ['method', 'route', 'status_code'],
+  buckets: [0.01, 0.03, 0.1, 0.3, 1, 3],
+})
+
+export const orderCreateTotal = new client.Counter({
+  name: 'order_create_total',
+  help: 'Order create count',
+  labelNames: ['result'],
+})
+
+export const outboxPending = new client.Gauge({
+  name: 'outbox_pending_count',
+  help: 'Outbox pending events',
+})
+```
+
+---
+
+## 四、HTTP 中间件统计延迟
+
+```ts
+app.addHook('onRequest', async (req) => {
+  req.startTime = process.hrtime.bigint()
+})
+
+app.addHook('onResponse', async (req, reply) => {
+  const end = process.hrtime.bigint()
+  const start = req.startTime as bigint
+  const seconds = Number(end - start) / 1e9
+
+  httpDuration
+    .labels(req.method, req.routerPath || req.url, String(reply.statusCode))
+    .observe(seconds)
+})
+
+app.get('/metrics', async (_, reply) => {
+  reply.header('Content-Type', client.register.contentType)
+  return client.register.metrics()
+})
+```
+
+---
+
+## 五、链路追踪（OpenTelemetry）
+
+### 1. 安装
+
+```bash
+npm i @opentelemetry/api @opentelemetry/sdk-node @opentelemetry/auto-instrumentations-node @opentelemetry/exporter-trace-otlp-http
+```
+
+### 2. 初始化示例
+
+```ts
+import { NodeSDK } from '@opentelemetry/sdk-node'
+import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node'
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http'
+
+const sdk = new NodeSDK({
+  traceExporter: new OTLPTraceExporter({
+    url: process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+  }),
+  instrumentations: [getNodeAutoInstrumentations()],
+})
+
+sdk.start()
+```
+
+### 3. 手动业务 Span
+
+```ts
+import { trace } from '@opentelemetry/api'
+
+const tracer = trace.getTracer('order-service')
+
+export async function createOrder() {
+  return tracer.startActiveSpan('order.create', async (span) => {
+    try {
+      span.setAttribute('biz.order.type', 'normal')
+      // 业务逻辑
+      span.setStatus({ code: 1 })
+    } catch (e) {
+      span.recordException(e as Error)
+      span.setStatus({ code: 2 })
+      throw e
+    } finally {
+      span.end()
+    }
+  })
+}
+```
+
+---
+
+## 六、结构化日志（JSON）
+
+推荐 `pino`，并强制输出字段：
+
+1. `traceId`
+2. `requestId`
+3. `userId`（脱敏）
+4. `orderNo`
+5. `service`
+6. `env`
+
+示例：
+
+```ts
+logger.info(
+  {
+    traceId,
+    requestId,
+    orderNo,
+    userId,
+  },
+  'order create success'
+)
+```
+
+---
+
+## 七、Prometheus 抓取配置示例
+
+```yaml
+scrape_configs:
+  - job_name: order-service
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - order-service-1:3000
+          - order-service-2:3000
+```
+
+---
+
+## 八、Grafana 看板建议
+
+至少做 4 个面板组：
+
+1. 流量：RPS、请求数
+2. 质量：错误率、超时率
+3. 性能：P95/P99、Event Loop Delay
+4. 业务：下单成功率、支付成功率、Outbox 积压
+
+如果只看系统指标不看业务指标，故障很容易“看起来一切正常”。
+
+---
+
+## 九、PromQL 示例
+
+### 1. 接口 P99 延迟
+
+```promql
+histogram_quantile(0.99,
+  sum(rate(http_request_duration_seconds_bucket{route="/api/orders"}[5m])) by (le)
+)
+```
+
+### 2. 5xx 错误率
+
+```promql
+sum(rate(http_requests_total{status_code=~"5.."}[5m]))
+/
+sum(rate(http_requests_total[5m]))
+```
+
+### 3. Outbox 积压
+
+```promql
+max(outbox_pending_count)
+```
+
+---
+
+## 十、告警规则（实战模板）
+
+```yaml
+groups:
+  - name: order-service-alerts
+    rules:
+      - alert: OrderApiP99TooHigh
+        expr: histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{route="/api/orders"}[5m])) by (le)) > 0.3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Order API P99 too high"
+
+      - alert: OrderApiHighErrorRate
+        expr: (sum(rate(http_requests_total{route="/api/orders",status_code=~"5.."}[5m])) / sum(rate(http_requests_total{route="/api/orders"}[5m]))) > 0.01
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Order API 5xx rate > 1%"
+
+      - alert: OutboxBacklogTooHigh
+        expr: max(outbox_pending_count) > 5000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox backlog too high"
+```
+
+---
+
+## 十一、告警收敛与值班建议
+
+避免告警风暴：
+
+1. 告警分级（warning/critical）
+2. 告警去重和聚合
+3. 值班路由按服务归属
+4. 每条关键告警有 SOP
+
+SOP 至少写清：
+
+1. 先看哪个仪表盘
+2. 先查哪个 trace
+3. 先执行哪些止血动作
+
+---
+
+## 十二、故障排查最短路径
+
+遇到“下单慢”时建议这样查：
+
+1. 看 `/api/orders` P99 是否升高
+2. 看 5xx 是否增加
+3. 打开 trace 看最慢 span（DB/MQ/下游）
+4. 关联日志按 `traceId` 看异常细节
+5. 判断是代码、数据库还是依赖瓶颈
+
+这套流程比“全靠经验猜”稳定得多。
+
+---
+
+## 十三、最小落地清单
+
+1. 暴露 `/metrics`
+2. 接入 OTel 自动埋点
+3. 结构化日志 + traceId
+4. 建 4 组核心 Grafana 面板
+5. 配 3 条关键告警（P99/错误率/积压）
+6. 值班 SOP 文档化
+
+做到这 6 步，可观测性就从“有日志”升级为“可定位问题”。
+
+---
+
+## 总结
+
+Node.js 订单系统的监控告警，不是多装几个组件，而是把这条链路打通：
+
+1. Metrics 发现问题
+2. Traces 定位问题
+3. Logs 解释问题
+4. Alert 驱动响应
+
+只要把这四步变成团队日常流程，你的系统稳定性会明显提升。

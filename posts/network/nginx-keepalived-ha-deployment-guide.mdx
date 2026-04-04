@@ -1,0 +1,347 @@
+---
+title: 'Nginx + Keepalived 双机热备高可用部署实战'
+date: '2026-04-02'
+excerpt: '本文手把手讲解如何用 Nginx + Keepalived 搭建双机热备高可用入口：架构设计、VRRP 原理、主备切换、健康检查、故障演练与上线检查清单。'
+tags: ['network', 'nginx', 'keepalived', 'high-availability', 'devops']
+---
+
+# Nginx + Keepalived 双机热备高可用部署实战
+
+如果你的入口只有一台 Nginx，那它就是单点故障。
+
+解决思路很直接：
+
+1. 两台 Nginx
+2. 一个虚拟 IP（VIP）
+3. Keepalived 自动主备切换
+
+这就是经典的双机热备方案。
+
+---
+
+## 一、目标架构
+
+```text
+Client
+  -> VIP (10.0.0.100)
+      -> Nginx-A (MASTER, 10.0.0.11)
+      -> Nginx-B (BACKUP, 10.0.0.12)
+          |
+          -> App Cluster (10.0.1.x)
+```
+
+平时 VIP 在 A 上，A 挂了就漂移到 B。
+
+---
+
+## 二、核心原理（VRRP）
+
+Keepalived 基于 VRRP：
+
+1. MASTER 定期发广播
+2. BACKUP 监听心跳
+3. MASTER 超时后，BACKUP 抢占 VIP
+
+切换关键取决于：
+
+- `priority`（优先级）
+- `advert_int`（心跳间隔）
+- 健康检查脚本结果
+
+---
+
+## 三、环境准备
+
+示例环境：
+
+1. `node-a`: `10.0.0.11`
+2. `node-b`: `10.0.0.12`
+3. VIP: `10.0.0.100`
+4. 网卡名：`eth0`（按你的机器调整）
+
+先保证：
+
+1. 两台机器时间同步
+2. 安全组放通 VRRP 协议（112）
+3. Nginx 可正常启动
+
+---
+
+## 四、安装组件
+
+Ubuntu 示例：
+
+```bash
+sudo apt update
+sudo apt install -y nginx keepalived
+```
+
+CentOS/RHEL 示例：
+
+```bash
+sudo yum install -y nginx keepalived
+```
+
+---
+
+## 五、Nginx 基础配置示例
+
+`/etc/nginx/nginx.conf`（简化示例）：
+
+```nginx
+worker_processes auto;
+events { worker_connections 4096; }
+
+http {
+  upstream app_backend {
+    least_conn;
+    server 10.0.1.21:3000 max_fails=3 fail_timeout=10s;
+    server 10.0.1.22:3000 max_fails=3 fail_timeout=10s;
+    keepalive 128;
+  }
+
+  server {
+    listen 80;
+    server_name _;
+
+    location / {
+      proxy_pass http://app_backend;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_connect_timeout 2s;
+      proxy_read_timeout 30s;
+      proxy_send_timeout 30s;
+    }
+
+    location /health {
+      return 200 'ok';
+    }
+  }
+}
+```
+
+校验并启动：
+
+```bash
+sudo nginx -t
+sudo systemctl enable --now nginx
+```
+
+---
+
+## 六、Keepalived 健康检查脚本
+
+`/etc/keepalived/check_nginx.sh`：
+
+```bash
+#!/usr/bin/env bash
+set -e
+
+if ! systemctl is-active --quiet nginx; then
+  exit 1
+fi
+
+if ! curl -fsS http://127.0.0.1/health >/dev/null; then
+  exit 1
+fi
+
+exit 0
+```
+
+授权：
+
+```bash
+sudo chmod +x /etc/keepalived/check_nginx.sh
+```
+
+---
+
+## 七、Keepalived 配置（MASTER）
+
+`node-a` 的 `/etc/keepalived/keepalived.conf`：
+
+```conf
+global_defs {
+  router_id LVS_NODE_A
+}
+
+vrrp_script chk_nginx {
+  script "/etc/keepalived/check_nginx.sh"
+  interval 2
+  timeout 2
+  fall 2
+  rise 1
+  weight -20
+}
+
+vrrp_instance VI_1 {
+  state MASTER
+  interface eth0
+  virtual_router_id 51
+  priority 120
+  advert_int 1
+
+  authentication {
+    auth_type PASS
+    auth_pass 123456
+  }
+
+  virtual_ipaddress {
+    10.0.0.100/24
+  }
+
+  track_script {
+    chk_nginx
+  }
+}
+```
+
+---
+
+## 八、Keepalived 配置（BACKUP）
+
+`node-b` 的 `/etc/keepalived/keepalived.conf`：
+
+```conf
+global_defs {
+  router_id LVS_NODE_B
+}
+
+vrrp_script chk_nginx {
+  script "/etc/keepalived/check_nginx.sh"
+  interval 2
+  timeout 2
+  fall 2
+  rise 1
+  weight -20
+}
+
+vrrp_instance VI_1 {
+  state BACKUP
+  interface eth0
+  virtual_router_id 51
+  priority 100
+  advert_int 1
+
+  authentication {
+    auth_type PASS
+    auth_pass 123456
+  }
+
+  virtual_ipaddress {
+    10.0.0.100/24
+  }
+
+  track_script {
+    chk_nginx
+  }
+}
+```
+
+两边启动：
+
+```bash
+sudo systemctl enable --now keepalived
+sudo systemctl status keepalived
+```
+
+---
+
+## 九、验证主备切换
+
+### 1. 确认 VIP 所在节点
+
+```bash
+ip addr | grep 10.0.0.100
+```
+
+正常应在 MASTER。
+
+### 2. 模拟主节点 Nginx 故障
+
+在 A 执行：
+
+```bash
+sudo systemctl stop nginx
+```
+
+1-3 秒后，VIP 应漂移到 B。
+
+### 3. 恢复后回切策略
+
+如果希望恢复后自动抢回，可保持优先级策略不变。
+如果不希望频繁回切，可调低抢占或使用 `nopreempt`（按业务选择）。
+
+---
+
+## 十、常见问题与排查
+
+### 1. VIP 不漂移
+
+检查：
+
+1. `virtual_router_id` 是否一致
+2. `auth_pass` 是否一致
+3. 网卡名是否写错
+4. 防火墙是否阻断 VRRP（协议 112）
+
+### 2. 双主（脑裂）
+
+可能原因：
+
+1. 网络隔离导致互相收不到心跳
+2. 配置不一致
+
+建议：
+
+1. 保证同网段稳定网络
+2. 增加监控告警
+3. 必要时配合更高层 LB 避免单 VIP 风险
+
+### 3. 频繁切换（抖动）
+
+调优：
+
+1. 适当增大 `fall`/`rise`
+2. 调整脚本超时
+3. 优化 Nginx 健康检查接口稳定性
+
+---
+
+## 十一、生产建议
+
+1. Keepalived 与 Nginx 日志集中采集
+2. 对 VIP 漂移事件做告警
+3. 配合灰度发布，避免入口层和业务层同时大变更
+4. 定期演练主备切换
+5. 做配置版本化管理
+
+---
+
+## 十二、上线检查清单
+
+上线前逐项确认：
+
+1. 两台节点 Nginx 配置一致
+2. Keepalived 配置参数一致（除 state/priority/router_id）
+3. 健康检查脚本可用
+4. VIP 仅在一台节点出现
+5. 主机故障时可自动切换
+6. 切换后业务可正常访问
+7. 告警链路可触发
+
+---
+
+## 总结
+
+`Nginx + Keepalived` 的价值不在“高大上”，而在“简单可靠”。
+
+它非常适合作为中小型系统入口高可用的第一步：
+
+1. 成本低
+2. 易部署
+3. 切换快
+
+先把入口单点消掉，再逐步演进到多可用区和更复杂的流量治理架构。

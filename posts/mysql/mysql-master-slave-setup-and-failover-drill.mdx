@@ -1,0 +1,284 @@
+---
+title: 'MySQL 主从复制搭建与故障切换演练：配置、验证与排错'
+date: '2026-04-02'
+excerpt: '这篇文章手把手讲解 MySQL 主从复制落地：主从配置、初始化同步、复制状态验证、读写分离要点、主故障切换流程以及常见问题排查。'
+tags: ['mysql', 'replication', 'master-slave', 'failover', 'database']
+---
+
+# MySQL 主从复制搭建与故障切换演练：配置、验证与排错
+
+如果你已经知道“主从复制是什么”，下一步最关键的是：
+
+1. 能搭起来
+2. 能跑稳定
+3. 故障时能切换
+
+这篇文章按实战流程来。
+
+---
+
+## 一、演练目标
+
+完成这些目标就算成功：
+
+1. 主库写入数据，从库自动同步。
+2. 复制状态可观测。
+3. 主库故障后能提升从库接管。
+4. 应用层可切换写路由。
+
+---
+
+## 二、环境示例
+
+示例节点：
+
+1. 主库：`10.0.0.11`（`mysql-master`）
+2. 从库：`10.0.0.12`（`mysql-slave`）
+3. MySQL：`8.0+`
+
+前置要求：
+
+1. 两台机器时间同步（NTP）。
+2. 网络互通，`3306` 放通。
+3. 主从版本尽量一致。
+
+---
+
+## 三、主库配置
+
+编辑主库 `my.cnf`（路径按系统实际）：
+
+```ini
+[mysqld]
+server-id = 11
+log_bin = mysql-bin
+binlog_format = ROW
+binlog_row_image = FULL
+sync_binlog = 1
+innodb_flush_log_at_trx_commit = 1
+```
+
+重启 MySQL 后，创建复制账号：
+
+```sql
+CREATE USER 'repl'@'10.0.0.%' IDENTIFIED BY 'Repl@123456';
+GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'repl'@'10.0.0.%';
+FLUSH PRIVILEGES;
+```
+
+记录主库 binlog 位点：
+
+```sql
+SHOW MASTER STATUS;
+```
+
+记下：
+
+1. `File`
+2. `Position`
+
+---
+
+## 四、从库配置
+
+编辑从库 `my.cnf`：
+
+```ini
+[mysqld]
+server-id = 12
+relay_log = relay-bin
+read_only = 1
+super_read_only = 1
+```
+
+重启后执行：
+
+```sql
+STOP REPLICA;
+
+CHANGE REPLICATION SOURCE TO
+  SOURCE_HOST = '10.0.0.11',
+  SOURCE_PORT = 3306,
+  SOURCE_USER = 'repl',
+  SOURCE_PASSWORD = 'Repl@123456',
+  SOURCE_LOG_FILE = 'mysql-bin.000001',
+  SOURCE_LOG_POS = 12345,
+  SOURCE_CONNECT_RETRY = 5;
+
+START REPLICA;
+```
+
+说明：
+
+- `SOURCE_LOG_FILE` 和 `SOURCE_LOG_POS` 用主库实际值。
+
+---
+
+## 五、验证复制是否成功
+
+在从库执行：
+
+```sql
+SHOW REPLICA STATUS\G
+```
+
+重点看：
+
+1. `Replica_IO_Running: Yes`
+2. `Replica_SQL_Running: Yes`
+3. `Seconds_Behind_Source`（尽量接近 0）
+
+再做数据验证：
+
+1. 在主库建库建表并插入。
+2. 在从库查询确认已同步。
+
+---
+
+## 六、初始化同步的推荐方式
+
+如果不是全新空库，建议用备份 + 位点方式初始化。
+
+常见做法：
+
+1. 主库加读锁或用一致性备份（如 `mysqldump --single-transaction`）。
+2. 导出数据并记录 binlog 位点。
+3. 从库导入数据。
+4. 从位点启动复制。
+
+生产中大库建议用物理备份工具（如 XtraBackup）。
+
+---
+
+## 七、主库故障切换演练（手动版）
+
+假设主库不可用，切换步骤：
+
+### 1. 确认从库复制追平
+
+在从库查看：
+
+```sql
+SHOW REPLICA STATUS\G
+```
+
+如果延迟很大，先评估是否接受数据丢失窗口。
+
+### 2. 提升从库为新主库
+
+```sql
+STOP REPLICA;
+RESET REPLICA ALL;
+SET GLOBAL read_only = 0;
+SET GLOBAL super_read_only = 0;
+```
+
+### 3. 更新应用写路由
+
+把写流量指向新主库（`10.0.0.12`）。
+
+### 4. 原主恢复后变成从库（可选）
+
+原主恢复后，按同样方式改为新主的从库。
+
+---
+
+## 八、读写分离注意事项
+
+主从搭好后常做读写分离，但要注意：
+
+1. 写后立刻读，可能读到旧数据（主从延迟）。
+2. 关键读（如下单后查状态）建议走主库。
+3. 非关键读（列表、报表）走从库。
+
+常见策略：
+
+1. 会话内“写后短期读主”。
+2. 指定强一致接口固定读主。
+
+---
+
+## 九、监控与告警建议
+
+至少监控：
+
+1. 复制线程状态（IO/SQL）。
+2. 主从延迟。
+3. 复制错误码。
+4. binlog 磁盘占用。
+
+告警示例：
+
+1. `Replica_IO_Running != Yes`
+2. `Replica_SQL_Running != Yes`
+3. `Seconds_Behind_Source > 30`
+
+---
+
+## 十、常见故障排查
+
+### 1. 复制线程不启动
+
+检查：
+
+1. 账号权限是否正确。
+2. 网络/防火墙是否放通。
+3. 主库 binlog 是否开启。
+
+### 2. SQL 线程报错停止
+
+常见原因：
+
+1. 主从数据不一致。
+2. DDL 冲突。
+
+处理思路：
+
+1. 先定位具体错误事件。
+2. 修复数据后再启动复制。
+3. 不建议长期依赖跳过错误。
+
+### 3. 延迟持续升高
+
+常见原因：
+
+1. 主库大事务。
+2. 从库硬件性能不足。
+3. 从库上跑了重查询。
+
+---
+
+## 十一、生产实践建议
+
+1. 复制模式优先考虑半同步（关键业务）。
+2. 从库也要做备份，不要只备份主库。
+3. 演练切换至少每季度一次。
+4. 切换流程写成 Runbook 并固化。
+5. 结合高可用组件（MHA/Orchestrator/Proxy）实现自动化。
+
+---
+
+## 十二、上线检查清单
+
+上线前逐项确认：
+
+1. 主从配置参数正确。
+2. 复制账号权限最小化。
+3. 复制状态双 `Yes`。
+4. 延迟在可接受范围。
+5. 故障切换演练通过。
+6. 应用层切主流程已验证。
+
+---
+
+## 总结
+
+MySQL 主从复制本身不复杂，难点在“长期稳定 + 故障切换”。
+
+你只要把三件事做扎实：
+
+1. 配置正确。
+2. 监控到位。
+3. 切换常演练。
+
+主从体系就能真正成为可用性保障，而不只是“看起来有从库”。
