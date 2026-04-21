@@ -1,0 +1,336 @@
+---
+title: 'Node.js 订单系统压测与容量评估实战：k6、指标解读与扩容策略'
+date: '2026-04-02'
+excerpt: '这篇文章用 Node.js 订单系统为例，系统讲解如何做压测与容量评估：从压测目标、k6 脚本设计、场景建模、指标口径、瓶颈定位到容量推算与扩容策略。'
+tags: ['nodejs', 'k6', 'load-testing', 'capacity-planning', 'order-system']
+---
+
+# Node.js 订单系统压测与容量评估实战：k6、指标解读与扩容策略
+
+很多团队做压测，最后只能得到一句话：
+
+> “系统大概能扛 3000 QPS。”
+
+这句话几乎没有工程价值，因为你不知道：
+
+- 在什么业务比例下的 3000 QPS
+- 是短时峰值还是长期稳定
+- 哪一层先到瓶颈
+- 再加 2 台机器能提升多少
+
+这篇文章给你一套可落地的方法，专门针对 Node.js 订单系统。
+
+---
+
+## 一、压测前先定义目标（不然数据没意义）
+
+至少先明确这四项：
+
+1. 目标吞吐：例如下单接口 `3000 RPS`
+2. 延迟目标：例如 `P99 < 300ms`
+3. 错误率目标：例如 `< 0.1%`
+4. 稳定时长：例如连续 `30 分钟`
+
+同时给出业务流量比例，例如：
+
+- 下单：20%
+- 支付回调：10%
+- 订单查询：70%
+
+压测场景必须接近真实流量结构。
+
+---
+
+## 二、测试环境原则
+
+压测环境尽量接近生产：
+
+1. 同版本代码
+2. 同中间件版本（Redis、MQ、MySQL）
+3. 同索引和核心数据量级
+4. 独立压测环境，避免污染线上
+
+如果环境差异太大，结论只能当参考，不能做容量决策。
+
+---
+
+## 三、压测分层：先单接口，再全链路
+
+建议按三层做：
+
+1. **接口基准压测**：只测单接口极限
+2. **业务场景压测**：按比例混合流量
+3. **峰值冲击压测**：模拟秒杀/大促突刺
+
+这样你能知道：
+
+- 单点极限
+- 常态稳定能力
+- 极端场景韧性
+
+---
+
+## 四、k6 脚本（Node.js 订单系统示例）
+
+### 1. 下单接口压测脚本
+
+```javascript
+import http from 'k6/http'
+import { check, sleep } from 'k6'
+
+export const options = {
+  scenarios: {
+    order_create: {
+      executor: 'ramping-arrival-rate',
+      startRate: 100,
+      timeUnit: '1s',
+      preAllocatedVUs: 200,
+      maxVUs: 1500,
+      stages: [
+        { target: 500, duration: '2m' },
+        { target: 1000, duration: '3m' },
+        { target: 1500, duration: '3m' },
+        { target: 2000, duration: '2m' },
+      ],
+    },
+  },
+  thresholds: {
+    http_req_failed: ['rate<0.001'],
+    http_req_duration: ['p(95)<200', 'p(99)<300'],
+  },
+}
+
+const BASE_URL = __ENV.BASE_URL || 'http://localhost:3000'
+
+export default function () {
+  const payload = JSON.stringify({
+    userId: 10001,
+    items: [{ skuId: 9001, quantity: 1 }],
+    idempotencyKey: `k6-${__VU}-${__ITER}`,
+  })
+
+  const res = http.post(`${BASE_URL}/api/orders`, payload, {
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer test-token',
+    },
+  })
+
+  check(res, {
+    'status is 200/201': (r) => r.status === 200 || r.status === 201,
+  })
+
+  sleep(0.1)
+}
+```
+
+### 2. 混合流量脚本（下单 + 查询 + 支付回调）
+
+```javascript
+import http from 'k6/http'
+import { check } from 'k6'
+
+export const options = {
+  scenarios: {
+    create_order: {
+      executor: 'constant-arrival-rate',
+      rate: 300,
+      timeUnit: '1s',
+      duration: '10m',
+      preAllocatedVUs: 200,
+      exec: 'createOrder',
+    },
+    query_order: {
+      executor: 'constant-arrival-rate',
+      rate: 1000,
+      timeUnit: '1s',
+      duration: '10m',
+      preAllocatedVUs: 300,
+      exec: 'queryOrder',
+    },
+    pay_callback: {
+      executor: 'constant-arrival-rate',
+      rate: 120,
+      timeUnit: '1s',
+      duration: '10m',
+      preAllocatedVUs: 120,
+      exec: 'payCallback',
+    },
+  },
+}
+
+const BASE_URL = __ENV.BASE_URL || 'http://localhost:3000'
+
+export function createOrder() {
+  const res = http.post(
+    `${BASE_URL}/api/orders`,
+    JSON.stringify({
+      userId: 10001,
+      items: [{ skuId: 9001, quantity: 1 }],
+      idempotencyKey: `mix-${__VU}-${__ITER}`,
+    }),
+    { headers: { 'Content-Type': 'application/json' } }
+  )
+  check(res, { 'create ok': (r) => r.status < 500 })
+}
+
+export function queryOrder() {
+  const res = http.get(`${BASE_URL}/api/orders?userId=10001&page=1&pageSize=20`)
+  check(res, { 'query ok': (r) => r.status < 500 })
+}
+
+export function payCallback() {
+  const res = http.post(
+    `${BASE_URL}/api/callbacks/payment`,
+    JSON.stringify({
+      paymentId: `pay-${__VU}-${__ITER}`,
+      orderNo: `T2026${__VU}${__ITER}`,
+      paid: true,
+    }),
+    { headers: { 'Content-Type': 'application/json' } }
+  )
+  check(res, { 'callback ok': (r) => r.status < 500 })
+}
+```
+
+---
+
+## 五、压测时必须盯的指标
+
+### 1. 接口层指标
+
+1. RPS/QPS
+2. P50/P95/P99 延迟
+3. 错误率（4xx/5xx）
+4. 超时率
+
+### 2. Node.js 进程指标
+
+1. CPU 使用率
+2. 内存（RSS / heapUsed）
+3. Event Loop Delay
+4. GC 次数与停顿
+5. 连接池利用率
+
+### 3. 依赖层指标
+
+1. MySQL QPS、慢 SQL、锁等待
+2. Redis 命中率、延迟
+3. MQ 积压、消费延迟
+
+压测中只看接口延迟不看依赖指标，基本无法定位瓶颈。
+
+---
+
+## 六、容量评估方法（实用版）
+
+### 1. 单实例稳定吞吐
+
+先测出单实例在目标延迟内可稳定承载的吞吐。
+
+假设：
+
+- 单实例在 `P99 < 300ms` 时可稳定 `600 RPS`
+
+### 2. 计算基础实例数
+
+目标为 `3000 RPS`：
+
+```text
+3000 / 600 = 5 台
+```
+
+### 3. 加冗余系数
+
+考虑发布、故障、抖动，一般加 30%-50% 冗余：
+
+```text
+5 * 1.4 ≈ 7 台
+```
+
+最终建议：`7-8 台`。
+
+这比“拍脑袋上 10 台”更可靠。
+
+---
+
+## 七、如何定位瓶颈（排查顺序）
+
+建议固定顺序：
+
+1. 先看错误和超时
+2. 再看 Node 事件循环和 CPU
+3. 再看 MySQL 慢 SQL 与锁
+4. 再看 Redis/MQ
+5. 最后看网络和网关配置
+
+常见症状与根因：
+
+1. P99 抖高但 CPU 不高：下游等待或锁竞争
+2. CPU 高 + Event Loop Delay 高：主线程阻塞
+3. 错误率突增 + MQ 积压：异步链路瓶颈
+4. 写接口慢：事务长或索引不命中
+
+---
+
+## 八、Node.js 订单系统常见优化点
+
+1. 下单链路减少同步远程调用
+2. 熔断和超时配置前置
+3. 数据库索引覆盖关键查询
+4. Redis 缓存热点查询
+5. Outbox/MQ 异步化后置逻辑
+6. 限制并发，避免下游被打爆
+7. 优化 JSON 序列化大对象
+
+压测是发现问题，不是证明“系统很强”。
+
+---
+
+## 九、基线与回归机制
+
+每次版本发布前，至少做两类基线：
+
+1. 单接口基线（固定请求模型）
+2. 混合场景基线（固定业务比例）
+
+然后与上一版本对比：
+
+- RPS 是否下降
+- P99 是否变差
+- 错误率是否上升
+
+把压测纳入 CI/CD，避免性能回退上线。
+
+---
+
+## 十、压测注意事项
+
+1. 不要用太小数据量压测
+2. 不要忽略冷启动与预热
+3. 不要只跑 1 分钟就下结论
+4. 压测脚本要带幂等键，避免脏数据影响结果
+5. 压测后要清理测试数据
+
+---
+
+## 十一、一个推荐执行流程
+
+1. 定目标（吞吐、延迟、错误率）
+2. 准备接近生产的数据与环境
+3. 先单接口，再混合场景，再峰值冲击
+4. 记录每轮报告和瓶颈点
+5. 每轮只做一批明确优化再复测
+6. 输出容量结论和扩容建议
+
+---
+
+## 总结
+
+Node.js 订单系统的压测与容量评估，关键不是“跑出多高 QPS”，而是回答这三个问题：
+
+1. 稳定承载能力是多少
+2. 先坏的是哪一层
+3. 再加资源是否线性提升
+
+你可以直接用本文的 k6 脚本做第一轮，然后按“指标 -> 瓶颈 -> 优化 -> 复测”闭环推进，容量结论会越来越准。

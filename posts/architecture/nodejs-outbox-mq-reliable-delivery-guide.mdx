@@ -1,0 +1,409 @@
+---
+title: 'Node.js 订单系统 Outbox + MQ 可靠投递实战：重试、退避、死信、幂等'
+date: '2026-04-02'
+excerpt: '这篇文章用 Node.js（TypeScript）讲清 Outbox 模式在订单系统中的落地：如何保证“业务落库 + 事件发送”一致，如何实现投递重试、指数退避、死信治理与消费端幂等。'
+tags: ['nodejs', 'typescript', 'outbox', 'mq', 'reliability', 'order-system']
+---
+
+# Node.js 订单系统 Outbox + MQ 可靠投递实战：重试、退避、死信、幂等
+
+订单系统里有个经典问题：
+
+> 订单已写库成功，但消息没发出去，怎么办？
+
+如果你直接在事务提交后 `sendMessage()`，会有窗口期：
+
+- 库成功
+- 应用在发消息前崩溃
+- 下游永远不知道这笔订单
+
+Outbox 模式就是为了解这个问题。
+
+---
+
+## 一、Outbox 核心思想
+
+一句话：
+
+> 把“待发送事件”先写进数据库，再由独立投递器异步发送到 MQ。
+
+这样可以保证：
+
+- 业务数据和事件记录在同一本地事务里
+- 即使应用崩溃，事件仍在表里可补发
+
+---
+
+## 二、最小可用架构
+
+```text
+Order API
+  -> DB Transaction
+      -> write orders
+      -> write outbox
+
+Outbox Publisher Worker
+  -> scan outbox(status=PENDING)
+  -> publish MQ
+  -> mark SENT / FAILED
+
+Consumer
+  -> consume MQ
+  -> idempotent handle
+```
+
+---
+
+## 三、Outbox 表结构（MySQL）
+
+```sql
+CREATE TABLE `order_outbox` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `event_id` VARCHAR(64) NOT NULL COMMENT '全局唯一事件ID',
+  `aggregate_type` VARCHAR(32) NOT NULL COMMENT 'ORDER',
+  `aggregate_id` VARCHAR(64) NOT NULL COMMENT 'order_no',
+  `event_type` VARCHAR(64) NOT NULL COMMENT 'ORDER_CREATED/ORDER_PAID',
+  `payload` JSON NOT NULL,
+  `status` TINYINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '1待发送 2已发送 3失败 4死信',
+  `retry_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `next_retry_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `last_error` VARCHAR(500) NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_event_id` (`event_id`),
+  KEY `idx_publish_scan` (`status`, `next_retry_at`, `id`),
+  KEY `idx_aggregate` (`aggregate_type`, `aggregate_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单Outbox事件表';
+```
+
+---
+
+## 四、下单事务中写 Outbox（Node.js）
+
+下面用 `Prisma` 示例。
+
+```ts
+import { PrismaClient } from '@prisma/client'
+import { randomUUID } from 'node:crypto'
+
+const prisma = new PrismaClient()
+
+export async function createOrderWithOutbox(input: {
+  orderNo: string
+  userId: bigint
+  amount: number
+}) {
+  return prisma.$transaction(async (tx) => {
+    await tx.orders.create({
+      data: {
+        order_no: input.orderNo,
+        user_id: input.userId,
+        status: 'CREATED',
+        pay_amount: input.amount,
+      },
+    })
+
+    await tx.order_outbox.create({
+      data: {
+        event_id: randomUUID(),
+        aggregate_type: 'ORDER',
+        aggregate_id: input.orderNo,
+        event_type: 'ORDER_CREATED',
+        payload: {
+          orderNo: input.orderNo,
+          userId: input.userId.toString(),
+          amount: input.amount,
+        },
+        status: 1,
+      },
+    })
+  })
+}
+```
+
+关键点：
+
+- `orders` 和 `order_outbox` 必须在同一事务
+- 只负责“记录事件”，不在这里直接发 MQ
+
+---
+
+## 五、投递器 Worker：扫描并发布
+
+### 1. 扫描策略
+
+- 扫描 `status=1` 且 `next_retry_at <= now()`
+- 分批处理（例如 100 条）
+- 每次按 `id` 升序
+
+### 2. Node.js 示例
+
+```ts
+import pLimit from 'p-limit'
+
+const limit = pLimit(10)
+
+export async function publishOutboxBatch() {
+  const rows = await prisma.order_outbox.findMany({
+    where: {
+      status: 1,
+      next_retry_at: { lte: new Date() },
+    },
+    orderBy: { id: 'asc' },
+    take: 100,
+  })
+
+  await Promise.all(
+    rows.map((row) =>
+      limit(async () => {
+        await publishOne(row)
+      })
+    )
+  )
+}
+```
+
+---
+
+## 六、单条发布逻辑：成功标记 + 失败重试
+
+```ts
+const MAX_RETRY = 16
+
+function backoffSeconds(retryCount: number) {
+  // 指数退避 + 上限
+  return Math.min(2 ** retryCount, 3600)
+}
+
+async function publishOne(row: any) {
+  try {
+    await mqProducer.publish(row.event_type, {
+      eventId: row.event_id,
+      aggregateId: row.aggregate_id,
+      payload: row.payload,
+    })
+
+    await prisma.order_outbox.update({
+      where: { id: row.id },
+      data: {
+        status: 2,
+        last_error: null,
+      },
+    })
+  } catch (err: any) {
+    const nextRetryCount = row.retry_count + 1
+    const delay = backoffSeconds(nextRetryCount)
+    const nextStatus = nextRetryCount >= MAX_RETRY ? 4 : 1
+
+    await prisma.order_outbox.update({
+      where: { id: row.id },
+      data: {
+        status: nextStatus,
+        retry_count: nextRetryCount,
+        next_retry_at: new Date(Date.now() + delay * 1000),
+        last_error: String(err?.message || err).slice(0, 500),
+      },
+    })
+  }
+}
+```
+
+状态说明：
+
+- `2` 已发送
+- `4` 死信（超过最大重试）
+
+---
+
+## 七、死信治理
+
+死信不是“写个状态就结束”。
+
+至少要有：
+
+1. 死信监控告警
+2. 死信重放工具（按 `event_id` 重投）
+3. 人工介入流程（修正 payload 后重发）
+
+重放示例：
+
+```ts
+export async function replayDeadLetter(eventId: string) {
+  const row = await prisma.order_outbox.findUnique({
+    where: { event_id: eventId },
+  })
+  if (!row || row.status !== 4) {
+    throw new Error('Dead-letter event not found')
+  }
+
+  await prisma.order_outbox.update({
+    where: { event_id: eventId },
+    data: {
+      status: 1,
+      retry_count: 0,
+      next_retry_at: new Date(),
+      last_error: null,
+    },
+  })
+}
+```
+
+---
+
+## 八、消费端幂等：必须做
+
+消息系统通常是“至少一次投递”，所以消费端一定会遇到重复消息。
+
+### 1. 幂等记录表
+
+```sql
+CREATE TABLE `mq_consume_record` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `consumer_group` VARCHAR(64) NOT NULL,
+  `event_id` VARCHAR(64) NOT NULL,
+  `status` TINYINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '1处理中 2成功 3失败',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_group_event` (`consumer_group`, `event_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MQ消费幂等记录';
+```
+
+### 2. 消费逻辑示例
+
+```ts
+export async function handleOrderCreated(msg: {
+  eventId: string
+  orderNo: string
+  payload: any
+}) {
+  const group = 'inventory-consumer'
+
+  try {
+    await prisma.mq_consume_record.create({
+      data: {
+        consumer_group: group,
+        event_id: msg.eventId,
+        status: 1,
+      },
+    })
+  } catch {
+    // 重复消息，直接忽略
+    return
+  }
+
+  try {
+    await reserveInventory(msg.payload)
+
+    await prisma.mq_consume_record.update({
+      where: {
+        consumer_group_event_id: {
+          consumer_group: group,
+          event_id: msg.eventId,
+        },
+      },
+      data: { status: 2 },
+    })
+  } catch (e) {
+    await prisma.mq_consume_record.update({
+      where: {
+        consumer_group_event_id: {
+          consumer_group: group,
+          event_id: msg.eventId,
+        },
+      },
+      data: { status: 3 },
+    })
+    throw e
+  }
+}
+```
+
+---
+
+## 九、发布语义：至少一次 vs 恰好一次
+
+工程上通常实现：
+
+- 发布端至少一次
+- 消费端幂等
+
+两者组合效果接近业务语义上的“恰好一次”。
+
+不要把“MQ 支持事务”当成唯一解，成本和复杂度通常更高。
+
+---
+
+## 十、调度与并发控制建议
+
+1. 多实例 Worker 时，避免重复扫描同一批记录
+2. 可用“抢占更新”避免并发冲突
+3. 限制每批大小与并发度
+4. 监控 backlog（待发送数量）
+
+抢占更新示例思路：
+
+```sql
+UPDATE order_outbox
+SET status = 9
+WHERE id = ? AND status = 1;
+```
+
+影响行数为 1 才说明抢占成功（`9` 可定义为 PROCESSING）。
+
+---
+
+## 十一、关键监控指标
+
+必须监控：
+
+1. 待发送数量（status=1）
+2. 死信数量（status=4）
+3. 平均重试次数
+4. 发布成功率
+5. 端到端延迟（订单创建到下游处理）
+
+告警建议：
+
+- `status=1` 持续增长
+- 死信数量突增
+- 发布成功率低于阈值
+
+---
+
+## 十二、常见坑
+
+1. 事务外写 outbox
+2. Worker 无并发限制
+3. 重试无上限
+4. 无死信处理
+5. 消费端无幂等
+
+---
+
+## 十三、你可以直接落地的最小步骤
+
+1. 建 `order_outbox` 表
+2. 下单事务中写 outbox
+3. 起一个发布 Worker 扫描并发送
+4. 失败做指数退避重试
+5. 超限转死信
+6. 消费端加幂等表
+7. 补齐监控与重放工具
+
+做到这 7 步，订单链路可靠性会明显提升。
+
+---
+
+## 总结
+
+Outbox 的价值不在“消息更快”，而在“故障时仍可恢复”。
+
+在 Node.js 订单系统里，最实用的组合就是：
+
+1. 本地事务写业务 + outbox
+2. 异步投递 + 重试 + 死信
+3. 消费端幂等
+
+这套组合能把最常见的“丢消息、重复消息、状态不一致”风险压到可控范围。

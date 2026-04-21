@@ -1,0 +1,277 @@
+---
+title: 'React 源码手写实战总览：从 JSX 到 Reconciler 再到 Hooks'
+date: '2026-04-02'
+excerpt: '本文整理并汇总了《手写 React 源码》系列的核心内容，按工程搭建、渲染流程、Diff 算法、事件系统、调度机制和 Hooks 实现六条主线串起来，帮助你建立完整的 React 底层认知。'
+tags: ['react', 'source-code', 'fiber', 'hooks', 'reconciler']
+---
+
+# React 源码手写实战总览：从 JSX 到 Reconciler 再到 Hooks
+
+这篇文章是对 **《手写 React 源码》** 系列内容的系统化汇总，目标不是逐行抄代码，而是把 16 章内容串成一条完整的技术链路，让你能看清：
+
+- React 如何从 JSX 变成 Fiber 树
+- Fiber 树如何进入 Render 和 Commit
+- 更新、Diff、事件、Hooks、调度如何协同
+
+如果你之前学 React 只停留在 API 层，这篇文章可以帮你补上“底层发生了什么”。
+
+---
+
+![React Logo](/posts/react/react-logo-UrHx_4Rt.png)
+
+---
+
+## 一、先搭好地基：工程化与包结构
+
+系列一开始没有急着写 `useState`，而是先做工程基础，这个顺序非常对。
+
+核心做法：
+
+1. 使用 `pnpm workspace` 搭建 Mono-repo
+2. 约束代码规范（ESLint + Prettier）
+3. 约束提交规范（Husky + Commitlint）
+4. 用 TypeScript 统一类型与路径别名
+5. 用 Rollup 做库打包
+
+为什么这一步重要？
+
+- 因为 React 本身就是多包协作（`react`、`react-dom`、`react-reconciler`、`shared`）
+- 没有清晰的包边界，后面实现会很快失控
+
+这也对应了真实框架开发的第一原则：
+
+> 先搭可演进的工程骨架，再堆功能。
+
+---
+
+## 二、入口：JSX 只是语法糖，核心是 ReactElement
+
+这条主线主要做了三件事：
+
+1. 实现 `jsx` / `jsxDEV`
+2. 实现 `React.createElement`
+3. 定义统一 `ReactElement` 数据结构
+
+关键认知：
+
+- JSX 在编译后会变成 `jsx(...)` 或 `createElement(...)`
+- 运行时真正流动的是 `ReactElement` 对象
+- `$$typeof` 用于标识元素类型（普通元素、Fragment 等）
+
+换句话说，React 的第一层抽象不是 DOM，而是 `ReactElement`。
+
+---
+
+## 三、核心：Reconciler + Fiber = React 的引擎
+
+这一部分是全系列最关键的内容。
+
+### 1. FiberNode 的本质
+
+每个 Fiber 节点至少包含：
+
+- 树结构关系：`return`、`child`、`sibling`
+- 组件信息：`type`、`pendingProps`、`memoizedState`
+- 更新控制：`flags`、`subtreeFlags`
+- 双缓冲关系：`alternate`
+
+这让 React 可以同时维护：
+
+- `current`（屏幕上正在显示的树）
+- `workInProgress`（本轮正在计算的树）
+
+### 2. Render 阶段做什么
+
+Render 阶段本质上是一次 DFS：
+
+- 向下：`beginWork`（比较、计算、创建/复用子 Fiber）
+- 向上：`completeWork`（收集 flags、生成宿主更新计划）
+
+### 3. Commit 阶段做什么
+
+Commit 阶段把更新计划落到宿主环境：
+
+- 插入（Placement）
+- 更新（Update）
+- 删除（ChildDeletion）
+
+而且它不是“整树重建”，而是按 flags 精确执行。
+
+---
+
+![Reconciler Flow](/posts/react/react-3-7LStg86R.png)
+
+---
+
+## 四、更新机制：UpdateQueue、Lane 与批处理
+
+### 1. UpdateQueue
+
+状态更新不是立即执行，而是先进队列。这个队列最终改造成环状链表，支持：
+
+- 多次更新合并
+- 顺序消费
+- 按优先级过滤
+
+### 2. Lane 模型
+
+每个更新带一个 Lane（优先级位），根节点维护 `pendingLanes`。
+
+调度时流程大概是：
+
+1. 取最高优先级 Lane
+2. 同步任务进微任务队列
+3. 执行 Render + Commit
+4. 从根节点移除已完成 Lane
+
+这就是“多次 setState 不一定多次渲染”的底层原因之一。
+
+---
+
+![Lane / Schedule](/posts/react/react-10-xKKVCz2w.png)
+
+---
+
+## 五、Diff 算法：复用、插入、删除、移动
+
+系列把 Diff 从简单到复杂分三层实现：
+
+1. 单节点 Diff
+2. 多节点 Diff（含 key）
+3. Fragment 与数组嵌套场景
+
+核心策略：
+
+- 同层比较，不跨层
+- `key + type` 决定可复用性
+- 多节点用 Map 加速匹配
+- 通过 `Placement` 区分“新插入”与“需要移动”
+
+这正是 React 列表渲染中“为什么 key 如此重要”的底层答案。
+
+---
+
+## 六、事件系统：从原生事件到合成事件
+
+系列实现了一个简化版事件系统，核心思路包括：
+
+1. 在根容器做事件委托
+2. 在 DOM 节点缓存 props（保存回调）
+3. 触发时收集 capture/bubble 路径
+4. 构造 SyntheticEvent
+5. 按捕获和冒泡顺序执行回调
+
+这样做的价值是：
+
+- 统一事件处理模型
+- 屏蔽部分浏览器差异
+- 和 Fiber 更新流程对接更自然
+
+---
+
+## 七、Hooks：useState 与 useEffect 的关键机制
+
+### 1. useState
+
+核心不是“返回数组”，而是两条链路：
+
+- Fiber 上的 Hooks 链表
+- 每个 Hook 上的 UpdateQueue
+
+mount 和 update 阶段通过不同 Dispatcher 分发到不同实现：
+
+- `mountState`
+- `updateState`
+
+这也是为什么 Hooks 必须按固定顺序调用。
+
+### 2. useEffect
+
+`useEffect` 的难点在执行时机，不在 API 形态。
+
+系列实现了：
+
+- Effect 数据结构
+- 依赖比较
+- destroy/create 的收集与执行
+- 在 Commit 后异步调度副作用
+
+执行顺序上体现了真实 React 的关键语义：
+
+- 先清理旧 effect，再执行新 effect
+- 卸载时执行对应 destroy
+
+---
+
+![Hooks / Effect](/posts/react/react-13-BFJv-3es.png)
+
+---
+
+## 八、ReactDOM 与 Noop Renderer：同一套 reconciler，多个宿主环境
+
+这个系列非常有价值的一点是：不仅实现了 `react-dom`，还实现了 `react-noop-renderer`。
+
+这说明了 React 架构最重要的分层思想：
+
+- `react-reconciler` 负责“算什么更新”
+- `hostConfig` 负责“怎么落地更新”
+
+浏览器环境用 DOM API，Noop 环境用内存对象模拟节点。
+
+这就是 React 能跨平台（Web / Native / Custom Renderer）的架构基础。
+
+---
+
+## 九、你可以直接带走的学习路径
+
+如果你准备真正啃 React 源码，建议按这个顺序：
+
+1. ReactElement 与 JSX Runtime
+2. FiberNode 与双缓冲
+3. beginWork / completeWork
+4. commit 阶段与 flags
+5. 单节点 Diff -> 多节点 Diff -> Fragment
+6. useState（Hook 链表 + UpdateQueue）
+7. useEffect（effect 链表 + 调度）
+8. 调度优先级（Lane）
+9. 事件系统与宿主环境适配
+
+这样你对 React 的理解会从“会用”升级到“能解释、能定位、能设计”。
+
+---
+
+## 总结
+
+这套手写 React 的路线，本质是在搭一套“迷你版 React 18 核心链路”：
+
+- 输入：JSX / ReactElement
+- 计算：Reconciler(Fiber)
+- 输出：Host Renderer(DOM / Noop)
+- 增强：Diff / Hooks / 调度 / 事件
+
+当你把这四层连起来，你就不再只是在调用 React API，而是已经开始用框架作者的视角看 React。
+
+---
+
+## 参考地址
+
+- 原站总目录：`https://cccdk.github.io/my-react/`
+- 原站首页：`https://cccdk.github.io/my-react/`
+- 分章节（1-16）：
+  - `https://cccdk.github.io/my-react/1.html`
+  - `https://cccdk.github.io/my-react/2.html`
+  - `https://cccdk.github.io/my-react/3.html`
+  - `https://cccdk.github.io/my-react/4.html`
+  - `https://cccdk.github.io/my-react/5.html`
+  - `https://cccdk.github.io/my-react/6.html`
+  - `https://cccdk.github.io/my-react/7.html`
+  - `https://cccdk.github.io/my-react/8.html`
+  - `https://cccdk.github.io/my-react/9.html`
+  - `https://cccdk.github.io/my-react/10.html`
+  - `https://cccdk.github.io/my-react/11.html`
+  - `https://cccdk.github.io/my-react/12.html`
+  - `https://cccdk.github.io/my-react/13.html`
+  - `https://cccdk.github.io/my-react/14.html`
+  - `https://cccdk.github.io/my-react/15.html`
+  - `https://cccdk.github.io/my-react/16.html`
+- GitHub 仓库：`https://github.com/CCCdk/CCCdk.github.io`

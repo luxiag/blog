@@ -1,0 +1,328 @@
+---
+title: '订单系统状态机实战：Node.js 实现（含状态流转、幂等、回调处理）'
+date: '2026-04-02'
+excerpt: '这篇文章聚焦订单系统最关键的一层：状态机。通过 Node.js（TypeScript）示例，讲清订单状态流转规则、并发安全、支付回调幂等、超时取消任务以及工程落地方式。'
+tags: ['nodejs', 'typescript', 'order-system', 'state-machine', 'architecture']
+---
+
+# 订单系统状态机实战：Node.js 实现（含状态流转、幂等、回调处理）
+
+订单系统最容易出事故的地方，不是建表，而是状态流转。
+
+常见问题：
+
+- 已取消订单被改成已支付
+- 支付回调重复导致状态跳错
+- 并发更新把状态覆盖
+- 定时任务把已支付订单误取消
+
+要解决这些问题，核心就是一套严格状态机。
+
+---
+
+## 一、先定义状态和事件
+
+### 1. 订单状态
+
+```ts
+export enum OrderStatus {
+  CREATED = 'CREATED',
+  PAYING = 'PAYING',
+  PAID = 'PAID',
+  FULFILLING = 'FULFILLING',
+  FINISHED = 'FINISHED',
+  CANCELED = 'CANCELED',
+  CLOSED = 'CLOSED',
+  REFUNDING = 'REFUNDING',
+  REFUNDED = 'REFUNDED',
+}
+```
+
+### 2. 状态事件
+
+```ts
+export enum OrderEvent {
+  PAY_START = 'PAY_START',
+  PAY_SUCCESS = 'PAY_SUCCESS',
+  PAY_FAIL = 'PAY_FAIL',
+  PAY_TIMEOUT = 'PAY_TIMEOUT',
+  CANCEL = 'CANCEL',
+  START_FULFILL = 'START_FULFILL',
+  FINISH = 'FINISH',
+  START_REFUND = 'START_REFUND',
+  REFUND_SUCCESS = 'REFUND_SUCCESS',
+}
+```
+
+---
+
+## 二、定义“合法流转表”
+
+这是状态机的核心。
+
+```ts
+import { OrderEvent, OrderStatus } from './types'
+
+export const TRANSITIONS: Record<OrderStatus, Partial<Record<OrderEvent, OrderStatus>>> = {
+  [OrderStatus.CREATED]: {
+    [OrderEvent.PAY_START]: OrderStatus.PAYING,
+    [OrderEvent.CANCEL]: OrderStatus.CANCELED,
+    [OrderEvent.PAY_TIMEOUT]: OrderStatus.CANCELED,
+  },
+  [OrderStatus.PAYING]: {
+    [OrderEvent.PAY_SUCCESS]: OrderStatus.PAID,
+    [OrderEvent.PAY_FAIL]: OrderStatus.CREATED,
+    [OrderEvent.PAY_TIMEOUT]: OrderStatus.CANCELED,
+    [OrderEvent.CANCEL]: OrderStatus.CANCELED,
+  },
+  [OrderStatus.PAID]: {
+    [OrderEvent.START_FULFILL]: OrderStatus.FULFILLING,
+    [OrderEvent.START_REFUND]: OrderStatus.REFUNDING,
+  },
+  [OrderStatus.FULFILLING]: {
+    [OrderEvent.FINISH]: OrderStatus.FINISHED,
+    [OrderEvent.START_REFUND]: OrderStatus.REFUNDING,
+  },
+  [OrderStatus.REFUNDING]: {
+    [OrderEvent.REFUND_SUCCESS]: OrderStatus.REFUNDED,
+  },
+  [OrderStatus.FINISHED]: {},
+  [OrderStatus.CANCELED]: {},
+  [OrderStatus.CLOSED]: {},
+  [OrderStatus.REFUNDED]: {},
+}
+```
+
+---
+
+## 三、状态机执行器（纯函数）
+
+```ts
+import { OrderEvent, OrderStatus } from './types'
+import { TRANSITIONS } from './transitions'
+
+export function nextStatus(current: OrderStatus, event: OrderEvent): OrderStatus {
+  const target = TRANSITIONS[current]?.[event]
+  if (!target) {
+    throw new Error(`Illegal transition: ${current} -> ${event}`)
+  }
+  return target
+}
+```
+
+纯函数好处：
+
+- 容易测
+- 规则集中
+- 不依赖数据库
+
+---
+
+## 四、Node.js 服务层实现（并发安全）
+
+下面用 `Fastify + Prisma` 风格示例，重点看“带旧状态条件更新”。
+
+```ts
+import { PrismaClient } from '@prisma/client'
+import { OrderEvent, OrderStatus } from './types'
+import { nextStatus } from './state-machine'
+
+const prisma = new PrismaClient()
+
+export async function applyOrderEvent(orderNo: string, event: OrderEvent, operator: string) {
+  return prisma.$transaction(async (tx) => {
+    const order = await tx.orders.findUnique({ where: { order_no: orderNo } })
+    if (!order) throw new Error('Order not found')
+
+    const from = order.status as OrderStatus
+    const to = nextStatus(from, event)
+
+    // 带旧状态条件，避免并发覆盖
+    const updated = await tx.orders.updateMany({
+      where: {
+        order_no: orderNo,
+        status: from,
+      },
+      data: {
+        status: to,
+      },
+    })
+
+    if (updated.count !== 1) {
+      throw new Error('Order status conflict, retry later')
+    }
+
+    await tx.order_status_log.create({
+      data: {
+        order_no: orderNo,
+        from_status: from,
+        to_status: to,
+        operator_type: 'SYSTEM',
+        operator_id: operator,
+      },
+    })
+
+    return { orderNo, from, to }
+  })
+}
+```
+
+关键点：
+
+- 不允许“直接 set status”
+- 必须通过 `event -> nextStatus`
+- 更新必须带 `where status = from`
+
+---
+
+## 五、支付回调幂等（Node.js）
+
+支付回调是重灾区，必须做：
+
+1. 验签
+2. 幂等
+3. 合法状态流转
+
+```ts
+import { FastifyInstance } from 'fastify'
+import { applyOrderEvent } from './order-service'
+import { OrderEvent } from './types'
+
+export async function registerPaymentRoutes(app: FastifyInstance) {
+  app.post('/callbacks/payment', async (req, reply) => {
+    const body = req.body as any
+    const { paymentId, orderNo, paid } = body
+
+    // 1. 验签（示例省略）
+    // if (!verifySignature(req)) return reply.code(400).send({ ok: false })
+
+    // 2. 幂等：paymentId 唯一
+    try {
+      await app.prisma.idempotency_record.create({
+        data: {
+          biz_type: 'PAY_CALLBACK',
+          idempotency_key: paymentId,
+          biz_no: orderNo,
+          status: 1,
+        },
+      })
+    } catch {
+      // 已处理过，直接返回成功给支付平台
+      return reply.send({ ok: true })
+    }
+
+    // 3. 按状态机推进
+    if (paid === true) {
+      await applyOrderEvent(orderNo, OrderEvent.PAY_SUCCESS, 'PAY_CALLBACK')
+    } else {
+      await applyOrderEvent(orderNo, OrderEvent.PAY_FAIL, 'PAY_CALLBACK')
+    }
+
+    await app.prisma.idempotency_record.update({
+      where: {
+        biz_type_idempotency_key: {
+          biz_type: 'PAY_CALLBACK',
+          idempotency_key: paymentId,
+        },
+      },
+      data: { status: 2 },
+    })
+
+    return reply.send({ ok: true })
+  })
+}
+```
+
+---
+
+## 六、超时取消任务（Node.js 定时任务）
+
+只取消“仍未支付”的订单。
+
+```ts
+import cron from 'node-cron'
+import { applyOrderEvent } from './order-service'
+import { OrderEvent } from './types'
+
+export function startOrderTimeoutJob() {
+  cron.schedule('*/1 * * * *', async () => {
+    const rows = await prisma.orders.findMany({
+      where: {
+        status: 'CREATED',
+        pay_timeout_at: {
+          lte: new Date(),
+        },
+      },
+      take: 500,
+      orderBy: { pay_timeout_at: 'asc' },
+    })
+
+    for (const row of rows) {
+      try {
+        await applyOrderEvent(row.order_no, OrderEvent.PAY_TIMEOUT, 'TIMEOUT_JOB')
+      } catch (e) {
+        // 被并发更新（例如刚支付）时会失败，记录即可
+      }
+    }
+  })
+}
+```
+
+---
+
+## 七、HTTP 接口层示例（Fastify）
+
+```ts
+app.post('/orders/:orderNo/cancel', async (req, reply) => {
+  const { orderNo } = req.params as { orderNo: string }
+  const result = await applyOrderEvent(orderNo, OrderEvent.CANCEL, 'USER')
+  return reply.send(result)
+})
+
+app.post('/orders/:orderNo/pay/start', async (req, reply) => {
+  const { orderNo } = req.params as { orderNo: string }
+  const result = await applyOrderEvent(orderNo, OrderEvent.PAY_START, 'USER')
+  return reply.send(result)
+})
+```
+
+接口层不要自行改状态，统一走状态机服务。
+
+---
+
+## 八、测试建议（最少要有）
+
+### 1. 状态机单测
+
+- 合法流转必须通过
+- 非法流转必须抛错
+
+### 2. 并发测试
+
+- 两个并发事件竞争时只允许一个成功
+
+### 3. 回调重复测试
+
+- 同一 `paymentId` 连续回调多次，最终只处理一次
+
+---
+
+## 九、常见坑
+
+1. 业务代码里随手改 `status`
+2. 回调没幂等
+3. 没有状态日志
+4. 更新不带旧状态条件
+5. 超时任务误取消已支付订单
+
+---
+
+## 总结
+
+订单状态机真正落地要抓三件事：
+
+1. **规则集中**：`event -> nextStatus` 单点维护
+2. **更新安全**：带旧状态条件更新，防并发覆盖
+3. **链路幂等**：回调、重试、任务都可重复执行但结果一致
+
+你可以先把本文这套 Node.js 模板落地到订单主链路，再逐步扩展到退款、履约、售后等子状态机。
