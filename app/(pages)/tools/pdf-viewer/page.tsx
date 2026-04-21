@@ -43,6 +43,11 @@ interface PageInfo {
   rendered: boolean;
 }
 
+interface PageOffset {
+  top: number;
+  height: number;
+}
+
 type PreviewMode = 'normal' | 'eink';
 
 export default function PdfViewerPage() {
@@ -77,6 +82,13 @@ export default function PdfViewerPage() {
   const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const renderTasksRef = useRef<Map<number, any>>(new Map());
   const pdfjsLibRef = useRef<any>(null);
+  const scrollRAFRef = useRef<number | null>(null);
+  const lastScrollTimeRef = useRef<number>(0);
+  const pageOffsetsRef = useRef<PageOffset[]>([]);
+  const renderingPageRef = useRef<Set<number>>(new Set());
+  const pageRefsRef = useRef<Map<number, HTMLDivElement>>(new Map());
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const scrollEndTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Initialize DB and load user PDFs
   useEffect(() => {
@@ -126,10 +138,54 @@ export default function PdfViewerPage() {
     
     return () => {
       isMounted = false;
+      if (scrollRAFRef.current) {
+        cancelAnimationFrame(scrollRAFRef.current);
+      }
+      if (scrollEndTimerRef.current) {
+        clearTimeout(scrollEndTimerRef.current);
+      }
     };
   }, []);
 
-  // Load public PDFs from /public/pdf directory
+  // Setup IntersectionObserver for lazy rendering
+  useEffect(() => {
+    if (!pdfDocRef.current || pagesInfo.length === 0) return;
+    
+    // Cleanup old observer
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+    }
+    
+    observerRef.current = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const pageNum = parseInt(entry.target.getAttribute('data-page') || '0', 10);
+          if (!pageNum) return;
+          
+          // When page enters viewport (with buffer), render it
+          if (entry.isIntersecting && !renderedPages.has(pageNum)) {
+            renderPage(pageNum);
+          }
+        });
+      },
+      {
+        root: scrollContainerRef.current,
+        rootMargin: '200px', // Start rendering 200px before visible
+        threshold: 0
+      }
+    );
+    
+    // Observe all page elements
+    pageRefsRef.current.forEach((el) => {
+      if (el) observerRef.current?.observe(el);
+    });
+    
+    return () => {
+      observerRef.current?.disconnect();
+    };
+  }, [currentPdf, pagesInfo.length]);
+
+  // Load public PDFs from /public PDF directory
   const loadPublicPdfs = async () => {
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/json/pdf-list.json?t=${Date.now()}`);
@@ -216,12 +272,22 @@ export default function PdfViewerPage() {
   const renderPage = async (pageNum: number) => {
     if (!pdfDocRef.current) return;
     
-    // Check if already rendered at current scale
-    const renderedScale = renderedScaleRef.current.get(pageNum);
-    if (renderedPages.has(pageNum) && renderedScale === scale) return;
+    // Prevent duplicate rendering
+    if (renderingPageRef.current.has(pageNum)) return;
+    renderingPageRef.current.add(pageNum);
     
     const canvas = pageCanvasesRef.current.get(pageNum);
-    if (!canvas) return;
+    if (!canvas) {
+      renderingPageRef.current.delete(pageNum);
+      return;
+    }
+    
+    // Check if already rendered at current scale - skip if already rendered
+    const renderedScale = renderedScaleRef.current.get(pageNum);
+    if (renderedPages.has(pageNum) && renderedScale === scale) {
+      renderingPageRef.current.delete(pageNum);
+      return;
+    }
     
     // Cancel any existing render task for this page
     if (renderTasksRef.current.has(pageNum)) {
@@ -231,7 +297,7 @@ export default function PdfViewerPage() {
       }
       renderTasksRef.current.delete(pageNum);
     }
-
+    
     try {
       const page = await pdfDocRef.current.getPage(pageNum);
       const context = canvas.getContext('2d', { alpha: false });
@@ -283,7 +349,9 @@ export default function PdfViewerPage() {
       renderTasksRef.current.delete(pageNum);
       renderedScaleRef.current.set(pageNum, scale);
       setRenderedPages(prev => new Set([...prev, pageNum]));
+      renderingPageRef.current.delete(pageNum);
     } catch (err) {
+      renderingPageRef.current.delete(pageNum);
       if (err && typeof err === 'object' && 'name' in err && err.name === 'RenderingCancelledException') {
         return;
       }
@@ -324,41 +392,16 @@ export default function PdfViewerPage() {
 
   // Re-render all pages when preview mode or scale changes
   useEffect(() => {
-    if (currentPdf && pagesInfo.length > 0) {
-      // Clear rendered pages to force re-render with new scale/mode
-      setRenderedPages(new Set());
-      renderedScaleRef.current.clear();
-      pageCanvasesRef.current.clear();
+    if (currentPdf && pageOffsets.length > 0 && renderedPages.size > 0) {
+      const renderedArray = Array.from(renderedPages);
       
-      const container = scrollContainerRef.current;
-      if (container) {
-        const scrollTop = container.scrollTop;
-        const containerHeight = container.clientHeight;
-        
-        let accumulatedHeight = 0;
-        const visiblePages: number[] = [];
-        
-        for (let i = 0; i < pagesInfo.length; i++) {
-          const pageHeight = pagesInfo[i].height * scale + 20;
-          const pageTop = accumulatedHeight;
-          const pageBottom = pageTop + pageHeight;
-          
-          if (pageBottom > scrollTop - 200 && pageTop < scrollTop + containerHeight + 200) {
-            visiblePages.push(i + 1);
-          }
-          
-          accumulatedHeight += pageHeight;
-        }
-        
-        // Small delay to allow React to clear the old canvases
-        setTimeout(() => {
-          visiblePages.forEach(pageNum => {
-            renderPage(pageNum);
-          });
-        }, 50);
-      }
+      requestAnimationFrame(() => {
+        renderedArray.forEach(pageNum => {
+          renderPage(pageNum);
+        });
+      });
     }
-  }, [previewMode, scale, currentPdf?.id]);
+  }, [previewMode, scale]);
 
   // Load PDF (from DB or public)
   const loadPdf = async (pdfId: string, name: string, url: string, isPublic: boolean = false) => {
@@ -451,7 +494,7 @@ export default function PdfViewerPage() {
         setShowMemoryPrompt(true);
       }
       
-      // Initial render of first few pages
+      // Trigger initial render after DOM is ready
       setTimeout(() => {
         for (let i = 1; i <= Math.min(3, pdf.numPages); i++) {
           renderPage(i);
@@ -655,26 +698,49 @@ export default function PdfViewerPage() {
     }
   };
 
-  // Load thumbnails when showing thumbnail panel
+  // Load thumbnails progressively
   useEffect(() => {
     if (activeTab === 'thumbnails' && pdfDocRef.current && totalPages > 0) {
+      let isCancelled = false;
+      
       const loadThumbnails = async () => {
+        setThumbnails([]);
         setThumbnailsLoading(true);
-        const thumbList: { page: number; url: string }[] = [];
-        const maxThumbs = Math.min(totalPages, 50);
         
-        for (let i = 1; i <= maxThumbs; i++) {
-          const url = await generateThumbnail(i);
-          if (url) {
-            thumbList.push({ page: i, url });
+        const maxThumbs = Math.min(totalPages, 50);
+        const batchSize = 5;
+        
+        for (let i = 1; i <= maxThumbs && !isCancelled; i += batchSize) {
+          const batch: { page: number; url: string }[] = [];
+          const batchPromises = [];
+          
+          for (let j = i; j < Math.min(i + batchSize, maxThumbs + 1); j++) {
+            batchPromises.push(
+              generateThumbnail(j).then(url => {
+                if (url) batch.push({ page: j, url });
+              })
+            );
           }
+          
+          await Promise.all(batchPromises);
+          
+          if (!isCancelled && batch.length > 0) {
+            setThumbnails(prev => [...prev, ...batch].sort((a, b) => a.page - b.page));
+          }
+          
+          await new Promise(r => setTimeout(r, 50));
         }
         
-        setThumbnails(thumbList);
-        setThumbnailsLoading(false);
+        if (!isCancelled) {
+          setThumbnailsLoading(false);
+        }
       };
       
       loadThumbnails();
+      
+      return () => {
+        isCancelled = true;
+      };
     }
   }, [activeTab, totalPages]);
 
@@ -689,57 +755,66 @@ export default function PdfViewerPage() {
     }
   };
 
-  // Handle scroll to update current page
-  const handleScroll = () => {
-    if (!scrollContainerRef.current || pagesInfo.length === 0) return;
-    
-    const scrollTop = scrollContainerRef.current.scrollTop;
-    let accumulatedHeight = 0;
-    
+  // Calculate page offsets (memoized)
+  const pageOffsets = useMemo((): PageOffset[] => {
+    if (pagesInfo.length === 0) return [];
+    const offsets: PageOffset[] = [];
+    let currentTop = 0;
     for (let i = 0; i < pagesInfo.length; i++) {
-      const pageHeight = pagesInfo[i].height * scale + 20;
-      if (scrollTop < accumulatedHeight + pageHeight / 2) {
-        setCurrentPage(i + 1);
-        break;
-      }
-      accumulatedHeight += pageHeight;
+      const height = pagesInfo[i].height * scale + 20;
+      offsets.push({ top: currentTop, height });
+      currentTop += height;
     }
-  };
+    pageOffsetsRef.current = offsets;
+    return offsets;
+  }, [pagesInfo, scale]);
 
   // Calculate total scroll height
   const totalScrollHeight = useMemo(() => {
-    return pagesInfo.reduce((acc, page) => acc + page.height * scale + 20, 0);
-  }, [pagesInfo, scale]);
+    if (pageOffsets.length === 0) return 0;
+    const last = pageOffsets[pageOffsets.length - 1];
+    return last.top + last.height;
+  }, [pageOffsets]);
 
-  // Render visible pages
-  useEffect(() => {
-    if (!scrollContainerRef.current || pagesInfo.length === 0) return;
+  // Handle scroll - only update currentPage when scroll ends
+  const handleScroll = useCallback(() => {
+    if (!scrollContainerRef.current || pageOffsetsRef.current.length === 0) return;
     
-    const container = scrollContainerRef.current;
-    const scrollTop = container.scrollTop;
-    const containerHeight = container.clientHeight;
+    const now = Date.now();
+    if (now - lastScrollTimeRef.current < 50) return;
+    lastScrollTimeRef.current = now;
     
-    let accumulatedHeight = 0;
-    const visiblePages: number[] = [];
-    
-    for (let i = 0; i < pagesInfo.length; i++) {
-      const pageHeight = pagesInfo[i].height * scale + 20;
-      const pageTop = accumulatedHeight;
-      const pageBottom = pageTop + pageHeight;
-      
-      if (pageBottom > scrollTop - 200 && pageTop < scrollTop + containerHeight + 200) {
-        visiblePages.push(i + 1);
-      }
-      
-      accumulatedHeight += pageHeight;
+    if (scrollRAFRef.current) {
+      cancelAnimationFrame(scrollRAFRef.current);
     }
     
-    visiblePages.forEach(pageNum => {
-      if (!renderedPages.has(pageNum)) {
-        renderPage(pageNum);
+    scrollRAFRef.current = requestAnimationFrame(() => {
+      const container = scrollContainerRef.current;
+      if (!container) return;
+      
+      const offsets = pageOffsetsRef.current;
+      const scrollTop = container.scrollTop;
+      
+      let currentP = 1;
+      for (let i = 0; i < offsets.length; i++) {
+        const { top, height } = offsets[i];
+        if (scrollTop < top + height / 2) {
+          currentP = i + 1;
+          break;
+        }
       }
+      
+      // Clear existing timer
+      if (scrollEndTimerRef.current) {
+        clearTimeout(scrollEndTimerRef.current);
+      }
+      
+      // Update currentPage after scroll ends (150ms delay)
+      scrollEndTimerRef.current = setTimeout(() => {
+        setCurrentPage(currentP);
+      }, 150);
     });
-  }, [pagesInfo, scale, renderedPages]);
+  }, []);
 
   // Navigation functions
   const prevPage = () => {
@@ -1149,7 +1224,7 @@ export default function PdfViewerPage() {
             </div>
           )}
 
-          {/* PDF Viewer Area - All Pages with Virtual Scrolling */}
+          {/* PDF Viewer Area - Virtual Scrolling */}
           <div 
             ref={scrollContainerRef}
             className="flex-1 overflow-y-auto"
@@ -1161,17 +1236,19 @@ export default function PdfViewerPage() {
                 <div style={{ height: totalScrollHeight, position: 'relative' }}>
                   {pagesInfo.map((pageInfo, index) => {
                     const pageNum = index + 1;
-                    let offset = 0;
-                    for (let i = 0; i < index; i++) {
-                      offset += pagesInfo[i].height * scale + 20;
-                    }
+                    const canvasWidth = pageInfo.width * scale;
+                    const canvasHeight = pageInfo.height * scale;
                     
                     return (
                       <div
                         key={pageNum}
+                        ref={(el) => {
+                          if (el) pageRefsRef.current.set(pageNum, el);
+                        }}
+                        data-page={pageNum}
                         className="absolute left-1/2 transform -translate-x-1/2"
                         style={{
-                          top: offset,
+                          top: pageOffsets[pageNum - 1]?.top || 0,
                           marginBottom: '20px',
                         }}
                       >
@@ -1180,10 +1257,11 @@ export default function PdfViewerPage() {
                             ref={(el) => {
                               if (el) {
                                 pageCanvasesRef.current.set(pageNum, el);
-                                if (!renderedPages.has(pageNum)) {
-                                  setTimeout(() => renderPage(pageNum), 0);
-                                }
                               }
+                            }}
+                            style={{
+                              width: canvasWidth,
+                              height: canvasHeight,
                             }}
                             className="block"
                           />
