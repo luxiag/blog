@@ -1,0 +1,2127 @@
+---
+title: '.NET 微服务实战：从单体到分布式的完整落地指南'
+date: '2026-05-28'
+excerpt: '用 ASP.NET Core 构建生产级微服务系统。涵盖解决方案结构、gRPC/HTTP 通信、API 网关（YARP）、弹性策略（Polly）、分布式事务、可观测性（OpenTelemetry）、容器化部署等核心实践，所有代码基于 .NET 8。'
+tags: ['dotnet', 'microservices', 'aspnetcore', 'grpc', 'docker', 'kubernetes']
+---
+
+# .NET 微服务实战：从单体到分布式的完整落地指南
+
+微服务在 .NET 生态中不是新概念了，但真正能把它落地到生产环境的团队并不多。
+
+原因很简单：微服务不是一个技术选型问题，而是一系列工程决策的组合。你需要同时回答这些问题：
+
+- 服务之间怎么通信？HTTP 还是 gRPC？
+- 网关用什么？怎么做路由和限流？
+- 某个下游服务挂了，上游怎么办？
+- 分布式事务怎么处理？
+- 日志、链路追踪、指标怎么统一收集？
+- 怎么容器化部署？怎么编排？
+
+这篇文章就是用 .NET 8 + ASP.NET Core 把上面每个问题逐一回答，给出可运行的代码和可复用的方案。
+
+---
+
+## 一、解决方案结构设计
+
+微服务的代码组织是第一个要解决的问题。在 .NET 中，我们通常用一个 Solution 管理多个 Service 项目。
+
+### 1.1 推荐的目录结构
+
+```
+EShop/
+├── src/
+│   ├── Services/
+│   │   ├── Ordering/
+│   │   │   ├── Ordering.API/              # Web API 入口
+│   │   │   ├── Ordering.Domain/           # 领域层
+│   │   │   ├── Ordering.Infrastructure/   # 基础设施层
+│   │   │   └── Ordering.Application/      # 应用层
+│   │   ├── Catalog/
+│   │   │   ├── Catalog.API/
+│   │   │   └── Catalog.Infrastructure/
+│   │   └── Identity/
+│   │       └── Identity.API/
+│   ├── ApiGateways/
+│   │   └── WebGateway/                    # YARP 网关
+│   ├── BuildingBlocks/
+│   │   ├── EventBus/                      # 事件总线抽象
+│   │   ├── EventBus.RabbitMQ/             # RabbitMQ 实现
+│   │   └── Common/                        # 共享工具类
+│   └── Web/
+│       └── WebApp/                        # 前端 BFF
+├── tests/
+│   ├── Ordering.UnitTests/
+│   ├── Ordering.IntegrationTests/
+│   └── Ordering.FunctionalTests/
+├── deploy/
+│   ├── docker-compose.yml
+│   ├── docker-compose.override.yml
+│   └── k8s/
+└── EShop.sln
+```
+
+### 1.2 关键设计原则
+
+**每个服务独立数据库**：Ordering 用 PostgreSQL，Catalog 用 MongoDB，Identity 用 SQL Server——根据场景选最合适的。
+
+**BuildingBlocks 是共享库，不是共享服务**：它以 NuGet 包的形式被各服务引用，不是一个独立运行的进程。
+
+**测试和部署配置放在仓库根目录**：不要散落到各个服务内部。
+
+### 1.3 创建项目骨架
+
+```bash
+# 创建解决方案
+dotnet new sln -n EShop
+
+# 创建订单服务
+dotnet new webapi -n Ordering.API -o src/Services/Ordering/Ordering.API
+dotnet new classlib -n Ordering.Domain -o src/Services/Ordering/Ordering.Domain
+dotnet new classlib -n Ordering.Infrastructure -o src/Services/Ordering/Ordering.Infrastructure
+dotnet new classlib -n Ordering.Application -o src/Services/Ordering/Ordering.Application
+
+# 创建商品目录服务
+dotnet new webapi -n Catalog.API -o src/Services/Catalog/Catalog.API
+
+# 添加到解决方案
+dotnet sln add src/Services/Ordering/Ordering.API
+dotnet sln add src/Services/Ordering/Ordering.Domain
+dotnet sln add src/Services/Ordering/Ordering.Infrastructure
+dotnet sln add src/Services/Ordering/Ordering.Application
+dotnet sln add src/Services/Catalog/Catalog.API
+```
+
+---
+
+## 二、服务通信：HTTP vs gRPC
+
+微服务之间的通信方式选择直接决定了系统的性能和复杂度。
+
+### 2.1 什么时候用 HTTP，什么时候用 gRPC
+
+| 场景 | 推荐方式 | 原因 |
+|------|---------|------|
+| 对外暴露 API（给前端调用） | HTTP/REST | 浏览器原生支持，工具链成熟 |
+| 服务间同步调用 | gRPC | 高性能、强类型、代码生成 |
+| 需要流式传输 | gRPC | 原生支持双向流 |
+| 需要跨语言但团队不熟 protobuf | HTTP + OpenAPI | 降低团队学习成本 |
+
+### 2.2 gRPC 服务实现
+
+先定义 proto 文件：
+
+```protobuf
+// Protos/catalog.proto
+syntax = "proto3";
+
+option csharp_namespace = "EShop.Catalog.Grpc";
+
+package catalog;
+
+service CatalogService {
+  rpc GetItemById (GetItemRequest) returns (CatalogItem);
+  rpc GetItemsByIds (GetItemsRequest) returns (CatalogItemsResponse);
+  rpc UpdateStock (UpdateStockRequest) returns (UpdateStockResponse);
+}
+
+message GetItemRequest {
+  int32 id = 1;
+}
+
+message GetItemsRequest {
+  repeated int32 ids = 1;
+}
+
+message CatalogItem {
+  int32 id = 1;
+  string name = 2;
+  string description = 3;
+  double price = 4;
+  int32 available_stock = 5;
+  string picture_uri = 6;
+}
+
+message CatalogItemsResponse {
+  repeated CatalogItem items = 1;
+}
+
+message UpdateStockRequest {
+  int32 item_id = 1;
+  int32 quantity = 2;
+}
+
+message UpdateStockResponse {
+  bool success = 1;
+  int32 new_stock = 2;
+}
+```
+
+服务端实现：
+
+```csharp
+// Catalog.API/Services/CatalogGrpcService.cs
+using Grpc.Core;
+using EShop.Catalog.Grpc;
+using Microsoft.EntityFrameworkCore;
+
+namespace Catalog.API.Services;
+
+public class CatalogGrpcService : CatalogService.CatalogServiceBase
+{
+    private readonly CatalogDbContext _db;
+    private readonly ILogger<CatalogGrpcService> _logger;
+
+    public CatalogGrpcService(CatalogDbContext db, ILogger<CatalogGrpcService> logger)
+    {
+        _db = db;
+        _logger = logger;
+    }
+
+    public override async Task<CatalogItem> GetItemById(
+        GetItemRequest request, ServerCallContext context)
+    {
+        var item = await _db.CatalogItems.FindAsync(request.Id);
+
+        if (item is null)
+        {
+            throw new RpcException(new Status(
+                StatusCode.NotFound, $"商品 {request.Id} 不存在"));
+        }
+
+        return MapToGrpcModel(item);
+    }
+
+    public override async Task<UpdateStockResponse> UpdateStock(
+        UpdateStockRequest request, ServerCallContext context)
+    {
+        var item = await _db.CatalogItems.FindAsync(request.ItemId);
+
+        if (item is null)
+        {
+            throw new RpcException(new Status(
+                StatusCode.NotFound, $"商品 {request.ItemId} 不存在"));
+        }
+
+        // 乐观并发控制
+        item.AvailableStock -= request.Quantity;
+
+        if (item.AvailableStock < 0)
+        {
+            throw new RpcException(new Status(
+                StatusCode.FailedPrecondition, "库存不足"));
+        }
+
+        await _db.SaveChangesAsync();
+
+        return new UpdateStockResponse
+        {
+            Success = true,
+            NewStock = item.AvailableStock
+        };
+    }
+
+    private static CatalogItem MapToGrpcModel(Domain.CatalogItem item) => new()
+    {
+        Id = item.Id,
+        Name = item.Name,
+        Description = item.Description ?? string.Empty,
+        Price = (double)item.Price,
+        AvailableStock = item.AvailableStock,
+        PictureUri = item.PictureUri ?? string.Empty
+    };
+}
+```
+
+注册 gRPC 服务：
+
+```csharp
+// Catalog.API/Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddGrpc();
+builder.Services.AddDbContext<CatalogDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("CatalogDb")));
+
+var app = builder.Build();
+
+app.MapGrpcService<CatalogGrpcService>();
+
+app.Run();
+```
+
+### 2.3 gRPC 客户端调用
+
+在 Ordering 服务中调用 Catalog 服务：
+
+```csharp
+// Ordering.Infrastructure/Services/CatalogService.cs
+using EShop.Catalog.Grpc;
+
+namespace Ordering.Infrastructure.Services;
+
+public class CatalogService : ICatalogService
+{
+    private readonly CatalogGrpc.CatalogServiceClient _client;
+    private readonly ILogger<CatalogService> _logger;
+
+    public CatalogService(
+        CatalogGrpc.CatalogServiceClient client,
+        ILogger<CatalogService> logger)
+    {
+        _client = client;
+        _logger = logger;
+    }
+
+    public async Task<CatalogItemDto?> GetItemAsync(int itemId)
+    {
+        try
+        {
+            var response = await _client.GetItemByIdAsync(
+                new GetItemRequest { Id = itemId });
+
+            return new CatalogItemDto(
+                response.Id, response.Name,
+                (decimal)response.Price, response.AvailableStock);
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.NotFound)
+        {
+            _logger.LogWarning("商品 {ItemId} 不存在", itemId);
+            return null;
+        }
+    }
+
+    public async Task<bool> DeductStockAsync(int itemId, int quantity)
+    {
+        var response = await _client.UpdateStockAsync(
+            new UpdateStockRequest { ItemId = itemId, Quantity = quantity });
+
+        return response.Success;
+    }
+}
+```
+
+注册 gRPC 客户端（带服务地址配置）：
+
+```csharp
+// Ordering.API/Program.cs
+builder.Services.AddGrpcClient<CatalogGrpc.CatalogServiceClient>(options =>
+{
+    options.Address = new Uri(builder.Configuration["Services:Catalog:GrpcUrl"]!);
+})
+.ConfigurePrimaryHttpMessageHandler(() =>
+{
+    // 开发环境允许不安全的 HTTP/2（无 TLS）
+    var handler = new HttpClientHandler();
+    if (builder.Environment.IsDevelopment())
+    {
+        handler.ServerCertificateCustomValidationCallback =
+            HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+    }
+    return handler;
+});
+
+builder.Services.AddScoped<ICatalogService, CatalogService>();
+```
+
+### 2.4 使用 Typed HttpClient 做 HTTP 通信
+
+对于不需要 gRPC 的场景（比如调用第三方服务），使用 `IHttpClientFactory`：
+
+```csharp
+// 定义 Typed Client
+public class PaymentServiceClient
+{
+    private readonly HttpClient _http;
+
+    public PaymentServiceClient(HttpClient http)
+    {
+        _http = http;
+    }
+
+    public async Task<PaymentResult> ProcessPaymentAsync(PaymentRequest request)
+    {
+        var response = await _http.PostAsJsonAsync("/api/payments", request);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<PaymentResult>()
+            ?? throw new InvalidOperationException("支付响应反序列化失败");
+    }
+}
+
+// 注册
+builder.Services.AddHttpClient<PaymentServiceClient>(client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["Services:Payment:Url"]!);
+    client.Timeout = TimeSpan.FromSeconds(10);
+});
+```
+
+---
+
+## 三、API 网关：YARP 反向代理
+
+API 网关是微服务对外的统一入口。.NET 生态中，**YARP (Yet Another Reverse Proxy)** 是微软官方维护的高性能反向代理库，比 Ocelot 更活跃、性能更好。
+
+### 3.1 为什么选 YARP 而不是 Ocelot
+
+| 对比项 | YARP | Ocelot |
+|--------|------|--------|
+| 维护者 | 微软官方 | 社区 |
+| 性能 | 接近原生 Kestrel | 中等 |
+| 配置方式 | JSON / 代码 / 动态提供者 | JSON |
+| 可扩展性 | 管道中间件模型 | 有限 |
+| 活跃度 | 活跃开发中 | 维护模式 |
+
+### 3.2 基础配置
+
+```csharp
+// ApiGateways/WebGateway/Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+// 从配置文件加载 YARP 路由规则
+builder.Services.AddReverseProxy()
+    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
+
+// 添加限流
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("default", opt =>
+    {
+        opt.PermitLimit = 100;
+        opt.Window = TimeSpan.FromMinutes(1);
+    });
+});
+
+var app = builder.Build();
+
+app.UseRateLimiter();
+app.MapReverseProxy();
+
+app.Run();
+```
+
+路由配置文件：
+
+```json
+// appsettings.json
+{
+  "ReverseProxy": {
+    "Routes": {
+      "catalog-route": {
+        "ClusterId": "catalog-cluster",
+        "RateLimiterPolicy": "default",
+        "Match": {
+          "Path": "/api/catalog/{**catch-all}"
+        },
+        "Transforms": [
+          { "PathRemovePrefix": "/api/catalog" }
+        ]
+      },
+      "ordering-route": {
+        "ClusterId": "ordering-cluster",
+        "AuthorizationPolicy": "authenticated",
+        "Match": {
+          "Path": "/api/orders/{**catch-all}"
+        },
+        "Transforms": [
+          { "PathRemovePrefix": "/api/orders" }
+        ]
+      }
+    },
+    "Clusters": {
+      "catalog-cluster": {
+        "Destinations": {
+          "catalog-api": {
+            "Address": "http://catalog-api:8080"
+          }
+        },
+        "HealthCheck": {
+          "Active": {
+            "Enabled": true,
+            "Interval": "00:00:30",
+            "Timeout": "00:00:10",
+            "Path": "/health"
+          }
+        }
+      },
+      "ordering-cluster": {
+        "Destinations": {
+          "ordering-api-1": {
+            "Address": "http://ordering-api-1:8080"
+          },
+          "ordering-api-2": {
+            "Address": "http://ordering-api-2:8080"
+          }
+        },
+        "LoadBalancingPolicy": "RoundRobin"
+      }
+    }
+  }
+}
+```
+
+### 3.3 动态路由配置（从数据库/Consul 加载）
+
+生产环境通常不会把路由写死在 JSON 里，而是从服务注册中心动态获取：
+
+```csharp
+// 自定义配置提供者
+public class ConsulProxyConfigProvider : IProxyConfigProvider
+{
+    private readonly IConsulClient _consul;
+    private readonly ILogger<ConsulProxyConfigProvider> _logger;
+    private volatile ConsulProxyConfig _config;
+
+    public ConsulProxyConfigProvider(
+        IConsulClient consul,
+        ILogger<ConsulProxyConfigProvider> logger)
+    {
+        _consul = consul;
+        _logger = logger;
+        _config = new ConsulProxyConfig([], []);
+
+        // 启动后台刷新任务
+        _ = RefreshConfigLoop();
+    }
+
+    public IProxyConfig GetConfig() => _config;
+
+    private async Task RefreshConfigLoop()
+    {
+        while (true)
+        {
+            try
+            {
+                var services = await _consul.Agent.Services();
+                var (routes, clusters) = BuildConfig(services.Response);
+                var newConfig = new ConsulProxyConfig(routes, clusters);
+
+                // 原子替换配置
+                var oldConfig = _config;
+                _config = newConfig;
+                oldConfig.SignalChange(); // 通知 YARP 重新加载
+
+                _logger.LogDebug("YARP 配置已刷新，发现 {Count} 个服务",
+                    clusters.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "刷新 YARP 配置失败");
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(30));
+        }
+    }
+
+    private (List<RouteConfig>, List<ClusterConfig>) BuildConfig(
+        Dictionary<string, AgentService> services)
+    {
+        var routes = new List<RouteConfig>();
+        var clusters = new List<ClusterConfig>();
+
+        // 按服务名分组
+        var grouped = services.Values.GroupBy(s => s.Service);
+
+        foreach (var group in grouped)
+        {
+            var serviceName = group.Key;
+            var destinations = group.ToDictionary(
+                s => s.ID,
+                s => new DestinationConfig
+                {
+                    Address = $"http://{s.Address}:{s.Port}"
+                });
+
+            clusters.Add(new ClusterConfig
+            {
+                ClusterId = $"{serviceName}-cluster",
+                Destinations = destinations,
+                LoadBalancingPolicy = "RoundRobin"
+            });
+
+            routes.Add(new RouteConfig
+            {
+                RouteId = $"{serviceName}-route",
+                ClusterId = $"{serviceName}-cluster",
+                Match = new RouteMatch
+                {
+                    Path = $"/api/{serviceName}/{{**catch-all}}"
+                }
+            });
+        }
+
+        return (routes, clusters);
+    }
+}
+```
+
+---
+
+## 四、弹性策略：Polly 与 Microsoft.Extensions.Http.Resilience
+
+服务间调用不可避免地会遇到网络抖动、超时、下游宕机等问题。弹性策略让你的系统在这些情况下依然可用。
+
+### 4.1 .NET 8 推荐方式：Microsoft.Extensions.Resilience
+
+.NET 8 引入了 `Microsoft.Extensions.Http.Resilience`，它基于 Polly v8 构建，提供了更简洁的配置方式：
+
+```bash
+dotnet add package Microsoft.Extensions.Http.Resilience
+```
+
+```csharp
+// 标准弹性管道：重试 + 断路器 + 超时
+builder.Services.AddHttpClient<CatalogHttpClient>(client =>
+{
+    client.BaseAddress = new Uri("http://catalog-api:8080");
+})
+.AddStandardResilienceHandler(options =>
+{
+    // 重试策略：指数退避，最多重试 3 次
+    options.Retry.MaxRetryAttempts = 3;
+    options.Retry.Delay = TimeSpan.FromMilliseconds(500);
+    options.Retry.BackoffType = DelayBackoffType.Exponential;
+
+    // 断路器：连续 10 次失败中有 50% 以上失败则打开
+    options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(30);
+    options.CircuitBreaker.FailureRatio = 0.5;
+    options.CircuitBreaker.MinimumThroughput = 10;
+    options.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(30);
+
+    // 总超时
+    options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(30);
+
+    // 单次尝试超时
+    options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(5);
+});
+```
+
+### 4.2 自定义弹性策略
+
+当标准管道不够用时，自己组合策略：
+
+```csharp
+using Polly;
+using Polly.CircuitBreaker;
+using Polly.Retry;
+using Polly.Timeout;
+
+// 为 gRPC 客户端配置弹性策略
+builder.Services.AddGrpcClient<CatalogGrpc.CatalogServiceClient>(options =>
+{
+    options.Address = new Uri("http://catalog-api:8081");
+})
+.AddResilienceHandler("catalog-grpc", pipeline =>
+{
+    // 1. 超时：单次调用最多等 3 秒
+    pipeline.AddTimeout(new TimeoutStrategyOptions
+    {
+        Timeout = TimeSpan.FromSeconds(3),
+        OnTimeout = args =>
+        {
+            Console.WriteLine($"gRPC 调用超时: {args.Context.OperationKey}");
+            return default;
+        }
+    });
+
+    // 2. 重试：遇到暂时性错误重试
+    pipeline.AddRetry(new RetryStrategyOptions<HttpResponseMessage>
+    {
+        MaxRetryAttempts = 2,
+        Delay = TimeSpan.FromMilliseconds(200),
+        BackoffType = DelayBackoffType.Exponential,
+        ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+            .Handle<TimeoutRejectedException>()
+            .Handle<HttpRequestException>()
+    });
+
+    // 3. 断路器：下游持续不可用时快速失败
+    pipeline.AddCircuitBreaker(new CircuitBreakerStrategyOptions<HttpResponseMessage>
+    {
+        FailureRatio = 0.5,
+        SamplingDuration = TimeSpan.FromSeconds(10),
+        MinimumThroughput = 5,
+        BreakDuration = TimeSpan.FromSeconds(15),
+        OnOpened = args =>
+        {
+            Console.WriteLine("断路器已打开，后续请求将快速失败");
+            return default;
+        },
+        OnClosed = args =>
+        {
+            Console.WriteLine("断路器已关闭，恢复正常请求");
+            return default;
+        }
+    });
+});
+```
+
+### 4.3 降级策略
+
+当断路器打开或重试耗尽时，返回降级响应而非直接报错：
+
+```csharp
+public class ResilientCatalogService : ICatalogService
+{
+    private readonly CatalogGrpc.CatalogServiceClient _client;
+    private readonly IDistributedCache _cache;
+    private readonly ILogger<ResilientCatalogService> _logger;
+
+    public ResilientCatalogService(
+        CatalogGrpc.CatalogServiceClient client,
+        IDistributedCache cache,
+        ILogger<ResilientCatalogService> logger)
+    {
+        _client = client;
+        _cache = cache;
+        _logger = logger;
+    }
+
+    public async Task<CatalogItemDto?> GetItemAsync(int itemId)
+    {
+        try
+        {
+            // 正常路径：调用 gRPC
+            var response = await _client.GetItemByIdAsync(
+                new GetItemRequest { Id = itemId });
+
+            var dto = MapToDto(response);
+
+            // 写入缓存作为降级数据源
+            await _cache.SetStringAsync(
+                $"catalog:item:{itemId}",
+                JsonSerializer.Serialize(dto),
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10)
+                });
+
+            return dto;
+        }
+        catch (RpcException ex) when (
+            ex.StatusCode == StatusCode.Unavailable ||
+            ex.StatusCode == StatusCode.DeadlineExceeded)
+        {
+            // 降级路径：从缓存读取
+            _logger.LogWarning("Catalog 服务不可用，使用缓存数据。异常: {Status}",
+                ex.StatusCode);
+
+            var cached = await _cache.GetStringAsync($"catalog:item:{itemId}");
+            if (cached is not null)
+            {
+                return JsonSerializer.Deserialize<CatalogItemDto>(cached);
+            }
+
+            _logger.LogError("缓存中也没有商品 {ItemId} 的数据", itemId);
+            return null;
+        }
+    }
+}
+```
+
+---
+
+## 五、异步通信与事件驱动
+
+微服务之间不是所有通信都需要同步等待结果。对于"下单后扣库存"、"支付成功后发通知"这类场景，异步事件更合适。
+
+### 5.1 集成事件定义
+
+```csharp
+// BuildingBlocks/EventBus/IntegrationEvent.cs
+namespace EShop.BuildingBlocks.EventBus;
+
+/// <summary>
+/// 跨服务的集成事件基类
+/// </summary>
+public abstract record IntegrationEvent
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+}
+
+// 具体事件
+public record OrderCreatedIntegrationEvent(
+    int OrderId,
+    string BuyerId,
+    List<OrderItemDto> Items) : IntegrationEvent;
+
+public record OrderPaidIntegrationEvent(
+    int OrderId,
+    string BuyerId) : IntegrationEvent;
+
+public record StockDeductedIntegrationEvent(
+    int OrderId,
+    bool Success,
+    string? FailureReason = null) : IntegrationEvent;
+```
+
+### 5.2 基于 RabbitMQ 的事件总线
+
+```csharp
+// BuildingBlocks/EventBus.RabbitMQ/RabbitMQEventBus.cs
+using System.Text;
+using System.Text.Json;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+
+namespace EShop.BuildingBlocks.EventBus.RabbitMQ;
+
+public class RabbitMQEventBus : IEventBus, IDisposable
+{
+    private readonly IConnection _connection;
+    private readonly IModel _channel;
+    private readonly string _exchangeName = "eshop_event_bus";
+    private readonly string _queueName;
+    private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<RabbitMQEventBus> _logger;
+    private readonly Dictionary<string, List<Type>> _handlers = new();
+
+    public RabbitMQEventBus(
+        IConnection connection,
+        IServiceProvider serviceProvider,
+        ILogger<RabbitMQEventBus> logger,
+        string queueName)
+    {
+        _connection = connection;
+        _channel = connection.CreateModel();
+        _serviceProvider = serviceProvider;
+        _logger = logger;
+        _queueName = queueName;
+
+        // 声明 Exchange
+        _channel.ExchangeDeclare(_exchangeName, ExchangeType.Direct, durable: true);
+
+        // 声明当前服务的队列
+        _channel.QueueDeclare(_queueName, durable: true,
+            exclusive: false, autoDelete: false);
+    }
+
+    public void Publish(IntegrationEvent @event)
+    {
+        var eventName = @event.GetType().Name;
+        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(
+            @event, @event.GetType()));
+
+        var properties = _channel.CreateBasicProperties();
+        properties.DeliveryMode = 2; // 持久化
+        properties.MessageId = @event.Id.ToString();
+        properties.Timestamp = new AmqpTimestamp(
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+        _channel.BasicPublish(
+            exchange: _exchangeName,
+            routingKey: eventName,
+            basicProperties: properties,
+            body: body);
+
+        _logger.LogInformation("已发布事件 {EventName}，ID: {EventId}",
+            eventName, @event.Id);
+    }
+
+    public void Subscribe<TEvent, THandler>()
+        where TEvent : IntegrationEvent
+        where THandler : IIntegrationEventHandler<TEvent>
+    {
+        var eventName = typeof(TEvent).Name;
+
+        // 绑定队列到 Exchange
+        _channel.QueueBind(_queueName, _exchangeName, eventName);
+
+        if (!_handlers.ContainsKey(eventName))
+        {
+            _handlers[eventName] = new List<Type>();
+            StartConsume(eventName);
+        }
+
+        _handlers[eventName].Add(typeof(THandler));
+    }
+
+    private void StartConsume(string eventName)
+    {
+        var consumer = new AsyncEventingBasicConsumer(_channel);
+
+        consumer.Received += async (_, ea) =>
+        {
+            var body = Encoding.UTF8.GetString(ea.Body.Span);
+
+            try
+            {
+                await ProcessEvent(eventName, body);
+                _channel.BasicAck(ea.DeliveryTag, multiple: false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "处理事件 {EventName} 失败", eventName);
+                // 重新入队，等待重试
+                _channel.BasicNack(ea.DeliveryTag, multiple: false, requeue: true);
+            }
+        };
+
+        _channel.BasicConsume(_queueName, autoAck: false, consumer: consumer);
+    }
+
+    private async Task ProcessEvent(string eventName, string message)
+    {
+        if (!_handlers.TryGetValue(eventName, out var handlerTypes))
+            return;
+
+        using var scope = _serviceProvider.CreateScope();
+
+        foreach (var handlerType in handlerTypes)
+        {
+            var handler = scope.ServiceProvider.GetRequiredService(handlerType);
+            var eventType = handler.GetType().GetInterfaces()
+                .First(i => i.IsGenericType &&
+                    i.GetGenericTypeDefinition() == typeof(IIntegrationEventHandler<>))
+                .GetGenericArguments()[0];
+
+            var @event = JsonSerializer.Deserialize(message, eventType)
+                as IntegrationEvent;
+
+            var method = handlerType.GetMethod("HandleAsync");
+            await (Task)method!.Invoke(handler, [@event])!;
+        }
+    }
+
+    public void Dispose()
+    {
+        _channel?.Dispose();
+        _connection?.Dispose();
+    }
+}
+```
+
+### 5.3 事件处理器
+
+```csharp
+// Catalog.API/EventHandlers/OrderCreatedEventHandler.cs
+public class OrderCreatedEventHandler : IIntegrationEventHandler<OrderCreatedIntegrationEvent>
+{
+    private readonly CatalogDbContext _db;
+    private readonly IEventBus _eventBus;
+    private readonly ILogger<OrderCreatedEventHandler> _logger;
+
+    public OrderCreatedEventHandler(
+        CatalogDbContext db,
+        IEventBus eventBus,
+        ILogger<OrderCreatedEventHandler> logger)
+    {
+        _db = db;
+        _eventBus = eventBus;
+        _logger = logger;
+    }
+
+    public async Task HandleAsync(OrderCreatedIntegrationEvent @event)
+    {
+        _logger.LogInformation("收到订单创建事件，订单ID: {OrderId}，开始扣减库存",
+            @event.OrderId);
+
+        using var transaction = await _db.Database.BeginTransactionAsync();
+
+        try
+        {
+            foreach (var item in @event.Items)
+            {
+                var catalogItem = await _db.CatalogItems.FindAsync(item.ProductId);
+
+                if (catalogItem is null || catalogItem.AvailableStock < item.Quantity)
+                {
+                    // 库存不足，发布失败事件
+                    _eventBus.Publish(new StockDeductedIntegrationEvent(
+                        @event.OrderId, false,
+                        $"商品 {item.ProductId} 库存不足"));
+
+                    await transaction.RollbackAsync();
+                    return;
+                }
+
+                catalogItem.AvailableStock -= item.Quantity;
+            }
+
+            await _db.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            // 库存扣减成功
+            _eventBus.Publish(new StockDeductedIntegrationEvent(
+                @event.OrderId, true));
+        }
+        catch (Exception ex)
+        {
+            await transaction.RollbackAsync();
+            _logger.LogError(ex, "扣减库存异常，订单ID: {OrderId}", @event.OrderId);
+            throw; // 重新抛出，触发消息重试
+        }
+    }
+}
+```
+
+### 5.4 Outbox 模式：保证事件可靠发布
+
+直接在业务操作后发事件，存在数据库写成功但事件发布失败的风险。Outbox 模式解决这个问题：
+
+```csharp
+// 1. Outbox 表实体
+public class OutboxMessage
+{
+    public Guid Id { get; set; }
+    public string EventType { get; set; } = default!;
+    public string Payload { get; set; } = default!;
+    public DateTime CreatedAt { get; set; }
+    public DateTime? ProcessedAt { get; set; }
+    public int RetryCount { get; set; }
+}
+
+// 2. 在同一个事务中写业务数据 + Outbox 记录
+public class OrderService
+{
+    private readonly OrderDbContext _db;
+
+    public async Task CreateOrderAsync(CreateOrderCommand command)
+    {
+        using var transaction = await _db.Database.BeginTransactionAsync();
+
+        // 写业务数据
+        var order = new Order(command.BuyerId, command.Items);
+        _db.Orders.Add(order);
+
+        // 写 Outbox（同一个事务！）
+        var @event = new OrderCreatedIntegrationEvent(
+            order.Id, order.BuyerId, order.Items.Select(MapToDto).ToList());
+
+        _db.OutboxMessages.Add(new OutboxMessage
+        {
+            Id = @event.Id,
+            EventType = nameof(OrderCreatedIntegrationEvent),
+            Payload = JsonSerializer.Serialize(@event),
+            CreatedAt = DateTime.UtcNow
+        });
+
+        await _db.SaveChangesAsync();
+        await transaction.CommitAsync();
+    }
+}
+
+// 3. 后台任务轮询 Outbox 并发布事件
+public class OutboxProcessor : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IEventBus _eventBus;
+    private readonly ILogger<OutboxProcessor> _logger;
+
+    public OutboxProcessor(
+        IServiceScopeFactory scopeFactory,
+        IEventBus eventBus,
+        ILogger<OutboxProcessor> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _eventBus = eventBus;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
+
+            var messages = await db.OutboxMessages
+                .Where(m => m.ProcessedAt == null && m.RetryCount < 5)
+                .OrderBy(m => m.CreatedAt)
+                .Take(20)
+                .ToListAsync(stoppingToken);
+
+            foreach (var message in messages)
+            {
+                try
+                {
+                    var eventType = Type.GetType(message.EventType)
+                        ?? throw new InvalidOperationException(
+                            $"未知事件类型: {message.EventType}");
+
+                    var @event = (IntegrationEvent)JsonSerializer.Deserialize(
+                        message.Payload, eventType)!;
+
+                    _eventBus.Publish(@event);
+
+                    message.ProcessedAt = DateTime.UtcNow;
+                }
+                catch (Exception ex)
+                {
+                    message.RetryCount++;
+                    _logger.LogError(ex,
+                        "Outbox 消息 {MessageId} 发布失败，重试次数: {Retry}",
+                        message.Id, message.RetryCount);
+                }
+            }
+
+            await db.SaveChangesAsync(stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+        }
+    }
+}
+```
+
+---
+
+## 六、分布式配置与服务发现
+
+### 6.1 使用 Consul 做服务注册与发现
+
+```bash
+dotnet add package Consul
+```
+
+服务注册：
+
+```csharp
+// 封装为扩展方法
+public static class ConsulRegistrationExtensions
+{
+    public static IServiceCollection AddConsulRegistration(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddSingleton<IConsulClient>(_ => new ConsulClient(cfg =>
+        {
+            cfg.Address = new Uri(configuration["Consul:Address"]!);
+        }));
+
+        services.AddHostedService<ConsulRegistrationService>();
+        return services;
+    }
+}
+
+public class ConsulRegistrationService : IHostedService
+{
+    private readonly IConsulClient _consul;
+    private readonly IConfiguration _config;
+    private readonly ILogger<ConsulRegistrationService> _logger;
+    private string? _registrationId;
+
+    public ConsulRegistrationService(
+        IConsulClient consul,
+        IConfiguration config,
+        ILogger<ConsulRegistrationService> logger)
+    {
+        _consul = consul;
+        _config = config;
+        _logger = logger;
+    }
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        var serviceName = _config["Service:Name"]!;
+        var serviceHost = _config["Service:Host"]!;
+        var servicePort = int.Parse(_config["Service:Port"]!);
+
+        _registrationId = $"{serviceName}-{serviceHost}-{servicePort}";
+
+        var registration = new AgentServiceRegistration
+        {
+            ID = _registrationId,
+            Name = serviceName,
+            Address = serviceHost,
+            Port = servicePort,
+            Tags = [_config["Service:Version"] ?? "v1"],
+            Check = new AgentServiceCheck
+            {
+                HTTP = $"http://{serviceHost}:{servicePort}/health",
+                Interval = TimeSpan.FromSeconds(10),
+                Timeout = TimeSpan.FromSeconds(5),
+                DeregisterCriticalServiceAfter = TimeSpan.FromMinutes(1)
+            }
+        };
+
+        await _consul.Agent.ServiceRegister(registration, cancellationToken);
+        _logger.LogInformation("服务 {ServiceName} 已注册到 Consul", serviceName);
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        if (_registrationId is not null)
+        {
+            await _consul.Agent.ServiceDeregister(_registrationId, cancellationToken);
+            _logger.LogInformation("服务已从 Consul 注销");
+        }
+    }
+}
+```
+
+### 6.2 分布式配置中心
+
+使用 Consul KV 存储配置，或者直接用 .NET 的配置系统配合 Kubernetes ConfigMap：
+
+```csharp
+// 方式一：Consul KV 配置提供者
+builder.Configuration.AddConsul(
+    $"services/{builder.Configuration["Service:Name"]}/config",
+    options =>
+    {
+        options.ConsulConfigurationOptions = cfg =>
+        {
+            cfg.Address = new Uri("http://consul:8500");
+        };
+        options.ReloadOnChange = true;
+        options.PollWaitTime = TimeSpan.FromSeconds(30);
+    });
+
+// 方式二：Kubernetes ConfigMap（推荐用于 K8s 环境）
+// appsettings.json 通过 ConfigMap 挂载即可，无需额外代码
+// 配合 reloadOnChange: true 实现热更新
+builder.Configuration
+    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json",
+        optional: true, reloadOnChange: true)
+    .AddEnvironmentVariables();
+```
+
+---
+
+## 七、可观测性：OpenTelemetry 全栈监控
+
+微服务最大的运维痛点是"出了问题不知道哪里出的"。可观测性三大支柱——日志、指标、链路追踪——是必须建设的。
+
+### 7.1 OpenTelemetry 集成
+
+```bash
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Instrumentation.AspNetCore
+dotnet add package OpenTelemetry.Instrumentation.Http
+dotnet add package OpenTelemetry.Instrumentation.GrpcNetClient
+dotnet add package OpenTelemetry.Instrumentation.EntityFrameworkCore
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
+```
+
+统一配置（封装为共享扩展方法）：
+
+```csharp
+// BuildingBlocks/Common/OpenTelemetryExtensions.cs
+using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+
+namespace EShop.BuildingBlocks.Common;
+
+public static class OpenTelemetryExtensions
+{
+    public static IHostApplicationBuilder AddServiceObservability(
+        this IHostApplicationBuilder builder)
+    {
+        var serviceName = builder.Configuration["Service:Name"] ?? "unknown";
+        var otlpEndpoint = builder.Configuration["Otlp:Endpoint"]
+            ?? "http://otel-collector:4317";
+
+        // 资源标识
+        var resourceBuilder = ResourceBuilder.CreateDefault()
+            .AddService(serviceName)
+            .AddAttributes(new Dictionary<string, object>
+            {
+                ["deployment.environment"] =
+                    builder.Environment.EnvironmentName,
+                ["service.version"] =
+                    builder.Configuration["Service:Version"] ?? "1.0.0"
+            });
+
+        // 链路追踪
+        builder.Services.AddOpenTelemetry()
+            .WithTracing(tracing => tracing
+                .SetResourceBuilder(resourceBuilder)
+                .AddAspNetCoreInstrumentation(options =>
+                {
+                    // 过滤健康检查等噪音请求
+                    options.Filter = ctx =>
+                        !ctx.Request.Path.StartsWithSegments("/health") &&
+                        !ctx.Request.Path.StartsWithSegments("/metrics");
+                })
+                .AddHttpClientInstrumentation()
+                .AddGrpcClientInstrumentation()
+                .AddEntityFrameworkCoreInstrumentation(options =>
+                {
+                    options.SetDbStatementForText = true;
+                })
+                .AddSource(serviceName) // 自定义 ActivitySource
+                .AddOtlpExporter(options =>
+                {
+                    options.Endpoint = new Uri(otlpEndpoint);
+                }))
+            .WithMetrics(metrics => metrics
+                .SetResourceBuilder(resourceBuilder)
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddRuntimeInstrumentation()
+                .AddProcessInstrumentation()
+                .AddMeter(serviceName) // 自定义 Meter
+                .AddOtlpExporter(options =>
+                {
+                    options.Endpoint = new Uri(otlpEndpoint);
+                }));
+
+        // 结构化日志
+        builder.Logging.AddOpenTelemetry(logging =>
+        {
+            logging.SetResourceBuilder(resourceBuilder);
+            logging.IncludeFormattedMessage = true;
+            logging.IncludeScopes = true;
+            logging.AddOtlpExporter(options =>
+            {
+                options.Endpoint = new Uri(otlpEndpoint);
+            });
+        });
+
+        return builder;
+    }
+}
+```
+
+在每个服务中使用：
+
+```csharp
+// Ordering.API/Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+builder.AddServiceObservability(); // 一行搞定
+
+// 其他服务注册...
+```
+
+### 7.2 自定义业务指标
+
+```csharp
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
+
+namespace Ordering.API.Telemetry;
+
+public static class OrderingMetrics
+{
+    private static readonly Meter Meter = new("ordering-api");
+    private static readonly ActivitySource ActivitySource = new("ordering-api");
+
+    // 计数器
+    private static readonly Counter<long> OrdersCreated =
+        Meter.CreateCounter<long>("orders.created", "orders",
+            "创建的订单总数");
+
+    private static readonly Counter<long> OrdersFailed =
+        Meter.CreateCounter<long>("orders.failed", "orders",
+            "创建失败的订单数");
+
+    // 直方图（用于耗时统计）
+    private static readonly Histogram<double> OrderProcessingDuration =
+        Meter.CreateHistogram<double>("orders.processing.duration", "ms",
+            "订单处理耗时");
+
+    // 仪表盘
+    private static readonly UpDownCounter<long> ActiveOrders =
+        Meter.CreateUpDownCounter<long>("orders.active", "orders",
+            "当前活跃订单数");
+
+    public static void RecordOrderCreated(string buyerId)
+    {
+        OrdersCreated.Add(1, new KeyValuePair<string, object?>("buyer_id", buyerId));
+    }
+
+    public static void RecordOrderFailed(string reason)
+    {
+        OrdersFailed.Add(1, new KeyValuePair<string, object?>("reason", reason));
+    }
+
+    public static Activity? StartOrderProcessing(int orderId)
+    {
+        return ActivitySource.StartActivity("ProcessOrder",
+            ActivityKind.Internal,
+            tags: new ActivityTagsCollection
+            {
+                { "order.id", orderId }
+            });
+    }
+
+    public static void RecordProcessingDuration(double milliseconds)
+    {
+        OrderProcessingDuration.Record(milliseconds);
+    }
+}
+```
+
+### 7.3 Health Checks
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddNpgSql(
+        builder.Configuration.GetConnectionString("OrderingDb")!,
+        name: "postgresql",
+        tags: ["db", "ready"])
+    .AddRabbitMQ(
+        builder.Configuration.GetConnectionString("RabbitMQ")!,
+        name: "rabbitmq",
+        tags: ["mq", "ready"])
+    .AddRedis(
+        builder.Configuration.GetConnectionString("Redis")!,
+        name: "redis",
+        tags: ["cache", "ready"])
+    .AddUrlGroup(
+        new Uri($"{builder.Configuration["Services:Catalog:Url"]}/health"),
+        name: "catalog-api",
+        tags: ["service", "ready"]);
+
+var app = builder.Build();
+
+// 存活检查：只要进程没死就返回 200
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false // 不执行任何检查
+});
+
+// 就绪检查：所有依赖就绪才返回 200
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
+});
+```
+
+---
+
+## 八、容器化与编排
+
+### 8.1 多阶段 Dockerfile
+
+```dockerfile
+# Ordering.API/Dockerfile
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
+WORKDIR /app
+EXPOSE 8080
+EXPOSE 8081
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+ARG BUILD_CONFIGURATION=Release
+WORKDIR /src
+
+# 复制 csproj 并还原依赖（利用 Docker 缓存层）
+COPY ["src/Services/Ordering/Ordering.API/Ordering.API.csproj", "Services/Ordering/Ordering.API/"]
+COPY ["src/Services/Ordering/Ordering.Domain/Ordering.Domain.csproj", "Services/Ordering/Ordering.Domain/"]
+COPY ["src/Services/Ordering/Ordering.Infrastructure/Ordering.Infrastructure.csproj", "Services/Ordering/Ordering.Infrastructure/"]
+COPY ["src/Services/Ordering/Ordering.Application/Ordering.Application.csproj", "Services/Ordering/Ordering.Application/"]
+COPY ["src/BuildingBlocks/EventBus/EventBus.csproj", "BuildingBlocks/EventBus/"]
+COPY ["src/BuildingBlocks/Common/Common.csproj", "BuildingBlocks/Common/"]
+
+RUN dotnet restore "Services/Ordering/Ordering.API/Ordering.API.csproj"
+
+# 复制源码并构建
+COPY src/ .
+WORKDIR "/src/Services/Ordering/Ordering.API"
+RUN dotnet build -c $BUILD_CONFIGURATION -o /app/build
+
+FROM build AS publish
+RUN dotnet publish -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+
+FROM base AS final
+WORKDIR /app
+COPY --from=publish /app/publish .
+
+# 非 root 用户运行
+USER $APP_UID
+ENTRYPOINT ["dotnet", "Ordering.API.dll"]
+```
+
+### 8.2 Docker Compose 开发环境
+
+```yaml
+# deploy/docker-compose.yml
+version: '3.8'
+
+services:
+  # ============ 基础设施 ============
+  postgresql:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: eshop
+      POSTGRES_PASSWORD: eshop_pass
+      POSTGRES_DB: ordering
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eshop"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  consul:
+    image: consul:1.15
+    ports:
+      - "8500:8500"
+    command: agent -dev -client=0.0.0.0
+
+  # ============ 可观测性 ============
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686" # UI
+      - "14268:14268"
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+
+  # ============ 业务服务 ============
+  catalog-api:
+    build:
+      context: ../
+      dockerfile: src/Services/Catalog/Catalog.API/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__CatalogDb=Host=postgresql;Database=catalog;Username=eshop;Password=eshop_pass
+      - ConnectionStrings__RabbitMQ=amqp://guest:guest@rabbitmq:5672
+      - Consul__Address=http://consul:8500
+      - Otlp__Endpoint=http://otel-collector:4317
+      - Service__Name=catalog-api
+      - Service__Host=catalog-api
+      - Service__Port=8080
+    ports:
+      - "5001:8080"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  ordering-api:
+    build:
+      context: ../
+      dockerfile: src/Services/Ordering/Ordering.API/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__OrderingDb=Host=postgresql;Database=ordering;Username=eshop;Password=eshop_pass
+      - ConnectionStrings__RabbitMQ=amqp://guest:guest@rabbitmq:5672
+      - ConnectionStrings__Redis=redis:6379
+      - Services__Catalog__GrpcUrl=http://catalog-api:8081
+      - Consul__Address=http://consul:8500
+      - Otlp__Endpoint=http://otel-collector:4317
+      - Service__Name=ordering-api
+      - Service__Host=ordering-api
+      - Service__Port=8080
+    ports:
+      - "5002:8080"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      catalog-api:
+        condition: service_started
+
+  web-gateway:
+    build:
+      context: ../
+      dockerfile: src/ApiGateways/WebGateway/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - Consul__Address=http://consul:8500
+      - Otlp__Endpoint=http://otel-collector:4317
+    ports:
+      - "5000:8080"
+    depends_on:
+      - catalog-api
+      - ordering-api
+
+volumes:
+  pgdata:
+```
+
+### 8.3 Kubernetes 部署清单
+
+```yaml
+# deploy/k8s/ordering-api.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ordering-api
+  labels:
+    app: ordering-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ordering-api
+  template:
+    metadata:
+      labels:
+        app: ordering-api
+    spec:
+      containers:
+        - name: ordering-api
+          image: eshop/ordering-api:latest
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8081
+              name: grpc
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: ConnectionStrings__OrderingDb
+              valueFrom:
+                secretKeyRef:
+                  name: ordering-secrets
+                  key: db-connection-string
+            - name: Otlp__Endpoint
+              value: http://otel-collector.monitoring:4317
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            failureThreshold: 30
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ordering-api
+spec:
+  selector:
+    app: ordering-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+    - name: grpc
+      port: 81
+      targetPort: 8081
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ordering-api-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ordering-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+```
+
+---
+
+## 九、认证与授权：跨服务身份传播
+
+### 9.1 网关统一认证
+
+在 API 网关层完成 JWT 验证，下游服务信任网关传递的身份信息：
+
+```csharp
+// WebGateway/Program.cs
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.Authority = builder.Configuration["Identity:Authority"];
+        options.Audience = "eshop-api";
+        options.RequireHttpsMetadata =
+            !builder.Environment.IsDevelopment();
+
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30)
+        };
+    });
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("authenticated", policy =>
+        policy.RequireAuthenticatedUser());
+    options.AddPolicy("admin", policy =>
+        policy.RequireRole("admin"));
+});
+```
+
+### 9.2 服务间身份传播
+
+网关验证 Token 后，将用户信息通过 HTTP Header 传递给下游：
+
+```csharp
+// YARP 配置中的 Transform
+{
+  "Routes": {
+    "ordering-route": {
+      "Transforms": [
+        { "RequestHeader": "X-User-Id", "Set": "{ClaimValue:sub}" },
+        { "RequestHeader": "X-User-Role", "Set": "{ClaimValue:role}" },
+        { "RequestHeader": "X-Request-Id", "Set": "{Header:X-Request-Id}" }
+      ]
+    }
+  }
+}
+```
+
+下游服务读取身份信息：
+
+```csharp
+// 自定义中间件
+public class ServiceAuthMiddleware
+{
+    private readonly RequestDelegate _next;
+
+    public ServiceAuthMiddleware(RequestDelegate next) => _next = next;
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        if (context.Request.Headers.TryGetValue("X-User-Id", out var userId))
+        {
+            var claims = new List<Claim>
+            {
+                new(ClaimTypes.NameIdentifier, userId.ToString()!)
+            };
+
+            if (context.Request.Headers.TryGetValue("X-User-Role", out var role))
+            {
+                claims.Add(new Claim(ClaimTypes.Role, role.ToString()!));
+            }
+
+            var identity = new ClaimsIdentity(claims, "Gateway");
+            context.User = new ClaimsPrincipal(identity);
+        }
+
+        await _next(context);
+    }
+}
+```
+
+---
+
+## 十、测试策略
+
+### 10.1 单元测试（领域逻辑）
+
+```csharp
+// tests/Ordering.UnitTests/Domain/OrderTests.cs
+public class OrderTests
+{
+    [Fact]
+    public void CreateOrder_WithValidItems_ShouldSetStatusToPending()
+    {
+        // Arrange
+        var buyerId = "user-123";
+        var items = new List<OrderItem>
+        {
+            new(productId: 1, productName: "键盘", unitPrice: 299m, quantity: 2),
+            new(productId: 2, productName: "鼠标", unitPrice: 149m, quantity: 1)
+        };
+
+        // Act
+        var order = new Order(buyerId, items);
+
+        // Assert
+        Assert.Equal(OrderStatus.Pending, order.Status);
+        Assert.Equal(buyerId, order.BuyerId);
+        Assert.Equal(747m, order.TotalAmount); // 299*2 + 149*1
+        Assert.Equal(2, order.Items.Count);
+    }
+
+    [Fact]
+    public void CancelOrder_WhenAlreadyShipped_ShouldThrowDomainException()
+    {
+        // Arrange
+        var order = CreateTestOrder();
+        order.MarkAsPaid();
+        order.MarkAsShipped();
+
+        // Act & Assert
+        var ex = Assert.Throws<OrderDomainException>(() => order.Cancel());
+        Assert.Contains("已发货", ex.Message);
+    }
+}
+```
+
+### 10.2 集成测试（WebApplicationFactory）
+
+```csharp
+// tests/Ordering.IntegrationTests/OrderingApiTests.cs
+public class OrderingApiTests : IClassFixture<OrderingApiFactory>
+{
+    private readonly HttpClient _client;
+    private readonly OrderingApiFactory _factory;
+
+    public OrderingApiTests(OrderingApiFactory factory)
+    {
+        _factory = factory;
+        _client = factory.CreateClient();
+    }
+
+    [Fact]
+    public async Task CreateOrder_WithValidRequest_ShouldReturn201()
+    {
+        // Arrange
+        var request = new CreateOrderRequest
+        {
+            Items =
+            [
+                new OrderItemRequest { ProductId = 1, Quantity = 2 }
+            ],
+            ShippingAddress = new AddressDto
+            {
+                Street = "中关村大街1号",
+                City = "北京",
+                ZipCode = "100080"
+            }
+        };
+
+        // 模拟已认证用户
+        _client.DefaultRequestHeaders.Add("X-User-Id", "test-user-001");
+
+        // Act
+        var response = await _client.PostAsJsonAsync("/api/orders", request);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<OrderDto>();
+        Assert.NotNull(created);
+        Assert.Equal("test-user-001", created.BuyerId);
+    }
+}
+
+// 测试工厂
+public class OrderingApiFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.ConfigureServices(services =>
+        {
+            // 替换真实数据库为内存数据库
+            var descriptor = services.SingleOrDefault(
+                d => d.ServiceType == typeof(DbContextOptions<OrderDbContext>));
+            if (descriptor is not null)
+                services.Remove(descriptor);
+
+            services.AddDbContext<OrderDbContext>(options =>
+                options.UseInMemoryDatabase("TestOrdering"));
+
+            // Mock 外部服务
+            services.AddScoped<ICatalogService, FakeCatalogService>();
+            services.AddScoped<IEventBus, FakeEventBus>();
+        });
+    }
+}
+```
+
+### 10.3 契约测试（Pact）
+
+验证服务间的 API 契约是否匹配：
+
+```csharp
+// 消费方测试：Ordering 调用 Catalog 的契约
+public class CatalogPactTests : IDisposable
+{
+    private readonly IPactBuilderV4 _pact;
+
+    public CatalogPactTests()
+    {
+        _pact = Pact.V4("Ordering", "Catalog", new PactConfig
+        {
+            PactDir = "../../../pacts"
+        }).WithHttpInteractions();
+    }
+
+    [Fact]
+    public async Task GetCatalogItem_WhenItemExists_ReturnsItem()
+    {
+        // 定义契约期望
+        _pact
+            .UponReceiving("a request for catalog item 1")
+            .Given("item 1 exists")
+            .WithRequest(HttpMethod.Get, "/api/items/1")
+            .WillRespond()
+            .WithStatus(200)
+            .WithJsonBody(new
+            {
+                id = 1,
+                name = Match.Type("机械键盘"),
+                price = Match.Decimal(299.00m),
+                availableStock = Match.Integer(100)
+            });
+
+        await _pact.VerifyAsync(async ctx =>
+        {
+            var client = new HttpClient { BaseAddress = ctx.MockServerUri };
+            var catalogClient = new CatalogHttpClient(client);
+
+            var item = await catalogClient.GetItemAsync(1);
+
+            Assert.NotNull(item);
+            Assert.Equal(1, item.Id);
+        });
+    }
+}
+```
+
+---
+
+## 十一、完整启动流程
+
+把上面所有东西串起来，一个服务的 `Program.cs` 最终长这样：
+
+```csharp
+// Ordering.API/Program.cs
+using EShop.BuildingBlocks.Common;
+using EShop.BuildingBlocks.EventBus;
+using EShop.BuildingBlocks.EventBus.RabbitMQ;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// ===== 可观测性 =====
+builder.AddServiceObservability();
+
+// ===== 数据库 =====
+builder.Services.AddDbContext<OrderDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("OrderingDb")));
+
+// ===== 缓存 =====
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("Redis");
+});
+
+// ===== gRPC 客户端 =====
+builder.Services.AddGrpcClient<CatalogGrpc.CatalogServiceClient>(options =>
+{
+    options.Address = new Uri(builder.Configuration["Services:Catalog:GrpcUrl"]!);
+})
+.AddStandardResilienceHandler();
+
+// ===== 事件总线 =====
+builder.Services.AddSingleton<IEventBus>(sp =>
+{
+    var connection = sp.GetRequiredService<IConnection>();
+    var logger = sp.GetRequiredService<ILogger<RabbitMQEventBus>>();
+    return new RabbitMQEventBus(connection, sp, logger, "ordering-queue");
+});
+
+// ===== 服务注册 =====
+builder.Services.AddConsulRegistration(builder.Configuration);
+
+// ===== Health Checks =====
+builder.Services.AddHealthChecks()
+    .AddNpgSql(builder.Configuration.GetConnectionString("OrderingDb")!)
+    .AddRabbitMQ(builder.Configuration.GetConnectionString("RabbitMQ")!)
+    .AddRedis(builder.Configuration.GetConnectionString("Redis")!);
+
+// ===== 后台任务 =====
+builder.Services.AddHostedService<OutboxProcessor>();
+
+// ===== API =====
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+// ===== 中间件管道 =====
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseMiddleware<ServiceAuthMiddleware>();
+app.MapControllers();
+app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
+app.MapHealthChecks("/health/ready");
+
+// ===== 订阅事件 =====
+var eventBus = app.Services.GetRequiredService<IEventBus>();
+eventBus.Subscribe<StockDeductedIntegrationEvent, StockDeductedEventHandler>();
+
+app.Run();
+```
+
+---
+
+## 十二、常见问题与最佳实践
+
+### 不要过早拆分
+
+:::warning
+如果你的团队少于 5 人，或者业务还在快速变化阶段，**不要上微服务**。先把单体做好，等到单体的某些模块开始成为瓶颈（部署频率不同、扩展需求不同、技术栈需求不同），再拆分。
+:::
+
+### 服务粒度怎么把握
+
+一个好的拆分原则是：**一个服务由一个 2-pizza team（5-8人）负责**。太细的服务带来的运维成本远大于它带来的灵活性。
+
+### 数据一致性
+
+:::tip
+微服务间不做分布式事务（Saga 除外）。接受最终一致性，用事件驱动 + Outbox + 补偿机制解决。如果两个操作必须强一致，说明它们不应该分成两个服务。
+:::
+
+### 版本管理
+
+API 版本通过 URL 前缀管理：
+
+```
+/api/v1/orders
+/api/v2/orders
+```
+
+Proto 文件通过 package 版本管理：
+
+```protobuf
+package catalog.v2;
+```
+
+### 本地开发
+
+不要求开发者启动所有服务。提供以下方案：
+
+1. **Docker Compose**：一键启动所有基础设施 + 需要联调的服务
+2. **Mock 服务**：用 WireMock 或 Mountebank 模拟其他服务
+3. **Tye**（已停止维护）/ **Aspire**：微软官方的本地编排工具
+
+```bash
+# 只启动基础设施，业务服务本地跑
+docker compose up postgresql rabbitmq redis consul -d
+
+# 或者使用 .NET Aspire（推荐）
+dotnet run --project src/EShop.AppHost
+```
+
+### .NET Aspire：下一代编排方案
+
+:::note
+.NET Aspire 是微软 2024 年推出的云原生应用编排框架，它可以替代 Docker Compose 作为本地开发编排工具，并且能生成 Kubernetes 部署清单。如果是新项目，强烈建议使用 Aspire 作为本地开发体验的基础。
+:::
+
+```csharp
+// EShop.AppHost/Program.cs（.NET Aspire）
+var builder = DistributedApplication.CreateBuilder(args);
+
+// 基础设施
+var postgres = builder.AddPostgres("postgres");
+var orderingDb = postgres.AddDatabase("ordering");
+var catalogDb = postgres.AddDatabase("catalog");
+
+var rabbitmq = builder.AddRabbitMQ("rabbitmq");
+var redis = builder.AddRedis("redis");
+
+// 业务服务
+var catalogApi = builder.AddProject<Projects.Catalog_API>("catalog-api")
+    .WithReference(catalogDb)
+    .WithReference(rabbitmq);
+
+var orderingApi = builder.AddProject<Projects.Ordering_API>("ordering-api")
+    .WithReference(orderingDb)
+    .WithReference(rabbitmq)
+    .WithReference(redis)
+    .WithReference(catalogApi);
+
+// 网关
+builder.AddProject<Projects.WebGateway>("web-gateway")
+    .WithReference(catalogApi)
+    .WithReference(orderingApi);
+
+builder.Build().Run();
+```
+
+---
+
+## 总结
+
+.NET 微服务的技术栈选择：
+
+| 关注点 | 推荐方案 |
+|--------|---------|
+| 服务间同步通信 | gRPC（内部）、HTTP/REST（对外） |
+| 服务间异步通信 | RabbitMQ + Outbox 模式 |
+| API 网关 | YARP |
+| 弹性策略 | Microsoft.Extensions.Http.Resilience (Polly v8) |
+| 服务发现 | Consul / Kubernetes DNS |
+| 配置中心 | Consul KV / Kubernetes ConfigMap |
+| 可观测性 | OpenTelemetry → Jaeger + Prometheus + Grafana |
+| 容器化 | Docker 多阶段构建 |
+| 编排 | Kubernetes + HPA |
+| 本地开发 | .NET Aspire / Docker Compose |
+| 测试 | xUnit + WebApplicationFactory + Pact |
+
+微服务不是银弹。它解决的是组织扩展问题（多团队独立交付），不是技术问题。如果你的痛点是"代码太烂"，微服务只会让它烂得更分散。先把代码写好，再谈架构。
