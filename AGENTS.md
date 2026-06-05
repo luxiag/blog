@@ -1,20 +1,20 @@
-## 写文章的要求
+## 写新文章的要求
 
-以下是写新文章时必须遵守的质量标准。
+写新文章时必须遵守以下质量标准。
 
 ### 1. 内容必须准确
 
 - 所有技术描述、API 说明、代码示例必须基于真实知识，不能编造
 - 涉及版本特性时需明确说明适用版本
-- 如果某个知识点不确定，宁可不写，也不能写错误的内容
+- 知识点不确定时宁可不写，也不能写错误的内容
 
 ### 2. 内容要系统全面，有逻辑关联
 
-文章不是知识点的堆砌，而是一条有逻辑的叙述链路。每篇文章需要做到：
+文章不是知识点的堆砌，而是一条有逻辑的叙述链路：
 
 - **有完整的知识脉络**：从"为什么"出发，讲清楚"是什么"，再讲"怎么用"，最后讲"边界和注意事项"
 - **章节之间要有承接**：后面的章节建立在前面章节的认知基础上，避免跳跃式展开
-- **不能草草带过**：每个核心概念都要展开讲透，给出足够的上下文，让读者能真正理解而不只是看懂语法
+- **不能草草带过**：每个核心概念都要展开讲透，给出足够的上下文
 
 **推荐文章结构：**
 
@@ -28,113 +28,23 @@
 
 ### 3. 优先使用 `.mdx` 格式，代码示例要具体
 
-#### 文件格式
-
-新文章统一使用 `.mdx` 格式（而非 `.md`），放在对应分类目录下：
-
-```
-posts/<category>/<slug>.mdx
-```
-
-`.mdx` 相比 `.md` 的优势：支持内置的交互组件（`CodeRunner`、`SqlSimulator`、`ShaderPreview` 等），以及 MDX 原生的 JSX 语法。
-
-#### 代码示例要求
+新文章统一使用 `.mdx`（而非 `.md`），放在 `posts/<category>/<slug>.mdx`。`.mdx` 支持内置的交互组件（`CodeRunner`、`SqlSimulator`、`ShaderPreview` 等）。
 
 **每个核心概念都必须有对应的代码示例**，示例要满足：
 
 - **完整可运行**：不要只贴片段，要让读者能直接复制运行
 - **有注释说明关键行**：复杂逻辑必须在代码内注释
-- **示例要循序渐进**：先给最简单的用法，再给进阶用法，不要一上来就上复杂场景
+- **示例要循序渐进**：先给最简单的用法，再给进阶用法
 
-**好的示例写法：**
+具体的 MDX 特殊语法（告示块、折叠块、可运行代码块、Mermaid、数学公式、图片、内置组件等）参考 [docs/mdx-syntax.md](./docs/mdx-syntax.md)。
 
-````mdx
-最基础的用法，先建立概念：
+## 详细文档
 
-```js
-// 最简单的 Promise
-const p = new Promise((resolve, reject) => {
-  setTimeout(() => resolve('done'), 1000);
-});
+- [架构与内容管道](./docs/architecture.md) —— Commands、整体架构、`.md`/`.mdx` 到页面的完整链路
+- [文章目录与 frontmatter](./docs/content-structure.md) —— `posts/` 目录规范与元数据写法
+- [MDX 特殊语法与 CodeBlock](./docs/mdx-syntax.md) —— 告示块、折叠块、可运行代码、Mermaid、数学公式、图片等
+- [TOC 与客户端渲染](./docs/rendering.md) —— Heading ID 生成、MDX/Markdown 两条渲染路径
+- [路由、路径别名、样式系统](./docs/development.md) —— 路由表、`@/` 别名、Tailwind v4 与设计 token
+- [交互式组件指南](./docs/interactive-components-guide.md) —— 各个交互组件的详细用法
 
-p.then(result => console.log(result)); // 1 秒后输出 "done"
-```
-
-在这个基础上，加入错误处理：
-
-```js
-// 加入 reject 分支
-const p = new Promise((resolve, reject) => {
-  const success = Math.random() > 0.5;
-  if (success) {
-    resolve('成功');
-  } else {
-    reject(new Error('失败'));
-  }
-});
-
-p.then(result => console.log('结果:', result))
- .catch(err => console.error('错误:', err.message));
-```
-````
-
-**可运行的代码块**（适合演示算法、JS 逻辑）：
-
-````mdx
-```js
-// 可运行
-function fibonacci(n) {
-  if (n <= 1) return n;
-  return fibonacci(n - 1) + fibonacci(n - 2);
-}
-
-// 输出前 10 项
-for (let i = 0; i < 10; i++) {
-  console.log(`fib(${i}) =`, fibonacci(i));
-}
-```
-````
-
-**流程图**（适合说明执行流程、架构关系）：
-
-````mdx
-```mermaid
-sequenceDiagram
-  Client->>Server: 发送请求
-  Server->>DB: 查询数据
-  DB-->>Server: 返回结果
-  Server-->>Client: 返回响应
-```
-````
-
-#### 告示块的使用
-
-合理使用告示块来区分信息优先级，避免正文里全是平铺的段落：
-
-```md
-:::tip
-这里放对读者有帮助的补充说明或最佳实践。
-:::
-
-:::warning
-这里放容易踩坑的地方，或者使用时需要注意的限制。
-:::
-
-:::note
-这里放背景知识或延伸阅读，不影响主线理解。
-:::
-```
-
-#### 折叠块的使用
-
-答案、完整代码、扩展内容适合用折叠块，避免文章主体过长：
-
-```md
-::: details 查看完整实现代码
-（完整代码放这里）
-:::
-
-::: details 为什么不用 XX 方案？
-（延伸讨论放这里）
-:::
-```
+> 注：本文件与 `CLAUDE.md` 保持同步，修改时记得两边一起改。

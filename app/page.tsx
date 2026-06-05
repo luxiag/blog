@@ -146,7 +146,7 @@ export default async function Home() {
       {/* Newsletter Section */}
       <section style={{padding: '64px 0', backgroundColor: 'var(--foreground)', color: 'white', borderTop: '1px solid var(--border-color)'}}>
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <h2 className="feature-card-title" style={{marginBottom: '16px', color: 'white', fontSize: '24px'}}>
+          {/* <h2 className="feature-card-title" style={{marginBottom: '16px', color: 'white', fontSize: '24px'}}>
             订阅我的博客
           </h2>
           <p style={{marginBottom: '32px', maxWidth: '32rem', margin: '0 auto 32px', color: 'white', opacity: 0.9, fontSize: '16px', lineHeight: '1.6'}}>
@@ -183,7 +183,7 @@ export default async function Home() {
             >
               订阅
             </button>
-          </form>
+          </form> */}
         </div>
       </section>
       </div>
