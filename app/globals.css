@@ -17,6 +17,7 @@
   /* 字体系统 */
   --font-sans: var(--font-public-sans), var(--font-noto-sans-sc), system-ui, sans-serif;
   --font-mono: var(--font-ibm-plex-mono), monospace;
+  --font-serif: var(--font-lora), var(--font-noto-serif-sc), Georgia, "Times New Roman", serif;
 
   /* Spacing */
   --spacing-xs: 4px;
@@ -46,6 +47,33 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-public-sans), var(--font-noto-sans-sc), system-ui, sans-serif;
   --font-mono: var(--font-ibm-plex-mono), monospace;
+  --font-serif: var(--font-lora), var(--font-noto-serif-sc), Georgia, "Times New Roman", serif;
+}
+
+/* mdx-content 报纸排版优化 */
+.mdx-content {
+  /* 中文标点挤压，提升排版质量 */
+  font-feature-settings: "kern" 1, "liga" 1;
+  text-rendering: optimizeLegibility;
+}
+
+.mdx-content p,
+.mdx-content li {
+  /* 中英文混排时优化断行 */
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* 首段首字下沉（可选，营造报纸感） */
+.mdx-content > p:first-of-type::first-letter {
+  float: left;
+  font-size: 3.2em;
+  line-height: 0.82;
+  margin-right: 0.08em;
+  margin-top: 0.06em;
+  font-family: var(--font-serif);
+  font-weight: 700;
+  color: var(--foreground);
 }
 
 body {

@@ -24,6 +24,7 @@ const config: Config = {
       fontFamily: {
         sans: ['var(--font-sans)', 'system-ui', 'sans-serif'],
         mono: ['var(--font-mono)', 'monospace'],
+        serif: ['var(--font-serif)', 'Georgia', '"Times New Roman"', 'serif'],
       },
       spacing: {
         xs: 'var(--spacing-xs)',

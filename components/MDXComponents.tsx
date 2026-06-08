@@ -167,12 +167,12 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       // </h1>
       null
     ),
-h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
+    h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
       const id = slugify(extractText(children));
       return (
         <h2
           id={id}
-          className="font-sans text-2xl font-semibold text-neutral-900 dark:text-neutral-100 mt-12 mb-4 border-b border-neutral-200 dark:border-neutral-700 pb-2"
+          className="font-serif text-[1.65rem] font-bold text-neutral-900 dark:text-neutral-100 mt-14 mb-5 pb-2.5 border-b-2 border-neutral-900 dark:border-neutral-200 tracking-tight leading-snug"
           {...props}
         >
           {children}
@@ -184,7 +184,7 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
       return (
         <h3
           id={id}
-          className="font-sans text-xl font-semibold text-neutral-900 dark:text-neutral-100 mt-10 mb-3"
+          className="font-serif text-[1.25rem] font-bold text-neutral-900 dark:text-neutral-100 mt-10 mb-3 tracking-tight leading-snug"
           {...props}
         >
           {children}
@@ -196,7 +196,7 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
       return (
         <h4
           id={id}
-          className="font-sans text-lg font-semibold text-neutral-900 dark:text-neutral-100 mt-8 mb-2"
+          className="font-serif text-[1.1rem] font-bold text-neutral-800 dark:text-neutral-200 mt-8 mb-2 tracking-tight"
           {...props}
         >
           {children}
@@ -204,7 +204,7 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
       );
     },
     p: ({ children, ...props }: React.ComponentPropsWithoutRef<'p'>) => (
-      <p className="text-neutral-700 dark:text-neutral-300 leading-7 mb-4" {...props}>
+      <p className="font-serif text-[1.0625rem] text-neutral-800 dark:text-neutral-300 leading-[1.85] mb-5 tracking-[0.01em]" {...props}>
         {children}
       </p>
     ),
@@ -213,16 +213,20 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
       const resolvedSrc = resolveImagePath(imgSrc);
       return (
         <>
-          <span className="relative group cursor-zoom-in inline-block my-6" onClick={(e) => resolvedSrc && handleImageClick(e, resolvedSrc)}>
+          <span className="relative group cursor-zoom-in inline-block my-8" onClick={(e) => resolvedSrc && handleImageClick(e, resolvedSrc)}>
             <img
               src={resolvedSrc}
               data-full-src={resolvedSrc}
               alt={alt || ''}
               title={title}
-              className="rounded-lg shadow-sm max-w-full h-auto transition-transform duration-200 group-hover:scale-[1.01]"
+              className="max-w-full h-auto transition-opacity duration-200 group-hover:opacity-95 shadow-[0_2px_12px_rgba(0,0,0,0.10)]"
               {...props}
             />
-            <span className="absolute inset-0 bg-black/0 group-hover:bg-black/5 rounded-lg transition-colors" />
+            {(alt || title) && (
+              <span className="block text-center text-xs text-neutral-500 dark:text-neutral-500 mt-2 font-serif italic">
+                {alt || title}
+              </span>
+            )}
           </span>
 
         </>
@@ -278,7 +282,7 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
       if (isInline) {
         return (
           <code
-            className="bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-sm font-mono text-orange-600 dark:text-orange-400"
+            className="bg-neutral-100 dark:bg-neutral-800 px-[0.35em] py-[0.1em] rounded-[3px] text-[0.875em] font-mono text-orange-700 dark:text-orange-400 border border-neutral-200 dark:border-neutral-700"
             {...props}
           >
             {children}
@@ -310,12 +314,12 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
           href={href}
           target={isExternal ? '_blank' : undefined}
           rel={isExternal ? 'noopener noreferrer' : undefined}
-          className="text-orange-600 hover:text-orange-700 underline transition-colors"
+          className="text-orange-700 dark:text-orange-400 underline underline-offset-2 decoration-orange-700/40 dark:decoration-orange-400/40 hover:decoration-orange-700 dark:hover:decoration-orange-400 transition-colors"
           {...props}
         >
           {children}
           {isExternal && (
-            <svg className="inline-block w-3 h-3 ml-0.5 mb-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="inline-block w-3 h-3 ml-0.5 mb-0.5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
           )}
@@ -324,32 +328,36 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
     },
     blockquote: ({ children, ...props }: React.ComponentPropsWithoutRef<'blockquote'>) => (
       <blockquote
-        className="border-l-4 border-orange-600 pl-4 py-3 my-4 italic bg-neutral-50 dark:bg-neutral-800/50 rounded-r-lg text-neutral-700 dark:text-neutral-300"
+        className="border-l-[3px] border-neutral-400 dark:border-neutral-500 pl-5 py-1 my-6 text-neutral-600 dark:text-neutral-400 italic font-serif"
         {...props}
       >
         {children}
       </blockquote>
     ),
     ul: ({ children, ...props }: React.ComponentPropsWithoutRef<'ul'>) => (
-      <ul className="list-disc list-inside my-4 text-neutral-700 dark:text-neutral-300 space-y-2" {...props}>
+      <ul className="my-5 text-neutral-800 dark:text-neutral-300 space-y-1.5 pl-5 list-disc marker:text-neutral-400 dark:marker:text-neutral-500" {...props}>
         {children}
       </ul>
     ),
     ol: ({ children, ...props }: React.ComponentPropsWithoutRef<'ol'>) => (
-      <ol className="list-decimal list-inside my-4 text-neutral-700 dark:text-neutral-300 space-y-2" {...props}>
+      <ol className="my-5 text-neutral-800 dark:text-neutral-300 space-y-1.5 pl-5 list-decimal marker:text-neutral-500 dark:marker:text-neutral-400" {...props}>
         {children}
       </ol>
     ),
     li: ({ children, ...props }: React.ComponentPropsWithoutRef<'li'>) => (
-      <li className="leading-7" {...props}>
+      <li className="font-serif text-[1.0625rem] leading-[1.85]" {...props}>
         {children}
       </li>
     ),
     hr: () => (
-      <hr className="my-8 border-neutral-200 dark:border-neutral-700" />
+      <div className="my-10 flex items-center gap-3 text-neutral-300 dark:text-neutral-600">
+        <div className="flex-1 border-t border-current" />
+        <span className="text-xs tracking-[0.3em] uppercase font-sans">&#10022;</span>
+        <div className="flex-1 border-t border-current" />
+      </div>
     ),
     strong: ({ children, ...props }: React.ComponentPropsWithoutRef<'strong'>) => (
-      <strong className="font-semibold text-neutral-900 dark:text-neutral-100" {...props}>
+      <strong className="font-bold text-neutral-900 dark:text-neutral-100" {...props}>
         {children}
       </strong>
     ),
@@ -359,19 +367,19 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
       </em>
     ),
     del: ({ children, ...props }: React.ComponentPropsWithoutRef<'del'>) => (
-      <del className="text-neutral-500 dark:text-neutral-400 line-through" {...props}>
+      <del className="text-neutral-500 dark:text-neutral-500 line-through" {...props}>
         {children}
       </del>
     ),
     table: ({ children, ...props }: React.ComponentPropsWithoutRef<'table'>) => (
-      <div className="overflow-x-auto my-8 rounded-lg border border-neutral-200 dark:border-neutral-700">
-        <table className="min-w-full" {...props}>
+      <div className="overflow-x-auto my-8 border-t-2 border-b border-neutral-900 dark:border-neutral-200">
+        <table className="min-w-full font-serif" {...props}>
           {children}
         </table>
       </div>
     ),
     thead: ({ children, ...props }: React.ComponentPropsWithoutRef<'thead'>) => (
-      <thead className="bg-neutral-100 dark:bg-neutral-800" {...props}>
+      <thead className="border-b border-neutral-900 dark:border-neutral-300" {...props}>
         {children}
       </thead>
     ),
@@ -382,7 +390,7 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
     ),
     th: ({ children, ...props }: React.ComponentPropsWithoutRef<'th'>) => (
       <th
-        className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-700 dark:text-neutral-300"
+        className="px-4 py-2.5 text-left text-xs font-bold uppercase tracking-widest text-neutral-700 dark:text-neutral-300 font-sans"
         {...props}
       >
         {children}
@@ -390,7 +398,7 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
     ),
     td: ({ children, ...props }: React.ComponentPropsWithoutRef<'td'>) => (
       <td
-        className="px-4 py-3 whitespace-nowrap text-sm text-neutral-600 dark:text-neutral-400"
+        className="px-4 py-3 text-[0.9375rem] text-neutral-700 dark:text-neutral-400 leading-relaxed"
         {...props}
       >
         {children}
@@ -465,16 +473,16 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
 
       return (
         <details
-          className="details-wrapper border border-neutral-200 dark:border-neutral-700 rounded-lg overflow-hidden"
+          className="details-wrapper border border-neutral-300 dark:border-neutral-600 overflow-hidden my-5"
           {...props}
         >
-          <summary className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800 cursor-pointer font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors list-none flex items-center justify-between w-full">
+          <summary className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800/60 cursor-pointer font-sans font-medium text-sm text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors list-none flex items-center justify-between w-full border-b border-neutral-200 dark:border-neutral-700">
             <span>{getSummaryContent()}</span>
-            <svg className="w-4 h-4 ml-2 transform transition-transform details-[open]:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4 ml-2 transform transition-transform details-[open]:rotate-90 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
           </summary>
-          <div className="p-4 bg-white dark:bg-neutral-900 [&_pre]:my-0">
+          <div className="px-5 py-4 bg-white dark:bg-neutral-900 [&_pre]:my-0">
             {getBodyContent()}
           </div>
         </details>
