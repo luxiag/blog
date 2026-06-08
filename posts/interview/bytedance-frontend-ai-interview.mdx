@@ -36,7 +36,7 @@ tags: ['interview', 'AI', 'frontend', '前端', '字节跳动', 'LLM', 'SSE', 'W
 
 - 项目是一个**代码审查助手**，嵌入 GitLab MR 页面
 - 技术挑战：GPT-4 平均响应 8-15 秒，用户等待体验差；多个 MR 并发审查时状态容易混乱
-- 方案：用 SSE 实现流式渲染，首 token 到达时间（TTFT）从 8s 降到体感"立即开始"；用 Map<mrId, ReviewState> 隔离每个 MR 的独立状态
+- 方案：用 SSE 实现流式渲染，首 token 到达时间（TTFT）从 8s 降到体感"立即开始"；用 `Map<mrId, ReviewState>` 隔离每个 MR 的独立状态
 - 成果：代码审查覆盖率从 30% 提升到 78%，用户留存率提升 40%
 
 ---

@@ -125,15 +125,25 @@ export const MermaidExcalidraw: React.FC<MermaidExcalidrawProps> = ({ code }) =>
         }
 
         // 2. Convert Excalidraw Elements to SVG
-        // We cast elements to any because the types between libraries might mismatch slightly in this setup
-        const svg = await exportToSvg({
-          elements: sanitizedElements as any,
-          appState: {
-            exportWithDarkMode: false,
-            viewBackgroundColor: "#ffffff",
-          },
-          files: files || {},
-        });
+        // Suppress Turbopack Worker error (falls back to main thread automatically)
+        const origError = console.error;
+        console.error = (...args: any[]) => {
+          if (typeof args[0] === 'string' && args[0].includes('Failed to use workers for subsetting')) return;
+          origError(...args);
+        };
+        let svg: SVGSVGElement;
+        try {
+          svg = await exportToSvg({
+            elements: sanitizedElements as any,
+            appState: {
+              exportWithDarkMode: false,
+              viewBackgroundColor: "#ffffff",
+            },
+            files: files || {},
+          });
+        } finally {
+          console.error = origError;
+        }
         // 2. 定义样式块 (包含中文字体补丁)
         const styleBlock = `
   <style>

@@ -17,7 +17,8 @@ const nextConfig: NextConfig = {
         pathname: '/api/posts/**',
       },
     ],
-  }
+  },
+  turbopack: {},
 };
 
 export default nextConfig;

@@ -514,7 +514,7 @@ h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
       <style>{detailsArrowStyles}</style>
       <div className="mdx-content">
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath, [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'] }]]}
+          remarkPlugins={[remarkGfm, remarkMath, [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'], format: 'html' }]]}
           rehypePlugins={[rehypeRaw, rehypeHighlight, rehypeKatex]}
           components={mdxComponents}
         >
