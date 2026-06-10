@@ -1,0 +1,259 @@
+---
+title: 'MySQL 分库分表后跨分片查询与分页实战：策略、SQL 与性能避坑'
+date: '2026-04-02'
+excerpt: '这篇文章专门解决分库分表后的高频难题：跨分片查询、跨分片排序、跨分片分页。内容覆盖应用层聚合、游标分页、预聚合表、搜索引擎协同与常见性能坑。'
+tags: ['mysql', 'sharding', 'query', 'pagination', 'database']
+---
+
+# MySQL 分库分表后跨分片查询与分页实战：策略、SQL 与性能避坑
+
+分库分表后最容易“突然变难”的不是写入，而是查询。
+
+典型痛点：
+
+1. 以前一条 SQL 能查完，现在要查多个分片。
+2. `ORDER BY + LIMIT` 跨分片后性能暴涨。
+3. 深分页几乎不可用。
+
+这篇文章就讲怎么把这些问题落地解决。
+
+---
+
+## 一、先定一个核心原则
+
+> 能单分片命中，就不要跨分片。
+
+这是分片系统查询设计的第一原则。
+
+所以设计 API 时，优先提供：
+
+1. 按分片键查询（如 `user_id`）。
+2. 带时间范围的查询。
+3. 可游标翻页的查询。
+
+---
+
+## 二、跨分片查询的四种常见方案
+
+## 1. 应用层聚合（最常见）
+
+流程：
+
+1. 并发查询多个分片。
+2. 内存合并结果。
+3. 排序、截断、返回。
+
+适合：
+
+1. 结果集不大。
+2. 实时性要求高。
+
+## 2. 预聚合表（离线/准实时）
+
+把跨分片统计提前算好落一张汇总表。
+
+适合：
+
+1. 报表类查询。
+2. 对实时性要求不是毫秒级。
+
+## 3. 搜索引擎协同（ES/OpenSearch）
+
+把复杂搜索、排序、分页交给搜索引擎。
+
+适合：
+
+1. 多条件检索。
+2. 复杂排序。
+3. 大规模分页。
+
+## 4. 中间件聚合
+
+用分片中间件做 SQL 解析和聚合。
+
+优点：开发接入快。
+缺点：复杂查询仍可能性能差。
+
+---
+
+## 三、跨分片分页：为什么 offset 会崩
+
+单库常见：
+
+```sql
+SELECT * FROM orders
+ORDER BY created_at DESC
+LIMIT 100000, 20;
+```
+
+分片后如果每个分片都跑深分页，再聚合，成本会非常高。
+
+推荐方案：游标分页（Seek Pagination）。
+
+---
+
+## 四、游标分页实战（推荐）
+
+## 1. 单分片游标 SQL
+
+```sql
+SELECT order_no, user_id, status, created_at
+FROM orders
+WHERE user_id = ?
+  AND (created_at < ? OR (created_at = ? AND id < ?))
+ORDER BY created_at DESC, id DESC
+LIMIT 20;
+```
+
+关键点：
+
+1. 排序字段要稳定（常用 `created_at, id`）。
+2. 游标携带最后一条记录的排序键。
+
+## 2. 跨分片游标思路
+
+流程：
+
+1. 每个分片都按游标取 `k` 条（如 20）。
+2. 应用层做 K 路归并。
+3. 取前 `N` 条返回。
+4. 生成下一页游标。
+
+这是分片系统里最实用的分页方式。
+
+---
+
+## 五、Node.js 聚合分页示例（伪代码）
+
+```ts
+type Row = {
+  id: number
+  orderNo: string
+  createdAt: string
+  shard: number
+}
+
+async function queryCrossShardPage(cursor: Cursor | null, pageSize = 20) {
+  const shardCount = 8
+
+  // 1) 并发拉取每个分片数据
+  const shardRows = await Promise.all(
+    Array.from({ length: shardCount }, (_, shard) =>
+      queryOneShard(shard, cursor?.byShard?.[shard], pageSize)
+    )
+  )
+
+  // 2) 合并 + 排序（createdAt desc, id desc）
+  const merged = shardRows.flat().sort((a, b) => {
+    if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1
+    return b.id - a.id
+  })
+
+  // 3) 截断
+  const page = merged.slice(0, pageSize)
+
+  // 4) 生成下一页游标（可按分片记录最后消费位置）
+  const nextCursor = buildNextCursor(page, shardRows)
+
+  return { list: page, nextCursor }
+}
+```
+
+---
+
+## 六、跨分片排序的现实做法
+
+如果你需要“全局 TopN”，建议：
+
+1. 每分片先取本地 TopK。
+2. 应用层再合并取全局 TopN。
+
+其中 `K` 一般略大于 `N`，防止误差。
+
+不要直接全量拉每个分片再排序。
+
+---
+
+## 七、跨分片聚合（COUNT/SUM）怎么做
+
+## 1. 实时小规模
+
+每分片执行：
+
+```sql
+SELECT COUNT(*) AS c, SUM(pay_amount) AS s
+FROM orders
+WHERE created_at >= ? AND created_at < ?;
+```
+
+应用层做求和。
+
+## 2. 大规模报表
+
+推荐预聚合：
+
+1. 按小时/天落汇总表。
+2. 查询直接读汇总。
+
+这样比每次全分片实时扫稳定得多。
+
+---
+
+## 八、索引设计要点（跨分片时代）
+
+每个分片都要有“同构索引”，至少覆盖：
+
+1. 分片内高频过滤条件。
+2. 分页排序字段。
+3. 关联回表最少化。
+
+示例索引：
+
+```sql
+KEY idx_user_created_id (user_id, created_at DESC, id DESC)
+KEY idx_status_created (status, created_at)
+```
+
+---
+
+## 九、性能优化建议
+
+1. 限制跨分片并发度（防止打爆连接池）。
+2. 结果集做上限保护。
+3. 常用查询加缓存。
+4. 热门聚合做异步预计算。
+5. 查询超时要明确配置。
+
+---
+
+## 十、常见坑
+
+1. 继续使用深分页 `limit offset`。
+2. 跨分片 JOIN 当常规查询用。
+3. 没有排序稳定键，分页重复/漏数据。
+4. 每次全分片全量扫描。
+5. 不做查询限流，峰值时雪崩。
+
+---
+
+## 十一、推荐落地路线
+
+1. 优先把 API 改造成可单分片查询。
+2. 分页统一改游标模式。
+3. 跨分片查询做应用层聚合。
+4. 报表类查询迁移到预聚合/搜索引擎。
+5. 建立慢查询和热点分片监控。
+
+---
+
+## 总结
+
+分库分表后，查询设计必须从“写 SQL”升级为“设计查询路径”。
+
+你可以记住这三句话：
+
+1. 单分片优先。
+2. 游标分页优先。
+3. 聚合前置优先（预聚合/搜索）。
+
+把这三点做扎实，跨分片查询和分页就能从“难用”变成“可控可扩展”。

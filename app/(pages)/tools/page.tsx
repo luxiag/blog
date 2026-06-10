@@ -36,6 +36,7 @@ const tools: Tool[] = [
   { id: 'base64', name: 'Base64 转换', description: 'Base64 编码解码工具', icon: 'binary', category: 'productivity' },
   { id: 'chatgpt', name: 'AI 对话', description: '与 AI 进行对话交流', icon: 'message-square', category: 'ai' },
   { id: 'image-editor', name: '图片编辑器', description: '在线图片编辑、滤镜与标注', icon: 'image', category: 'design' },
+  { id: 'shader-toy', name: 'Shader 预览', description: '在线编写和预览 GLSL Shader 效果', icon: 'cube', category: 'design' },
   { id: 'qrcode', name: '二维码生成', description: '生成自定义二维码', icon: 'qr-code', category: 'other' },
 ];
 
@@ -206,6 +207,13 @@ const toolIcons: Record<string, React.ReactElement> = {
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
       <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
       <circle cx="12" cy="12" r="3" />
+    </svg>
+  ),
+  cube: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+      <line x1="12" y1="22.08" x2="12" y2="12" />
     </svg>
   ),
 };
