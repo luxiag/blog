@@ -54,7 +54,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" className={`${publicSans.variable} ${ibmPlexMono.variable} ${notoSansSC.variable}`}>
+    <html lang="zh-CN" suppressHydrationWarning className={`${publicSans.variable} ${ibmPlexMono.variable} ${notoSansSC.variable}`}>
       <body className="antialiased" style={{ backgroundColor: 'var(--background)' }}>
         <RulerLayout>
           <Header />

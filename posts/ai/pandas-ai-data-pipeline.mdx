@@ -1,0 +1,603 @@
+---
+title: 'Pandas + AI API：数据处理与大模型调用实战'
+date: '2026-04-30'
+description: '本文面向有 Python 基础但未用过 Pandas 的开发者，讲解如何用 Pandas 处理结构化数据，并在此基础上调用 AI API（OpenAI / 通义千问）对数据做批量分析、打标签、生成摘要，搭建一条完整的数据 + AI 处理流水线。'
+tags: ['AI', 'Python', 'Pandas', 'LLM', '数据处理']
+---
+
+# Pandas + AI API：数据处理与大模型调用实战
+
+如果你有一批结构化数据——比如用户反馈、客服工单、商品评论——想让 AI 对每一条做分析、打标签或生成摘要，你会遇到两个问题：
+
+1. 数据清洗和预处理：原始数据往往有缺失值、格式不统一、需要过滤
+2. 批量调用 AI API：逐条调用效率低，要控制并发、处理失败重试、保存中间结果
+
+Pandas 解决第一个问题，AI API 解决第二个问题。本文把两者串起来，从环境搭建到完整流水线，讲清楚每个环节。
+
+---
+
+## 一、环境搭建
+
+### 安装依赖
+
+```bash
+pip install pandas openai jupyter openpyxl
+```
+
+- `pandas`：数据处理核心库
+- `openai`：调用 OpenAI / 兼容接口的客户端
+- `jupyter`：交互式运行环境，数据探索必备
+- `openpyxl`：让 Pandas 能读写 `.xlsx` 文件
+
+### 推荐的项目结构
+
+```
+project/
+├── data/
+│   ├── raw/          # 原始数据，不要修改
+│   └── processed/    # 处理后的输出
+├── notebooks/        # Jupyter 探索用
+├── main.py           # 正式跑批脚本
+└── .env              # API Key，不要提交 git
+```
+
+### 配置 API Key
+
+```python
+# .env 文件
+OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
+```
+
+```python
+# 在代码里读取
+import os
+from dotenv import load_dotenv  # pip install python-dotenv
+
+load_dotenv()
+api_key = os.getenv("OPENAI_API_KEY")
+```
+
+:::warning
+API Key 绝对不要硬编码在代码里，也不要提交到 git。用 `.env` 文件管理，并把 `.env` 加进 `.gitignore`。
+:::
+
+---
+
+## 二、Pandas 核心概念：给 Python 开发者的快速入门
+
+Pandas 的核心数据结构是 **DataFrame**，你可以把它理解成一张内存里的二维表格，每列有名字，每行有索引。
+
+### 创建 DataFrame
+
+```python
+import pandas as pd
+
+# 从字典创建
+df = pd.DataFrame({
+    "id":       [1, 2, 3, 4],
+    "feedback": ["产品很好用", "发货太慢了", None, "性价比不错"],
+    "rating":   [5, 2, 4, 4],
+    "source":   ["app", "web", "app", "web"],
+})
+
+print(df)
+#    id    feedback  rating source
+# 0   1      产品很好用       5    app
+# 1   2      发货太慢了       2    web
+# 2   3       None       4    app
+# 3   4      性价比不错       4    web
+```
+
+### 基础操作
+
+```python
+# 查看基本信息
+df.shape        # (4, 4)，4 行 4 列
+df.dtypes       # 每列的数据类型
+df.head(2)      # 前 2 行
+df.describe()   # 数值列的统计摘要（均值、标准差等）
+
+# 选列
+df["feedback"]          # 单列，返回 Series
+df[["id", "rating"]]    # 多列，返回 DataFrame
+
+# 过滤行
+df[df["rating"] >= 4]                          # 评分 >= 4 的行
+df[df["source"] == "app"]                      # 来源为 app 的行
+df[(df["rating"] >= 4) & (df["source"] == "app")]  # 组合条件用 & |
+
+# 新增列
+df["is_positive"] = df["rating"] >= 4
+# 根据现有列计算新列，结果：[True, False, True, True]
+```
+
+### 读写文件
+
+```python
+# 读取
+df = pd.read_csv("data/raw/feedback.csv")
+df = pd.read_excel("data/raw/feedback.xlsx")
+df = pd.read_json("data/raw/feedback.json")
+
+# 写出
+df.to_csv("data/processed/result.csv", index=False)   # index=False 不写行号
+df.to_excel("data/processed/result.xlsx", index=False)
+```
+
+---
+
+## 三、数据清洗：调用 AI 前的必要准备
+
+原始数据往往不干净，直接把脏数据喂给 AI 会浪费 token 还影响结果质量。常见的清洗步骤：
+
+### 3.1 处理缺失值
+
+```python
+# 查看哪些列有缺失
+df.isnull().sum()
+# id          0
+# feedback    1   ← 有 1 个缺失
+# rating      0
+# source      0
+
+# 方案一：删掉有缺失的行（适合缺失比例很小时）
+df_clean = df.dropna(subset=["feedback"])
+
+# 方案二：填充默认值
+df["feedback"] = df["feedback"].fillna("（用户未填写反馈）")
+```
+
+### 3.2 文本清洗
+
+```python
+import re
+
+def clean_text(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+    text = text.strip()                      # 去掉首尾空白
+    text = re.sub(r'\s+', ' ', text)         # 多个空白压缩成一个
+    text = re.sub(r'[^\w\u4e00-\u9fff，。！？、：""''【】]', '', text)  # 去掉特殊字符
+    return text
+
+df["feedback"] = df["feedback"].apply(clean_text)
+```
+
+### 3.3 过滤无效数据
+
+```python
+# 过滤掉内容太短（可能是乱输的）
+df = df[df["feedback"].str.len() >= 5]
+
+# 过滤掉评分不在合理范围的
+df = df[df["rating"].between(1, 5)]
+
+# 去重
+df = df.drop_duplicates(subset=["feedback"])
+
+print(f"清洗后剩余 {len(df)} 条数据")
+```
+
+### 3.4 数据集中看一眼
+
+清洗前后，用 `.describe()` 和 `.value_counts()` 快速了解数据分布：
+
+```python
+# 评分分布
+print(df["rating"].value_counts().sort_index())
+# 1    12
+# 2    28
+# 3    45
+# 4    89
+# 5    56
+
+# 来源分布
+print(df["source"].value_counts())
+# app    130
+# web    100
+```
+
+---
+
+## 四、调用 AI API：对每行数据做分析
+
+数据清洗完，开始接入 AI。最常见的需求是对每一行的文本做**情感分类**、**打标签**、**生成摘要**等。
+
+### 4.1 基础：对单行调用 AI
+
+先写好单条调用的函数，再用 Pandas 批量应用：
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+def classify_sentiment(text: str) -> str:
+    """
+    对一条用户反馈做情感分类，返回 "正面" / "负面" / "中性"。
+    用结构化的输出格式，方便后续解析。
+    """
+    if not text or len(text.strip()) < 2:
+        return "未知"
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "你是一个情感分析助手。请对用户反馈做情感分类，只输出：正面、负面、中性 三个词之一，不要输出其他任何内容。"
+            },
+            {
+                "role": "user",
+                "content": text
+            }
+        ],
+        temperature=0,      # 分类任务设为 0，结果更稳定
+        max_tokens=10,      # 只需要几个字，限制 token 节省费用
+    )
+    return response.choices[0].message.content.strip()
+
+# 测试单条
+print(classify_sentiment("发货太慢了，等了一周还没到"))  # 负面
+print(classify_sentiment("产品质量很好，会继续购买"))    # 正面
+```
+
+### 4.2 用 `.apply()` 批量处理
+
+Pandas 的 `.apply()` 可以把一个函数应用到某列的每一行：
+
+```python
+# 直接应用，逐行调用 AI
+# 注意：这是同步的，数据量大时会比较慢
+df["sentiment"] = df["feedback"].apply(classify_sentiment)
+
+print(df[["feedback", "sentiment"]].head())
+```
+
+:::warning
+`.apply()` 是串行的，每次调用都要等 API 返回。如果有 1000 条数据，每次 API 调用耗时 1 秒，全部跑完需要约 17 分钟。数据量超过几百条，务必使用并发方案（见第五章）。
+:::
+
+### 4.3 多任务：一次 API 调用返回多个字段
+
+每条数据单独调用一次 API 效率太低。更好的做法是**一次调用同时返回多个分析结果**：
+
+```python
+import json
+
+def analyze_feedback(text: str) -> dict:
+    """
+    一次调用同时返回：情感、问题类型、优先级。
+    用 JSON 格式输出，便于解析。
+    """
+    prompt = f"""请分析以下用户反馈，以 JSON 格式返回结果，包含以下字段：
+- sentiment: 情感，值为 "正面" / "负面" / "中性"
+- category: 问题类型，值为 "物流" / "产品质量" / "售后服务" / "价格" / "其他"
+- priority: 处理优先级，值为 "高" / "中" / "低"
+
+用户反馈：{text}
+
+只输出 JSON，不要输出其他内容。"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            response_format={"type": "json_object"},  # 强制 JSON 输出
+        )
+        result = json.loads(response.choices[0].message.content)
+        return result
+    except Exception as e:
+        # 出错时返回默认值，不影响整批处理
+        print(f"解析失败：{e}，文本：{text[:30]}")
+        return {"sentiment": "未知", "category": "其他", "priority": "低"}
+
+
+# 应用到 DataFrame
+results = df["feedback"].apply(analyze_feedback)
+
+# 把返回的字典展开成多列
+df = pd.concat([df, pd.json_normalize(results)], axis=1)
+
+print(df[["feedback", "sentiment", "category", "priority"]].head())
+```
+
+---
+
+## 五、批量处理：并发 + 断点续传
+
+### 5.1 并发调用（asyncio）
+
+用 `asyncio` 并发调用 API，速度可以提升 10～20 倍：
+
+```python
+import asyncio
+from openai import AsyncOpenAI
+
+async_client = AsyncOpenAI()
+
+async def analyze_feedback_async(text: str, semaphore: asyncio.Semaphore) -> dict:
+    """
+    异步版本的 analyze_feedback，用 semaphore 控制并发数。
+    """
+    async with semaphore:  # 限制同时发出的请求数，避免触发限速
+        try:
+            response = await async_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": f"分析反馈：{text}"}],
+                temperature=0,
+                response_format={"type": "json_object"},
+            )
+            return json.loads(response.choices[0].message.content)
+        except Exception as e:
+            return {"sentiment": "未知", "category": "其他", "priority": "低", "error": str(e)}
+
+
+async def batch_analyze(texts: list[str], max_concurrent: int = 10) -> list[dict]:
+    """
+    并发批量分析，max_concurrent 控制最大并发数。
+    OpenAI 免费账户建议 3～5，付费账户可以到 20～50。
+    """
+    semaphore = asyncio.Semaphore(max_concurrent)
+    tasks = [analyze_feedback_async(text, semaphore) for text in texts]
+    return await asyncio.gather(*tasks)
+
+
+# 在 Jupyter 里直接 await（Jupyter 支持顶层 await）
+results = await batch_analyze(df["feedback"].tolist(), max_concurrent=10)
+
+# 在普通 Python 脚本里用 asyncio.run()
+# results = asyncio.run(batch_analyze(df["feedback"].tolist()))
+
+df_results = pd.DataFrame(results)
+df = pd.concat([df.reset_index(drop=True), df_results], axis=1)
+```
+
+### 5.2 断点续传：避免中途失败全部重来
+
+数据量大时，中途 API 报错或网络断了，已处理的结果不应该丢失：
+
+```python
+import os
+
+CHECKPOINT_PATH = "data/processed/checkpoint.csv"
+
+def process_with_checkpoint(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    带断点续传的批量处理。
+    已经处理过的行直接读缓存，只处理未处理的行。
+    """
+    # 如果有历史进度，加载它
+    if os.path.exists(CHECKPOINT_PATH):
+        done = pd.read_csv(CHECKPOINT_PATH)
+        done_ids = set(done["id"].tolist())
+        print(f"加载断点：已完成 {len(done_ids)} 条")
+    else:
+        done = pd.DataFrame()
+        done_ids = set()
+
+    # 只处理未完成的行
+    pending = df[~df["id"].isin(done_ids)].copy()
+    print(f"剩余待处理：{len(pending)} 条")
+
+    if len(pending) == 0:
+        return done
+
+    # 分批处理，每批完成后保存一次
+    batch_size = 50
+    all_results = [done] if len(done) > 0 else []
+
+    for i in range(0, len(pending), batch_size):
+        batch = pending.iloc[i:i + batch_size]
+        texts = batch["feedback"].tolist()
+
+        # 调用 AI
+        results = asyncio.run(batch_analyze(texts))
+        batch_result = batch.copy()
+        for key in results[0].keys():
+            batch_result[key] = [r.get(key) for r in results]
+
+        all_results.append(batch_result)
+
+        # 保存进度
+        pd.concat(all_results, ignore_index=True).to_csv(CHECKPOINT_PATH, index=False)
+        print(f"进度：{min(i + batch_size, len(pending))}/{len(pending)}")
+
+    return pd.concat(all_results, ignore_index=True)
+
+
+df_final = process_with_checkpoint(df)
+```
+
+---
+
+## 六、结果分析与导出
+
+AI 处理完之后，用 Pandas 做汇总分析：
+
+```python
+# 各情感类别的数量和占比
+sentiment_stats = df_final["sentiment"].value_counts(normalize=True) * 100
+print(sentiment_stats.round(1))
+# 正面    45.2%
+# 负面    32.1%
+# 中性    22.7%
+
+# 交叉分析：不同来源的情感分布
+pivot = pd.crosstab(df_final["source"], df_final["sentiment"], normalize="index") * 100
+print(pivot.round(1))
+#         中性   负面   正面
+# app     20.1  28.3  51.6
+# web     25.4  36.2  38.4
+
+# 高优先级的负面反馈，按类别分组统计
+urgent_issues = (
+    df_final[(df_final["sentiment"] == "负面") & (df_final["priority"] == "高")]
+    .groupby("category")
+    .size()
+    .sort_values(ascending=False)
+)
+print(urgent_issues)
+# 物流       45
+# 售后服务    23
+# 产品质量    12
+
+# 导出最终结果
+df_final.to_excel("data/processed/feedback_analyzed.xlsx", index=False)
+print("导出完成")
+```
+
+---
+
+## 七、完整流水线
+
+把所有环节整合成一个可直接运行的脚本：
+
+::: details 查看完整代码
+
+```python
+import os
+import json
+import asyncio
+import pandas as pd
+from openai import AsyncOpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
+client = AsyncOpenAI()
+
+# ── 1. 数据清洗 ──────────────────────────────────────────
+
+def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.dropna(subset=["feedback"])
+    df["feedback"] = df["feedback"].astype(str).str.strip()
+    df = df[df["feedback"].str.len() >= 5]
+    df = df[df["rating"].between(1, 5)]
+    df = df.drop_duplicates(subset=["feedback"])
+    df = df.reset_index(drop=True)
+    return df
+
+# ── 2. AI 分析 ──────────────────────────────────────────
+
+SYSTEM_PROMPT = """你是用户反馈分析助手。请分析用户反馈，以 JSON 格式返回：
+{
+  "sentiment": "正面/负面/中性",
+  "category": "物流/产品质量/售后服务/价格/其他",
+  "priority": "高/中/低",
+  "summary": "一句话总结问题"
+}"""
+
+async def analyze_one(text: str, sem: asyncio.Semaphore) -> dict:
+    async with sem:
+        try:
+            resp = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": text}
+                ],
+                temperature=0,
+                response_format={"type": "json_object"},
+                max_tokens=100,
+            )
+            return json.loads(resp.choices[0].message.content)
+        except Exception as e:
+            return {"sentiment": "未知", "category": "其他", "priority": "低", "summary": "", "error": str(e)}
+
+async def analyze_batch(texts: list[str], concurrency: int = 10) -> list[dict]:
+    sem = asyncio.Semaphore(concurrency)
+    return await asyncio.gather(*[analyze_one(t, sem) for t in texts])
+
+# ── 3. 断点续传 ──────────────────────────────────────────
+
+def run_with_checkpoint(df: pd.DataFrame, checkpoint: str, batch_size: int = 50) -> pd.DataFrame:
+    if os.path.exists(checkpoint):
+        done = pd.read_csv(checkpoint)
+        done_ids = set(done["id"])
+    else:
+        done, done_ids = pd.DataFrame(), set()
+
+    pending = df[~df["id"].isin(done_ids)].copy()
+    print(f"待处理 {len(pending)} 条，已完成 {len(done_ids)} 条")
+
+    batches = [done] if len(done) else []
+    for i in range(0, len(pending), batch_size):
+        batch = pending.iloc[i:i + batch_size].copy()
+        results = asyncio.run(analyze_batch(batch["feedback"].tolist()))
+        for key in ["sentiment", "category", "priority", "summary"]:
+            batch[key] = [r.get(key, "") for r in results]
+        batches.append(batch)
+        merged = pd.concat(batches, ignore_index=True)
+        merged.to_csv(checkpoint, index=False)
+        print(f"  进度 {min(i + batch_size, len(pending))}/{len(pending)}")
+
+    return pd.concat(batches, ignore_index=True) if batches else df
+
+# ── 4. 主流程 ──────────────────────────────────────────
+
+if __name__ == "__main__":
+    # 读取原始数据
+    df = pd.read_csv("data/raw/feedback.csv")
+    print(f"原始数据：{len(df)} 条")
+
+    # 清洗
+    df = clean_dataframe(df)
+    print(f"清洗后：{len(df)} 条")
+
+    # AI 分析（带断点续传）
+    df = run_with_checkpoint(df, "data/processed/checkpoint.csv")
+
+    # 导出
+    df.to_excel("data/processed/result.xlsx", index=False)
+    print("完成，结果已保存到 data/processed/result.xlsx")
+```
+:::
+
+---
+
+## 八、常见问题
+
+**Q：API 调用报 RateLimitError 怎么办？**
+
+降低并发数（`concurrency` 改成 3～5），或者在 `analyze_one` 里加重试：
+
+```python
+import time
+
+async def analyze_one(text: str, sem: asyncio.Semaphore, max_retries: int = 3) -> dict:
+    async with sem:
+        for attempt in range(max_retries):
+            try:
+                # ... 调用 API
+                return result
+            except RateLimitError:
+                wait = 2 ** attempt  # 指数退避：1s, 2s, 4s
+                await asyncio.sleep(wait)
+        return {"sentiment": "未知", "error": "超过最大重试次数"}
+```
+
+**Q：`.apply()` 和 `asyncio` 哪个适合什么场景？**
+
+| 数据量 | 方案 |
+|---|---|
+| < 100 条 | `.apply()` 同步，够用，简单 |
+| 100 ～ 1000 条 | `asyncio` 并发，速度提升明显 |
+| > 1000 条 | `asyncio` + 断点续传，必须加 |
+
+**Q：用哪个模型比较省钱？**
+
+分类、打标签等结构化任务用 `gpt-4o-mini` 足够，比 `gpt-4o` 便宜约 30 倍。需要长文摘要、复杂推理时再换 `gpt-4o`。
+
+---
+
+## 总结
+
+| 环节 | 工具 | 关键点 |
+|---|---|---|
+| 数据读取 | `pd.read_csv / read_excel` | 统一从 `data/raw/` 读，不改原始文件 |
+| 数据清洗 | Pandas `dropna / apply / str` | 先清洗再调用 AI，省 token 也提高质量 |
+| 单条 AI 调用 | `openai` SDK | `temperature=0` 保证分类稳定，`response_format=json_object` 方便解析 |
+| 批量处理 | `asyncio.gather` + `Semaphore` | 控制并发，避免触发限速 |
+| 断点续传 | 定期 `to_csv` 保存进度 | 大批量任务必备，避免半途崩溃全部重来 |
+| 结果分析 | `value_counts / crosstab / groupby` | 几行代码出统计报告 |

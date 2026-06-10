@@ -1,0 +1,1200 @@
+---
+title: 'RabbitMQ 完整指南：从 AMQP 模型到生产级消息架构'
+date: '2026-05-27'
+excerpt: 'RabbitMQ 是最成熟的消息中间件之一。本文从 AMQP 协议模型出发，系统讲解四种 Exchange 类型、消息确认机制、持久化策略、死信队列、集群镜像、流控与背压，再到生产环境的运维实践，帮你建立完整的消息队列工程认知。'
+tags: ['rabbitmq', 'message-queue', 'amqp', 'architecture', 'nodejs']
+---
+
+# RabbitMQ 完整指南：从 AMQP 模型到生产级消息架构
+
+消息队列是分布式系统的基础设施之一，而 RabbitMQ 是这个领域最成熟、生态最完善的开源实现。
+
+很多人对 RabbitMQ 的印象是"一个队列，生产者塞消息，消费者取消息"。但真正在生产环境中用好它，需要理解的远不止这些：
+
+- Exchange 的四种类型分别适用什么路由场景？
+- 消息确认机制到底在保护什么？
+- 持久化能防消息丢失，但它防的是哪种丢失？
+- 集群模式和镜像队列各自解决什么问题？
+- 消费者挂了、消息积压了、Broker 内存爆了怎么办？
+
+这篇文章的目标是：**从 AMQP 协议模型讲到生产级架构设计，帮你建立系统的 RabbitMQ 工程认知。**
+
+---
+
+## 一、为什么选 RabbitMQ
+
+在消息中间件的选型里，常见的候选者有 RabbitMQ、Kafka、RocketMQ、Redis Streams 等。
+
+RabbitMQ 的核心定位是：
+
+- **灵活路由**：通过 Exchange + Binding 组合，可以实现精确匹配、模式匹配、广播等多种路由策略
+- **可靠投递**：内置消息确认、持久化、死信队列、事务等机制
+- **协议标准**：实现了 AMQP 0-9-1 开放标准协议，多语言客户端成熟
+- **运维友好**：自带 Management UI、HTTP API、丰富的监控指标
+
+它更适合这些场景：
+
+| 场景 | 为什么选 RabbitMQ |
+|------|------------------|
+| 业务解耦（订单→库存→物流） | 灵活路由，按业务类型精确投递 |
+| 异步任务处理 | 可靠确认 + 重试机制 |
+| 延迟/定时任务 | 死信队列 + TTL / 延迟插件 |
+| RPC 模式 | 内置 Reply-To + Correlation ID |
+| 事件广播 | Fanout Exchange |
+| 多租户/多优先级 | Vhost 隔离 + 优先级队列 |
+
+不太适合的场景：
+
+- **超高吞吐日志流**（Kafka 更合适）
+- **消息回溯/重放**（RabbitMQ 消费后即删，Kafka 保留日志）
+- **百万级队列**（RabbitMQ 单集群队列数有上限压力）
+
+---
+
+## 二、AMQP 模型：理解 RabbitMQ 的核心架构
+
+RabbitMQ 实现的是 AMQP 0-9-1 协议。理解这个协议模型，就理解了 RabbitMQ 的一切设计。
+
+### 1. 完整的消息流转路径
+
+```
+Producer → Connection → Channel → Exchange → Binding → Queue → Channel → Connection → Consumer
+```
+
+用一张更直观的图表示：
+
+```mermaid
+graph LR
+  P[Producer] -->|publish| E[Exchange]
+  E -->|routing key = order.create| Q1[Queue: order-process]
+  E -->|routing key = order.pay| Q2[Queue: payment-process]
+  E -->|routing key = order.*| Q3[Queue: order-audit]
+  Q1 --> C1[Consumer 1]
+  Q2 --> C2[Consumer 2]
+  Q3 --> C3[Consumer 3]
+```
+
+### 2. 各组件职责
+
+**Connection（连接）**
+
+客户端与 RabbitMQ 之间的 TCP 连接。建连开销大，通常一个应用维护一个长连接。
+
+**Channel（通道）**
+
+建立在 Connection 之上的虚拟连接。一个 Connection 可以包含多个 Channel，每个 Channel 独立处理消息，互不干扰。这样做的好处是复用 TCP 连接，避免频繁建连。
+
+:::tip
+Channel 不是线程安全的。多线程场景下，每个线程应该使用自己的 Channel，而不是共享一个。
+:::
+
+**Exchange（交换机）**
+
+接收生产者发来的消息，根据路由规则把消息分发到一个或多个 Queue。Exchange 本身不存储消息——如果没有匹配的 Queue，消息会被丢弃（除非设置了 `mandatory` 标志）。
+
+**Queue（队列）**
+
+消息的存储容器。消息在 Queue 中按 FIFO 顺序等待消费者来取。Queue 可以设置持久化、排他性、自动删除、TTL、长度限制等属性。
+
+**Binding（绑定）**
+
+定义了 Exchange 到 Queue 的路由规则。绑定时指定一个 Binding Key，Exchange 会根据消息的 Routing Key 和 Binding Key 的匹配关系决定投递方向。
+
+### 3. Virtual Host（虚拟主机）
+
+RabbitMQ 支持在同一个 Broker 上创建多个 Vhost，每个 Vhost 有独立的 Exchange、Queue、Binding 和权限体系。
+
+```
+/              # 默认 vhost
+/production    # 生产环境
+/staging       # 预发环境
+/tenant-a      # 租户 A
+```
+
+Vhost 之间完全隔离，可以用来做多环境隔离或多租户隔离。
+
+---
+
+## 三、四种 Exchange 类型
+
+Exchange 类型决定了消息的路由方式。这是 RabbitMQ 最核心的灵活性所在。
+
+### 1. Direct Exchange（直连交换机）
+
+**规则**：消息的 Routing Key 必须与 Binding Key **完全匹配**，才会被投递。
+
+```mermaid
+graph LR
+  P[Producer] -->|routing_key=error| E[Direct Exchange]
+  E -->|binding_key=error| Q1[Queue: error-log]
+  E -->|binding_key=info| Q2[Queue: info-log]
+  E -->|binding_key=warning| Q3[Queue: warning-log]
+```
+
+**适用场景**：精确的点对点投递，如根据日志级别分流、按订单类型分发。
+
+```javascript
+// 声明 Direct Exchange
+await channel.assertExchange('log.direct', 'direct', { durable: true })
+
+// 绑定队列，指定 binding key
+await channel.assertQueue('error-log', { durable: true })
+await channel.bindQueue('error-log', 'log.direct', 'error')
+
+await channel.assertQueue('info-log', { durable: true })
+await channel.bindQueue('info-log', 'log.direct', 'info')
+
+// 发布时指定 routing key
+channel.publish('log.direct', 'error', Buffer.from('disk full'))
+channel.publish('log.direct', 'info', Buffer.from('user login'))
+```
+
+:::note
+RabbitMQ 有一个特殊的**默认交换机**（名字为空字符串 `""`），它是 Direct 类型，会自动将消息路由到 Routing Key 同名的 Queue。这就是为什么简单场景下你可以直接 `sendToQueue` 而不声明 Exchange。
+:::
+
+### 2. Fanout Exchange（扇出交换机）
+
+**规则**：**忽略 Routing Key**，把消息投递给所有绑定的 Queue。
+
+```mermaid
+graph LR
+  P[Producer] -->|任何 routing_key| E[Fanout Exchange]
+  E --> Q1[Queue: email-notify]
+  E --> Q2[Queue: sms-notify]
+  E --> Q3[Queue: push-notify]
+```
+
+**适用场景**：广播通知，如用户注册后同时触发邮件、短信、站内信。
+
+```javascript
+await channel.assertExchange('user.events', 'fanout', { durable: true })
+
+// 绑定多个队列（binding key 无意义，可以留空）
+await channel.bindQueue('email-notify', 'user.events', '')
+await channel.bindQueue('sms-notify', 'user.events', '')
+await channel.bindQueue('push-notify', 'user.events', '')
+
+// 发布（routing key 会被忽略）
+channel.publish('user.events', '', Buffer.from(JSON.stringify({
+  event: 'user.registered',
+  userId: 'u-001'
+})))
+```
+
+### 3. Topic Exchange（主题交换机）
+
+**规则**：Routing Key 是一个用 `.` 分隔的多段字符串，Binding Key 支持两种通配符：
+
+- `*`：匹配一个单词
+- `#`：匹配零个或多个单词
+
+```mermaid
+graph LR
+  P[Producer] -->|order.create.vip| E[Topic Exchange]
+  E -->|order.create.*| Q1[Queue: order-process]
+  E -->|order.#| Q2[Queue: order-audit]
+  E -->|*.*.vip| Q3[Queue: vip-alert]
+```
+
+**适用场景**：需要按多维度灵活路由的场景，如按业务线+操作+等级分流。
+
+```javascript
+await channel.assertExchange('business.topic', 'topic', { durable: true })
+
+// 绑定不同的模式
+await channel.bindQueue('order-process', 'business.topic', 'order.create.*')
+await channel.bindQueue('order-audit', 'business.topic', 'order.#')
+await channel.bindQueue('vip-alert', 'business.topic', '*.*.vip')
+
+// 发布
+channel.publish('business.topic', 'order.create.vip', Buffer.from('VIP order'))
+// → 匹配 order.create.* ✓
+// → 匹配 order.# ✓
+// → 匹配 *.*.vip ✓
+// 三个队列都会收到
+
+channel.publish('business.topic', 'order.cancel.normal', Buffer.from('cancel'))
+// → 匹配 order.create.* ✗
+// → 匹配 order.# ✓
+// → 匹配 *.*.vip ✗
+// 只有 order-audit 收到
+```
+
+### 4. Headers Exchange（头部交换机）
+
+**规则**：不使用 Routing Key，而是根据消息的 **Headers 属性**进行匹配。
+
+绑定时指定一组 header 键值对和匹配方式（`x-match: all` 或 `x-match: any`）。
+
+```javascript
+await channel.assertExchange('task.headers', 'headers', { durable: true })
+
+await channel.bindQueue('gpu-queue', 'task.headers', '', {
+  'x-match': 'all',    // 所有 header 都要匹配
+  'type': 'render',
+  'priority': 'high'
+})
+
+// 发布时在 headers 中携带属性
+channel.publish('task.headers', '', Buffer.from('render task'), {
+  headers: { type: 'render', priority: 'high' }
+})
+```
+
+Headers Exchange 使用较少，性能也不如其他类型，通常只在 Routing Key 无法表达路由逻辑时才使用。
+
+### Exchange 类型对比
+
+| 类型 | 路由依据 | 匹配方式 | 典型场景 |
+|------|---------|---------|---------|
+| Direct | Routing Key | 精确匹配 | 按类型精确投递 |
+| Fanout | 无 | 全部投递 | 广播通知 |
+| Topic | Routing Key | 通配符模式匹配 | 多维度灵活路由 |
+| Headers | Message Headers | 键值对匹配 | 复杂属性路由 |
+
+---
+
+## 四、消息确认机制：可靠性的第一道防线
+
+消息从 Producer 到 Consumer，中间经过 Exchange → Queue → Consumer 三个阶段。任何一个阶段都可能丢消息。RabbitMQ 提供了完整的确认机制来保护每个阶段。
+
+### 1. 生产者确认（Publisher Confirm）
+
+解决的问题：**消息从 Producer 到 Broker 的这段，怎么确保送到了？**
+
+开启 Confirm 模式后，每条消息发出后，Broker 会异步回传一个 `ack`（已接收）或 `nack`（拒绝）：
+
+```javascript
+import amqplib from 'amqplib'
+
+const conn = await amqplib.connect('amqp://localhost')
+const channel = await conn.createConfirmChannel()  // 创建确认通道
+
+await channel.assertExchange('orders', 'direct', { durable: true })
+
+// 发布消息，等待确认
+channel.publish('orders', 'create', Buffer.from(JSON.stringify(order)), {
+  persistent: true  // 持久化消息
+}, (err, ok) => {
+  if (err) {
+    console.error('消息被 Broker 拒绝:', err)
+    // 重试逻辑
+  } else {
+    console.log('消息已确认送达 Broker')
+  }
+})
+
+// 或者使用 waitForConfirms
+await channel.waitForConfirms()
+```
+
+:::warning
+Publisher Confirm 只保证消息到达了 Broker（写入了队列），不保证消费者已经处理了消息。
+:::
+
+### 2. 消费者确认（Consumer Ack）
+
+解决的问题：**消息从 Queue 到 Consumer 的这段，怎么确保被处理了？**
+
+消费者可以选择**手动确认**（Manual Ack），只有明确发送 `ack` 后，消息才从队列中删除：
+
+```javascript
+// 手动确认模式（noAck: false）
+await channel.consume('order-process', async (msg) => {
+  if (!msg) return
+
+  try {
+    const order = JSON.parse(msg.content.toString())
+    await processOrder(order)
+
+    // 处理成功，确认消息
+    channel.ack(msg)
+  } catch (err) {
+    // 处理失败，决定是否重试
+    if (isRetryable(err)) {
+      // requeue=true，消息回到队列头部，等待重新投递
+      channel.nack(msg, false, true)
+    } else {
+      // 不可恢复的错误，拒绝并不重回队列（会进入死信队列）
+      channel.nack(msg, false, false)
+    }
+  }
+}, { noAck: false })  // 关键：关闭自动确认
+```
+
+**三种确认行为**：
+
+| 方法 | 含义 | 消息去向 |
+|------|------|---------|
+| `ack(msg)` | 确认成功处理 | 从队列中删除 |
+| `nack(msg, false, true)` | 处理失败，要求重新投递 | 回到队列等待重试 |
+| `nack(msg, false, false)` | 处理失败，不再重试 | 丢弃或进入死信队列 |
+
+:::warning
+**千万不要忘记 ack/nack**。如果消费者既不 ack 也不 nack，消息会一直处于 unacked 状态，占用队列内存。当该消费者断开连接时，所有 unacked 消息会被 requeue，可能导致重复消费。
+:::
+
+### 3. 预取计数（Prefetch）
+
+默认情况下，RabbitMQ 会尽可能快地把消息推给消费者。如果消费者处理慢，大量 unacked 消息会堆积在消费者内存中。
+
+`prefetch` 限制了消费者同时处理的最大消息数：
+
+```javascript
+// 每次最多处理 10 条未确认的消息
+await channel.prefetch(10)
+
+await channel.consume('heavy-task', async (msg) => {
+  await heavyWork(msg)
+  channel.ack(msg)
+}, { noAck: false })
+```
+
+**prefetch 的设置原则**：
+- 处理耗时短 → prefetch 设大些（如 50-100），提高吞吐
+- 处理耗时长 → prefetch 设小些（如 1-5），避免单个消费者积压过多
+- 多消费者负载均衡 → prefetch=1 可以实现最公平的分发
+
+---
+
+## 五、消息持久化：防止 Broker 重启丢数据
+
+消息确认解决的是"传输过程"的可靠性，而持久化解决的是"存储"的可靠性——Broker 崩溃重启后，消息还在不在。
+
+### 要做到真正的持久化，需要三管齐下：
+
+**1. Exchange 持久化**
+
+```javascript
+await channel.assertExchange('orders', 'direct', { durable: true })
+```
+
+**2. Queue 持久化**
+
+```javascript
+await channel.assertQueue('order-process', { durable: true })
+```
+
+**3. Message 持久化**
+
+```javascript
+channel.publish('orders', 'create', Buffer.from(payload), {
+  persistent: true   // deliveryMode = 2
+})
+```
+
+三者缺一不可：
+- Exchange 不持久化 → 重启后 Exchange 消失，绑定关系丢失
+- Queue 不持久化 → 重启后 Queue 消失，里面的消息全没了
+- Message 不持久化 → 即使 Queue 还在，里面的消息也没了
+
+:::warning
+持久化有性能代价——每条消息要写磁盘（fsync）。对于高吞吐但允许少量丢失的场景（如实时指标），可以不开持久化来换取性能。
+:::
+
+---
+
+## 六、死信队列（Dead Letter Queue）
+
+当消息无法被正常消费时，RabbitMQ 不会直接丢弃它，而是可以把它转发到一个"死信交换机"（DLX），由专门的队列来收集这些"死掉的消息"。
+
+### 1. 触发死信的三种情况
+
+| 触发条件 | 说明 |
+|---------|------|
+| 消费者拒绝且不 requeue | `nack(msg, false, false)` 或 `reject(msg, false)` |
+| 消息 TTL 过期 | 在队列中等待超过指定时间 |
+| 队列达到最大长度 | 队列满了，最老的消息被挤出 |
+
+### 2. 配置死信队列
+
+```javascript
+// 第一步：声明死信交换机和死信队列
+await channel.assertExchange('dlx.exchange', 'direct', { durable: true })
+await channel.assertQueue('dlx.queue', { durable: true })
+await channel.bindQueue('dlx.queue', 'dlx.exchange', 'dead')
+
+// 第二步：声明业务队列时，绑定死信交换机
+await channel.assertQueue('order-process', {
+  durable: true,
+  arguments: {
+    'x-dead-letter-exchange': 'dlx.exchange',
+    'x-dead-letter-routing-key': 'dead',
+    'x-message-ttl': 60000,     // 可选：消息 60 秒未消费则过期
+    'x-max-length': 10000,      // 可选：队列最多容纳 10000 条
+  }
+})
+
+// 第三步：消费死信队列，做告警/人工处理/重试
+await channel.consume('dlx.queue', (msg) => {
+  const deadMsg = JSON.parse(msg.content.toString())
+  const reason = msg.properties.headers['x-death']  // 包含死信原因
+
+  console.error('死信消息:', deadMsg, '原因:', reason)
+  // 记录日志、发告警、写入人工处理表...
+  channel.ack(msg)
+}, { noAck: false })
+```
+
+### 3. 死信消息携带的元信息
+
+当消息变成死信后，RabbitMQ 会在 headers 中添加 `x-death` 数组，记录：
+
+- `reason`：死信原因（rejected / expired / maxlen）
+- `queue`：原来所在的队列
+- `exchange`：原来的交换机
+- `routing-keys`：原来的路由键
+- `count`：成为死信的次数
+- `time`：成为死信的时间
+
+这些信息对于排查问题非常有用。
+
+---
+
+## 七、延迟队列：定时任务的消息队列方案
+
+RabbitMQ 原生不支持延迟投递，但可以通过两种方式实现：
+
+### 方案一：TTL + 死信队列
+
+原理：把消息发到一个设了 TTL 的"暂存队列"，消息过期后进入死信队列，死信队列才是真正被消费的队列。
+
+```javascript
+// 暂存队列：消息在这里等待过期
+await channel.assertQueue('delay.staging', {
+  durable: true,
+  arguments: {
+    'x-dead-letter-exchange': 'real.exchange',
+    'x-dead-letter-routing-key': 'real',
+  }
+})
+
+// 真正消费的队列
+await channel.assertExchange('real.exchange', 'direct', { durable: true })
+await channel.assertQueue('real.queue', { durable: true })
+await channel.bindQueue('real.queue', 'real.exchange', 'real')
+
+// 发布延迟消息（通过 expiration 设置单条消息的 TTL）
+channel.sendToQueue('delay.staging', Buffer.from(JSON.stringify(payload)), {
+  persistent: true,
+  expiration: '30000'  // 30 秒后过期 → 进入 real.queue
+})
+```
+
+:::warning
+**TTL 方案有一个坑**：RabbitMQ 只会检查队列头部的消息是否过期。如果先发一条 60s 的消息，再发一条 10s 的消息，10s 的消息不会先出来——它会被 60s 的消息堵住。
+
+解决方式：为不同的延迟时长创建不同的暂存队列（如 delay.5s、delay.30s、delay.5min），或者使用方案二。
+:::
+
+### 方案二：rabbitmq-delayed-message-exchange 插件
+
+这是更推荐的方案，使用官方插件实现真正的延迟投递：
+
+```bash
+# 启用插件
+rabbitmq-plugins enable rabbitmq_delayed_message_exchange
+```
+
+```javascript
+// 声明延迟交换机（类型是 x-delayed-message）
+await channel.assertExchange('delay.exchange', 'x-delayed-message', {
+  durable: true,
+  arguments: { 'x-delayed-type': 'direct' }
+})
+
+await channel.assertQueue('task.queue', { durable: true })
+await channel.bindQueue('task.queue', 'delay.exchange', 'task')
+
+// 发布延迟消息（通过 headers 中的 x-delay 指定延迟毫秒数）
+channel.publish('delay.exchange', 'task', Buffer.from(JSON.stringify({
+  action: 'send_reminder',
+  userId: 'u-001',
+})), {
+  persistent: true,
+  headers: { 'x-delay': 300000 }  // 5 分钟后投递
+})
+```
+
+这种方案没有 TTL 方案的"队头阻塞"问题，每条消息独立计时。
+
+---
+
+## 八、消息幂等性：重复消费的终极防线
+
+在分布式环境中，消息重复消费几乎不可避免：
+
+- 消费者处理完消息但 ack 还没发出去就挂了 → 消息被 requeue，再次消费
+- 网络抖动导致 ack 丢失 → Broker 认为未消费，重新投递
+- 生产者 confirm 超时后重发 → Broker 收到两条一样的消息
+
+**防线：消费端做幂等处理。**
+
+### 常见的幂等策略
+
+**1. 基于唯一消息 ID 去重**
+
+```javascript
+// 生产者：每条消息带唯一 ID
+channel.publish('orders', 'create', Buffer.from(payload), {
+  messageId: crypto.randomUUID(),  // 全局唯一
+  persistent: true,
+})
+
+// 消费者：基于 messageId 去重
+await channel.consume('order-process', async (msg) => {
+  const messageId = msg.properties.messageId
+
+  // 检查是否已处理过（Redis SET NX 或数据库唯一约束）
+  const isDuplicate = await redis.set(`msg:${messageId}`, '1', 'NX', 'EX', 3600)
+  if (!isDuplicate) {
+    console.log('重复消息，跳过:', messageId)
+    channel.ack(msg)
+    return
+  }
+
+  await processOrder(JSON.parse(msg.content.toString()))
+  channel.ack(msg)
+}, { noAck: false })
+```
+
+**2. 基于业务唯一键**
+
+更可靠的做法是在业务层做幂等，比如：
+
+- 订单号唯一约束：同一个订单号不会重复创建
+- 状态机校验：订单状态只能单向流转，重复消息不会触发重复动作
+- 数据库乐观锁：`UPDATE ... WHERE version = ?`
+
+---
+
+## 九、Node.js 完整实战
+
+### 1. 安装依赖
+
+```bash
+npm install amqplib
+```
+
+### 2. 连接管理（带重连）
+
+```javascript
+import amqplib from 'amqplib'
+
+class RabbitMQClient {
+  constructor(url) {
+    this.url = url
+    this.connection = null
+    this.channel = null
+    this.reconnectTimer = null
+  }
+
+  async connect() {
+    try {
+      this.connection = await amqplib.connect(this.url)
+      this.channel = await this.connection.createConfirmChannel()
+
+      // 设置预取
+      await this.channel.prefetch(10)
+
+      // 监听连接关闭事件
+      this.connection.on('close', () => {
+        console.error('RabbitMQ 连接断开，准备重连...')
+        this.reconnect()
+      })
+
+      this.connection.on('error', (err) => {
+        console.error('RabbitMQ 连接错误:', err.message)
+      })
+
+      console.log('RabbitMQ 连接成功')
+      return this.channel
+    } catch (err) {
+      console.error('RabbitMQ 连接失败:', err.message)
+      this.reconnect()
+    }
+  }
+
+  reconnect() {
+    if (this.reconnectTimer) return
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null
+      await this.connect()
+    }, 5000)
+  }
+
+  async close() {
+    if (this.channel) await this.channel.close()
+    if (this.connection) await this.connection.close()
+  }
+}
+
+// 使用
+const client = new RabbitMQClient('amqp://user:password@localhost:5672')
+const channel = await client.connect()
+```
+
+### 3. 生产者：带确认的消息发布
+
+```javascript
+async function publishOrder(channel, order) {
+  const exchange = 'orders.topic'
+  const routingKey = `order.${order.type}.${order.priority}`
+
+  await channel.assertExchange(exchange, 'topic', { durable: true })
+
+  const payload = Buffer.from(JSON.stringify({
+    ...order,
+    timestamp: Date.now(),
+  }))
+
+  // 发布并等待确认
+  return new Promise((resolve, reject) => {
+    channel.publish(exchange, routingKey, payload, {
+      persistent: true,
+      messageId: crypto.randomUUID(),
+      contentType: 'application/json',
+      timestamp: Math.floor(Date.now() / 1000),
+    }, (err) => {
+      if (err) {
+        console.error('消息发布失败:', err)
+        reject(err)
+      } else {
+        resolve()
+      }
+    })
+  })
+}
+
+// 使用
+await publishOrder(channel, {
+  orderId: 'ORD-001',
+  type: 'create',
+  priority: 'high',
+  amount: 299.99,
+})
+```
+
+### 4. 消费者：带错误处理和重试
+
+```javascript
+async function startConsumer(channel) {
+  const queue = 'order-process'
+  const exchange = 'orders.topic'
+  const MAX_RETRIES = 3
+
+  await channel.assertExchange(exchange, 'topic', { durable: true })
+  await channel.assertQueue(queue, {
+    durable: true,
+    arguments: {
+      'x-dead-letter-exchange': 'dlx.exchange',
+      'x-dead-letter-routing-key': 'order.dead',
+    }
+  })
+  await channel.bindQueue(queue, exchange, 'order.create.*')
+
+  console.log(`消费者已启动，监听队列: ${queue}`)
+
+  await channel.consume(queue, async (msg) => {
+    if (!msg) return
+
+    const retryCount = (msg.properties.headers?.['x-retry-count'] || 0)
+
+    try {
+      const order = JSON.parse(msg.content.toString())
+      console.log(`处理订单: ${order.orderId} (重试次数: ${retryCount})`)
+
+      await processOrder(order)
+      channel.ack(msg)
+    } catch (err) {
+      console.error(`处理失败: ${err.message}`)
+
+      if (retryCount < MAX_RETRIES) {
+        // 重试：重新发布带递增计数的消息，然后 ack 当前消息
+        channel.publish(exchange, msg.fields.routingKey, msg.content, {
+          ...msg.properties,
+          headers: {
+            ...msg.properties.headers,
+            'x-retry-count': retryCount + 1,
+          }
+        })
+        channel.ack(msg)
+      } else {
+        // 超过最大重试次数，进入死信队列
+        channel.nack(msg, false, false)
+      }
+    }
+  }, { noAck: false })
+}
+```
+
+### 5. RPC 模式：请求/响应
+
+RabbitMQ 内置了 RPC 支持，通过 `replyTo` 和 `correlationId` 实现：
+
+```javascript
+// RPC 客户端（请求方）
+async function rpcCall(channel, request) {
+  // 创建临时回调队列
+  const { queue: replyQueue } = await channel.assertQueue('', { exclusive: true })
+  const correlationId = crypto.randomUUID()
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('RPC timeout')), 10000)
+
+    // 监听回调队列
+    channel.consume(replyQueue, (msg) => {
+      if (msg.properties.correlationId === correlationId) {
+        clearTimeout(timeout)
+        resolve(JSON.parse(msg.content.toString()))
+        channel.ack(msg)
+      }
+    }, { noAck: false })
+
+    // 发送请求
+    channel.sendToQueue('rpc.queue', Buffer.from(JSON.stringify(request)), {
+      correlationId,
+      replyTo: replyQueue,
+    })
+  })
+}
+
+// RPC 服务端（处理方）
+async function startRpcServer(channel) {
+  await channel.assertQueue('rpc.queue', { durable: true })
+  await channel.prefetch(1)
+
+  await channel.consume('rpc.queue', async (msg) => {
+    const request = JSON.parse(msg.content.toString())
+    console.log('收到 RPC 请求:', request)
+
+    const result = await handleRpcRequest(request)
+
+    // 回复到 replyTo 队列
+    channel.sendToQueue(msg.properties.replyTo, Buffer.from(JSON.stringify(result)), {
+      correlationId: msg.properties.correlationId,
+    })
+
+    channel.ack(msg)
+  }, { noAck: false })
+}
+
+// 使用
+const result = await rpcCall(channel, { action: 'get_price', productId: 'P-001' })
+console.log('RPC 响应:', result)
+```
+
+---
+
+## 十、集群与高可用
+
+### 1. 普通集群（Cluster）
+
+RabbitMQ 集群中的各节点共享 Exchange、Queue 的**元数据**（名称、绑定关系），但**队列中的消息默认只存储在创建该队列的节点上**。
+
+```text
+Node A: Exchange 元数据 + Queue-1 的消息
+Node B: Exchange 元数据 + Queue-2 的消息
+Node C: Exchange 元数据 + Queue-3 的消息
+```
+
+当消费者连接到 Node B，但要消费 Queue-1 的消息时，Node B 会从 Node A 拉取消息再转发。
+
+**普通集群的问题**：如果 Node A 挂了，Queue-1 的消息就不可用了。
+
+### 2. 镜像队列（Mirrored Queue）— 经典模式
+
+通过 `ha-policy` 配置，队列的消息会被复制到多个节点：
+
+```bash
+# 所有队列在所有节点上做镜像（适合小集群）
+rabbitmqctl set_policy ha-all "^" '{"ha-mode":"all"}'
+
+# 队列镜像到 2 个节点
+rabbitmqctl set_policy ha-two "^order\." '{"ha-mode":"exactly","ha-params":2}'
+```
+
+镜像队列有一个 master 节点和多个 mirror 节点：
+- 所有写操作先写 master，再同步到 mirrors
+- master 挂了，某个 mirror 会被提升为新 master
+
+:::warning
+镜像队列已在 RabbitMQ 3.13 中被标记为废弃（deprecated），推荐使用 Quorum Queue。
+:::
+
+### 3. 仲裁队列（Quorum Queue）— 推荐方案
+
+Quorum Queue 是 RabbitMQ 3.8+ 引入的新一代高可用队列，基于 Raft 共识协议：
+
+```javascript
+await channel.assertQueue('order-process', {
+  durable: true,
+  arguments: {
+    'x-queue-type': 'quorum',            // 声明为仲裁队列
+    'x-quorum-initial-group-size': 3,    // 副本数
+  }
+})
+```
+
+**Quorum Queue vs 镜像队列**：
+
+| 特性 | 镜像队列 | Quorum Queue |
+|------|---------|-------------|
+| 一致性协议 | 自研同步 | Raft 共识 |
+| 数据安全性 | 可能丢消息（异步同步时） | 多数派确认，不丢 |
+| 性能 | 中 | 高（优化了磁盘 IO） |
+| 运维 | 需要手动配置 policy | 声明时指定即可 |
+| 非持久化消息 | 支持 | 不支持（强制持久化） |
+| 状态 | 已废弃 | 推荐 |
+
+### 4. 集群部署建议
+
+- **节点数**：至少 3 个节点（满足 Raft 多数派要求）
+- **网络**：节点间要求低延迟（同机房或同可用区）
+- **磁盘**：仲裁队列对磁盘 IO 有要求，建议 SSD
+- **负载均衡**：前端放一个 HAProxy / Nginx 做连接分发
+
+```text
+Client → HAProxy (TCP 5672) → RabbitMQ Node 1/2/3
+```
+
+---
+
+## 十一、流控与背压
+
+当生产速度远超消费速度时，RabbitMQ 有多层保护机制防止系统被撑爆。
+
+### 1. 内存水位告警
+
+RabbitMQ 默认在内存使用超过 40% 时触发流控，阻塞所有生产者的 publish 操作：
+
+```bash
+# 查看当前内存水位配置
+rabbitmqctl eval 'application:get_env(rabbit, vm_memory_high_watermark).'
+
+# 调整水位（默认 0.4 = 40%）
+rabbitmqctl set_vm_memory_high_watermark 0.6
+```
+
+### 2. 磁盘空间告警
+
+磁盘空间低于阈值时同样会触发流控：
+
+```bash
+# 默认阈值 50MB
+rabbitmqctl set_disk_free_limit "2GB"
+```
+
+### 3. 连接级流控（Connection Flow Control）
+
+当某个连接的发送速度过快时，RabbitMQ 会对这个连接施加背压，在 Management UI 中显示为连接状态 `flow`。
+
+### 4. 消费端的背压策略
+
+消费端也需要做流量控制：
+
+```javascript
+// 通过 prefetch 限制未确认消息数
+await channel.prefetch(20)
+
+// 消费时如果处理能力不足，可以暂停消费
+let isPaused = false
+
+channel.on('drain', () => {
+  // 通道排空，恢复消费
+  isPaused = false
+})
+
+// 在业务逻辑中监控积压情况
+setInterval(async () => {
+  const queueInfo = await channel.checkQueue('order-process')
+  if (queueInfo.messageCount > 50000) {
+    console.warn('队列积压超过 5 万，考虑扩容消费者')
+    // 触发自动扩容...
+  }
+}, 30000)
+```
+
+---
+
+## 十二、监控与运维
+
+### 1. Management UI
+
+RabbitMQ 自带一个功能完善的管理界面：
+
+```bash
+# 启用管理插件
+rabbitmq-plugins enable rabbitmq_management
+```
+
+访问 `http://localhost:15672`，可以查看：
+
+- 所有连接、通道状态
+- Exchange、Queue 列表和统计
+- 消息速率（发布/投递/确认）
+- 节点资源使用（内存、磁盘、文件描述符）
+- 配置 Policy、用户权限
+
+### 2. 关键监控指标
+
+| 指标 | 含义 | 告警阈值建议 |
+|------|------|-------------|
+| `queue.messages_ready` | 队列中待消费的消息数 | 持续增长说明消费能力不足 |
+| `queue.messages_unacknowledged` | 已投递但未确认的消息数 | 过高说明消费者处理慢 |
+| `node.mem_used / mem_limit` | 内存使用率 | > 70% 告警 |
+| `node.disk_free` | 可用磁盘空间 | < 5GB 告警 |
+| `connection.state = flow` | 连接被流控 | 出现即告警 |
+| `channel.consumer_count` | 队列消费者数 | = 0 告警（无人消费） |
+
+### 3. HTTP API
+
+Management 插件同时提供 RESTful API，方便集成到 Prometheus / Grafana：
+
+```bash
+# 获取所有队列状态
+curl -u guest:guest http://localhost:15672/api/queues
+
+# 获取单个队列详情
+curl -u guest:guest http://localhost:15672/api/queues/%2F/order-process
+
+# 获取节点信息
+curl -u guest:guest http://localhost:15672/api/nodes
+```
+
+配合 [rabbitmq-exporter](https://github.com/kbudde/rabbitmq_exporter) 可以将指标导出到 Prometheus。
+
+### 4. 常用运维命令
+
+```bash
+# 查看集群状态
+rabbitmqctl cluster_status
+
+# 查看队列列表
+rabbitmqctl list_queues name messages consumers
+
+# 查看连接列表
+rabbitmqctl list_connections user peer_host state
+
+# 查看通道列表
+rabbitmqctl list_channels connection consumer_count messages_unacknowledged
+
+# 清空队列
+rabbitmqctl purge_queue order-process
+
+# 删除队列
+rabbitmqctl delete_queue order-process
+```
+
+---
+
+## 十三、生产环境最佳实践
+
+### 1. 命名规范
+
+好的命名让系统一眼可读：
+
+```
+Exchange:  {domain}.{type}        → orders.topic, notifications.fanout
+Queue:     {service}.{action}     → payment.process, inventory.check
+Routing:   {domain}.{action}.{level} → order.create.high, order.cancel.normal
+```
+
+### 2. 连接与通道管理
+
+```
+每个应用      → 1 个 Connection（长连接，带心跳）
+每个线程/协程 → 1 个 Channel
+生产者        → 用 Confirm Channel
+消费者        → 设合理的 prefetch
+```
+
+不要为每条消息创建新连接，也不要所有线程共享一个 Channel。
+
+### 3. 消息设计建议
+
+```javascript
+// 推荐的消息结构
+{
+  "messageId": "msg-uuid",         // 全局唯一，用于去重
+  "type": "order.created",         // 消息类型
+  "timestamp": 1716800000000,      // 发布时间
+  "source": "order-service",       // 来源服务
+  "version": "1.0",                // 消息格式版本
+  "payload": {                     // 业务数据
+    "orderId": "ORD-001",
+    "amount": 299.99
+  }
+}
+```
+
+**设计原则**：
+- 每条消息必须有唯一 ID
+- 必须有 type/event 字段标识消息类型
+- payload 和元信息分离
+- 考虑版本兼容（新增字段不影响旧消费者）
+
+### 4. 错误处理策略
+
+```
+第一层：消费者内部重试（immediate retry，如网络抖动）
+第二层：消息 requeue + 延迟重试（如下游服务暂时不可用）
+第三层：死信队列 + 人工介入（如数据格式错误、业务异常）
+```
+
+不要无限重试，设置最大重试次数后进入死信队列。
+
+### 5. 队列设置建议
+
+```javascript
+await channel.assertQueue('order-process', {
+  durable: true,
+  arguments: {
+    'x-queue-type': 'quorum',           // 高可用
+    'x-dead-letter-exchange': 'dlx',    // 死信处理
+    'x-message-ttl': 86400000,          // 消息最大存活 24 小时
+    'x-max-length': 100000,             // 队列最大长度
+    'x-overflow': 'reject-publish',     // 满了就拒绝生产者（而不是丢弃旧消息）
+  }
+})
+```
+
+---
+
+## 十四、RabbitMQ vs Kafka：什么时候该用谁
+
+这是最常被问到的选型问题。两者定位不同：
+
+| 维度 | RabbitMQ | Kafka |
+|------|---------|-------|
+| 核心模型 | 消息队列（消费即删） | 日志流（保留可回放） |
+| 路由能力 | 极强（4种 Exchange） | 弱（只有 Topic 分区） |
+| 消息确认 | 精细（单条 ack/nack） | 粗粒度（offset 提交） |
+| 吞吐量 | 万级/秒（单节点） | 百万级/秒（分区并行） |
+| 延迟 | 毫秒级 | 毫秒级（但批量优化后会有延迟） |
+| 消息回溯 | 不支持（消费即删） | 支持（按 offset 回放） |
+| 适用场景 | 业务流程解耦、任务队列、RPC | 日志采集、事件流、数据管道 |
+
+**选择建议**：
+
+- 需要灵活路由、可靠投递、任务重试 → **RabbitMQ**
+- 需要超高吞吐、消息回溯、流式处理 → **Kafka**
+- 两者都需要 → 组合使用（RabbitMQ 做业务消息，Kafka 做数据管道）
+
+---
+
+## 十五、常见问题与排查
+
+### 1. 消息积压（最常见的生产问题）
+
+**症状**：`messages_ready` 持续增长，消费者跟不上。
+
+**排查步骤**：
+1. 检查消费者数量是否足够
+2. 检查 prefetch 设置是否合理
+3. 检查消费逻辑是否有阻塞操作（如同步 HTTP 调用）
+4. 检查是否有消费者异常退出但未被发现
+
+**解决方式**：
+- 增加消费者实例数
+- 优化消费逻辑（异步化、批量处理）
+- 临时调大 prefetch
+- 对不重要的历史消息设置 TTL 自动过期
+
+### 2. 连接频繁断开
+
+**可能原因**：
+- 心跳超时（默认 60 秒）
+- 网络不稳定
+- 服务端流控导致连接阻塞
+- 客户端 GC 导致心跳线程卡顿
+
+**解决方式**：
+- 调整心跳间隔：`amqp://user:pass@host?heartbeat=30`
+- 检查网络质量
+- 检查客户端是否有长时间阻塞操作
+
+### 3. 消息丢失
+
+**排查方向**：
+
+| 阶段 | 可能原因 | 防护措施 |
+|------|---------|---------|
+| Producer → Broker | 网络断开、未等确认 | Publisher Confirm |
+| Broker 存储 | 非持久化 + 重启 | Exchange/Queue/Message 三持久化 |
+| Broker → Consumer | autoAck + 处理失败 | 手动 ack |
+| 集群同步 | 镜像队列异步丢失 | 用 Quorum Queue |
+
+### 4. 消息重复
+
+**根本原因**：分布式环境下无法做到"恰好一次"投递。
+
+**应对方式**：不要试图在 MQ 层面解决，在消费端做幂等（见第八章）。
+
+### 5. 队列声明冲突
+
+```
+Error: PRECONDITION_FAILED - inequivalent arg 'x-message-ttl'
+```
+
+已存在的队列不能修改参数。解决方式：
+- 删除旧队列重建
+- 或创建新队列，用版本后缀区分（如 `order-process-v2`）
+
+---
+
+## 十六、快速启动（Docker Compose）
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"      # AMQP
+      - "15672:15672"    # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  rabbitmq_data:
+```
+
+```bash
+docker compose up -d
+# 访问 http://localhost:15672（admin / admin123）
+```
+
+---
+
+## 十七、总结
+
+RabbitMQ 的设计哲学是：**用灵活的路由和可靠的确认机制，在分布式系统中做精确的消息投递。**
+
+掌握 RabbitMQ，核心是理解这几层：
+
+1. **AMQP 模型**：Producer → Exchange → Binding → Queue → Consumer，消息不直接进队列，必须经过 Exchange 路由。
+
+2. **Exchange 是路由引擎**：Direct 精确匹配、Fanout 广播、Topic 模式匹配、Headers 属性匹配——选对 Exchange 类型是设计好消息系统的第一步。
+
+3. **可靠性是分层保证的**：Publisher Confirm 保生产段、持久化保存储段、手动 Ack 保消费段、死信队列兜底异常——每一层都有对应的机制，不是"用了 RabbitMQ 就不丢消息"。
+
+4. **高可用选 Quorum Queue**：基于 Raft 共识协议，多数派写入确认，比旧的镜像队列更安全、更简单。
+
+5. **消费端幂等是必须的**：消息重复不可避免，防线在消费端而不是 MQ 端。
+
+6. **监控先行**：队列积压、消费者掉线、内存水位、连接流控——这些告警比业务 bug 更早暴露问题。
+
+当你能把 Exchange 路由、消息确认、持久化、死信、集群高可用这几个维度串起来思考时，你就具备了设计生产级消息架构的能力。

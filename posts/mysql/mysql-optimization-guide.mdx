@@ -1,0 +1,376 @@
+---
+title: 'MySQL 性能优化指南：索引、查询优化与最佳实践'
+date: '2026-03-24'
+description: '基于《MySQL是怎样运行的》整理的MySQL核心优化知识点，涵盖B+树索引原理、查询优化、EXPLAIN详解、成本优化、事务与锁等关键内容。'
+tags: ['MySQL', '性能优化', '索引', '查询优化', 'Database']
+---
+
+# MySQL 性能优化指南：索引、查询优化与最佳实践
+
+> (本文整理自《MySQL是怎样运行的：从根儿上理解MySQL》，提取了MySQL优化和核心机制的要点。)[https://juejin.cn/book/6844733769996304392]
+
+---
+
+## 1. B+树索引：快速查询的秘籍
+
+### 1.1 索引的本质
+
+**索引**是为快速定位记录所在数据页而建立的目录，它有以下特点：
+
+- 数据页之间通过**双向链表**关联
+- 页内记录按主键顺序组成**单向链表**
+- 通过**页目录**实现二分法快速定位
+
+### 1.2 InnoDB索引方案
+
+InnoDB使用**B+树**作为索引结构：
+
+```
+B+树结构
+├── 非叶子节点（目录项记录）：存储索引列值 + 页号
+└── 叶子节点（用户记录）：存储完整数据（聚簇索引）
+```
+
+**聚簇索引特点**：
+- 按主键值排序，存储完整用户记录
+- 索引即数据，数据即索引
+
+**二级索引特点**：
+- 按索引列排序，叶子节点只存储**索引列 + 主键**
+- 查询时需要**回表**获取完整记录
+
+### 1.3 索引的代价
+
+| 代价类型 | 说明 |
+|---------|------|
+| 空间代价 | 每建一个索引就要建立一棵B+树，占用存储空间 |
+| 时间代价 | 增删改时需维护B+树结构，产生页面分裂、记录移位 |
+
+---
+
+## 2. B+树索引使用条件
+
+### 2.1 适用场景
+
+| 场景 | 说明 |
+|-----|------|
+| **全值匹配** | 查询条件包含索引的全部列 |
+| **匹配左边的列** | 必须从最左边连续使用索引列 |
+| **匹配列前缀** | 如 `LIKE 'As%'`，不支持 `LIKE '%As%'` |
+| **匹配范围值** | 索引列进行范围查询 |
+| **精确匹配+范围匹配** | 左边列精确匹配，右边列范围匹配 |
+| **用于排序/分组** | ORDER BY/GROUP BY 使用索引列 |
+
+### 2.2 联合索引注意事项
+
+```sql
+-- 联合索引 idx_name_birthday_phone_number (name, birthday, phone_number)
+-- 可用于：
+SELECT * FROM person_info WHERE name = 'Ashburn';                    -- OK
+SELECT * FROM person_info WHERE name = 'Ashburn' AND birthday = '1990-09-27';  -- OK
+
+-- 不可用于：
+SELECT * FROM person_info WHERE birthday = '1990-09-27';             -- 无法使用
+SELECT * FROM person_info WHERE name = 'Ashburn' AND phone_number = '...';      -- phone_number无法使用
+```
+
+### 2.3 回表的代价
+
+使用二级索引后，需要根据主键值到聚簇索引中查找完整记录（**回表**）。
+
+**优化建议**：
+- 尽量使用**覆盖索引**，只查询索引列，避免回表
+- 限制查询返回的记录数，减少回表次数
+
+```sql
+-- 覆盖索引示例：只查询索引列
+SELECT name, birthday, phone_number 
+FROM person_info WHERE name > 'Asa' AND name < 'Barlow';
+```
+
+---
+
+## 3. 单表访问方法
+
+### 3.1 访问类型（按性能从好到差）
+
+| 类型 | 说明 | 适用场景 |
+|-----|------|---------|
+| `const` | 主键/唯一索引等值查询 | `WHERE id = 1` |
+| `ref` | 普通二级索引等值查询 | `WHERE key1 = 'abc'` |
+| `ref_or_null` | 索引列等值或NULL | `WHERE key1 = 'a' OR key1 IS NULL` |
+| `range` | 索引列范围查询 | `WHERE key2 > 10 AND key2 < 1000` |
+| `index` | 遍历全部索引 | 查询列都在索引中 |
+| `ALL` | 全表扫描 | 最慢，尽量避免 |
+
+### 3.2 索引合并（Index Merge）
+
+某些情况下可使用多个索引：
+
+| 类型 | 条件 | 说明 |
+|-----|------|------|
+| **Intersection** | 多索引等值匹配 | 取多个索引结果的交集 |
+| **Union** | 多索引条件用OR连接 | 取多个索引结果的并集 |
+| **Sort-Union** | 非等值但可排序 | 先排序再Union |
+
+---
+
+## 4. 基于成本的优化
+
+### 4.1 成本构成
+
+```
+总成本 = I/O成本 + CPU成本
+```
+
+- **I/O成本**：页面从磁盘加载到内存
+- **CPU成本**：读取记录、检测搜索条件、排序
+
+### 4.2 优化步骤
+
+1. 根据搜索条件，找出所有可能使用的索引（`possible_keys`）
+2. 计算全表扫描的代价
+3. 计算使用不同索引执行查询的代价
+4. 对比各种执行方案的代价，选择最低的
+
+### 4.3 影响成本的因素
+
+| 因素 | 影响 |
+|-----|------|
+| **范围区间数量** | IN子句参数多则成本高 |
+| **需要回表的记录数** | 回表记录越多，成本越高 |
+| **统计数据准确性** | InnoDB统计数据是估计值 |
+
+---
+
+## 5. EXPLAIN详解
+
+### 5.1 关键输出列
+
+| 列名 | 说明 |
+|-----|------|
+| `type` | 访问方法：`const` > `ref` > `range` > `ALL` |
+| `key` | 实际使用的索引 |
+| `rows` | 预估读取的记录数 |
+| `Extra` | 额外信息（Using index/Using filesort等）|
+
+### 5.2 Extra常见值
+
+| 值 | 含义 | 优化建议 |
+|---|-----|---------|
+| `Using index` | 覆盖索引，无需回表 | 最佳 |
+| `Using index condition` | 使用索引下推 | 良好 |
+| `Using filesort` | 需要额外排序 | 考虑添加索引 |
+| `Using temporary` | 使用临时表 | 考虑优化查询 |
+| `Using where` | 回表后过滤 | 可能需优化 |
+
+### 5.3 优化建议
+
+```sql
+-- 优化前：全表扫描
+EXPLAIN SELECT * FROM orders WHERE status = 'pending';
+
+-- 优化后：添加索引
+ALTER TABLE orders ADD INDEX idx_status (status);
+EXPLAIN SELECT * FROM orders WHERE status = 'pending';
+```
+
+---
+
+## 6. 基于规则的优化
+
+### 6.1 条件化简
+
+| 优化 | 示例 |
+|-----|------|
+| 移除括号 | `((a=5))` → `a=5` |
+| 常量传递 | `a=5 AND b>a` → `a=5 AND b>5` |
+| 表达式计算 | `a=5+1` → `a=6` |
+
+### 6.2 外连接消除
+
+当WHERE子句包含被驱动表列的**非NULL条件**时：
+```sql
+-- 左外连接可转为内连接
+SELECT * FROM t1 LEFT JOIN t2 ON t1.id = t2.id 
+WHERE t2.name IS NOT NULL;
+-- 等价于内连接
+SELECT * FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t2.name IS NOT NULL;
+```
+
+### 6.3 子查询优化
+
+**物化表**：将不相关子查询结果存入临时表，避免重复执行子查询。
+
+**半连接（Semi-join）**：将子查询转为连接，只关心匹配是否存在。
+
+---
+
+## 7. 事务与锁
+
+### 7.1 事务特性（ACID）
+
+| 特性 | 说明 | 实现机制 |
+|-----|------|---------|
+| **A**tomic | 原子性 | Undo Log |
+| **C**onsistency | 一致性 | Redo Log + 锁 |
+| **I**solation | 隔离性 | MVCC + 锁 |
+| **D**uration | 持久性 | Redo Log |
+
+### 7.2 隔离级别
+
+| 级别 | 脏读 | 不可重复读 | 幻读 |
+|-----|-----|----------|-----|
+| READ UNCOMMITTED | 可能 | 可能 | 可能 |
+| READ COMMITTED | 不可能 | 可能 | 可能 |
+| REPEATABLE READ（默认） | 不可能 | 不可能 | 可能 |
+| SERIALIZABLE | 不可能 | 不可能 | 不可能 |
+
+### 7.3 MVCC原理
+
+**ReadView** 包含：
+- `m_ids`：活跃事务ID列表
+- `min_trx_id`：最小活跃事务ID
+- `max_trx_id`：创建时最大事务ID
+- `creator_trx_id`：当前事务ID
+
+**快照读** vs **当前读**：
+- 快照读：读取事务开始时的快照（普通SELECT）
+- 当前读：读取最新数据（INSERT/UPDATE/DELETE/SELECT FOR UPDATE）
+
+---
+
+## 8. Buffer Pool 优化
+
+### 8.1 作用
+
+Buffer Pool是InnoDB在内存中缓存数据和索引的组件，减少磁盘IO。
+
+### 8.2 关键参数
+
+| 参数 | 说明 | 建议值 |
+|-----|------|-------|
+| `innodb_buffer_pool_size` | 缓冲池大小 | 物理内存的50%-80% |
+| `innodb_buffer_pool_instances` | 缓冲池实例数 | CPU核心数（最多8个）|
+| `innodb_old_blocks_pct` | 旧区域比例 | 默认37% |
+| `innodb_flush_neighbor_pages` | 刷邻接页 | 机械盘建议always，SSD建议none |
+
+### 8.3 优化建议
+
+```sql
+-- 设置合适的缓冲池大小（建议物理内存的50%-80%）
+SET GLOBAL innodb_buffer_pool_size = 8589934592;  -- 8GB
+
+-- 预热Buffer Pool
+SELECT COUNT(*) FROM t;  -- 全表扫描预热
+```
+
+---
+
+## 9. 索引设计最佳实践
+
+### 9.1 创建原则
+
+1. **只为用于搜索、排序、分组的列创建索引**
+2. **选择高基数的列**（重复值少）
+3. **索引列类型尽量小**（减少存储空间和IO）
+4. **字符串前缀索引**（对长字符串效果好）
+
+```sql
+-- 前缀索引示例
+ALTER TABLE orders ADD INDEX idx_email (email(10));
+
+-- 联合索引示例（遵循最左前缀原则）
+ALTER TABLE orders ADD INDEX idx_status_created (status, created_at);
+```
+
+### 9.2 避免的索引
+
+| 问题 | 说明 | 解决方案 |
+|-----|------|---------|
+| **冗余索引** | 联合索引已包含单列索引 | 删除冗余索引 |
+| **重复索引** | 主键+唯一索引+普通索引 | 避免重复 |
+| **过长的索引** | 占用大量空间 | 使用前缀索引 |
+
+### 9.3 主键设计
+
+**建议**：使用自增主键或趋势主键，避免随机主键导致页分裂。
+
+```sql
+-- 推荐：自增主键
+CREATE TABLE orders (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    ...
+) ENGINE=InnoDB;
+
+-- 避免：UUID或其他随机主键
+```
+
+---
+
+## 10. 慢查询排查方法
+
+### 10.1 开启慢查询日志
+
+```sql
+-- 开启慢查询
+SET GLOBAL slow_query_log = ON;
+SET GLOBAL long_query_time = 1;  -- 超过1秒记录
+SET GLOBAL slow_query_log_file = '/var/log/mysql/slow.log';
+
+-- 查看未使用索引的查询
+SET GLOBAL log_queries_not_using_indexes = ON;
+```
+
+### 10.2 使用 EXPLAIN 分析
+
+```sql
+EXPLAIN SELECT * FROM orders 
+WHERE customer_id = 100 AND status = 'pending';
+
+-- 分析结果
+-- type: 应为 ref 或 range，不应为 ALL
+-- key: 应显示使用的索引名
+-- rows: 预估扫描行数，越少越好
+-- Extra: 避免 Using filesort、Using temporary
+```
+
+### 10.3 使用 optimizer_trace
+
+```sql
+SET optimizer_trace = "enabled=on";
+SET optimizer_trace_max_mem_size = 1000000;
+
+SELECT * FROM orders WHERE ...;
+
+SELECT * FROM information_schema.OPTIMIZER_TRACE;
+```
+
+---
+
+## 总结：MySQL优化检查清单
+
+### 索引优化
+- [ ] 为WHERE、JOIN、ORDER BY、GROUP BY的列建立索引
+- [ ] 遵循最左前缀原则设计联合索引
+- [ ] 避免冗余和重复索引
+- [ ] 使用覆盖索引减少回表
+- [ ] 对长字符串列使用前缀索引
+
+### 查询优化
+- [ ] 避免 SELECT *，只查询需要的列
+- [ ] 避免在索引列上使用函数或运算
+- [ ] 使用 EXPLAIN 分析执行计划
+- [ ] 避免隐式类型转换
+- [ ] 优化子查询，使用 JOIN 替代
+
+### 架构优化
+- [ ] 合理设置 Buffer Pool 大小
+- [ ] 使用合适的数据类型
+- [ ] 避免大事务
+- [ ] 定期分析表更新统计数据
+- [ ] 使用连接池复用连接
+
+---
+
+> 参考资料：《MySQL是怎样运行的：从根儿上理解MySQL》
