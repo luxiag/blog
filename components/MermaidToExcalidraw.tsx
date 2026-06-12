@@ -33,9 +33,21 @@ export const MermaidExcalidraw: React.FC<MermaidExcalidrawProps> = ({ code }) =>
 
         const sanitizedElements: any[] = [];
 
+
+
+        // Mermaid / Excalidraw 有时会把换行保留成字面量 "\\n"，这里统一转成真实换行
+
+        const normalizeTextNewlines = (text: string) => text.replace(/\\n/g, "\n");
+
+
+
         // 1. 增强型文本测量：处理多行和中文字符
+
         const measureMultilineText = (text: string, fontSize: number) => {
-          const lines = text.split("\n");
+
+          const normalizedText = normalizeTextNewlines(text);
+
+          const lines = normalizedText.split("\n");
           const lineHeight = fontSize * 1.5; // 增加行间距系数
           let maxWidth = 0;
 
@@ -52,64 +64,208 @@ export const MermaidExcalidraw: React.FC<MermaidExcalidrawProps> = ({ code }) =>
           };
         };
 
+        const pushLabelBackground = (
+          ownerId: string,
+          x: number,
+          y: number,
+          width: number,
+          height: number,
+          paddingX = 8,
+          paddingY = 5
+        ) => {
+          sanitizedElements.push({
+            id: `${ownerId}-label-bg`,
+            type: "rectangle",
+            x: safeNum(x) - paddingX,
+            y: safeNum(y) - paddingY,
+            width: Math.max(1, safeNum(width) + paddingX * 2),
+            height: Math.max(1, safeNum(height) + paddingY * 2),
+            angle: 0,
+            strokeColor: "transparent",
+            backgroundColor: "#ffffff",
+            fillStyle: "solid",
+            strokeWidth: 0,
+            strokeStyle: "solid",
+            roughness: 0,
+            opacity: 100,
+            roundness: { type: 3 },
+          });
+        };
+
+        const nodeMetricsById = new Map<string, { x: number; y: number; width: number; height: number }>();
+
+        const getLabelMetrics = (el: any) => {
+          const labelText = el.label?.text ? normalizeTextNewlines(el.label.text) : "";
+          if (!labelText) return { labelText, textMetrics: { width: 0, height: 0 } };
+
+          const fontSize = safeNum(el.label.fontSize || 20);
+          const lines = labelText.split("\n");
+          const lineHeight = fontSize * 1.5;
+          const maxWidth = lines.reduce((max: number, line: string) => {
+            // 中文 1.2 系数，确保手写体不会溢出
+            const w = line.split("").reduce((a, c) => a + (c.charCodeAt(0) > 255 ? 1.2 : 0.6), 0);
+            return Math.max(max, w * fontSize);
+          }, 0);
+
+          return {
+            labelText,
+            textMetrics: { width: maxWidth + 36, height: lines.length * lineHeight + 14 }
+          };
+        };
+
+        // 第一遍：先算出所有非箭头元素撑大后的尺寸，后面箭头端点要按这个新尺寸吸附
         elements.forEach((el: any) => {
-          // 1. 预计算文字所需的尺寸
-          let textMetrics = { width: 0, height: 0 };
-          if (el.label?.text) {
-            const fontSize = safeNum(el.label.fontSize || 20);
-            const lines = el.label.text.split("\n");
-            const lineHeight = fontSize * 1.5;
+          if (el.type === "arrow") return;
 
-            const maxWidth = lines.reduce((max: number, line: string) => {
-              // 中文 1.2 系数，确保手写体不会溢出
-              const w = line.split("").reduce((a, c) => a + (c.charCodeAt(0) > 255 ? 1.2 : 0.6), 0);
-              return Math.max(max, w * fontSize);
-            }, 0);
+          const { textMetrics } = getLabelMetrics(el);
+          const width = Math.max(safeNum(el.width), textMetrics.width);
+          const height = Math.max(safeNum(el.height), textMetrics.height);
 
-            textMetrics = { width: maxWidth + 20, height: lines.length * lineHeight + 10 };
+          if (el.id) {
+            nodeMetricsById.set(el.id, {
+              x: safeNum(el.x),
+              y: safeNum(el.y),
+              width,
+              height,
+            });
+          }
+        });
+
+        const movePointOutsideBound = (arrow: any, point: any, boundElementId?: string) => {
+          if (!boundElementId || !Array.isArray(point)) return point;
+
+          const node = nodeMetricsById.get(boundElementId);
+          if (!node) return point;
+
+          const gap = 8;
+          const absX = safeNum(arrow.x) + safeNum(point[0]);
+          const absY = safeNum(arrow.y) + safeNum(point[1]);
+          const cx = node.x + node.width / 2;
+          const cy = node.y + node.height / 2;
+          const dx = absX - cx;
+          const dy = absY - cy;
+
+          let nextX = absX;
+          let nextY = absY;
+
+          // 判断原端点更接近哪条边，然后贴到新边界外侧
+          if (Math.abs(dy) / Math.max(node.height, 1) >= Math.abs(dx) / Math.max(node.width, 1)) {
+            nextY = dy >= 0 ? node.y + node.height + gap : node.y - gap;
+            nextX = Math.max(node.x + gap, Math.min(node.x + node.width - gap, absX));
+          } else {
+            nextX = dx >= 0 ? node.x + node.width + gap : node.x - gap;
+            nextY = Math.max(node.y + gap, Math.min(node.y + node.height - gap, absY));
           }
 
-          // 2. 修正形状（Rectangle）的宽度：取 原始宽度 和 文字宽度 的最大值
+          return [nextX - safeNum(arrow.x), nextY - safeNum(arrow.y)];
+        };
+
+        const normalizeArrowGeometry = (el: any) => {
+          if (el.type !== "arrow" || !Array.isArray(el.points)) {
+            return {
+              x: safeNum(el.x),
+              y: safeNum(el.y),
+              width: safeNum(el.width),
+              height: safeNum(el.height),
+              points: el.points,
+            };
+          }
+
+          const startElementId = el.startBinding?.elementId;
+          const endElementId = el.endBinding?.elementId;
+
+          // 先转成绝对坐标，端点按撑大后的节点重新吸附到边界外
+          const absolutePoints = el.points.map((point: any, index: number) => {
+            if (!Array.isArray(point)) return point;
+
+            let nextPoint = [safeNum(point[0]), safeNum(point[1])];
+            if (index === 0) {
+              nextPoint = movePointOutsideBound(el, nextPoint, startElementId);
+            }
+            if (index === el.points.length - 1) {
+              nextPoint = movePointOutsideBound(el, nextPoint, endElementId);
+            }
+
+            return [safeNum(el.x) + safeNum(nextPoint[0]), safeNum(el.y) + safeNum(nextPoint[1])];
+          });
+
+          const validPoints = absolutePoints.filter((point: any) => Array.isArray(point));
+          if (validPoints.length === 0) {
+            return {
+              x: safeNum(el.x),
+              y: safeNum(el.y),
+              width: safeNum(el.width),
+              height: safeNum(el.height),
+              points: el.points,
+            };
+          }
+
+          // 重新计算箭头 bbox。只改 points 不改 x/y/width/height，Excalidraw 会继续按旧 bbox 画线。
+          const minX = Math.min(...validPoints.map((point: any) => point[0]));
+          const minY = Math.min(...validPoints.map((point: any) => point[1]));
+          const maxX = Math.max(...validPoints.map((point: any) => point[0]));
+          const maxY = Math.max(...validPoints.map((point: any) => point[1]));
+
+          return {
+            x: minX,
+            y: minY,
+            width: Math.max(1, maxX - minX),
+            height: Math.max(1, maxY - minY),
+            points: absolutePoints.map((point: any) => Array.isArray(point)
+              ? [point[0] - minX, point[1] - minY]
+              : point
+            ),
+          };
+        };
+
+        elements.forEach((el: any) => {
+          const { labelText, textMetrics } = getLabelMetrics(el);
+          const arrowGeometry = normalizeArrowGeometry(el);
+
+          // 修正形状宽高；箭头使用重算后的 bbox，避免节点变大后线还按旧尺寸穿进节点
           const baseEl = {
             ...el,
-            x: safeNum(el.x),
-            y: safeNum(el.y),
-            // 关键修复：给矩形增加内边距补偿
-            width: Math.max(safeNum(el.width), textMetrics.width),
-            height: Math.max(safeNum(el.height), textMetrics.height),
+            x: el.type === "arrow" ? arrowGeometry.x : safeNum(el.x),
+            y: el.type === "arrow" ? arrowGeometry.y : safeNum(el.y),
+            points: el.type === "arrow" ? arrowGeometry.points : el.points,
+            width: el.type === "arrow" ? arrowGeometry.width : Math.max(safeNum(el.width), textMetrics.width),
+            height: el.type === "arrow" ? arrowGeometry.height : Math.max(safeNum(el.height), textMetrics.height),
             fontFamily: 1,
             opacity: 100
           };
           sanitizedElements.push(baseEl);
 
-          // 3. 处理文字位置（基于修正后的 baseEl）
-          if (el.label?.text) {
+          // 处理文字位置（基于修正后的 baseEl）
+          if (labelText) {
             let tx = baseEl.x + (baseEl.width - (textMetrics.width - 20)) / 2;
             let ty = baseEl.y + (baseEl.height - (textMetrics.height - 10)) / 2;
-            const { width: tWidth, height: tHeight } = measureMultilineText(el.label.text, el.label.fontSize || 20);
-            if (el.type === "arrow" && el.points) {
-              // 1. 找到线条的“中间段”
-              // 对于 3 个点以上的折线，取中间那个点的坐标通常最准确
-              const midIndex = Math.floor(el.points.length / 2);
-              const midPoint = el.points[midIndex];
+            const { width: tWidth, height: tHeight } = measureMultilineText(labelText, el.label.fontSize || 20);
 
-              // 2. 这里的坐标是相对于 baseEl.x/y 的偏移
-              const centerX = midPoint[0];
-              const centerY = midPoint[1];
+            if (el.type === "arrow" && baseEl.points) {
+              const midIndex = Math.floor(baseEl.points.length / 2);
+              const midPoint = baseEl.points[midIndex];
+              const centerX = safeNum(midPoint?.[0]);
+              const centerY = safeNum(midPoint?.[1]);
 
               tx = baseEl.x + centerX - tWidth / 2;
-
-              // 3. 这里的偏移量从原来的 -15 缩小到 -5，让文字紧贴线条
-              // 如果文字在线条下面，可以设为 +5
               ty = baseEl.y + centerY - tHeight - 2;
+
+              // 给箭头文字加一块白底遮罩，水平线不会从文字中间穿过去
+              pushLabelBackground(el.id || "arrow", tx, ty, tWidth, tHeight, 8, 5);
             }
+
+            if (el.type !== "arrow") {
+              pushLabelBackground(el.id || "el", tx, ty, Math.max(1, textMetrics.width - 36), Math.max(1, textMetrics.height - 14), 8, 5);
+            }
+
             sanitizedElements.push({
+              id: `${el.id || "el"}-label-text`,
               type: "text",
-              text: el.label.text,
+              text: labelText,
               x: safeNum(tx),
               y: safeNum(ty),
-              width: textMetrics.width - 20,
-              height: textMetrics.height - 10,
+              width: Math.max(1, textMetrics.width - 36),
+              height: Math.max(1, textMetrics.height - 14),
               fontSize: el.label.fontSize || 20,
               fontFamily: 1,
               textAlign: "center",
@@ -156,12 +312,20 @@ export const MermaidExcalidraw: React.FC<MermaidExcalidrawProps> = ({ code }) =>
     }
     @font-face {
       font-family: 'ChineseHandwrittenLocal';
-      src: url('${process.env.NEXT_PUBLIC_BASE_PATH || ''}/fonts/ZCOOLKuaiLe-Regular.ttf') format('ttf');
+      src: url('${process.env.NEXT_PUBLIC_BASE_PATH || ''}/fonts/ZCOOLKuaiLe-Regular.ttf') format('truetype');
       font-display: swap;
     }
-svg text {
-      /* 优先使用中文手写，英文回退到 Virgil */
+    /* 强制所有文本使用中文字体 */
+    svg text, svg tspan {
       font-family: 'ChineseHandwrittenLocal', 'VirgilLocal', sans-serif !important;
+      white-space: pre;
+      dominant-baseline: middle;
+      text-anchor: middle;
+    }
+
+    /* 确保文本容器正确显示 */
+    svg text {
+      pointer-events: none;
     }
     
     /* 解决换行符不生效的问题 */
