@@ -5,6 +5,8 @@ excerpt: '深入探索 C# 的并发编程：线程基础、线程安全、同步
 tags: ['csharp', 'concurrency', 'threading', 'async', 'performance']
 ---
 
+
+
 # C# 并发编程完全指南
 
 ## 为什么需要并发编程？
@@ -50,6 +52,8 @@ Thread thread = new Thread(() =>
 {
     Console.WriteLine($"线程 {Thread.CurrentThread.ManagedThreadId} 正在运行");
     Thread.Sleep(1000);
+
+    
     Console.WriteLine("线程完成");
 });
 
@@ -222,6 +226,8 @@ class SafeCounter
     {
         lock (lockObj)
         {
+
+
             count++;
         }
     }
