@@ -180,6 +180,7 @@ export async function getPostData(slug: string): Promise<Post> {
       author: frontMatter.author,
       tags: ensureCategoryInTags(frontMatter.tags || [], postFile.category),
       readingTime: calculateReadingTime(content),
+      hidden: frontMatter.hidden === true
     };
   } catch (error) {
     logger.error(`Error reading post ${slug}:`, error);
@@ -201,17 +202,32 @@ function ensureCategoryInTags(tags: string[], category?: string): string[] {
 }
 
 export async function getAllPosts(): Promise<Post[]> {
-  const slugs = getAllPostSlugs();
-  const posts = await Promise.all(
-    slugs.map(({ params }) => getPostData(params.slug))
-  );
-  return posts.sort((a, b) => {
-    if (a.date < b.date) {
-      return 1;
-    } else {
-      return -1;
+  const postFiles = getPostFiles(postsDirectory);
+
+  // 1. 提前过滤：仅解析 front matter，避免对不符合要求的文章执行昂贵的 markdown 编译
+  const validSlugs = postFiles.filter(({ filePath }) => {
+    try {
+      const fileContents = fs.readFileSync(filePath, 'utf8');
+      const { data } = matter(fileContents);
+      const frontMatter = data as PostFrontMatter;
+
+      const hasValidTitle = frontMatter.title && frontMatter.title !== '无标题';
+      const hasValidDate = !!frontMatter.date;
+      const isNotHidden = frontMatter.hidden !== true;
+
+      return hasValidTitle && hasValidDate && isNotHidden;
+    } catch {
+      return false;
     }
-  });
+  }).map(file => file.slug);
+
+  // 2. 仅对符合要求的文章执行完整的数据获取与编译
+  const posts = await Promise.all(
+    validSlugs.map(slug => getPostData(slug))
+  );
+
+  // 3. 优雅排序：基于时间戳比较，并直接返回
+  return posts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 }
 
 export interface TocItem {

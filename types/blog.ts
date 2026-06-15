@@ -15,6 +15,7 @@ export interface Post {
     picture?: string;
   };
   tags?: string[];
+  hidden?:boolean;
   readingTime?: string;
 }
 
@@ -29,4 +30,5 @@ export interface PostFrontMatter {
     picture?: string;
   };
   tags?: string[];
+  hidden?:boolean;
 }
