@@ -84,11 +84,13 @@
 
 .dark .DocSearch-Hit a:hover {
   background: oklch(0.25 0 0);
+   border-color: #ea580c;
 }
 
 .dark .DocSearch-Hit[aria-selected="true"] a {
+
   background: #ffffff;
-  border-color: #ffffff;
+  border-color: #ea580c;
 }
 
 .dark .DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-title {
@@ -378,26 +380,29 @@
 
 /* Hit hover state */
 .DocSearch-Hit a:hover {
-  background: #f5f5f5;
+  background: #ffffff;
+  border-color: #ea580c;
 }
 
-/* Hit selected/active state - HIGH CONTRAST dark background with white text */
+/* Hit selected/active state - Only highlight border */
 .DocSearch-Hit[aria-selected="true"] a {
-  background: oklch(0.145 0 0);
-  border-color: oklch(0.145 0 0);
+    --docsearch-hit-active-color: #ea580c;
+  background: #ffffff;
+  border-color: #ea580c;
 }
 
 .DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-title {
-  color: #ffffff;
+  color: oklch(0.145 0 0);
 }
 
 .DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-path {
-  color: oklch(0.75 0 0);
+  color: oklch(0.55 0 0);
 }
 
 .DocSearch-Hit[aria-selected="true"] mark {
-  color: #ffab70;
+  color: #ea580c;
 }
+
 
 
 
@@ -517,17 +522,21 @@
 
 /* Selected state icons */
 .DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-icon {
-  border-color: oklch(0.5 0 0);
-  background: oklch(0.2 0 0);
+  border-color: oklch(0.3 0 0);
+  background: #ffffff;
 }
 
 .DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-icon::before {
-  border-color: oklch(0.5 0 0);
-  background: oklch(0.2 0 0);
+  border-color: oklch(0.3 0 0);
+  background: #ffffff;
 }
 
 .DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-icon svg {
-  color: #ffffff;
+  color: oklch(0.145 0 0);
+}
+
+.DocSearch-Hit[aria-selected="true"] .DocSearch-Hit-action svg {
+  color: #ea580c;
 }
 
 /* ========== Start Screen ========== */

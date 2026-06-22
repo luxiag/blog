@@ -1,13 +1,23 @@
 ---
-title: 'SQL 实战练习 一：简单SQL语句'
+title: 'SQL 系统进阶 · Part 2：实战练习（一）基础巩固'
 date: '2026-01-23'
-description: '无需安装数据库，直接在浏览器中运行 SQL。精选 10 道练习题，从基础查询到多表连接与聚合，配有实时执行环境与参考答案。'
+description: '「SQL 从入门到专家」系列第二篇。10 道在线可运行练习题，从基础查询到多表连接与聚合，配实时执行环境与参考答案，把 Part 1 的语法变成肌肉记忆。'
 tags: ['SQL', 'Database', 'Interactive', 'Exercises']
 ---
 
-# SQL 实战练习：在线运行 + 实时验证
+# SQL 系统进阶 · Part 2：实战练习（一）基础巩固
+
+:::info 本文是「SQL 从入门到专家」系列的第二篇
+1. [Part 1 · 入门指南](/blog/sql/sql-beginner-guide) —— 建立 SQL 心智模型
+2. **Part 2 · 实战练习（一）：基础巩固（本文）** —— 10 道题巩固单表与双表基础
+3. [Part 3 · 实战练习（二）：进阶应用](/blog/sql/sql-practice-lab) —— 21 道电商数据集题
+4. [Part 4 · 进阶：执行计划、索引原理与查询优化](/blog/sql/sql-advanced-performance)
+5. [Part 5 · PostgreSQL 深度实战](/blog/sql/postgresql-guide)
+:::
 
 纸上得来终觉浅，绝知此事要躬行。
+
+读完 [Part 1 入门指南](/blog/sql/sql-beginner-guide) 后，你已经知道 `SELECT / WHERE / GROUP BY / JOIN` 该怎么写。这一篇的目标是把这些"知道"变成"会写"——10 道由易到难的题，全部在浏览器里直接跑。
 
 本文内置了一个 **轻量级 SQL 模拟器**（基于 `sql.js`/SQLite），你可以在每一道题的编辑器中直接编写并运行 SQL，结果会实时显示。
 
@@ -183,4 +193,6 @@ INSERT INTO orders VALUES (101, 1, 100, 'PAID'), (102, 1, 200, 'PAID'), (103, 2,
 3. **连接**：`INNER JOIN`, `LEFT JOIN`
 4. **子查询**：`IN`, `EXISTS`
 
-如果你能独立做完这些题，说明你已经具备了扎实的 SQL 基础。建议在真实数据库（MySQL/PostgreSQL）中继续深入学习索引优化与事务处理。
+如果你能独立做完这些题，说明你已经具备了扎实的 SQL 基础。
+
+**下一步：** 这 10 道题主要是单表与双表的基础操作。想挑战更接近真实业务的场景——多表 JOIN、子查询、CTE、窗口函数、对账报表——请继续 [Part 3 · 实战练习（二）：进阶应用](/blog/sql/sql-practice-lab)，那里用一套更完整的电商数据集准备了 21 道题。
