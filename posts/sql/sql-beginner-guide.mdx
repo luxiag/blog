@@ -15,6 +15,7 @@ tags: ['SQL', 'Database', 'Tutorial', 'Backend']
 3. [Part 3 · 实战练习（二）：进阶应用](/blog/sql/sql-practice-lab) —— 21 道电商数据集题，覆盖 CTE、窗口函数与报表
 4. [Part 4 · 进阶：执行计划、索引原理与查询优化](/blog/sql/sql-advanced-performance) —— 从「会写」到「写得快」的方法论（数据库中立）
 5. [Part 5 · PostgreSQL 深度实战](/blog/sql/postgresql-guide) —— 把进阶知识落到一个具体的、功能最完善的数据库上
+
 :::
 
 SQL（Structured Query Language）是**关系型数据库**的通用语言。你可以用它：
@@ -688,6 +689,50 @@ SQL 注入是最常见也最危险的问题之一。
   dataset="commerce"
   title="SQL 模拟器（本文数据集：电商订单）"
   description="建议：只写 SELECT/CTE 查询来练习。写坏了也没关系，点‘重置数据’即可恢复。"
+  answerSql={`
+-- 1. 查最近 30 天下单用户的数量
+SELECT COUNT(DISTINCT user_id) AS recent_users_count
+FROM orders
+WHERE order_date >= DATE('now', '-30 days');
+
+-- 2. 查每个用户的订单总金额（没有订单也要显示 0）
+SELECT 
+  u.id AS user_id,
+  u.name,
+  IFNULL(SUM(oi.quantity * oi.unit_price), 0) AS total_amount
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+LEFT JOIN order_items oi ON o.id = oi.order_id
+GROUP BY u.id, u.name
+ORDER BY total_amount DESC;
+
+-- 3. 查每个用户最近一笔订单的状态
+SELECT 
+  u.id AS user_id,
+  u.name,
+  o.id AS latest_order_id,
+  o.order_date,
+  o.status
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+WHERE o.order_date = (
+  SELECT MAX(o2.order_date) 
+  FROM orders o2 
+  WHERE o2.user_id = u.id
+)
+ORDER BY u.id;
+
+-- 4. 查销量最高的前 10 个商品
+SELECT 
+  p.id AS product_id,
+  p.name AS product_name,
+  SUM(oi.quantity) AS total_sales
+FROM order_items oi
+JOIN products p ON oi.product_id = p.id
+GROUP BY oi.product_id, p.name
+ORDER BY total_sales DESC
+LIMIT 10;
+  `}
 />
 
 把这些题写熟，你就已经超过"只会 SELECT * "的阶段了。

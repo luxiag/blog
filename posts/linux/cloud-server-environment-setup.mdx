@@ -1,0 +1,433 @@
+---
+title: '云服务器环境搭建：运行时、数据库与 Nginx'
+date: '2026-02-10'
+excerpt: '有了一台安全的服务器，接下来要把它变成能跑项目的"生产环境"。本文系统讲解如何安装并管理 Node.js / Python 运行时、MySQL 与 Redis 数据库，以及作为流量入口的 Nginx，并解释 systemd、反向代理、HTTPS 等关键概念，为项目部署铺好最后一段路。'
+tags: ['linux', 'server', 'nginx', 'mysql', 'redis', 'nodejs', 'devops']
+---
+
+# 云服务器环境搭建：运行时、数据库与 Nginx
+
+在上一篇《[云服务器入门](/blog/posts/linux/cloud-server-getting-started)》中，我们拿到了一台干净、安全的服务器，并完成了密钥登录、用户管理和防火墙加固。但此时它还是一张"白纸"——只有操作系统，没有任何能运行你项目的环境。
+
+这篇文章的目标，就是把这张白纸变成一个**完整的生产环境**。我们会按"一个 Web 请求从外到内的路径"来组织内容，这样你能清楚每个组件在系统里扮演什么角色：
+
+```mermaid
+graph LR
+  U[用户浏览器] -- 80/443 --> N[Nginx<br/>反向代理]
+  N -- 转发 --> A[你的应用<br/>Node/Python]
+  A -- 读写 --> D[(MySQL)]
+  A -- 缓存 --> R[(Redis)]
+```
+
+我们将从最外层的 **Nginx** 概念讲起，再到中间的**运行时**，最后到底层的**数据库**，并在最后用 `systemd` 把一切串成可靠的"开机自启、崩溃自愈"的服务。
+
+:::note 环境约定
+本文以 **Ubuntu 22.04 / 24.04 LTS** 为例，包管理器使用 `apt`。如果你用的是 CentOS/RHEL 系列，把 `apt` 换成 `dnf`、把 `sudo apt install` 换成 `sudo dnf install` 即可，思路完全一致。
+:::
+
+---
+
+## 1. 先理解三类组件的角色
+
+在动手安装之前，先建立一个清晰的心智模型。一个典型的 Web 项目运行环境由三类组件构成：
+
+| 组件 | 角色 | 类比 |
+| :--- | :--- | :--- |
+| **运行时**（Node/Python/JVM） | 真正执行你写的业务代码 | 厨房里的厨师 |
+| **数据库**（MySQL/Redis） | 存储和缓存数据 | 仓库和冰箱 |
+| **Web 服务器**（Nginx） | 接收外部请求、分发流量、托管静态文件、处理 HTTPS | 餐厅前台/门童 |
+
+很多新手会问："我用 Node.js 自己就能监听 80 端口对外服务，为什么还要 Nginx？" 这个问题我们会在第 4 节专门解答。先按部就班把环境装起来。
+
+在开始前，先更新一下软件源（这是上一篇讲过的好习惯）：
+
+```bash
+sudo apt update && sudo apt upgrade -y
+```
+
+---
+
+## 2. 安装应用运行时
+
+你的项目用什么语言写的，就装对应的运行时。这里以最常见的 **Node.js** 和 **Python** 为例。
+
+### 2.1 安装 Node.js（推荐用 nvm 管理多版本）
+
+直接用 `apt install nodejs` 装到的版本通常很旧。更好的方式是用 **nvm（Node Version Manager）**，它能让你自由切换 Node 版本，互不干扰。
+
+```bash
+# 1. 安装 nvm（脚本来自官方仓库）
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+
+# 2. 让当前终端立即加载 nvm（或重新登录一次）
+source ~/.bashrc
+
+# 3. 安装最新的 LTS 版本 Node.js
+nvm install --lts
+
+# 4. 验证
+node -v
+npm -v
+```
+
+:::tip 为什么不用 root 装 nvm？
+nvm 把 Node 装在**当前用户的家目录**下（`~/.nvm`），这正符合上一篇"用普通用户 deploy 操作"的原则——你的应用运行时归属于业务用户，而不需要 root 权限，更安全也更易管理。
+:::
+
+如果项目要用 `pnpm` 或 `yarn`，可以通过 Node 自带的 `corepack` 一键启用：
+
+```bash
+corepack enable
+corepack prepare pnpm@latest --activate
+```
+
+### 2.2 安装 Python（用系统自带 + venv）
+
+Ubuntu 一般自带 Python 3。我们要补装的是创建**虚拟环境**和安装包的工具：
+
+```bash
+# 安装 venv 和 pip
+sudo apt install python3 python3-venv python3-pip -y
+
+# 验证
+python3 --version
+pip3 --version
+```
+
+部署 Python 项目时，**强烈建议每个项目用独立的虚拟环境**，避免依赖互相污染：
+
+```bash
+# 在项目目录下创建虚拟环境
+python3 -m venv venv
+
+# 激活它（激活后命令行前会出现 (venv) 标记）
+source venv/bin/activate
+
+# 在虚拟环境内安装依赖
+pip install -r requirements.txt
+
+# 用完退出虚拟环境
+deactivate
+```
+
+---
+
+## 3. 安装数据库
+
+### 3.1 MySQL：关系型数据库
+
+```bash
+# 1. 安装 MySQL 服务端
+sudo apt install mysql-server -y
+
+# 2. 启动并设为开机自启
+sudo systemctl start mysql
+sudo systemctl enable mysql
+
+# 3. 运行安全初始化脚本（设置 root 密码、移除匿名用户和测试库）
+sudo mysql_secure_installation
+```
+
+`mysql_secure_installation` 会交互式地问你几个问题，建议这样选：
+
+- 是否启用密码强度校验插件：学习可以选 No（`n`）。
+- 设置 root 密码：**是**，设一个强密码。
+- 移除匿名用户：**是**（`y`）。
+- 禁止 root 远程登录：**是**（`y`，更安全）。
+- 移除 test 数据库：**是**（`y`）。
+- 重新加载权限表：**是**（`y`）。
+
+接下来，**不要让应用直接用 root 连数据库**。应该为每个项目创建专用账号，遵循"最小权限原则"：
+
+```sql
+-- 用 sudo mysql 进入 MySQL 控制台后执行
+
+-- 1. 创建数据库
+CREATE DATABASE myapp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- 2. 创建专用用户（'%' 表示允许任意主机，仅限内网可用时建议改成 'localhost'）
+CREATE USER 'myapp_user'@'localhost' IDENTIFIED BY 'a_strong_password';
+
+-- 3. 只授予这个用户对 myapp 库的权限，而不是所有库
+GRANT ALL PRIVILEGES ON myapp.* TO 'myapp_user'@'localhost';
+
+-- 4. 刷新权限
+FLUSH PRIVILEGES;
+```
+
+:::warning 数据库不要暴露在公网
+默认情况下 MySQL 监听 `127.0.0.1`（仅本机可访问），这是**安全的**。除非确有需要，否则**不要**修改 `bind-address` 让它监听公网，更**不要**在防火墙/安全组里放行 3306 端口。绝大多数"数据库被脱库勒索"的事故，都源于把数据库直接暴露在了公网。
+:::
+
+### 3.2 Redis：内存缓存数据库
+
+Redis 常用于缓存、会话存储、消息队列等场景。
+
+```bash
+# 1. 安装
+sudo apt install redis-server -y
+
+# 2. 启动并设为开机自启
+sudo systemctl enable --now redis-server
+
+# 3. 测试连接（返回 PONG 即正常）
+redis-cli ping
+```
+
+同样建议给 Redis 加上密码，编辑 `/etc/redis/redis.conf`：
+
+```text
+# 找到 requirepass 这一行，去掉注释并设置密码
+requirepass your_redis_password
+
+# 确认只监听本机（默认就是，保持即可）
+bind 127.0.0.1 ::1
+```
+
+修改后重启：`sudo systemctl restart redis-server`。
+
+---
+
+## 4. Nginx：流量的入口与守门人
+
+现在回答前面那个关键问题：**既然应用自己能监听端口，为什么还要 Nginx？**
+
+因为 Nginx 作为专业的 Web 服务器，能优雅地承担应用不擅长的脏活累活：
+
+- **反向代理**：把用户请求转发给后端应用，让应用安心跑在内网高位端口（如 3000），不直接暴露。
+- **静态资源服务**：图片、CSS、JS 这类静态文件，Nginx 提供服务的效率远高于 Node/Python。
+- **HTTPS 终止**：在 Nginx 层统一处理 SSL 证书，后端应用无需关心加密。
+- **负载均衡**：流量大了，可以把请求分发到多个应用实例。
+- **统一入口**：一台服务器上跑多个项目，可以通过域名/路径由 Nginx 分发到不同后端。
+
+### 4.1 安装与基础操作
+
+```bash
+# 安装
+sudo apt install nginx -y
+
+# 启动并开机自启
+sudo systemctl enable --now nginx
+```
+
+此时，在浏览器访问你的服务器公网 IP（`http://你的IP`），应该能看到 Nginx 的默认欢迎页 "Welcome to nginx!"。如果看不到，回顾上一篇：检查 **UFW** 和**云厂商安全组**是否都放行了 80 端口。
+
+### 4.2 理解什么是反向代理
+
+这是 Nginx 最核心的用途，务必理解清楚。
+
+- **正向代理**：代理**客户端**。比如你用 VPN 访问外网，VPN 替你去请求，服务器只看到 VPN 的 IP。
+- **反向代理**：代理**服务器**。用户以为自己在和 Nginx 对话，实际上 Nginx 在背后偷偷把请求转发给了真正的应用。
+
+```mermaid
+graph LR
+  U[用户] -- 访问 example.com:80 --> N[Nginx]
+  N -- proxy_pass<br/>转发到 127.0.0.1:3000 --> A[Node 应用<br/>监听 3000]
+  A -- 响应 --> N
+  N -- 返回给用户 --> U
+```
+
+用户全程只和 Nginx（80/443 端口）打交道，完全不知道背后那个监听 3000 端口的应用的存在。
+
+### 4.3 配置一个反向代理站点
+
+Nginx 的站点配置放在 `/etc/nginx/sites-available/`，启用时通过软链接到 `/etc/nginx/sites-enabled/`。我们新建一个配置：
+
+```bash
+sudo nano /etc/nginx/sites-available/myapp
+```
+
+写入以下内容（假设你的应用监听本机 3000 端口）：
+
+```nginx
+server {
+    listen 80;
+    # 把 example.com 换成你的域名；没有域名就写服务器公网 IP
+    server_name example.com;
+
+    location / {
+        # 核心：把请求转发给本机 3000 端口的应用
+        proxy_pass http://127.0.0.1:3000;
+
+        # 传递真实的客户端信息给后端应用
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # 支持 WebSocket（如果应用用到了实时通信）
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+启用并生效：
+
+```bash
+# 1. 创建软链接启用站点
+sudo ln -s /etc/nginx/sites-available/myapp /etc/nginx/sites-enabled/
+
+# 2. （可选）移除默认站点，避免冲突
+sudo rm /etc/nginx/sites-enabled/default
+
+# 3. ⚠️ 关键：每次改完配置都先测试语法，避免重载后整个 Nginx 挂掉
+sudo nginx -t
+
+# 4. 测试通过后，平滑重载配置（不中断现有连接）
+sudo systemctl reload nginx
+```
+
+:::tip reload 还是 restart？
+- `reload`：平滑重载配置，**不中断**正在处理的请求，日常改配置用这个。
+- `restart`：完全停止再启动，会**短暂中断**服务，一般只在大改动或服务异常时用。
+
+这正是上一篇《[进阶之路](/blog/posts/linux/linux-advanced-commands)》里讲的 **SIGHUP 信号重载配置**在实际中的体现——`reload` 本质就是给 Nginx 主进程发了重载信号。
+:::
+
+### 4.4 用 Nginx 直接托管静态网站
+
+如果你的项目是纯前端（如打包后的 React/Vue 静态文件），根本不需要后端应用，直接让 Nginx 托管即可：
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    # 静态文件根目录
+    root /var/www/myapp/dist;
+    index index.html;
+
+    location / {
+        # 单页应用（SPA）路由回退：找不到文件时返回 index.html
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+---
+
+## 5. 配置 HTTPS：让网站用上小绿锁
+
+明文的 HTTP 已经被现代浏览器标记为"不安全"。给网站配 HTTPS 不仅安全，还是很多功能（如 PWA、地理定位）的前提。最简单免费的方案是 **Let's Encrypt + Certbot**。
+
+:::important 前提条件
+配 HTTPS 需要一个**已经解析到你服务器 IP 的域名**（纯 IP 无法签发受信任证书）。请先在域名服务商处把域名的 A 记录指向你的服务器公网 IP。
+:::
+
+```bash
+# 1. 安装 Certbot 及其 Nginx 插件
+sudo apt install certbot python3-certbot-nginx -y
+
+# 2. 一条命令自动签发证书并改写 Nginx 配置
+sudo certbot --nginx -d example.com -d www.example.com
+```
+
+Certbot 会：自动验证域名归属、签发证书、**自动修改你的 Nginx 配置**加上 443 端口和证书路径、并配置 HTTP 自动跳转 HTTPS。证书有效期 90 天，Certbot 还会自动设置定时任务续期，你基本不用再操心。
+
+完成后，记得在防火墙放行 443（上一篇已讲）：`sudo ufw allow 443/tcp`。
+
+---
+
+## 6. systemd：让你的应用变成可靠的"服务"
+
+前面所有组件（Nginx、MySQL、Redis）都是用 `systemctl start/enable` 来管理的。这背后是 Linux 现代的**服务管理系统 systemd**。它的核心价值是：
+
+- **开机自启**（`enable`）：服务器重启后服务自动拉起。
+- **崩溃自愈**：进程意外退出后自动重启。
+- **统一管理**：用一套命令管理所有后台服务，并集中收集日志。
+
+我们也应该把**自己的应用**注册成 systemd 服务，而不是用上一篇提到的 `nohup ... &` 这种简陋方式（一旦崩溃就再也起不来了）。
+
+### 6.1 systemctl 常用命令速查
+
+```bash
+sudo systemctl start nginx       # 启动
+sudo systemctl stop nginx        # 停止
+sudo systemctl restart nginx     # 重启
+sudo systemctl reload nginx      # 重载配置
+sudo systemctl status nginx      # 查看运行状态（最常用，排错第一步）
+sudo systemctl enable nginx      # 设为开机自启
+sudo systemctl disable nginx     # 取消开机自启
+```
+
+### 6.2 把自己的 Node 应用做成 systemd 服务
+
+新建一个服务单元文件：
+
+```bash
+sudo nano /etc/systemd/system/myapp.service
+```
+
+写入：
+
+```ini
+[Unit]
+Description=My Node.js App
+# 声明依赖：在网络就绪后再启动
+After=network.target
+
+[Service]
+# 用普通用户运行，而不是 root（安全！）
+User=deploy
+Group=deploy
+# 项目所在目录
+WorkingDirectory=/home/deploy/myapp
+# 启动命令（用 which node 查到 node 的绝对路径填进来）
+ExecStart=/home/deploy/.nvm/versions/node/v20.x.x/bin/node server.js
+# 崩溃后自动重启
+Restart=always
+RestartSec=5
+# 注入环境变量
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+[Install]
+WantedBy=multi-user.target
+```
+
+让它生效并启动：
+
+```bash
+# 1. 重新加载 systemd 配置（每次改 .service 文件后都要执行）
+sudo systemctl daemon-reload
+
+# 2. 启动并设为开机自启
+sudo systemctl enable --now myapp
+
+# 3. 查看状态，确认是 active (running)
+sudo systemctl status myapp
+```
+
+### 6.3 用 journalctl 查看应用日志
+
+注册成 systemd 服务后，应用的所有输出（`stdout`/`stderr`）都会被 systemd 收集，用 `journalctl` 统一查看：
+
+```bash
+# 查看 myapp 的全部日志
+sudo journalctl -u myapp
+
+# 实时跟踪最新日志（相当于第一篇讲的 tail -f）
+sudo journalctl -u myapp -f
+
+# 只看今天的日志
+sudo journalctl -u myapp --since today
+```
+
+:::tip Node 项目也可以用 PM2
+除了 systemd，Node 生态里还有非常流行的进程管理工具 **PM2**（`npm install -g pm2`），它内置了进程守护、日志管理、负载均衡（cluster 模式）和开机自启（`pm2 startup` + `pm2 save`）。两者选其一即可：追求"系统级统一管理"用 systemd，追求"Node 生态便捷"用 PM2。下一篇部署实战中我们会再具体演示。
+:::
+
+---
+
+## 总结
+
+经过这一篇，你的服务器已经从一张白纸变成了一个**完整可用的生产环境**。我们按照请求流转的路径把各组件串了起来：
+
+- **运行时**：用 `nvm` 管理 Node.js、用 `venv` 隔离 Python，让应用代码能跑起来。
+- **数据库**：安装 MySQL 与 Redis，并遵循**最小权限**和**绝不暴露公网**两条铁律。
+- **Nginx**：作为流量入口，理解并配置**反向代理**，托管静态资源，再用 **Certbot** 一键上 HTTPS。
+- **systemd**：把 Nginx、数据库乃至**你自己的应用**都管理成开机自启、崩溃自愈的可靠服务，并用 `journalctl` 查日志。
+
+至此，环境万事俱备。下一篇《[项目部署实战](/blog/posts/linux/project-deployment-in-practice)》，我们将把这些组件真正用起来——把一份代码从本地仓库一步步搬上服务器、构建、运行、对外提供服务，并介绍用 **Docker** 和 **CI/CD** 实现更现代、更自动化的部署方式。

@@ -1,5 +1,5 @@
 ---
-title: MySQL 基础知识：从安装到索引与事务的系统指南
+title: MySQL 基础知识
 date: 2025-04-28
 category:
   - MySQL
