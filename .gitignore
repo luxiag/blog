@@ -48,3 +48,4 @@ next-env.d.ts
 .out
 .alma-snapshots
 .contentlayer
+.playwright-mcp

@@ -21,9 +21,6 @@ export default function Header() {
           </div>
 
             <nav className="hidden md:flex items-center gap-8">
-            <Link href="/" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
-              Home
-            </Link>
             <Link href="/posts" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
               Post
             </Link>
@@ -60,9 +57,6 @@ export default function Header() {
         {isMenuOpen && (
           <div className="md:hidden pb-4 border-t border-neutral-200 dark:border-neutral-800 mt-3 pt-3">
               <nav className="flex flex-col gap-4">
-              <Link href="/" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
-                首页
-              </Link>
               <Link href="/posts" className="text-sm text-neutral-900 dark:text-neutral-100 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors">
                 博客
               </Link>

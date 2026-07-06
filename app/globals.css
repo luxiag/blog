@@ -64,17 +64,6 @@
   word-break: break-word;
 }
 
-/* 首段首字下沉（可选，营造报纸感） */
-.mdx-content > p:first-of-type::first-letter {
-  float: left;
-  font-size: 3.2em;
-  line-height: 0.82;
-  margin-right: 0.08em;
-  margin-top: 0.06em;
-  font-family: var(--font-serif);
-  font-weight: 700;
-  color: var(--foreground);
-}
 
 body {
   background: var(--background);

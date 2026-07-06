@@ -142,7 +142,6 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       });
       return (result as { default: unknown }).default;
     } catch (e) {
-      console.error('Error rendering MDX:', e);
       return null;
     }
   }, [content, isMdxCompiled]);

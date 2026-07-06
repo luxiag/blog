@@ -130,7 +130,8 @@ function plugin(config: AdmonitionConfig = {}) {
       if (node.type !== 'paragraph' || index === undefined || !parent) return;
 
       const text = node.children?.[0]?.value;
-      if (typeof text !== 'string' || !text.startsWith(':::')) return;
+      if (typeof text !== 'string') return;
+      if (!text.startsWith(':::')) return;
 
       // When there is no blank line between the opening marker and the closing :::,
       // remark-parse merges them into ONE paragraph (e.g. ":::note\n:::").
@@ -138,7 +139,7 @@ function plugin(config: AdmonitionConfig = {}) {
       const newlinePos = text.indexOf('\n');
       const firstLine  = newlinePos === -1 ? text : text.slice(0, newlinePos);
 
-      const match = firstLine.match(/^:::\s*(\w+)(?:\s+(.+))?$/);
+      const match = firstLine.match(/^:::\s*(\w+)(?:\s+(.+))?\r?$/);
       if (!match) return;
 
       const [, type, title] = match;

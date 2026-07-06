@@ -18,11 +18,6 @@ export default function Footer() {
             <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">快速链接</h3>
             <ul className="flex flex-col gap-2">
               <li>
-                <Link href="/" className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">
-                  首页
-                </Link>
-              </li>
-              <li>
                 <Link href="/posts" className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">
                   博客文章
                 </Link>

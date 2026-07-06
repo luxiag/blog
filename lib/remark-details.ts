@@ -8,10 +8,10 @@ function plugin() {
 
       // 检查是否是 ::: details 指令
       const text = node.children?.[0]?.value;
-      if (typeof text !== 'string' || !text.startsWith('::: details')) return;
+      if (typeof text !== 'string' || !text.replace(/\r$/, '').startsWith('::: details')) return;
 
       // 提取标题
-      const titleMatch = text.match(/::: details\s+(.+)/);
+      const titleMatch = text.replace(/\r$/, '').match(/::: details\s+(.+)/);
       const title = titleMatch ? titleMatch[1].trim() : 'Details';
 
       // 查找结束标记
@@ -24,9 +24,10 @@ function plugin() {
         const siblingText = sibling?.children?.[0]?.value;
 
         if (typeof siblingText === 'string') {
-          if (siblingText.startsWith('::: details')) {
+          const trimmed = siblingText.replace(/\r$/, '');
+          if (trimmed.startsWith('::: details')) {
             depth++;
-          } else if (siblingText === ':::') {
+          } else if (trimmed === ':::') {
             depth--;
           }
         }
