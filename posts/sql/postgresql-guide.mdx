@@ -395,7 +395,41 @@ ROLLBACK TO SAVEPOINT sp1;  -- 只回滚到 sp1，保留前面的 INSERT
 COMMIT;
 ```
 
-### 4.2 隔离级别
+### 4.2 RETURNING 子句：操作后直接拿结果
+
+PG 独有的强大特性——`INSERT`、`UPDATE`、`DELETE` 后可以用 `RETURNING` 直接返回受影响的行，省去一次额外查询：
+
+```sql
+-- 插入后拿到生成的 ID 和默认值
+INSERT INTO orders (user_id, amount, status)
+VALUES (1, 299.00, 'pending')
+RETURNING id, created_at;
+
+-- 更新后拿到新旧值对比
+UPDATE products
+SET price = price * 0.9
+WHERE category = 'electronics'
+RETURNING id, name, price AS new_price;
+
+-- 删除后知道删了什么
+DELETE FROM orders
+WHERE created_at < '2024-01-01'
+RETURNING id, user_id;
+
+-- 配合 CTE 使用（最强大的模式）
+WITH new_order AS (
+  INSERT INTO orders (user_id, amount) VALUES (1, 199.00)
+  RETURNING id
+)
+INSERT INTO order_items (order_id, product_id, quantity)
+SELECT id, 42, 2 FROM new_order;
+```
+
+:::tip 为什么 RETURNING 很重要？
+在应用层，你通常需要插入后拿到自增 ID。没有 `RETURNING`，你需要先 `INSERT` 再 `SELECT last_insert_id()`。`RETURNING` 把这两步合成一步，既快又不会在并发时拿错 ID。
+:::
+
+### 4.3 隔离级别
 
 PG 支持 SQL 标准定义的四个隔离级别，但实现上有自己的特点（基于 MVCC）：
 
@@ -418,7 +452,7 @@ COMMIT;
 SET default_transaction_isolation = 'serializable';
 ```
 
-### 4.3 锁机制
+### 4.4 锁机制
 
 PG 有多个粒度的锁：
 
@@ -452,7 +486,7 @@ UPDATE task_queue SET status = 'done' WHERE id = :task_id;
 COMMIT;
 ```
 
-### 4.4 死锁
+### 4.5 死锁
 
 PG 自动检测死锁，并回滚其中一个事务：
 
@@ -617,7 +651,50 @@ FOR EACH ROW EXECUTE FUNCTION posts_search_vector_update();
 CREATE INDEX idx_posts_search_vector ON posts USING GIN (search_vector);
 ```
 
-### 5.4 继承与分区表
+### 5.4 LATERAL JOIN：关联子查询 + JOIN
+
+`LATERAL` 允许在 `FROM` 子句中，后面的子查询可以引用前面表的列——这在普通 JOIN 中是做不到的。
+
+```sql
+-- 每个用户的最近 3 笔订单（普通写法需要子查询 + 窗口函数）
+-- LATERAL 写法更直观：
+SELECT u.name, latest.*
+FROM users u
+CROSS JOIN LATERAL (
+  SELECT id, amount, created_at
+  FROM orders o
+  WHERE o.user_id = u.id
+  ORDER BY created_at DESC
+  LIMIT 3
+) latest;
+
+-- 每个分类的商品 Top 5
+SELECT c.name, top_products.*
+FROM categories c
+CROSS JOIN LATERAL (
+  SELECT p.name, p.price
+  FROM products p
+  WHERE p.category_id = c.id
+  ORDER BY p.sales DESC
+  LIMIT 5
+) top_products;
+
+-- LEFT JOIN LATERAL：即使子查询返回空也保留左表行
+SELECT u.name, recent.amount
+FROM users u
+LEFT JOIN LATERAL (
+  SELECT amount FROM orders o
+  WHERE o.user_id = u.id
+  ORDER BY created_at DESC
+  LIMIT 1
+) recent ON true;
+```
+
+:::tip LATERAL vs 普通子查询
+普通 `FROM` 子查询是**独立**的，不能引用外部表的列。加了 `LATERAL` 后，子查询变成了"对每一行执行一次"的关联子查询。`CROSS JOIN LATERAL` 等价于 `LATERAL` 直接写在 `FROM` 里（不写 JOIN 时默认是 `CROSS JOIN LATERAL`）。
+:::
+
+### 5.5 继承与分区表
 
 **声明式表分区**（PG 10+）是处理大表的推荐方案：
 
@@ -642,6 +719,47 @@ SELECT * FROM logs WHERE created_at >= '2026-05-01' AND created_at < '2026-06-01
 
 :::tip
 分区表最大的好处不是查询性能，而是**维护性**：可以直接 `DROP TABLE logs_2026_04` 删除旧数据，比 `DELETE` 快 100 倍，也不会造成表膨胀。
+:::
+
+### 5.6 物化视图：预计算 + 缓存复杂查询
+
+普通视图每次查询都重新执行底层 SQL。物化视图（Materialized View）把结果**物理存储**到磁盘，适合底层查询很重但数据可以容忍一定延迟的场景。
+
+```sql
+-- 创建物化视图：每个用户的消费汇总
+CREATE MATERIALIZED VIEW mv_user_spending AS
+SELECT
+  u.id AS user_id,
+  u.name,
+  COUNT(o.id) AS order_count,
+  SUM(o.amount) AS total_spent
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+GROUP BY u.id, u.name;
+
+-- 查询和普通表一样
+SELECT * FROM mv_user_spending WHERE total_spent > 1000;
+
+-- 刷新数据（全量重新计算）
+REFRESH MATERIALIZED VIEW mv_user_spending;
+
+-- 刷新时允许并发读（加 CONCURRENTLY 关键字，需要唯一索引）
+CREATE UNIQUE INDEX ON mv_user_spending (user_id);
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_user_spending;
+```
+
+**物化视图 vs 普通视图 vs 汇总表：**
+
+| 方案 | 数据实时性 | 查询性能 | 维护成本 |
+|------|-----------|----------|----------|
+| 普通视图 | 实时 | 取决于底层查询 | 无需维护 |
+| 物化视图 | 需要手动/定时刷新 | 快（直接读物化数据） | 需要刷新策略 |
+| 汇总表 | 应用层控制 | 最快 | 应用层维护一致性 |
+
+:::tip 适用场景
+- 报表/仪表盘：每天凌晨刷新一次物化视图，白天查询直接命中
+- 复杂聚合：底层 JOIN + GROUP BY 很重，但业务不需要秒级实时
+- 配合 `pg_cron` 扩展实现定时自动刷新
 :::
 
 ---
@@ -745,7 +863,47 @@ ORDER BY seq_tup_read DESC
 LIMIT 20;
 ```
 
-### 6.4 VACUUM 与表膨胀
+### 6.4 COPY：大批量数据导入导出
+
+`COPY` 是 PG 中批量操作数据的最快方式，比逐条 `INSERT` 快 10 倍以上：
+
+```sql
+-- 从 CSV 文件导入数据到表
+COPY users FROM '/path/to/users.csv' WITH (FORMAT CSV, HEADER true);
+
+-- 导出表数据到 CSV
+COPY users TO '/path/to/users_export.csv' WITH (FORMAT CSV, HEADER true);
+
+-- 导出查询结果
+COPY (SELECT name, email FROM users WHERE is_active = true)
+TO '/path/to/active_users.csv' WITH (FORMAT CSV);
+
+-- 从 stdin 导入（适合应用层管道操作）
+COPY users FROM STDIN WITH (FORMAT CSV);
+-- 然后通过 psql 的 \copy 命令或程序管道发送数据
+```
+
+**pg_dump 逻辑备份（整个库/表）：**
+
+```bash
+# 导出整个数据库为 SQL 文本
+pg_dump -U myuser -d mydb -f backup.sql
+
+# 导出为自定义格式（压缩，可选择性恢复）
+pg_dump -U myuser -d mydb -Fc -f backup.dump
+
+# 只导出表结构
+pg_dump -U myuser -d mydb -t users -s -f users_schema.sql
+
+# 恢复
+pg_restore -U myuser -d mydb backup.dump
+```
+
+:::tip COPY vs INSERT 的性能差异
+`COPY` 直接将数据写入缓冲区，绕过了逐行解析和约束检查的开销。对于超过 1 万行的数据导入，优先用 `COPY` 而非多条 `INSERT`。
+:::
+
+### 6.5 VACUUM 与表膨胀
 
 由于 MVCC，更新和删除不会立即释放空间，需要 VACUUM 来回收：
 

@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## 写新文章的要求
 
 写新文章时必须遵守以下质量标准。
@@ -46,5 +50,3 @@
 - [TOC 与客户端渲染](./docs/rendering.md) —— Heading ID 生成、MDX/Markdown 两条渲染路径
 - [路由、路径别名、样式系统](./docs/development.md) —— 路由表、`@/` 别名、Tailwind v4 与设计 token
 - [交互式组件指南](./docs/interactive-components-guide.md) —— 各个交互组件的详细用法
-
-> 注：本文件与 `CLAUDE.md` 保持同步，修改时记得两边一起改。
