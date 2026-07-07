@@ -127,7 +127,7 @@ export default function CodeBlock({ children, className, codeContent: propCodeCo
               >
                 查看代码
               </button>
-              <MermaidExcalidraw code={displayContent} />
+              <MermaidExcalidraw code={codeString} />
             </div>
           ) : (
             <div className={`relative overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 ${!isExpanded ? 'max-h-[400px]' : ''}`}>

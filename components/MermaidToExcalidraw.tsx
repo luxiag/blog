@@ -1,17 +1,26 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { parseMermaidToExcalidraw } from "@excalidraw/mermaid-to-excalidraw";
-import { exportToSvg } from "@excalidraw/excalidraw";
+import { exportToSvg, convertToExcalidrawElements } from "@excalidraw/excalidraw";
 
 
 interface MermaidExcalidrawProps {
   code: string;
 }
 
+const MIN_SCALE = 0.4;
+const MAX_SCALE = 3;
+const SCALE_STEP = 0.2;
+
 export const MermaidExcalidraw: React.FC<MermaidExcalidrawProps> = ({ code }) => {
   const [svgContent, setSvgContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [scale, setScale] = useState<number>(1);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const zoomIn = useCallback(() => setScale((s) => Math.min(MAX_SCALE, +(s + SCALE_STEP).toFixed(2))), []);
+  const zoomOut = useCallback(() => setScale((s) => Math.max(MIN_SCALE, +(s - SCALE_STEP).toFixed(2))), []);
+  const zoomReset = useCallback(() => setScale(1), []);
 
   useEffect(() => {
     let isMounted = true;
@@ -23,46 +32,21 @@ export const MermaidExcalidraw: React.FC<MermaidExcalidrawProps> = ({ code }) =>
       setError(null);
 
       try {
+        // Mermaid 的流程图节点标签不支持字面量 "\n"（尤其在 [(...)] 这类形状里会直接解析报错），
+        // 但支持 <br/> 换行。这里先把源码里的 "\n" 统一替换成 <br/> 再交给解析器。
+        const preprocessedCode = code.replace(/\\n/g, "<br/>");
+
         // 1. Convert Mermaid syntax to Excalidraw Elements
-        // Removed invalid 'fontSize' property from config object
-        const { elements, files } = await parseMermaidToExcalidraw(code);
-        console.log('elements', elements)
+        const { elements, files } = await parseMermaidToExcalidraw(preprocessedCode);
         if (!isMounted) return;
 
         const safeNum = (v: any) => (isNaN(parseFloat(v)) ? 0 : parseFloat(v));
 
         const sanitizedElements: any[] = [];
 
-
-
-        // Mermaid / Excalidraw 有时会把换行保留成字面量 "\\n"，这里统一转成真实换行
-
-        const normalizeTextNewlines = (text: string) => text.replace(/\\n/g, "\n");
-
-
-
-        // 1. 增强型文本测量：处理多行和中文字符
-
-        const measureMultilineText = (text: string, fontSize: number) => {
-
-          const normalizedText = normalizeTextNewlines(text);
-
-          const lines = normalizedText.split("\n");
-          const lineHeight = fontSize * 1.5; // 增加行间距系数
-          let maxWidth = 0;
-
-          lines.forEach(line => {
-            const lineUnits = line.split("").reduce((acc, char) =>
-              acc + (char.charCodeAt(0) > 255 ? 1.1 : 0.55), 0);
-            maxWidth = Math.max(maxWidth, lineUnits * fontSize);
-          });
-
-          return {
-            width: maxWidth + 10, // 额外缓冲区
-            height: lines.length * lineHeight,
-            lineHeight
-          };
-        };
+        // Mermaid / Excalidraw 有时会把换行保留成字面量 "\n" 或 "<br/>"，这里统一转成真实换行
+        const normalizeTextNewlines = (text: string) =>
+          text.replace(/\\n/g, "\n").replace(/<br\s*\/?>/gi, "\n");
 
         const pushLabelBackground = (
           ownerId: string,
@@ -70,8 +54,9 @@ export const MermaidExcalidraw: React.FC<MermaidExcalidrawProps> = ({ code }) =>
           y: number,
           width: number,
           height: number,
-          paddingX = 8,
-          paddingY = 5
+          paddingX = 3,
+          paddingY = 1,
+          opacity = 85
         ) => {
           sanitizedElements.push({
             id: `${ownerId}-label-bg`,
@@ -87,192 +72,120 @@ export const MermaidExcalidraw: React.FC<MermaidExcalidrawProps> = ({ code }) =>
             strokeWidth: 0,
             strokeStyle: "solid",
             roughness: 0,
-            opacity: 100,
+            // 半透明白底：只用来遮挡连线穿过文字，不会把相邻节点整块盖住
+            opacity,
             roundness: { type: 3 },
           });
         };
 
-        const nodeMetricsById = new Map<string, { x: number; y: number; width: number; height: number }>();
-
-        const getLabelMetrics = (el: any) => {
-          const labelText = el.label?.text ? normalizeTextNewlines(el.label.text) : "";
-          if (!labelText) return { labelText, textMetrics: { width: 0, height: 0 } };
-
-          const fontSize = safeNum(el.label.fontSize || 20);
-          const lines = labelText.split("\n");
-          const lineHeight = fontSize * 1.5;
-          const maxWidth = lines.reduce((max: number, line: string) => {
-            // 中文 1.2 系数，确保手写体不会溢出
-            const w = line.split("").reduce((a, c) => a + (c.charCodeAt(0) > 255 ? 1.2 : 0.6), 0);
-            return Math.max(max, w * fontSize);
+        // 按“字符单位”估算一段（可能多行）文字在给定字号下的宽高。
+        // 中文/全角约 1.05 个单位宽，ASCII 约 0.58 个单位宽；行高按 1.25 倍字号。
+        const measureText = (text: string, fontSize: number) => {
+          const lines = text.split("\n");
+          const maxUnits = lines.reduce((m: number, line: string) => {
+            const u = line.split("").reduce((a, c) => a + (c.charCodeAt(0) > 255 ? 1.05 : 0.58), 0);
+            return Math.max(m, u);
           }, 0);
-
           return {
-            labelText,
-            textMetrics: { width: maxWidth + 36, height: lines.length * lineHeight + 14 }
+            width: maxUnits * fontSize,
+            height: lines.length * fontSize * 1.25,
+            lineCount: lines.length,
+            maxUnits,
           };
         };
 
-        // 第一遍：先算出所有非箭头元素撑大后的尺寸，后面箭头端点要按这个新尺寸吸附
-        elements.forEach((el: any) => {
-          if (el.type === "arrow") return;
-
-          const { textMetrics } = getLabelMetrics(el);
-          const width = Math.max(safeNum(el.width), textMetrics.width);
-          const height = Math.max(safeNum(el.height), textMetrics.height);
-
-          if (el.id) {
-            nodeMetricsById.set(el.id, {
-              x: safeNum(el.x),
-              y: safeNum(el.y),
-              width,
-              height,
-            });
-          }
-        });
-
-        const movePointOutsideBound = (arrow: any, point: any, boundElementId?: string) => {
-          if (!boundElementId || !Array.isArray(point)) return point;
-
-          const node = nodeMetricsById.get(boundElementId);
-          if (!node) return point;
-
-          const gap = 8;
-          const absX = safeNum(arrow.x) + safeNum(point[0]);
-          const absY = safeNum(arrow.y) + safeNum(point[1]);
-          const cx = node.x + node.width / 2;
-          const cy = node.y + node.height / 2;
-          const dx = absX - cx;
-          const dy = absY - cy;
-
-          let nextX = absX;
-          let nextY = absY;
-
-          // 判断原端点更接近哪条边，然后贴到新边界外侧
-          if (Math.abs(dy) / Math.max(node.height, 1) >= Math.abs(dx) / Math.max(node.width, 1)) {
-            nextY = dy >= 0 ? node.y + node.height + gap : node.y - gap;
-            nextX = Math.max(node.x + gap, Math.min(node.x + node.width - gap, absX));
-          } else {
-            nextX = dx >= 0 ? node.x + node.width + gap : node.x - gap;
-            nextY = Math.max(node.y + gap, Math.min(node.y + node.height - gap, absY));
-          }
-
-          return [nextX - safeNum(arrow.x), nextY - safeNum(arrow.y)];
+        // 关键设计：完全保留 Mermaid 计算出的节点位置与尺寸、以及连线的路径，
+        // 不做任何“撑大 / 挪位 / 重排 / 重新吸附”——这些才是导致布局错乱的根源。
+        // 我们唯一要解决的是“手写中文字体比 Mermaid 预设字体更宽、文字会溢出节点”，
+        // 因此改为按节点尺寸把标签字号缩小到刚好放得下，位置一律沿用 Mermaid 的结果。
+        const shapeFitFactor = (type: string) => {
+          if (type === "ellipse") return 0.72; // 圆/椭圆的内接矩形
+          if (type === "diamond") return 0.6;   // 菱形内接矩形更小
+          return 0.88;                          // 矩形留一点内边距
         };
 
-        const normalizeArrowGeometry = (el: any) => {
-          if (el.type !== "arrow" || !Array.isArray(el.points)) {
-            return {
-              x: safeNum(el.x),
-              y: safeNum(el.y),
-              width: safeNum(el.width),
-              height: safeNum(el.height),
-              points: el.points,
-            };
-          }
+        const fitFontSize = (text: string, baseFontSize: number, boxW: number, boxH: number, factor: number) => {
+          const unit = measureText(text, 1); // 字号 1 时的宽(=maxUnits) 与高(=lineCount*1.25)
+          const availW = Math.max(1, boxW * factor);
+          const availH = Math.max(1, boxH * factor);
+          const byWidth = unit.maxUnits > 0 ? availW / unit.maxUnits : baseFontSize;
+          const byHeight = unit.lineCount > 0 ? availH / (unit.lineCount * 1.25) : baseFontSize;
+          // 不超过原始字号，也不小于 9px，保证可读
+          return Math.max(9, Math.min(baseFontSize, byWidth, byHeight));
+        };
 
-          const startElementId = el.startBinding?.elementId;
-          const endElementId = el.endBinding?.elementId;
+        elements.forEach((el: any) => {
+          const labelText = el.label?.text ? normalizeTextNewlines(el.label.text) : "";
+          const baseFontSize = safeNum(el.label?.fontSize || 20);
 
-          // 先转成绝对坐标，端点按撑大后的节点重新吸附到边界外
-          const absolutePoints = el.points.map((point: any, index: number) => {
-            if (!Array.isArray(point)) return point;
-
-            let nextPoint = [safeNum(point[0]), safeNum(point[1])];
-            if (index === 0) {
-              nextPoint = movePointOutsideBound(el, nextPoint, startElementId);
-            }
-            if (index === el.points.length - 1) {
-              nextPoint = movePointOutsideBound(el, nextPoint, endElementId);
-            }
-
-            return [safeNum(el.x) + safeNum(nextPoint[0]), safeNum(el.y) + safeNum(nextPoint[1])];
+          // 元素本体：原样保留 Mermaid 的几何，只统一字体族与不透明度。
+          sanitizedElements.push({
+            ...el,
+            fontFamily: 1,
+            opacity: 100,
           });
 
-          const validPoints = absolutePoints.filter((point: any) => Array.isArray(point));
-          if (validPoints.length === 0) {
-            return {
-              x: safeNum(el.x),
-              y: safeNum(el.y),
-              width: safeNum(el.width),
-              height: safeNum(el.height),
-              points: el.points,
-            };
-          }
+          if (!labelText) return;
 
-          // 重新计算箭头 bbox。只改 points 不改 x/y/width/height，Excalidraw 会继续按旧 bbox 画线。
-          const minX = Math.min(...validPoints.map((point: any) => point[0]));
-          const minY = Math.min(...validPoints.map((point: any) => point[1]));
-          const maxX = Math.max(...validPoints.map((point: any) => point[0]));
-          const maxY = Math.max(...validPoints.map((point: any) => point[1]));
+          if (el.type === "arrow" && Array.isArray(el.points) && el.points.length > 0) {
+            // 连线标签：放在连线中点上方，字号略收敛（不超过 16），并用紧贴的半透明白底
+            // 遮住从下方穿过的连线。位置完全基于 Mermaid 的连线路径。
+            const arrowFont = Math.min(baseFontSize, 16);
+            const m = measureText(labelText, arrowFont);
+            const textW = Math.max(1, m.width);
+            const textH = Math.max(1, m.height);
 
-          return {
-            x: minX,
-            y: minY,
-            width: Math.max(1, maxX - minX),
-            height: Math.max(1, maxY - minY),
-            points: absolutePoints.map((point: any) => Array.isArray(point)
-              ? [point[0] - minX, point[1] - minY]
-              : point
-            ),
-          };
-        };
+            const midIndex = Math.floor(el.points.length / 2);
+            const midPoint = el.points[midIndex] || el.points[0];
+            const centerX = safeNum(midPoint?.[0]);
+            const centerY = safeNum(midPoint?.[1]);
 
-        elements.forEach((el: any) => {
-          const { labelText, textMetrics } = getLabelMetrics(el);
-          const arrowGeometry = normalizeArrowGeometry(el);
+            const tx = safeNum(el.x) + centerX - textW / 2;
+            const ty = safeNum(el.y) + centerY - textH - 2;
 
-          // 修正形状宽高；箭头使用重算后的 bbox，避免节点变大后线还按旧尺寸穿进节点
-          const baseEl = {
-            ...el,
-            x: el.type === "arrow" ? arrowGeometry.x : safeNum(el.x),
-            y: el.type === "arrow" ? arrowGeometry.y : safeNum(el.y),
-            points: el.type === "arrow" ? arrowGeometry.points : el.points,
-            width: el.type === "arrow" ? arrowGeometry.width : Math.max(safeNum(el.width), textMetrics.width),
-            height: el.type === "arrow" ? arrowGeometry.height : Math.max(safeNum(el.height), textMetrics.height),
-            fontFamily: 1,
-            opacity: 100
-          };
-          sanitizedElements.push(baseEl);
-
-          // 处理文字位置（基于修正后的 baseEl）
-          if (labelText) {
-            let tx = baseEl.x + (baseEl.width - (textMetrics.width - 20)) / 2;
-            let ty = baseEl.y + (baseEl.height - (textMetrics.height - 10)) / 2;
-            const { width: tWidth, height: tHeight } = measureMultilineText(labelText, el.label.fontSize || 20);
-
-            if (el.type === "arrow" && baseEl.points) {
-              const midIndex = Math.floor(baseEl.points.length / 2);
-              const midPoint = baseEl.points[midIndex];
-              const centerX = safeNum(midPoint?.[0]);
-              const centerY = safeNum(midPoint?.[1]);
-
-              tx = baseEl.x + centerX - tWidth / 2;
-              ty = baseEl.y + centerY - tHeight - 2;
-
-              // 给箭头文字加一块白底遮罩，水平线不会从文字中间穿过去
-              pushLabelBackground(el.id || "arrow", tx, ty, tWidth, tHeight, 8, 5);
-            }
-
-            if (el.type !== "arrow") {
-              pushLabelBackground(el.id || "el", tx, ty, Math.max(1, textMetrics.width - 36), Math.max(1, textMetrics.height - 14), 8, 5);
-            }
+            pushLabelBackground(el.id || "arrow", tx, ty, textW, textH, 2, 1, 70);
 
             sanitizedElements.push({
               id: `${el.id || "el"}-label-text`,
               type: "text",
               text: labelText,
-              x: safeNum(tx),
-              y: safeNum(ty),
-              width: Math.max(1, textMetrics.width - 36),
-              height: Math.max(1, textMetrics.height - 14),
-              fontSize: el.label.fontSize || 20,
+              x: tx,
+              y: ty,
+              width: textW,
+              height: textH,
+              fontSize: arrowFont,
               fontFamily: 1,
               textAlign: "center",
               verticalAlign: "middle",
               strokeColor: "#1f2937",
             });
+            return;
           }
+
+          // 节点标签：把字号缩到刚好放进 Mermaid 给的节点框内，再在框内居中。
+          const boxW = safeNum(el.width);
+          const boxH = safeNum(el.height);
+          const fs = fitFontSize(labelText, baseFontSize, boxW, boxH, shapeFitFactor(el.type));
+          const m = measureText(labelText, fs);
+          const textW = Math.max(1, m.width);
+          const textH = Math.max(1, m.height);
+          const tx = safeNum(el.x) + (boxW - textW) / 2;
+          const ty = safeNum(el.y) + (boxH - textH) / 2;
+
+          sanitizedElements.push({
+            id: `${el.id || "el"}-label-text`,
+            type: "text",
+            text: labelText,
+            x: tx,
+            y: ty,
+            width: textW,
+            height: textH,
+            fontSize: fs,
+            fontFamily: 1,
+            textAlign: "center",
+            verticalAlign: "middle",
+            strokeColor: "#1f2937",
+          });
         });
 
         // 如果 elements 数组为空，也会导致 exportToSvg 报错
@@ -380,7 +293,7 @@ tspan {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center my-6 w-full overflow-hidden">
+    <div className="relative flex flex-col items-center justify-center my-6 w-full">
       {isLoading && (
         <div className="flex items-center space-x-2 text-gray-500 py-8">
           <div className="w-5 h-5 border-t-2 border-b-2 border-blue-500 rounded-full animate-spin"></div>
@@ -389,11 +302,51 @@ tspan {
       )}
 
       {!isLoading && svgContent && (
-        <div
-          ref={containerRef}
-          className="w-full overflow-x-auto flex justify-center p-4 bg-white rounded-xl "
-          dangerouslySetInnerHTML={{ __html: svgContent }}
-        />
+        <div className="relative w-full overflow-hidden">
+          {/* 可滚动的缩放视口 */}
+          <div ref={containerRef} className="w-full overflow-auto p-4">
+            <div
+              className="mx-auto w-fit origin-top transition-transform duration-150 ease-out"
+              style={{ transform: `scale(${scale})` }}
+              dangerouslySetInnerHTML={{ __html: svgContent }}
+            />
+          </div>
+
+          {/* 缩放工具栏：沿用「查看代码」按钮的 neutral / 暗色风格，放到左下角避免与之重叠 */}
+          <div className="absolute bottom-3 left-3 z-10 flex items-center gap-0.5 rounded-md bg-neutral-900/90 dark:bg-neutral-100/90 p-0.5 shadow-sm backdrop-blur">
+            <button
+              type="button"
+              onClick={zoomOut}
+              disabled={scale <= MIN_SCALE}
+              aria-label="缩小"
+              className="flex h-7 w-7 items-center justify-center rounded text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={zoomReset}
+              aria-label="重置缩放"
+              className="min-w-[3.25rem] rounded px-1 py-1 text-center text-xs font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 transition-colors"
+            >
+              {Math.round(scale * 100)}%
+            </button>
+            <button
+              type="button"
+              onClick={zoomIn}
+              disabled={scale >= MAX_SCALE}
+              aria-label="放大"
+              className="flex h-7 w-7 items-center justify-center rounded text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
