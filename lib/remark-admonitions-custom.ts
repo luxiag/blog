@@ -238,7 +238,12 @@ function plugin(config: AdmonitionConfig = {}) {
       } else {
         // Content is in sibling nodes between opening and closing markers.
         // The opening paragraph needs its :::type\n prefix removed from first child.
-        const rawContent = siblings.slice(index + 1, endIndex);
+        // When the closing ::: is embedded inside a sibling (e.g. a list whose
+        // last item lazily absorbed the ::: line), that sibling at `endIndex` IS
+        // content and must be included in the slice; otherwise it is a standalone
+        // closing marker and should be excluded.
+        const sliceEnd = closingEmbedded ? endIndex + 1 : endIndex;
+        const rawContent = siblings.slice(index + 1, sliceEnd);
 
         // If the closing ::: was embedded in the last sibling (e.g. a list),
         // strip it from that sibling so it doesn't appear in the rendered output.

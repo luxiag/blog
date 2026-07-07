@@ -143,7 +143,7 @@ export async function getPostData(slug: string): Promise<Post> {
 
         const compiled = await compile(content, {
           outputFormat: 'function-body',
-          remarkPlugins: [remarkGfm, remarkMath, remarkDetails, [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'], format: 'html' }]],
+          remarkPlugins: [remarkGfm, remarkMath, remarkDetails, [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'], format: 'mdx' }]],
           rehypePlugins: [rehypeSlug as any, rehypeHighlight as any, rehypeKatex as any],
           development: false,
         });
