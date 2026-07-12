@@ -43,7 +43,7 @@ tags: ['architecture', 'notification', 'message-queue', 'backend']
 
 - **接收人（To）**：发给谁。可能是手机号、邮箱、用户 ID、设备 token。
 - **渠道（Channel）**：走短信、邮件还是推送。
-- **模板（Template）+ 变量**：通知内容通常不是写死的，而是"模板 + 动态数据"。比如模板"您的订单 {orderNo} 已发货",变量 `{orderNo}` 在发送时填入。
+- **模板（Template）+ 变量**：通知内容通常不是写死的，而是"模板 + 动态数据"。比如模板"您的订单 `{orderNo}` 已发货",变量 `{orderNo}` 在发送时填入。
 - **触发事件（Event）**：什么业务动作触发了这条通知（下单、支付、发货）。
 
 ```mermaid

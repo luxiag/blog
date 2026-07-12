@@ -5,11 +5,18 @@ import React, { useState, useCallback, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { createLowlight, all } from 'lowlight';
 
+// 旧的 Excalidraw 手绘渲染组件保留备用（未删除）：
+// const MermaidExcalidraw = dynamic(
+//   () => import('./MermaidToExcalidraw').then((mod) => mod.MermaidExcalidraw),
+//   { ssr: false, loading: () => <p>Loading Diagram Engine...</p> }
+// );
+
+// 新的 mermaid 原生渲染组件（手绘风 + 中文手写字体 + 主题色 + 缩放/拖拽）
 const MermaidExcalidraw = dynamic(
-  () => import('./MermaidToExcalidraw').then((mod) => mod.MermaidExcalidraw),
-  { 
+  () => import('./MermaidDiagram').then((mod) => mod.MermaidDiagram),
+  {
     ssr: false,
-    loading: () => <p>Loading Diagram Engine...</p> 
+    loading: () => <p>Loading Diagram Engine...</p>
   }
 );
 const MAX_CODE_LINES = 15;
