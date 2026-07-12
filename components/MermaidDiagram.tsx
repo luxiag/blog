@@ -26,6 +26,12 @@ async function getMermaid() {
   return mermaidPromise;
 }
 
+// 预加载 mermaid（在组件外部调用）
+if (typeof window !== "undefined") {
+  // 延迟预加载，不阻塞首屏
+  setTimeout(() => getMermaid(), 1000);
+}
+
 // 只注入一次全局字体，供 mermaid 渲染出来的内联 SVG / foreignObject 使用。
 let fontInjected = false;
 function ensureFontInjected() {
@@ -360,4 +366,4 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code }) => {
   );
 };
 
-export default MermaidDiagram;
+export default React.memo(MermaidDiagram);
