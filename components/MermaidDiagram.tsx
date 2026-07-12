@@ -210,7 +210,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code }) => {
           theme: "base",
           fontFamily: FONT_FAMILY,
           flowchart: { curve: "basis", htmlLabels: true },
-          themeVariables: buildThemeVariables(isDark) as Record<string, string>,
+          themeVariables: buildThemeVariables(isDark) as unknown as Record<string, string>,
         });
 
         const id = `mermaid-svg-${renderSeq++}`;
