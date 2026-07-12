@@ -2,7 +2,14 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import AlgoliaSearch from './AlgoliaSearch';
+import dynamic from 'next/dynamic';
+
+const AlgoliaSearch = dynamic(() => import('./AlgoliaSearch'), {
+  ssr: false,
+  loading: () => (
+    <div className="w-full max-w-xs h-9 bg-neutral-100 dark:bg-neutral-800 rounded-lg animate-pulse" />
+  )
+});
 
 export default function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);

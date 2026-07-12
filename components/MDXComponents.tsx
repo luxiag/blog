@@ -89,7 +89,16 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     usedHeadingIds.clear();
   }, [content]);
 
-  const resolveImagePath = (src: string): string => {
+  // 缓存 remark/rehype 插件数组，避免每次渲染重新创建
+  const remarkPlugins = useMemo(() => [
+    remarkGfm,
+    remarkMath,
+    [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'], format: 'html' }]
+  ] as any[], []);
+
+  const rehypePlugins = useMemo(() => [rehypeRaw, rehypeHighlight, rehypeKatex] as any[], []);
+
+  const resolveImagePath = useCallback((src: string): string => {
     if (!src) return src;
     if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
       return src;
@@ -107,9 +116,9 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       return `/blog/posts/${category}/images/${imageName}`;
     }
     return src;
-  };
+  }, [category]);
 
-  const handleImageClick = (e: React.MouseEvent, src: string) => {
+  const handleImageClick = useCallback((e: React.MouseEvent, src: string) => {
     e.stopPropagation();
     const clickedSrc = src;
     const allImages = document.querySelectorAll('.mdx-content img[data-full-src]');
@@ -120,12 +129,12 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     }));
     const index = Array.from(allImages).findIndex((img) => (img as HTMLImageElement).dataset.fullSrc === clickedSrc || (img as HTMLImageElement).src === clickedSrc);
     lightbox.openLightbox(items, index >= 0 ? index : 0);
-  };
+  }, [lightbox]);
 
-  const handleVideoClick = (e: React.MouseEvent, src: string) => {
+  const handleVideoClick = useCallback((e: React.MouseEvent, src: string) => {
     e.stopPropagation();
     lightbox.openLightbox([{ src, type: 'video' }], 0);
-  };
+  }, [lightbox]);
 
   const CompiledMDX = useMemo(() => {
     if (!isMdxCompiled) return null;
@@ -155,7 +164,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     }
     return '';
   };
-  const mdxComponents: Record<string, React.ComponentType<any>> = {
+
+  const mdxComponents: Record<string, React.ComponentType<any>> = useMemo(() => ({
     h1: ({ children, ...props }: React.ComponentPropsWithoutRef<'h1'>) => (
       // <h1
       //   id={children?.toString().replace(/\s+/g, '-').toLowerCase()}
@@ -496,7 +506,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     CodePenDemo,
     codependemo: CodePenDemo,
     SqlSimulator,
-  };
+  }), [resolveImagePath, lightbox]);
 
   if (isMdxCompiled && CompiledMDX) {
     const MDXComponent = CompiledMDX as React.ComponentType<{ components: Record<string, React.ComponentType> }>;
@@ -521,8 +531,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       <style>{detailsArrowStyles}</style>
       <div className="mdx-content">
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath, [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'], format: 'html' }]]}
-          rehypePlugins={[rehypeRaw, rehypeHighlight, rehypeKatex]}
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
           components={mdxComponents}
         >
           {content || ''}

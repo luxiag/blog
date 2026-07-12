@@ -3,13 +3,29 @@
 import React, { useState, useCallback, useEffect } from 'react';
 // import {MermaidExcalidraw} from './MermaidToExcalidraw';
 import dynamic from 'next/dynamic';
-import { createLowlight, all } from 'lowlight';
-
-// 旧的 Excalidraw 手绘渲染组件保留备用（未删除）：
-// const MermaidExcalidraw = dynamic(
-//   () => import('./MermaidToExcalidraw').then((mod) => mod.MermaidExcalidraw),
-//   { ssr: false, loading: () => <p>Loading Diagram Engine...</p> }
-// );
+import { createLowlight } from 'lowlight';
+import javascript from 'highlight.js/lib/languages/javascript';
+import typescript from 'highlight.js/lib/languages/typescript';
+import python from 'highlight.js/lib/languages/python';
+import css from 'highlight.js/lib/languages/css';
+import scss from 'highlight.js/lib/languages/scss';
+import xml from 'highlight.js/lib/languages/xml';
+import json from 'highlight.js/lib/languages/json';
+import yaml from 'highlight.js/lib/languages/yaml';
+import bash from 'highlight.js/lib/languages/bash';
+import sql from 'highlight.js/lib/languages/sql';
+import java from 'highlight.js/lib/languages/java';
+import go from 'highlight.js/lib/languages/go';
+import rust from 'highlight.js/lib/languages/rust';
+import cpp from 'highlight.js/lib/languages/cpp';
+import csharp from 'highlight.js/lib/languages/csharp';
+import php from 'highlight.js/lib/languages/php';
+import ruby from 'highlight.js/lib/languages/ruby';
+import swift from 'highlight.js/lib/languages/swift';
+import kotlin from 'highlight.js/lib/languages/kotlin';
+import diff from 'highlight.js/lib/languages/diff';
+import markdown from 'highlight.js/lib/languages/markdown';
+import plaintext from 'highlight.js/lib/languages/plaintext';
 
 // 新的 mermaid 原生渲染组件（手绘风 + 中文手写字体 + 主题色 + 缩放/拖拽）
 const MermaidExcalidraw = dynamic(
@@ -21,8 +37,15 @@ const MermaidExcalidraw = dynamic(
 );
 const MAX_CODE_LINES = 15;
 
-// 创建 lowlight 实例，包含所有语言
-const lowlight = createLowlight(all);
+// 创建 lowlight 实例，只注册常用语言（~20种 vs 全部 200+ 种）
+const lowlight = createLowlight({
+  javascript, typescript, python, css, scss, xml, json, yaml,
+  bash, sql, java, go, rust, cpp, csharp, php, ruby, swift, kotlin,
+  diff, markdown, plaintext,
+  // 常见别名
+  js: javascript, ts: typescript, py: python, rb: ruby, kt: kotlin,
+  'c++': cpp, 'c#': csharp, sh: bash, shell: bash, yml: yaml,
+});
 
 const LANGUAGE_ALIASES: Record<string, string> = {
   redis: 'bash',

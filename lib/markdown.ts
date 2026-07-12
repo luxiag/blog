@@ -10,6 +10,12 @@ import { slugify } from './slugify';
 
 const postsDirectory = path.join(process.cwd(), 'posts');
 
+// 模块级缓存：避免重复读取和编译所有文章
+let allPostsCache: Post[] | null = null;
+
+// 单篇文章缓存
+const postCache = new Map<string, Post>();
+
 interface PostFile {
   slug: string;
   filePath: string;
@@ -94,6 +100,11 @@ function transformMarkdownDetails(content: string): string {
 }
 
 export async function getPostData(slug: string): Promise<Post> {
+  // 如果已有缓存，直接返回
+  if (postCache.has(slug)) {
+    return postCache.get(slug)!;
+  }
+
   const postFiles = getPostFiles(postsDirectory);
   const postFile = postFiles.find((f) => f.slug === slug);
 
@@ -165,7 +176,7 @@ export async function getPostData(slug: string): Promise<Post> {
       compiledContent = processedContent;
     }
 
-    return {
+    const post: Post = {
       slug,
       content: compiledContent,
       rawContent: content,
@@ -182,6 +193,10 @@ export async function getPostData(slug: string): Promise<Post> {
       readingTime: calculateReadingTime(content),
       hidden: frontMatter.hidden === true
     };
+
+    // 缓存结果
+    postCache.set(slug, post);
+    return post;
   } catch (error) {
     logger.error(`Error reading post ${slug}:`, error);
     throw new Error(`Failed to read post with slug: ${slug}`);
@@ -202,6 +217,11 @@ function ensureCategoryInTags(tags: string[], category?: string): string[] {
 }
 
 export async function getAllPosts(): Promise<Post[]> {
+  // 如果已有缓存，直接返回
+  if (allPostsCache) {
+    return allPostsCache;
+  }
+
   const postFiles = getPostFiles(postsDirectory);
 
   // 1. 提前过滤：仅解析 front matter，避免对不符合要求的文章执行昂贵的 markdown 编译
@@ -226,8 +246,9 @@ export async function getAllPosts(): Promise<Post[]> {
     validSlugs.map(slug => getPostData(slug))
   );
 
-  // 3. 优雅排序：基于时间戳比较，并直接返回
-  return posts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  // 3. 排序并缓存结果
+  allPostsCache = posts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return allPostsCache;
 }
 
 export interface TocItem {
