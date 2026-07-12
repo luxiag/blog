@@ -7,7 +7,7 @@ interface MermaidDiagramProps {
 }
 
 const MIN_SCALE = 0.4;
-const MAX_SCALE = 3;
+const MAX_SCALE = 5;
 const SCALE_STEP = 0.2;
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || "";
@@ -172,7 +172,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code }) => {
     if (!el) return;
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [onWheel]);
+  }, [onWheel, svg]);
 
   // 跟随站点亮/暗色（.dark class 挂在祖先元素上）
   useEffect(() => {

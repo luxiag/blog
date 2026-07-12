@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
-import { Public_Sans, IBM_Plex_Mono, Lora } from "next/font/google";
+import { Inter, IBM_Plex_Mono, Noto_Serif_SC } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
 import BambooRuler from "@/components/BambooRuler";
 import RulerLayout from "@/components/RulerLayout";
 
-const publicSans = Public_Sans({
+const inter = Inter({
   subsets: ["latin"],
-  variable: "--font-public-sans",
+  variable: "--font-inter",
   display: 'swap',
 });
 
@@ -18,11 +18,10 @@ const ibmPlexMono = IBM_Plex_Mono({
   display: 'swap',
 });
 
-const lora = Lora({
-  subsets: ["latin"],
+const notoSerifSC = Noto_Serif_SC({
   weight: ["400", "500", "600", "700"],
-  style: ["normal", "italic"],
-  variable: "--font-lora",
+  subsets: ["latin"],
+  variable: "--font-noto-serif-sc",
   display: 'swap',
 });
 
@@ -55,7 +54,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" suppressHydrationWarning className={`${publicSans.variable} ${ibmPlexMono.variable} ${lora.variable}`}>
+    <html lang="zh-CN" suppressHydrationWarning className={`${inter.variable} ${ibmPlexMono.variable} ${notoSerifSC.variable}`}>
       <body className="antialiased" style={{ backgroundColor: 'var(--background)' }}>
         <RulerLayout>
           <Header />

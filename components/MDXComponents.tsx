@@ -482,16 +482,14 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
 
       return (
         <details
-          className="details-wrapper border border-neutral-300 dark:border-neutral-600 overflow-hidden my-5"
+          className="details-wrapper border border-neutral-200/80 dark:border-neutral-700/60 overflow-hidden my-6 rounded-xl bg-gradient-to-br from-neutral-50/50 to-white dark:from-neutral-800/30 dark:to-neutral-900/50"
           {...props}
         >
-          <summary className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800/60 cursor-pointer font-sans font-medium text-sm text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors list-none flex items-center justify-between w-full border-b border-neutral-200 dark:border-neutral-700">
+          <summary className="px-5 py-3.5 cursor-pointer font-sans font-medium text-[0.9375rem] text-neutral-700 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors list-none flex items-center gap-2.5 w-full border-b border-neutral-200/60 dark:border-neutral-700/40">
+            <span className="text-neutral-400 dark:text-neutral-500 text-xs transition-transform details-[open]:rotate-90">▶</span>
             <span>{getSummaryContent()}</span>
-            <svg className="w-4 h-4 ml-2 transform transition-transform details-[open]:rotate-90 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
           </summary>
-          <div className="px-5 py-4 bg-white dark:bg-neutral-900 [&_pre]:my-0">
+          <div className="px-5 py-4 font-serif text-[1.0625rem] leading-[1.85] text-neutral-800 dark:text-neutral-300 [&_pre]:my-0">
             {getBodyContent()}
           </div>
         </details>

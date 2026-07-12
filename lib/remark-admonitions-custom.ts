@@ -15,12 +15,12 @@ interface AdmonitionConfig {
 const defaultKeywords: AdmonitionType[] = ['note', 'tip', 'warning', 'important', 'info', 'details'];
 
 const admonitionStyles: Record<AdmonitionType, string> = {
-  note:      'border-blue-500 bg-blue-50 dark:bg-blue-900/20',
-  tip:       'border-green-500 bg-green-50 dark:bg-green-900/20',
-  warning:   'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20',
-  important: 'border-red-500 bg-red-50 dark:bg-red-900/20',
-  info:      'border-cyan-500 bg-cyan-50 dark:bg-cyan-900/20',
-  details:   'border-gray-500 bg-gray-50 dark:bg-gray-900/20',
+  note:      'border-l-4 border-blue-500 bg-blue-50 dark:bg-blue-900/20',
+  tip:       'border-l-4 border-green-500 bg-green-50 dark:bg-green-900/20',
+  warning:   'border-l-4 border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20',
+  important: 'border-l-4 border-red-500 bg-red-50 dark:bg-red-900/20',
+  info:      'border-l-4 border-cyan-500 bg-cyan-50 dark:bg-cyan-900/20',
+  details:   'border-l-4 border-gray-500 bg-gray-50 dark:bg-gray-900/20',
 };
 
 const admonitionTitleColors: Record<AdmonitionType, string> = {
@@ -280,8 +280,8 @@ function plugin(config: AdmonitionConfig = {}) {
 
       if (format === 'html') {
         // ── react-markdown path ────────────────────────────────────────────────
-        const outerClass = `border-l-4 p-4 my-4 rounded-r ${styleClass}`;
-        const titleClass = `font-semibold mb-2 ${titleColor}`;
+        const outerClass = `${styleClass} rounded-r p-4`;
+        const titleClass = `${titleColor}`;
         replacementNodes = [
           {
             type: 'html',
@@ -299,7 +299,7 @@ function plugin(config: AdmonitionConfig = {}) {
             {
               type: 'mdxJsxAttribute',
               name: 'className',
-              value: `border-l-4 p-4 my-4 rounded-r ${styleClass}`,
+              value: `${styleClass} rounded-r p-4`,
             },
           ],
           children: [
@@ -310,7 +310,7 @@ function plugin(config: AdmonitionConfig = {}) {
                 {
                   type: 'mdxJsxAttribute',
                   name: 'className',
-                  value: `font-semibold mb-2 ${titleColor}`,
+                  value: titleColor,
                 },
               ],
               children: [{ type: 'text', value: displayTitle }],
