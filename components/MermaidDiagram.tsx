@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 
 interface MermaidDiagramProps {
   code: string;
@@ -16,6 +16,15 @@ const FONT_FAMILY =
 
 // 主题色
 const BRAND = "#ea580c";
+
+// 缓存 mermaid 实例，避免重复导入
+let mermaidPromise: Promise<any> | null = null;
+async function getMermaid() {
+  if (!mermaidPromise) {
+    mermaidPromise = import("mermaid").then((m) => m.default);
+  }
+  return mermaidPromise;
+}
 
 // 只注入一次全局字体，供 mermaid 渲染出来的内联 SVG / foreignObject 使用。
 let fontInjected = false;
@@ -183,7 +192,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code }) => {
 
     const render = async () => {
       try {
-        const mermaid = (await import("mermaid")).default;
+        const mermaid = await getMermaid();
 
         // mermaid 用 <br/> 换行，这里把源码里的字面量 "\n" 统一成 <br/>
         const processed = code.replace(/\\n/g, "<br/>");
