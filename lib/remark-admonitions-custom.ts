@@ -278,7 +278,26 @@ function plugin(config: AdmonitionConfig = {}) {
       // ── Build replacement nodes ──────────────────────────────────────────────
       let replacementNodes: any[];
 
-      if (format === 'html') {
+      if (admonitionType === 'details') {
+        // ── details: emit <details> with data-details-title (component renders <summary>) ──
+        if (format === 'html') {
+          replacementNodes = [
+            { type: 'html', value: `<details data-details-title="${escapeHtml(displayTitle)}">` },
+            ...contentNodes,
+            { type: 'html', value: '</details>' },
+          ];
+        } else {
+          const detailsNode = {
+            type: 'mdxJsxFlowElement',
+            name: 'details',
+            attributes: [
+              { type: 'mdxJsxAttribute', name: 'data-details-title', value: displayTitle },
+            ],
+            children: [...contentNodes],
+          };
+          replacementNodes = [detailsNode];
+        }
+      } else if (format === 'html') {
         // ── react-markdown path ────────────────────────────────────────────────
         const outerClass = `${styleClass} rounded-r p-4`;
         const titleClass = `${titleColor}`;

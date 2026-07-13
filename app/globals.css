@@ -411,14 +411,7 @@ li {
   margin-bottom: var(--spacing-sm);
 }
 
-/* 引用样式 */
-blockquote {
-  margin: var(--spacing-lg) 0;
-  padding: var(--spacing-lg) var(--spacing-2xl);
-  border-left: 4px solid var(--color-orange-800);
-  background-color: var(--color-neutral-100);
-  font-style: italic;
-}
+/* 引用样式 - 由 MDXComponents blockquote 组件处理 */
 
 /* 表格样式 */
 table {

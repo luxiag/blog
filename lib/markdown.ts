@@ -77,13 +77,18 @@ function transformMarkdownDetails(content: string): string {
     if (openMatch) {
       const title = (openMatch[1] ?? 'Details').trim();
       const escapedTitle = escapeHtml(title);
+      result.push('');
       result.push(`<details data-details-title="${escapedTitle}">`);
+      result.push('');
       result.push(`<summary>${escapedTitle}</summary>`);
+      result.push('');
       i++;
 
       while (i < lines.length) {
         if (lines[i].trim() === ':::') {
+          result.push('');
           result.push('</details>');
+          result.push('');
           i++;
           break;
         }
@@ -141,11 +146,10 @@ export async function getPostData(slug: string): Promise<Post> {
 
     if (isMdx) {
       try {
-        const [{ compile }, { default: remarkGfm }, { default: remarkMath }, { remarkDetails }, { remarkAdmonitionsCustom }, { default: rehypeHighlight }, { default: rehypeKatex }, { default: rehypeSlug }] = await Promise.all([
+        const [{ compile }, { default: remarkGfm }, { default: remarkMath }, { remarkAdmonitionsCustom }, { default: rehypeHighlight }, { default: rehypeKatex }, { default: rehypeSlug }] = await Promise.all([
           import('@mdx-js/mdx'),
           import('remark-gfm'),
           import('remark-math'),
-          import('./remark-details'),
           import('./remark-admonitions-custom'),
           import('rehype-highlight'),
           import('rehype-katex'),
@@ -154,7 +158,7 @@ export async function getPostData(slug: string): Promise<Post> {
 
         const compiled = await compile(content, {
           outputFormat: 'function-body',
-          remarkPlugins: [remarkGfm, remarkMath, remarkDetails, [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'], format: 'mdx' }]],
+          remarkPlugins: [remarkGfm, remarkMath, [remarkAdmonitionsCustom, { keywords: ['details', 'note', 'warning', 'tip', 'important', 'info'], format: 'mdx' }]],
           rehypePlugins: [rehypeSlug as any, rehypeHighlight as any, rehypeKatex as any],
           development: false,
         });

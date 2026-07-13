@@ -338,10 +338,19 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
         );
       }
 
+      // 内部链接：修正 /posts/category/slug → /posts/slug（slug 是路由的唯一标识）
+      let resolvedHref = href || '/';
+      const postMatch = resolvedHref.match(/^\/posts\/(.+)$/);
+      if (postMatch) {
+        const segments = postMatch[1].split('/');
+        const slug = segments[segments.length - 1];
+        resolvedHref = `/posts/${slug}`;
+      }
+
       // 内部链接：使用 Next.js 的 Link 组件，自动处理 basePath
       return (
         <Link
-          href={href || '/'}
+          href={resolvedHref}
           className="text-orange-700 dark:text-orange-400 underline underline-offset-2 decoration-orange-700/40 dark:decoration-orange-400/40 hover:decoration-orange-700 dark:hover:decoration-orange-400 transition-colors"
           {...props}
         >
@@ -351,10 +360,11 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     },
     blockquote: ({ children, ...props }: React.ComponentPropsWithoutRef<'blockquote'>) => (
       <blockquote
-        className="border-l-[3px] border-neutral-400 dark:border-neutral-500 pl-5 py-1 my-6 text-neutral-600 dark:text-neutral-400 italic font-serif"
+        className="relative my-8 px-6 py-5 border-l-[3px] border-[#ea580c] bg-gradient-to-r from-[#ea580c]/5 to-transparent dark:from-[#ea580c]/10 dark:to-transparent rounded-r-lg font-serif text-neutral-700 dark:text-neutral-300 leading-relaxed"
         {...props}
       >
-        {children}
+        <span className="absolute top-3 left-4 text-[#ea580c]/20 dark:text-[#ea580c]/30 text-5xl font-serif leading-none select-none pointer-events-none" aria-hidden="true">&ldquo;</span>
+        <span className="relative z-10 block pl-4">{children}</span>
       </blockquote>
     ),
     ul: ({ children, ...props }: React.ComponentPropsWithoutRef<'ul'>) => (
@@ -500,7 +510,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           {...props}
         >
           <summary className="px-5 py-3.5 cursor-pointer font-sans font-medium text-[0.9375rem] text-neutral-700 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors list-none flex items-center gap-2.5 w-full border-b border-neutral-200/60 dark:border-neutral-700/40">
-            <span className="text-neutral-400 dark:text-neutral-500 text-xs transition-transform details-[open]:rotate-90">▶</span>
+            {/* <span className="text-neutral-400 dark:text-neutral-500 text-xs transition-transform details-[open]:rotate-90">▶</span> */}
             <span>{getSummaryContent()}</span>
           </summary>
           <div className="px-5 py-4 font-serif text-[1.0625rem] leading-[1.85] text-neutral-800 dark:text-neutral-300 [&_pre]:my-0">
