@@ -55,7 +55,7 @@ export default function JsonFormatterPage() {
     <>
       <PageTitle title="JSON 格式化" />
       <div className="min-h-screen" style={{ backgroundColor: 'var(--background)' }}>
-        <div className="max-w-6xl mx-auto px-4" style={{ padding: '48px 24px' }}>
+        <div className="max-w-6xl mx-auto px-2 sm:px-4 py-6 sm:py-12">
           <div style={{ marginBottom: '32px' }}>
             <Link
               href="/tools"
@@ -69,8 +69,7 @@ export default function JsonFormatterPage() {
             </Link>
           </div>
 
-          <h1 style={{
-            fontSize: '32px',
+          <h1 className="text-2xl md:text-3xl" style={{
             fontWeight: 700,
             marginBottom: '8px',
             fontFamily: 'var(--font-sans)',
@@ -87,7 +86,7 @@ export default function JsonFormatterPage() {
             格式化、验证、压缩 JSON 数据
           </p>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '24px' }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6" style={{ marginBottom: '24px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--foreground)', opacity: 0.6 }}>输入 (Raw JSON)</label>
@@ -109,9 +108,9 @@ export default function JsonFormatterPage() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder='在此粘贴 JSON 代码...'
+                className="w-full"
                 style={{
-                  width: '100%',
-                  height: '450px',
+                  height: '300px',
                   padding: '16px',
                   borderRadius: '8px',
                   border: '1px solid var(--border-color)',
@@ -120,7 +119,7 @@ export default function JsonFormatterPage() {
                   fontFamily: 'var(--font-mono)',
                   fontSize: '13px',
                   outline: 'none',
-                  resize: 'none'
+                  resize: 'vertical'
                 }}
               />
             </div>
@@ -146,9 +145,9 @@ export default function JsonFormatterPage() {
                 value={output}
                 readOnly
                 placeholder='结果将在此显示...'
+                className="w-full"
                 style={{
-                  width: '100%',
-                  height: '450px',
+                  height: '300px',
                   padding: '16px',
                   borderRadius: '8px',
                   border: '1px solid var(--border-color)',
@@ -157,52 +156,41 @@ export default function JsonFormatterPage() {
                   fontFamily: 'var(--font-mono)',
                   fontSize: '13px',
                   outline: 'none',
-                  resize: 'none'
+                  resize: 'vertical'
                 }}
               />
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <div className="flex flex-wrap gap-3 items-center">
             <button
               onClick={handleFormat}
+              className="px-6 py-2.5 rounded-md font-semibold text-sm transition-colors"
               style={{
                 background: 'var(--foreground)',
                 color: 'white',
                 border: 'none',
-                padding: '10px 24px',
-                borderRadius: '6px',
-                fontSize: '14px',
-                fontWeight: 600,
-                cursor: 'pointer',
                 fontFamily: 'var(--font-sans)',
               }}
             >
-              格式化 (Beautify)
+              格式化
             </button>
             <button
               onClick={handleMinify}
+              className="px-6 py-2.5 rounded-md font-semibold text-sm transition-colors"
               style={{
                 background: 'white',
                 color: 'var(--foreground)',
                 border: '1px solid var(--border-color)',
-                padding: '10px 24px',
-                borderRadius: '6px',
-                fontSize: '14px',
-                fontWeight: 600,
-                cursor: 'pointer',
                 fontFamily: 'var(--font-sans)',
               }}
             >
-              压缩 (Minify)
+              压缩
             </button>
 
             {error && (
-              <span style={{
+              <span className="text-sm font-mono" style={{
                 color: '#ef4444',
-                fontSize: '13px',
-                fontFamily: 'var(--font-mono)',
-                marginLeft: '12px'
               }}>
                 ⚠️ {error}
               </span>

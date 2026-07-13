@@ -6,7 +6,7 @@ import '@/styles/algolia-search.css';
 
 export default function AlgoliaSearch() {
   return (
-    <div className="w-full max-w-xs">
+    <div className="w-full max-w-xs md:block">
       <DocSearch
         appId="E61AH5LVMY"
         indexName="luxiagio"

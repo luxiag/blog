@@ -79,7 +79,7 @@ export default function PasswordGeneratorPage() {
     <>
       <PageTitle title="密码生成器" />
       <div className="min-h-screen" style={{ backgroundColor: 'var(--background)' }}>
-        <div className="max-w-4xl mx-auto px-4" style={{ padding: '48px 24px' }}>
+        <div className="max-w-4xl mx-auto px-2 sm:px-4 py-6 sm:py-12">
           <div style={{ marginBottom: '32px' }}>
             <Link
               href="/tools"
@@ -93,8 +93,7 @@ export default function PasswordGeneratorPage() {
             </Link>
           </div>
 
-          <h1 style={{
-            fontSize: '32px',
+          <h1 className="text-2xl md:text-3xl" style={{
             fontWeight: 700,
             marginBottom: '8px',
             fontFamily: 'var(--font-sans)',
@@ -111,50 +110,34 @@ export default function PasswordGeneratorPage() {
             生成高强度的安全随机密码
           </p>
 
-          <div style={{
+          <div className="p-4 sm:p-8" style={{
             background: 'white',
             border: '1px solid var(--border-color)',
             borderRadius: '12px',
-            padding: '32px',
             boxShadow: 'var(--shadow-subtle)'
           }}>
-            <div style={{
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-lg mb-8" style={{
               background: 'var(--color-neutral-100)',
-              padding: '24px',
-              borderRadius: '8px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: '32px',
               border: '1px solid var(--border-color)'
             }}>
-              <span style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '24px',
-                fontWeight: 600,
+              <span className="break-all font-mono text-lg sm:text-xl font-semibold" style={{
                 color: 'var(--foreground)',
-                wordBreak: 'break-all'
               }}>
                 {password || '......'}
               </span>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button onClick={generatePassword} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-neutral-500)' }} title="重新生成">
+              <div className="flex gap-3">
+                <button onClick={generatePassword} className="p-2 rounded-md transition-colors" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-neutral-500)' }} title="重新生成">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
                   </svg>
                 </button>
                 <button
                   onClick={handleCopy}
+                  className="px-4 py-2 rounded-md font-semibold text-sm transition-all"
                   style={{
                     background: copied ? 'var(--color-orange-800)' : 'var(--foreground)',
                     color: 'white',
                     border: 'none',
-                    padding: '8px 16px',
-                    borderRadius: '6px',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s'
                   }}
                 >
                   {copied ? '已复制' : '复制'}
@@ -190,19 +173,19 @@ export default function PasswordGeneratorPage() {
                 />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[
                   { id: 'uppercase', label: '包含大写字母 (A-Z)' },
                   { id: 'lowercase', label: '包含小写字母 (a-z)' },
                   { id: 'numbers', label: '包含数字 (0-9)' },
                   { id: 'symbols', label: '包含特殊符号 (!@#)' },
                 ].map(opt => (
-                  <label key={opt.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', cursor: 'pointer' }}>
+                  <label key={opt.id} className="flex items-center gap-3 text-sm cursor-pointer">
                     <input
                       type="checkbox"
                       checked={options[opt.id as keyof typeof options]}
                       onChange={(e) => setOptions({ ...options, [opt.id]: e.target.checked })}
-                      style={{ width: '16px', height: '16px', accentColor: 'var(--color-orange-800)' }}
+                      className="w-4 h-4 accent-orange-500"
                     />
                     {opt.label}
                   </label>

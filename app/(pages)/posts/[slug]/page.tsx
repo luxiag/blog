@@ -46,7 +46,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
       <PageTitle title={post.title} />
       <TableOfContents toc={toc} />
 
-      <div className="max-w-4xl mx-auto px-6 py-12">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-12 overflow-hidden">
         {/* Nav */}
         <nav className="mb-8">
           <Link
@@ -87,7 +87,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
 
           {/* Content */}
           <div className="py-8">
-            <div className="prose prose-neutral max-w-none prose-headings:font-bold prose-blockquote:border-l-[#ea580c] prose-a:text-[#ea580c] prose-pre:border prose-pre:border-[oklch(0.145_0_0)] prose-pre:rounded-lg prose-pre:bg-white">
+            <div className="prose prose-neutral max-w-none prose-headings:font-bold prose-blockquote:border-l-[#ea580c] prose-a:text-[#ea580c] prose-pre:border prose-pre:border-[oklch(0.145_0_0)] prose-pre:rounded-lg prose-pre:bg-white overflow-hidden">
               <MDXComponents content={post.content} isMdxCompiled={post.isMdxCompiled} category={post.category} />
             </div>
 

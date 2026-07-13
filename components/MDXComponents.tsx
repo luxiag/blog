@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
+import Link from 'next/link';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeRaw from 'rehype-raw';
@@ -24,15 +25,15 @@ const usedHeadingIds = new Map<string, number>();
 
 function generateHeadingId(text: string): string {
   const baseId = slugify(text) || 'section';
-  
+
   // 处理重复 - 使用与 extractToc 相同的逻辑
   const count = usedHeadingIds.get(baseId) || 0;
   let finalId = baseId;
-  
+
   if (count > 0) {
     finalId = `${baseId}-${count}`;
   }
-  
+
   usedHeadingIds.set(baseId, count + 1);
   return finalId;
 }
@@ -318,21 +319,34 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     },
     a: ({ href, children, ...props }: React.ComponentPropsWithoutRef<'a'>) => {
       const isExternal = href?.startsWith('http');
+
+      // 外部链接：保持原生 a 标签，新窗口打开
+      if (isExternal) {
+        return (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-orange-700 dark:text-orange-400 underline underline-offset-2 decoration-orange-700/40 dark:decoration-orange-400/40 hover:decoration-orange-700 dark:hover:decoration-orange-400 transition-colors"
+            {...props}
+          >
+            {children}
+            <svg className="inline-block w-3 h-3 ml-0.5 mb-0.5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+          </a>
+        );
+      }
+
+      // 内部链接：使用 Next.js 的 Link 组件，自动处理 basePath
       return (
-        <a
-          href={href}
-          target={isExternal ? '_blank' : undefined}
-          rel={isExternal ? 'noopener noreferrer' : undefined}
+        <Link
+          href={href || '/'}
           className="text-orange-700 dark:text-orange-400 underline underline-offset-2 decoration-orange-700/40 dark:decoration-orange-400/40 hover:decoration-orange-700 dark:hover:decoration-orange-400 transition-colors"
           {...props}
         >
           {children}
-          {isExternal && (
-            <svg className="inline-block w-3 h-3 ml-0.5 mb-0.5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-            </svg>
-          )}
-        </a>
+        </Link>
       );
     },
     blockquote: ({ children, ...props }: React.ComponentPropsWithoutRef<'blockquote'>) => (

@@ -112,6 +112,13 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: clip;
+  max-width: 100vw;
+}
+
+html {
+  overflow-x: clip;
+  max-width: 100vw;
 }
 
 /* Typography */
@@ -303,6 +310,59 @@ body {
   h2 {
     font-size: 1.25rem;
   }
+
+  .mdx-content {
+    font-size: 16px;
+    line-height: 1.7;
+  }
+
+  .mdx-content h2,
+  .mdx-content h3,
+  .mdx-content h4 {
+    margin-top: 1.5em;
+  }
+
+  pre {
+    font-size: 12px;
+    padding: var(--spacing-md);
+  }
+
+  code {
+    font-size: 0.8125em;
+  }
+
+  blockquote {
+    padding: var(--spacing-md) var(--spacing-lg);
+    margin: var(--spacing-md) 0;
+  }
+}
+
+@media (max-width: 640px) {
+  h1 {
+    font-size: 1.5rem;
+  }
+
+  h2 {
+    font-size: 1.125rem;
+  }
+
+  h3 {
+    font-size: 1rem;
+  }
+
+  .mdx-content {
+    font-size: 15px;
+  }
+
+  .card-body {
+    padding: var(--spacing-md);
+  }
+
+  pre {
+    font-size: 11px;
+    padding: var(--spacing-sm);
+    overflow-x: auto;
+  }
 }
 
 
@@ -365,6 +425,8 @@ table {
   width: 100%;
   border-collapse: collapse;
   margin-bottom: var(--spacing-lg);
+  display: block;
+  overflow-x: auto;
 }
 
 th,

@@ -51,7 +51,7 @@ export default function TimestampPage() {
     <>
       <PageTitle title="时间戳转换" />
       <div className="min-h-screen" style={{ backgroundColor: 'var(--background)' }}>
-        <div className="max-w-4xl mx-auto px-4" style={{ padding: '48px 24px' }}>
+        <div className="max-w-4xl mx-auto px-2 sm:px-4 py-6 sm:py-12">
           <div style={{ marginBottom: '32px' }}>
             <Link
               href="/tools"
@@ -65,8 +65,7 @@ export default function TimestampPage() {
             </Link>
           </div>
 
-          <h1 style={{
-            fontSize: '32px',
+          <h1 className="text-2xl md:text-3xl" style={{
             fontWeight: 700,
             marginBottom: '8px',
             fontFamily: 'var(--font-sans)',
@@ -83,19 +82,16 @@ export default function TimestampPage() {
             Unix 时间戳与北京时间（GMT+8）相互转换
           </p>
 
-          <div style={{
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4" style={{
             background: 'white',
             border: '1px solid var(--border-color)',
             borderRadius: '12px',
             padding: '24px',
             marginBottom: '24px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between'
           }}>
-            <span style={{ fontSize: '14px', fontWeight: 600 }}>当前时间戳:</span>
-            <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '20px', fontWeight: 700, color: 'var(--color-orange-800)' }}>
+            <span className="text-sm font-semibold">当前时间戳:</span>
+            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+              <span className="text-lg sm:text-xl font-bold font-mono" style={{ color: 'var(--color-orange-800)' }}>
                 {unit === 's' ? Math.floor(now / 1000) : now}
               </span>
               <div style={{ display: 'flex', background: 'var(--color-neutral-100)', padding: '2px', borderRadius: '4px' }}>
@@ -135,15 +131,15 @@ export default function TimestampPage() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {/* 时间戳转日期 */}
-            <div style={{ background: 'white', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '24px' }}>
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <div className="p-4 sm:p-6" style={{ background: 'white', border: '1px solid var(--border-color)', borderRadius: '12px' }}>
+              <div className="flex flex-col sm:flex-row gap-3">
                 <input
                   type="text"
                   value={tsInput}
                   onChange={(e) => setTsInput(e.target.value)}
                   placeholder="输入时间戳..."
+                  className="flex-1"
                   style={{
-                    flex: 1,
                     padding: '10px 16px',
                     borderRadius: '6px',
                     border: '1px solid var(--border-color)',
@@ -154,6 +150,7 @@ export default function TimestampPage() {
                 />
                 <button
                   onClick={handleTsToDate}
+                  className="whitespace-nowrap"
                   style={{
                     padding: '10px 24px',
                     background: 'var(--foreground)',
@@ -172,8 +169,8 @@ export default function TimestampPage() {
                   readOnly
                   value={dateOutput}
                   placeholder="结果将在此显示..."
+                  className="flex-1"
                   style={{
-                    flex: 1,
                     padding: '10px 16px',
                     borderRadius: '6px',
                     border: '1px solid var(--border-color)',
@@ -186,15 +183,15 @@ export default function TimestampPage() {
             </div>
 
             {/* 日期转时间戳 */}
-            <div style={{ background: 'white', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '24px' }}>
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <div className="p-4 sm:p-6" style={{ background: 'white', border: '1px solid var(--border-color)', borderRadius: '12px' }}>
+              <div className="flex flex-col sm:flex-row gap-3">
                 <input
                   type="text"
                   value={dateInput}
                   onChange={(e) => setDateInput(e.target.value)}
                   placeholder="输入日期 (例如: 2025-01-01 12:00:00)"
+                  className="flex-1"
                   style={{
-                    flex: 1,
                     padding: '10px 16px',
                     borderRadius: '6px',
                     border: '1px solid var(--border-color)',
@@ -205,6 +202,7 @@ export default function TimestampPage() {
                 />
                 <button
                   onClick={handleDateToTs}
+                  className="whitespace-nowrap"
                   style={{
                     padding: '10px 24px',
                     background: 'var(--foreground)',
@@ -223,8 +221,8 @@ export default function TimestampPage() {
                   readOnly
                   value={tsOutput}
                   placeholder="结果将在此显示..."
+                  className="flex-1"
                   style={{
-                    flex: 1,
                     padding: '10px 16px',
                     borderRadius: '6px',
                     border: '1px solid var(--border-color)',

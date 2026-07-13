@@ -45,7 +45,7 @@ export default function UrlEncoderPage() {
     <>
       <PageTitle title="URL 编码解码" />
       <div className="min-h-screen" style={{ backgroundColor: 'var(--background)' }}>
-        <div className="max-w-4xl mx-auto px-4" style={{ padding: '48px 24px' }}>
+        <div className="max-w-4xl mx-auto px-2 sm:px-4 py-6 sm:py-12">
           <div style={{ marginBottom: '32px' }}>
             <Link
               href="/tools"

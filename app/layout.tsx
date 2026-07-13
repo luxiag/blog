@@ -1,9 +1,20 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, IBM_Plex_Mono, Noto_Serif_SC } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
 import BambooRuler from "@/components/BambooRuler";
 import RulerLayout from "@/components/RulerLayout";
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  userScalable: true,
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f5f5f5" },
+    { media: "(prefers-color-scheme: dark)", color: "#171717" },
+  ],
+};
 
 const inter = Inter({
   subsets: ["latin"],
@@ -55,10 +66,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning className={`${inter.variable} ${ibmPlexMono.variable} ${notoSerifSC.variable}`}>
-      <body className="antialiased" style={{ backgroundColor: 'var(--background)' }}>
+      <body className="antialiased overflow-x-hidden" style={{ backgroundColor: 'var(--background)' }}>
         <RulerLayout>
           <Header />
-          <main>{children}</main>
+          <main className="overflow-x-hidden">{children}</main>
         </RulerLayout>
       </body>
     </html>

@@ -25,7 +25,7 @@ export default function DiffCheckerPage() {
         <>
             <PageTitle title="文本对比" />
             <div className="min-h-screen" style={{ backgroundColor: 'var(--background)' }}>
-                <div className="max-w-6xl mx-auto px-4" style={{ padding: '48px 24px' }}>
+                <div className="max-w-6xl mx-auto px-2 sm:px-4 py-6 sm:py-12">
                     <div style={{ marginBottom: '32px' }}>
                         <Link
                             href="/tools"
@@ -45,8 +45,7 @@ export default function DiffCheckerPage() {
                         </Link>
                     </div>
 
-                    <h1 style={{
-                        fontSize: '32px',
+                    <h1 className="text-2xl md:text-3xl" style={{
                         fontWeight: 700,
                         marginBottom: '8px',
                         fontFamily: 'var(--font-sans)',
@@ -63,10 +62,7 @@ export default function DiffCheckerPage() {
                         对比两个文本的差异，支持行级比较。
                     </p>
 
-                    <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: '1fr 1fr',
-                        gap: '24px',
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6" style={{
                         marginBottom: '24px'
                     }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

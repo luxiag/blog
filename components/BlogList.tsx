@@ -37,13 +37,13 @@ export default function BlogList({ posts }: { posts: Post[] }) {
   };
 
   return (
-    <div className="flex flex-col gap-12">
-      <div className="p-6">
+    <div className="flex flex-col gap-12 overflow-hidden">
+      <div className="p-2 sm:p-6">
         <TagFilter posts={posts} onFilter={handleFilter} />
       </div>
 
       {postsByYear.length > 0 ? (
-        <div className="flex flex-col gap-32 px-6">
+        <div className="flex flex-col gap-16 sm:gap-32 px-2 sm:px-6">
           {postsByYear.map(([year, yearPosts]) => (
             <section key={year} className="relative">
               {/* 立体年份设计 */}
@@ -122,7 +122,7 @@ export default function BlogList({ posts }: { posts: Post[] }) {
 
               {/* 文章网格 - 立体卡片 */}
               <div
-                className="grid grid-cols-1 md:grid-cols-2 gap-8"
+                className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8"
                 style={{ perspective: '1000px' }}
               >
                 {yearPosts.map((post, idx) => (
@@ -141,7 +141,7 @@ export default function BlogList({ posts }: { posts: Post[] }) {
                       }}
                     >
                       {/* 卡片头部 */}
-                      <div className="px-5 py-3 border-b border-[oklch(0.145_0_0)] flex items-center justify-between bg-gradient-to-r from-[#f5f5f5] to-white dark:from-neutral-800 dark:to-neutral-900 group-hover:[transform:translateZ(10px)] transition-transform duration-300">
+                      <div className="px-4 sm:px-5 py-3 border-b border-[oklch(0.145_0_0)] flex items-center justify-between bg-gradient-to-r from-[#f5f5f5] to-white dark:from-neutral-800 dark:to-neutral-900 group-hover:[transform:translateZ(10px)] transition-transform duration-300">
                         <div className="flex items-center gap-2">
                           <Hash className="w-4 h-4 text-[#ea580c]" />
                           <span className="text-[10px] font-mono uppercase tracking-widest text-[oklch(0.145_0_0)]">
@@ -155,12 +155,12 @@ export default function BlogList({ posts }: { posts: Post[] }) {
                       </div>
 
                       {/* 卡片内容 */}
-                      <div className="p-8 flex-1 flex flex-col justify-between relative overflow-hidden group-hover:[transform:translateZ(15px)] transition-transform duration-300">
+                      <div className="p-6 sm:p-8 flex-1 flex flex-col justify-between relative overflow-hidden group-hover:[transform:translateZ(15px)] transition-transform duration-300">
                         {/* 背景装饰 */}
                         <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-[#ea580c]/5 to-transparent rounded-full blur-2xl" />
 
                         <div className="relative z-10">
-                          <h3 className="text-xl font-bold mb-4 font-sans text-[oklch(0.145_0_0)] group-hover:text-[#ea580c] transition-colors leading-tight">
+                          <h3 className="text-lg sm:text-xl font-bold mb-4 font-sans text-[oklch(0.145_0_0)] group-hover:text-[#ea580c] transition-colors leading-tight">
                             {post.title}
                           </h3>
                           {post.excerpt && (
@@ -171,7 +171,7 @@ export default function BlogList({ posts }: { posts: Post[] }) {
                         </div>
 
                         <div className="flex items-center justify-between mt-auto relative z-10">
-                          <div className="flex gap-2">
+                          <div className="flex gap-2 flex-wrap">
                             {post.tags?.slice(0, 2).map((tag) => (
                               <span
                                 key={tag}
@@ -181,7 +181,7 @@ export default function BlogList({ posts }: { posts: Post[] }) {
                               </span>
                             ))}
                           </div>
-                          <div className="flex items-center gap-2 text-[11px] font-mono text-[oklch(0.145_0_0)]">
+                          <div className="flex items-center gap-2 text-[11px] font-mono text-[oklch(0.145_0_0)] shrink-0 ml-2">
                             {post.date.replace(/-/g, '.')}
                             <ArrowRight className="w-4 h-4 text-[oklch(0.145_0_0)] transform group-hover:translate-x-1 transition-transform group-hover:[transform:translateZ(30px)_scale(1.1)]" />
                           </div>
@@ -201,7 +201,7 @@ export default function BlogList({ posts }: { posts: Post[] }) {
               </div>
 
               {/* 年份底部装饰线 */}
-              <div className="mt-16 flex items-center justify-center gap-4">
+              <div className="mt-12 sm:mt-16 flex items-center justify-center gap-4">
                 <div className="h-px flex-1 max-w-[200px] bg-gradient-to-r from-transparent via-[oklch(0.145_0_0)]/20 to-transparent" />
                 <div className="w-2 h-2 rounded-full bg-[oklch(0.145_0_0)]/20" />
                 <div className="h-px flex-1 max-w-[200px] bg-gradient-to-r from-transparent via-[oklch(0.145_0_0)]/20 to-transparent" />
@@ -211,10 +211,10 @@ export default function BlogList({ posts }: { posts: Post[] }) {
 
           {/* 加载更多按钮 */}
           {hasMore && (
-            <div className="text-center pt-12 pb-24">
+            <div className="text-center pt-8 sm:pt-12 pb-16 sm:pb-24">
               <button
                 onClick={loadMore}
-                className="relative inline-flex items-center gap-3 px-12 py-5 bg-[oklch(0.145_0_0)] text-white font-mono font-bold text-xs uppercase tracking-[0.2em] rounded-xl transition-all duration-300 hover:scale-105"
+                className="relative inline-flex items-center gap-3 px-10 sm:px-12 py-4 sm:py-5 bg-[oklch(0.145_0_0)] text-white font-mono font-bold text-xs uppercase tracking-[0.2em] rounded-xl transition-all duration-300 hover:scale-105"
                 style={{
                   boxShadow: '0 10px 30px rgba(0,0,0,0.3), 0 0 0 4px rgba(234, 88, 12, 0.3)',
                 }}
@@ -231,9 +231,9 @@ export default function BlogList({ posts }: { posts: Post[] }) {
         </div>
       ) : (
         /* 空状态 */
-        <div className="bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl p-20 flex flex-col items-center justify-center text-center shadow-[6px_6px_0_rgba(0,0,0,0.12)]">
-          <div className="w-20 h-20 rounded-full border border-dashed border-[oklch(0.145_0_0)] flex items-center justify-center mb-6 opacity-30">
-            <Calendar className="w-10 h-10 text-[oklch(0.145_0_0)]" />
+        <div className="bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl p-12 sm:p-20 flex flex-col items-center justify-center text-center shadow-[6px_6px_0_rgba(0,0,0,0.12)]">
+          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full border border-dashed border-[oklch(0.145_0_0)] flex items-center justify-center mb-6 opacity-30">
+            <Calendar className="w-8 h-8 sm:w-10 sm:h-10 text-[oklch(0.145_0_0)]" />
           </div>
           <p className="font-mono text-xs font-bold uppercase tracking-[0.3em] opacity-40">
             No Results Found

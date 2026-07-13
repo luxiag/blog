@@ -239,6 +239,7 @@
 .DocSearch-Container {
   background-color: rgba(0, 0, 0, 0.15);
   backdrop-filter: blur(4px);
+  overflow: hidden;
 }
 
 .DocSearch-Modal {
@@ -249,6 +250,7 @@
   max-width: 600px;
   margin: 60px auto auto;
   overflow: hidden;
+  width: calc(100vw - 24px);
 }
 
 /* ========== Search Bar ========== */
@@ -724,9 +726,10 @@
 /* ========== Responsive Adjustments ========== */
 @media (max-width: 640px) {
   .DocSearch-Modal {
-    margin: 20px;
+    margin: 12px;
     max-width: none;
-    max-height: calc(100vh - 40px);
+    max-height: calc(100vh - 24px);
+    border-radius: 12px;
   }
   
   .DocSearch-SearchBar {
@@ -742,11 +745,14 @@
   }
   
   .DocSearch-Button {
-    max-width: 160px;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
   }
   
   .DocSearch-Button-Placeholder {
-    font-size: 12px;
+    display: none;
   }
   
   .DocSearch-Button-Keys {
@@ -772,4 +778,11 @@
   .DocSearch-Commands-Key {
     border-width: 2px;
   }
+}
+
+/* Prevent body scroll when search modal is open */
+body.DocSearch--active {
+  overflow: hidden !important;
+  position: fixed;
+  width: 100%;
 }

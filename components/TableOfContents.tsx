@@ -100,7 +100,7 @@ export default function TableOfContents({ toc }: TableOfContentsProps) {
 
   return (
     <div
-      className="fixed left-6 top-32 z-30"
+      className="hidden xl:block fixed left-6 top-32 z-30"
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
     >
@@ -166,7 +166,7 @@ export default function TableOfContents({ toc }: TableOfContentsProps) {
       </div>
 
       <div
-        className={`transition-all duration-300 ${!isExpanded && isHovering
+        className={`transition-all duration-300 hidden xl:block ${!isExpanded && isHovering
           ? 'opacity-100 visible translate-x-0'
           : 'opacity-0 invisible -translate-x-4 pointer-events-none'
           }`}

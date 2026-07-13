@@ -7,12 +7,12 @@ export default function AboutPage() {
     <>
       <PageTitle title="关于我" />
       <div className="min-h-screen" style={{backgroundColor: 'var(--background)'}}>
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8" style={{padding: '48px 24px'}}>
-        <h1 style={{fontSize: '48px', fontWeight: 900, marginBottom: '48px', fontFamily: 'var(--font-sans)', color: 'var(--foreground)'}}>关于我</h1>
+      <div className="max-w-4xl mx-auto px-2 sm:px-4 lg:px-8 py-6 sm:py-12">
+        <h1 className="text-3xl sm:text-5xl" style={{fontWeight: 900, marginBottom: '48px', fontFamily: 'var(--font-sans)', color: 'var(--foreground)'}}>关于我</h1>
 
         <div className="grid grid-cols-1 md:grid-cols-3" style={{gap: '32px', marginBottom: '48px'}}>
           <div className="md:col-span-1">
-            <div className="relative h-64 w-64 mx-auto rounded-full overflow-hidden" style={{border: '1px solid var(--border-color)'}}>
+            <div className="relative h-48 w-48 sm:h-64 sm:w-64 mx-auto rounded-full overflow-hidden" style={{border: '1px solid var(--border-color)'}}>
               <Image
                 src="/images/profile.jpg"  // 请替换为您的头像路径
                 alt="个人头像"
@@ -72,7 +72,7 @@ export default function AboutPage() {
 
         <div style={{marginTop: '48px', textAlign: 'center'}}>
           <h2 style={{fontSize: '24px', fontWeight: 700, marginBottom: '24px', color: 'var(--foreground)'}}>联系我</h2>
-          <div style={{display: 'flex', justifyContent: 'center', gap: '24px'}}>
+          <div className="flex flex-wrap justify-center gap-4 sm:gap-6">
             <a href="mailto:your.email@example.com" className="transition-colors" style={{fontSize: '14px', color: 'var(--color-neutral-500)', fontFamily: 'var(--font-mono)'}}>
               邮箱
             </a>

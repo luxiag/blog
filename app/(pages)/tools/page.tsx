@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactElement } from 'react';
+import { useState, useCallback, type ReactElement } from 'react';
 import PageTitle from '@/components/PageTitle';
 import Link from 'next/link';
 
@@ -220,6 +220,14 @@ const toolIcons: Record<string, React.ReactElement> = {
 
 export default function ToolsPage() {
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleCategoryChange = useCallback((categoryId: string) => {
+    setIsLoading(true);
+    setSelectedCategory(categoryId);
+    setTimeout(() => setIsLoading(false), 150);
+  }, []);
 
   const filteredTools = selectedCategory === 'all'
     ? tools
@@ -229,20 +237,72 @@ export default function ToolsPage() {
     <>
       <PageTitle title="工具箱" />
       <div className="min-h-screen" style={{ backgroundColor: 'var(--background)' }}>
-        <div className="max-w-6xl mx-auto px-4" style={{ padding: '48px 24px' }}>
-          <h1 style={{
-            fontSize: '48px',
+        <div className="max-w-6xl mx-auto px-2 sm:px-4 py-6 sm:py-12">
+          <h1 className="text-2xl sm:text-3xl md:text-5xl mb-6 sm:mb-12" style={{
             fontWeight: 900,
-            marginBottom: '48px',
             fontFamily: 'var(--font-sans)',
             color: 'var(--foreground)'
           }}>
             工具箱
           </h1>
 
-          <div style={{ display: 'flex', gap: '32px' }}>
-            {/* 左侧分类导航 */}
-            <div style={{ width: '200px', flexShrink: 0 }}>
+          {/* 移动端分类选择器 */}
+          <div className="md:hidden mb-4">
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="w-full flex items-center justify-between px-4 py-3 rounded-lg"
+              style={{
+                background: 'white',
+                border: '1px solid var(--border-color)',
+                color: 'var(--foreground)',
+                fontFamily: 'var(--font-sans)',
+              }}
+            >
+              <span className="flex items-center gap-2">
+                {categories.find(c => c.id === selectedCategory)?.name || '全部工具'}
+              </span>
+              <svg
+                className={`w-5 h-5 transition-transform ${isMobileMenuOpen ? 'rotate-180' : ''}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.5}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              </svg>
+            </button>
+            
+            {isMobileMenuOpen && (
+              <div className="mt-2 p-2 rounded-lg" style={{
+                background: 'white',
+                border: '1px solid var(--border-color)',
+              }}>
+                {categories.map(cat => (
+                  <button
+                    key={cat.id}
+                    onClick={() => {
+                      handleCategoryChange(cat.id);
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-left transition-colors"
+                    style={{
+                      background: selectedCategory === cat.id ? 'var(--foreground)' : 'transparent',
+                      color: selectedCategory === cat.id ? 'white' : 'var(--foreground)',
+                      fontSize: '14px',
+                      fontFamily: 'var(--font-sans)',
+                    }}
+                  >
+                    {categoryIcons[cat.icon]}
+                    {cat.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col md:flex-row gap-4 sm:gap-8">
+            {/* 左侧分类导航 - 桌面端 */}
+            <div className="hidden md:block" style={{ width: '200px', flexShrink: 0 }}>
               <div style={{
                 background: 'white',
                 border: '1px solid var(--border-color)',
@@ -253,7 +313,7 @@ export default function ToolsPage() {
                   {categories.map(cat => (
                     <button
                       key={cat.id}
-                      onClick={() => setSelectedCategory(cat.id)}
+                      onClick={() => handleCategoryChange(cat.id)}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -281,68 +341,71 @@ export default function ToolsPage() {
 
             {/* 中间工具列表 */}
             <div style={{ flex: 1 }}>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-                gap: '16px',
-              }}>
-                {filteredTools.map(tool => (
-                  <Link
-                    key={tool.id}
-                    href={`/tools/${tool.id}`}
-                    style={{
-                      display: 'block',
-                      background: 'white',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: '8px',
-                      padding: '20px',
-                      textDecoration: 'none',
-                      transition: 'all 0.2s ease',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--color-orange-800)';
-                      e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
-                      e.currentTarget.style.transform = 'translateY(-2px)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--border-color)';
-                      e.currentTarget.style.boxShadow = 'none';
-                      e.currentTarget.style.transform = 'translateY(0)';
-                    }}
-                  >
-                    <div style={{
-                      width: '40px',
-                      height: '40px',
-                      borderRadius: '8px',
-                      background: 'var(--color-neutral-100)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginBottom: '12px',
-                      color: 'var(--foreground)',
-                    }}>
-                      {toolIcons[tool.icon]}
+              {isLoading ? (
+                <div className="flex items-center justify-center py-20">
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="w-8 h-8 border-2 border-neutral-200 border-t-orange-600 rounded-full animate-spin" />
+                    <div className="text-xs font-mono text-neutral-400 tracking-widest uppercase">
+                      Loading...
                     </div>
-                    <h3 style={{
-                      fontSize: '14px',
-                      fontWeight: 600,
-                      fontFamily: 'var(--font-sans)',
-                      color: 'var(--foreground)',
-                      margin: '0 0 4px 0',
-                    }}>
-                      {tool.name}
-                    </h3>
-                    <p style={{
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)',
-                      color: 'var(--color-neutral-500)',
-                      margin: 0,
-                    }}>
-                      {tool.description}
-                    </p>
-                  </Link>
-                ))}
-              </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                  {filteredTools.map(tool => (
+                    <Link
+                      key={tool.id}
+                      href={`/tools/${tool.id}`}
+                      className="block p-3 sm:p-5 rounded-lg transition-all duration-200 hover:-translate-y-0.5"
+                      style={{
+                        background: 'white',
+                        border: '1px solid var(--border-color)',
+                        textDecoration: 'none',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--color-orange-800)';
+                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--border-color)';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                    >
+                      <div style={{
+                        width: '36px',
+                        height: '36px',
+                        borderRadius: '8px',
+                        background: 'var(--color-neutral-100)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginBottom: '10px',
+                        color: 'var(--foreground)',
+                      }}>
+                        {toolIcons[tool.icon]}
+                      </div>
+                      <h3 style={{
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        fontFamily: 'var(--font-sans)',
+                        color: 'var(--foreground)',
+                        margin: '0 0 4px 0',
+                      }}>
+                        {tool.name}
+                      </h3>
+                      <p style={{
+                        fontSize: '11px',
+                        fontFamily: 'var(--font-mono)',
+                        color: 'var(--color-neutral-500)',
+                        margin: 0,
+                        lineHeight: '1.4',
+                      }}>
+                        {tool.description}
+                      </p>
+                    </Link>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
