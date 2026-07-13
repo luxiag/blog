@@ -132,7 +132,6 @@ export default function CodeBlock({ children, className, codeContent: propCodeCo
     }
   }, [displayContent, className]);
 
-  // console.log(displayContent,'displayContent')
   const toggleExpand = useCallback(() => {
     setIsExpanded(prev => !prev);
   }, []);

@@ -74,13 +74,13 @@ export default function BlogList({ posts }: { posts: Post[] }) {
                       filter: 'drop-shadow(0 10px 20px rgba(0,0,0,0.1))',
                     }}
                   >
-                    {/* 多层描边堆叠 */}
-                    {[...Array(4)].map((_, i) => (
+                    {/* 多层描边堆叠 - 减少层数以优化性能 */}
+                    {[...Array(2)].map((_, i) => (
                       <span
                         key={i}
                         className="text-transparent relative"
                         style={{
-                          WebkitTextStroke: `${1 + i * 0.3}px rgba(0, 0, 0, ${0.06 + i * 0.04})`,
+                          WebkitTextStroke: `${1 + i * 0.5}px rgba(0, 0, 0, ${0.08 + i * 0.05})`,
                           marginTop: i === 0 ? 0 : '-0.65em',
                           transform: `translateZ(${i * 2}px)`,
                         }}
@@ -123,7 +123,7 @@ export default function BlogList({ posts }: { posts: Post[] }) {
               {/* 文章网格 - 立体卡片 */}
               <div
                 className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8"
-                style={{ perspective: '1000px' }}
+                style={{ perspective: '1000px', contentVisibility: 'auto', containIntrinsicSize: '1px 500px' }}
               >
                 {yearPosts.map((post, idx) => (
                   <Link
@@ -133,7 +133,7 @@ export default function BlogList({ posts }: { posts: Post[] }) {
                     style={{ transformStyle: 'preserve-3d' }}
                   >
                     <div
-                      className="h-full flex flex-col bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl overflow-hidden transition-all duration-300 group-hover:[transform:translateZ(20px)_rotateX(2deg)_rotateY(-2deg)] group-hover:shadow-[8px_8px_0_rgba(0,0,0,0.15),16px_16px_0_rgba(234,88,12,0.12)]"
+                      className="h-full flex flex-col bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl overflow-hidden transition-all duration-300 group-hover:[transform:translateZ(20px)_rotateX(2deg)_rotateY(-2deg)] group-hover:shadow-[8px_8px_0_rgba(0,0,0,0.15),16px_16px_0_rgba(234,88,12,0.12)] will-change-transform"
                       style={{
                         boxShadow: '6px 6px 0 rgba(0, 0, 0, 0.12), 12px 12px 0 rgba(234, 88, 12, 0.08)',
                         transform: 'translateZ(0)',

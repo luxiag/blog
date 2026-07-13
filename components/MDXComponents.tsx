@@ -229,6 +229,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
               data-full-src={resolvedSrc}
               alt={alt || ''}
               title={title}
+              loading="lazy"
+              decoding="async"
               className="max-w-full h-auto transition-opacity duration-200 group-hover:opacity-95 shadow-[0_2px_12px_rgba(0,0,0,0.10)]"
               {...props}
             />

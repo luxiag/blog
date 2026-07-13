@@ -16,6 +16,9 @@ let allPostsCache: Post[] | null = null;
 // 单篇文章缓存
 const postCache = new Map<string, Post>();
 
+// 元数据缓存
+let allPostsMetadataCache: Post[] | null = null;
+
 interface PostFile {
   slug: string;
   filePath: string;
@@ -221,38 +224,47 @@ function ensureCategoryInTags(tags: string[], category?: string): string[] {
 }
 
 export async function getAllPosts(): Promise<Post[]> {
-  // 如果已有缓存，直接返回
-  if (allPostsCache) {
-    return allPostsCache;
+  // 列表页仅需要元数据，避免编译 MDX
+  if (allPostsMetadataCache) {
+    return allPostsMetadataCache;
   }
 
   const postFiles = getPostFiles(postsDirectory);
 
-  // 1. 提前过滤：仅解析 front matter，避免对不符合要求的文章执行昂贵的 markdown 编译
-  const validSlugs = postFiles.filter(({ filePath }) => {
+  const posts = postFiles.map(postFile => {
     try {
-      const fileContents = fs.readFileSync(filePath, 'utf8');
-      const { data } = matter(fileContents);
+      const fileContents = fs.readFileSync(postFile.filePath, 'utf8');
+      const { data, content } = matter(fileContents);
       const frontMatter = data as PostFrontMatter;
 
       const hasValidTitle = frontMatter.title && frontMatter.title !== '无标题';
       const hasValidDate = !!frontMatter.date;
       const isNotHidden = frontMatter.hidden !== true;
 
-      return hasValidTitle && hasValidDate && isNotHidden;
+      if (!hasValidTitle || !hasValidDate || !isNotHidden) {
+        return null;
+      }
+
+      return {
+        slug: postFile.slug,
+        title: frontMatter.title,
+        date: typeof frontMatter.date === 'object' && frontMatter.date !== null
+          ? new Date(frontMatter.date as unknown as string).toISOString().split('T')[0]
+          : (frontMatter.date || new Date().toISOString().split('T')[0]),
+        excerpt: frontMatter.excerpt || '',
+        category: postFile.category,
+        tags: ensureCategoryInTags(frontMatter.tags || [], postFile.category),
+        readingTime: calculateReadingTime(content),
+        content: '', // 列表页不需要内容
+        hidden: frontMatter.hidden
+      } as Post;
     } catch {
-      return false;
+      return null;
     }
-  }).map(file => file.slug);
+  }).filter((p): p is Post => p !== null);
 
-  // 2. 仅对符合要求的文章执行完整的数据获取与编译
-  const posts = await Promise.all(
-    validSlugs.map(slug => getPostData(slug))
-  );
-
-  // 3. 排序并缓存结果
-  allPostsCache = posts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  return allPostsCache;
+  allPostsMetadataCache = posts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return allPostsMetadataCache;
 }
 
 export interface TocItem {
