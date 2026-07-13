@@ -408,18 +408,18 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     ),
     table: ({ children, ...props }: React.ComponentPropsWithoutRef<'table'>) => (
       <div className="overflow-x-auto my-8 border-t-2 border-b border-neutral-900 dark:border-neutral-200">
-        <table className="min-w-full font-sans" {...props}>
+        <table className="w-full min-w-full font-sans" {...props}>
           {children}
         </table>
       </div>
     ),
     thead: ({ children, ...props }: React.ComponentPropsWithoutRef<'thead'>) => (
-      <thead className="border-b border-neutral-900 dark:border-neutral-300" {...props}>
+      <thead className="w-full border-b border-neutral-900 dark:border-neutral-300" {...props}>
         {children}
       </thead>
     ),
     tbody: ({ children, ...props }: React.ComponentPropsWithoutRef<'tbody'>) => (
-      <tbody className="divide-y divide-neutral-200 dark:divide-neutral-700" {...props}>
+      <tbody className="w-full divide-y divide-neutral-200 dark:divide-neutral-700" {...props}>
         {children}
       </tbody>
     ),

@@ -425,8 +425,14 @@ table {
   width: 100%;
   border-collapse: collapse;
   margin-bottom: var(--spacing-lg);
-  display: block;
-  overflow-x: auto;
+}
+
+thead, tbody {
+  width: 100%;
+}
+
+tr {
+  width: 100%;
 }
 
 th,
