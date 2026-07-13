@@ -182,7 +182,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       return (
         <h2
           id={id}
-          className="font-serif text-[1.65rem] font-bold text-neutral-900 dark:text-neutral-100 mt-14 mb-5 pb-2.5 border-b-2 border-neutral-900 dark:border-neutral-200 tracking-tight leading-snug"
+          className="font-sans text-[1.65rem] font-bold text-neutral-900 dark:text-neutral-100 mt-14 mb-5 pb-2.5 border-b-2 border-neutral-900 dark:border-neutral-200 tracking-tight leading-snug"
           {...props}
         >
           {children}
@@ -194,7 +194,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       return (
         <h3
           id={id}
-          className="font-serif text-[1.25rem] font-bold text-neutral-900 dark:text-neutral-100 mt-10 mb-3 tracking-tight leading-snug"
+          className="font-sans text-[1.25rem] font-bold text-neutral-900 dark:text-neutral-100 mt-10 mb-3 tracking-tight leading-snug"
           {...props}
         >
           {children}
@@ -206,7 +206,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       return (
         <h4
           id={id}
-          className="font-serif text-[1.1rem] font-bold text-neutral-800 dark:text-neutral-200 mt-8 mb-2 tracking-tight"
+          className="font-sans text-[1.1rem] font-bold text-neutral-800 dark:text-neutral-200 mt-8 mb-2 tracking-tight"
           {...props}
         >
           {children}
@@ -214,7 +214,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       );
     },
     p: ({ children, ...props }: React.ComponentPropsWithoutRef<'p'>) => (
-      <p className="font-serif text-[1.0625rem] text-neutral-800 dark:text-neutral-300 leading-[1.85] mb-5 tracking-[0.01em]" {...props}>
+      <p className="font-sans text-[1.0625rem] text-neutral-800 dark:text-neutral-300 leading-[1.75] mb-5 tracking-[0.01em]" {...props}>
         {children}
       </p>
     ),
@@ -360,10 +360,10 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     },
     blockquote: ({ children, ...props }: React.ComponentPropsWithoutRef<'blockquote'>) => (
       <blockquote
-        className="relative my-8 px-6 py-5 border-l-[3px] border-[#ea580c] bg-gradient-to-r from-[#ea580c]/5 to-transparent dark:from-[#ea580c]/10 dark:to-transparent rounded-r-lg font-serif text-neutral-700 dark:text-neutral-300 leading-relaxed"
+        className="relative my-8 px-6 py-5 border-l-[3px] border-[#ea580c] bg-gradient-to-r from-[#ea580c]/5 to-transparent dark:from-[#ea580c]/10 dark:to-transparent rounded-r-lg font-sans text-neutral-700 dark:text-neutral-300 leading-relaxed"
         {...props}
       >
-        <span className="absolute top-3 left-4 text-[#ea580c]/20 dark:text-[#ea580c]/30 text-5xl font-serif leading-none select-none pointer-events-none" aria-hidden="true">&ldquo;</span>
+        <span className="absolute top-3 left-4 text-[#ea580c]/20 dark:text-[#ea580c]/30 text-5xl font-sans leading-none select-none pointer-events-none" aria-hidden="true">&ldquo;</span>
         <span className="relative z-10 block pl-4">{children}</span>
       </blockquote>
     ),
@@ -378,7 +378,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       </ol>
     ),
     li: ({ children, ...props }: React.ComponentPropsWithoutRef<'li'>) => (
-      <li className="font-serif text-[1.0625rem] leading-[1.85]" {...props}>
+      <li className="font-sans text-[1.0625rem] leading-[1.75]" {...props}>
         {children}
       </li>
     ),
@@ -406,7 +406,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     ),
     table: ({ children, ...props }: React.ComponentPropsWithoutRef<'table'>) => (
       <div className="overflow-x-auto my-8 border-t-2 border-b border-neutral-900 dark:border-neutral-200">
-        <table className="min-w-full font-serif" {...props}>
+        <table className="min-w-full font-sans" {...props}>
           {children}
         </table>
       </div>
@@ -513,7 +513,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
             {/* <span className="text-neutral-400 dark:text-neutral-500 text-xs transition-transform details-[open]:rotate-90">▶</span> */}
             <span>{getSummaryContent()}</span>
           </summary>
-          <div className="px-5 py-4 font-serif text-[1.0625rem] leading-[1.85] text-neutral-800 dark:text-neutral-300 [&_pre]:my-0">
+          <div className="px-5 py-4 font-sans text-[1.0625rem] leading-[1.75] text-neutral-800 dark:text-neutral-300 [&_pre]:my-0">
             {getBodyContent()}
           </div>
         </details>

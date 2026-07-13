@@ -50,14 +50,14 @@
   --font-serif: var(--font-noto-serif-sc), "Source Han Serif SC", "STSong", Georgia, serif;
 }
 
-/* mdx-content 报纸排版优化 */
+/* mdx-content 现代文档排版优化 */
 .mdx-content {
   /* 中文标点挤压，提升排版质量 */
   font-feature-settings: "kern" 1, "liga" 1;
   text-rendering: optimizeLegibility;
-  /* 正文字号与行高：默认浏览器行高偏紧(约1.2)，长文阅读容易疲劳 */
+  /* 正文字号与行高：参考 Vite/Tailwind/Next.js 文档网站 */
   font-size: 17px;
-  line-height: 1.8;
+  line-height: 1.75;
 }
 
 .mdx-content p,
@@ -70,16 +70,16 @@
 }
 
 .mdx-content p {
-  margin-bottom: 1.6em;
+  margin-bottom: 1.5em;
 }
 
 .mdx-content li {
-  margin-bottom: 0.4em;
+  margin-bottom: 0.375em;
 }
 
 .mdx-content ul,
 .mdx-content ol {
-  margin-bottom: 1.6em;
+  margin-bottom: 1.5em;
 }
 
 /* 正文内小标题：拉开与上文的距离，形成清晰的章节呼吸感 */
@@ -88,6 +88,7 @@
 .mdx-content h4 {
   margin-top: 2em;
   color: var(--foreground);
+  font-family: var(--font-sans);
 }
 
 .mdx-content blockquote {
@@ -99,6 +100,7 @@
   text-decoration-line: underline;
   text-decoration-color: color-mix(in oklch, var(--color-orange-800) 40%, transparent);
   text-underline-offset: 2px;
+  transition: text-decoration-color 0.2s ease;
 }
 
 .mdx-content a:hover {
@@ -377,16 +379,19 @@ h6 {
   margin-top: 0;
   margin-bottom: var(--spacing-md);
   font-weight: 600;
-  line-height: 1.25;
+  line-height: 1.3;
+  color: var(--foreground);
 }
 
 h1 {
   font-size: 2rem;
   font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 h2 {
   font-size: 1.5rem;
+  letter-spacing: -0.01em;
 }
 
 h3 {
@@ -397,6 +402,7 @@ h3 {
 p {
   margin-top: 0;
   margin-bottom: var(--spacing-lg);
+  line-height: 1.75;
 }
 
 /* 列表样式 */
@@ -409,6 +415,7 @@ ol {
 
 li {
   margin-bottom: var(--spacing-sm);
+  line-height: 1.75;
 }
 
 /* 引用样式 - 由 MDXComponents blockquote 组件处理 */
@@ -472,6 +479,7 @@ pre {
 pre code {
   background-color: transparent;
   padding: 0;
+  color: inherit;
 }
 
 
