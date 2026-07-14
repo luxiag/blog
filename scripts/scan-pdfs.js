@@ -47,6 +47,37 @@ function scanPdfDirectory() {
   fs.writeFileSync(outputFile, JSON.stringify({ pdfs: pdfFiles }, null, 2));
   console.log(`Found ${pdfFiles.length} PDF(s) in public/pdf directory`);
   console.log(`Generated ${outputFile}`);
+  
+  // Sync pdf.worker.min.mjs to public/js
+  syncPdfWorker();
+}
+
+function syncPdfWorker() {
+  const source = path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.min.mjs');
+  const targetDir = path.join(process.cwd(), 'public', 'js');
+  const target = path.join(targetDir, 'pdf.worker.min.mjs');
+
+  try {
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    if (fs.existsSync(source)) {
+      const sourceContent = fs.readFileSync(source);
+      const targetContent = fs.existsSync(target) ? fs.readFileSync(target) : null;
+
+      if (!targetContent || !sourceContent.equals(targetContent)) {
+        fs.writeFileSync(target, sourceContent);
+        console.log(`✅ Synced pdf.worker.min.mjs to ${target}`);
+      } else {
+        console.log(`ℹ️ pdf.worker.min.mjs is already up to date`);
+      }
+    } else {
+      console.warn(`⚠️ Could not find source worker at ${source}`);
+    }
+  } catch (err) {
+    console.error(`❌ Failed to sync PDF worker: ${err.message}`);
+  }
 }
 
 scanPdfDirectory();

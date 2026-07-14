@@ -248,7 +248,7 @@ export default function ViewerComponent() {
 
     return (
         <div className="w-full h-full flex flex-col gap-4">
-            <div className="flex justify-between items-center bg-white dark:bg-neutral-900 p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 shadow-sm">
+            {/* <div className="flex justify-between items-center bg-white dark:bg-neutral-900 p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 shadow-sm">
                 <div className="flex items-center gap-3">
                     <div className="p-2 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded-lg">
                         <Box className="w-6 h-6" />
@@ -279,12 +279,12 @@ export default function ViewerComponent() {
                         </button>
                     )}
                 </div>
-            </div>
+            </div> */}
 
             <div
-                className={`flex-1 relative rounded-2xl overflow-hidden border-2 transition-all duration-300 shadow-inner ${dragActive
-                    ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-900/10 scale-[0.99]'
-                    : 'border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-black/40'
+                className={`flex-1 relative rounded-2xl overflow-hidden  transition-all duration-300  ${dragActive
+                    ? 'border-blue-500  dark:bg-blue-900/10 scale-[0.99]'
+                    : ''
                     }`}
                 onDragEnter={(e) => { e.preventDefault(); setDragActive(true); }}
                 onDragLeave={(e) => { e.preventDefault(); setDragActive(false); }}

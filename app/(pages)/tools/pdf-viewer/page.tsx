@@ -74,6 +74,8 @@ export default function PdfViewerPage() {
   const [previewMode, setPreviewMode] = useState<PreviewMode>('normal');
   const [publicPdfs, setPublicPdfs] = useState<{ id: string; name: string; url: string; size: number }[]>([]);
   const [pdfjsLibLoaded, setPdfjsLibLoaded] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -93,6 +95,18 @@ export default function PdfViewerPage() {
   // Initialize DB and load user PDFs
   useEffect(() => {
     let isMounted = true;
+    
+    // Check if mobile
+    const checkMobile = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (mobile) {
+        setScale(0.8);
+      }
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
     
     const init = async () => {
       try {
@@ -138,6 +152,7 @@ export default function PdfViewerPage() {
     
     return () => {
       isMounted = false;
+      window.removeEventListener('resize', checkMobile);
       if (scrollRAFRef.current) {
         cancelAnimationFrame(scrollRAFRef.current);
       }
@@ -270,7 +285,7 @@ export default function PdfViewerPage() {
 
   // Render a single page
   const renderPage = async (pageNum: number) => {
-    if (!pdfDocRef.current) return;
+    if (!pdfDocRef.current || !pagesInfo.length) return;
     
     // Prevent duplicate rendering
     if (renderingPageRef.current.has(pageNum)) return;
@@ -392,14 +407,26 @@ export default function PdfViewerPage() {
 
   // Re-render all pages when preview mode or scale changes
   useEffect(() => {
-    if (currentPdf && pageOffsets.length > 0 && renderedPages.size > 0) {
-      const renderedArray = Array.from(renderedPages);
+    if (currentPdf && pageOffsets.length > 0) {
+      // Clear all rendered flags to force re-render
+      setRenderedPages(new Set());
+      renderedScaleRef.current.clear();
+      renderingPageRef.current.clear();
       
-      requestAnimationFrame(() => {
-        renderedArray.forEach(pageNum => {
-          renderPage(pageNum);
-        });
+      // Cancel any ongoing render tasks
+      renderTasksRef.current.forEach(task => {
+        if (task && task.cancel) task.cancel();
       });
+      renderTasksRef.current.clear();
+
+      // Trigger re-render of currently visible pages
+      const container = scrollContainerRef.current;
+      if (container) {
+        // A small timeout to let the new layout settle
+        setTimeout(() => {
+          handleScroll();
+        }, 50);
+      }
     }
   }, [previewMode, scale]);
 
@@ -614,6 +641,13 @@ export default function PdfViewerPage() {
     setSavedPage(null);
   };
 
+  // Close sidebar on mobile when a PDF is loaded or tab changed
+  useEffect(() => {
+    if (isMobile) {
+      setIsSidebarOpen(false);
+    }
+  }, [currentPdf?.id, activeTab]);
+
   // Handle outline item click
   const handleOutlineClick = async (item: PdfOutlineItem) => {
     if (!pdfDocRef.current || !item.dest) return;
@@ -794,13 +828,24 @@ export default function PdfViewerPage() {
       
       const offsets = pageOffsetsRef.current;
       const scrollTop = container.scrollTop;
+      const viewportHeight = container.clientHeight;
       
       let currentP = 1;
+      
+      // Determine visible pages and update current page
       for (let i = 0; i < offsets.length; i++) {
+        const pageNum = i + 1;
         const { top, height } = offsets[i];
-        if (scrollTop < top + height / 2) {
-          currentP = i + 1;
-          break;
+        
+        // Update current page (middle of viewport)
+        if (scrollTop < top + height / 2 && currentP === 1) {
+          currentP = pageNum;
+        }
+
+        // Check if page is in viewport (with buffer)
+        const isVisible = (top < scrollTop + viewportHeight + 600) && (top + height > scrollTop - 600);
+        if (isVisible && !renderedPages.has(pageNum)) {
+          renderPage(pageNum);
         }
       }
       
@@ -912,19 +957,41 @@ export default function PdfViewerPage() {
         </div>
       )}
 
-      <div className="flex h-screen overflow-hidden">
+      <div className="flex h-screen overflow-hidden relative">
+        {/* Mobile Sidebar Backdrop */}
+        {isMobile && isSidebarOpen && (
+          <div 
+            className="fixed inset-0 bg-black/50 z-40 transition-opacity"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+        )}
+
         {/* Left Sidebar */}
-        <div className="w-72 bg-white border-r border-[oklch(0.145_0_0)] flex flex-col">
+        <div className={`
+          ${isMobile ? 'fixed inset-y-0 left-0 z-50 transform transition-transform duration-300' : 'relative w-72'}
+          ${isMobile && !isSidebarOpen ? '-translate-x-full' : 'translate-x-0'}
+          w-72 bg-white border-r border-[oklch(0.145_0_0)] flex flex-col
+        `}>
           {/* Header */}
-          <div className="px-4 py-4 border-b border-[oklch(0.145_0_0)]">
-            <Link
-              href="/tools"
-              className="inline-flex items-center text-[10px] font-mono font-bold uppercase tracking-[0.15em] text-[#ea580c] mb-3 hover:underline"
-            >
-              <ChevronLeft className="w-3 h-3 mr-1" />
-              Back
-            </Link>
-            <h1 className="text-xl font-black tracking-tight">PDF Viewer</h1>
+          <div className="px-4 py-4 border-b border-[oklch(0.145_0_0)] flex items-center justify-between">
+            <div>
+              <Link
+                href="/tools"
+                className="inline-flex items-center text-[10px] font-mono font-bold uppercase tracking-[0.15em] text-[#ea580c] mb-1 hover:underline"
+              >
+                <ChevronLeft className="w-3 h-3 mr-1" />
+                Back
+              </Link>
+              <h1 className="text-xl font-black tracking-tight">PDF Viewer</h1>
+            </div>
+            {isMobile && (
+              <button 
+                onClick={() => setIsSidebarOpen(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <ChevronLeftIcon className="w-5 h-5" />
+              </button>
+            )}
           </div>
 
           {/* Tabs */}
@@ -990,7 +1057,7 @@ export default function PdfViewerPage() {
                     <span className="text-xs font-mono">Generating thumbnails...</span>
                   </div>
                 ) : thumbnails.length > 0 ? (
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {thumbnails.map((thumb) => (
                       <button
                         key={thumb.page}
@@ -1134,22 +1201,30 @@ export default function PdfViewerPage() {
         </div>
 
         {/* Main Content */}
-        <div className={`flex-1 flex flex-col ${previewMode === 'eink' ? 'bg-white' : 'bg-[#f5f5f5]'}`}>
+        <div className={`flex-1 flex flex-col min-w-0 ${previewMode === 'eink' ? 'bg-white' : 'bg-[#f5f5f5]'}`}>
           {/* Toolbar */}
-          {currentPdf && (
-            <div className="h-14 bg-white border-b border-[oklch(0.145_0_0)] flex items-center justify-between px-4 z-10">
-              <div className="flex items-center gap-4">
-                <span className="text-sm font-mono font-bold truncate max-w-md">
+          {currentPdf ? (
+            <div className="h-auto min-h-[3.5rem] py-2 bg-white border-b border-[oklch(0.145_0_0)] flex flex-wrap items-center justify-between px-4 z-10 gap-2">
+              <div className="flex items-center gap-3 min-w-0">
+                {isMobile && (
+                  <button
+                    onClick={() => setIsSidebarOpen(true)}
+                    className="p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 transition-colors"
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                )}
+                <span className="text-sm font-mono font-bold truncate max-w-[150px] sm:max-w-md">
                   {currentPdf.name}
                 </span>
               </div>
               
-              <div className="flex items-center gap-2">
-                {/* Preview Mode Toggle */}
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                {/* Preview Mode Toggle - Icon only on mobile */}
                 <div className="flex items-center border border-[oklch(0.145_0_0)] rounded overflow-hidden">
                   <button
                     onClick={() => setPreviewMode('normal')}
-                    className={`px-3 py-1.5 text-xs font-mono font-bold uppercase flex items-center gap-1.5 transition-colors ${
+                    className={`px-2 sm:px-3 py-1.5 text-[10px] sm:text-xs font-mono font-bold uppercase flex items-center gap-1.5 transition-colors ${
                       previewMode === 'normal'
                         ? 'bg-[oklch(0.145_0_0)] text-white'
                         : 'bg-white hover:bg-gray-50'
@@ -1157,11 +1232,11 @@ export default function PdfViewerPage() {
                     title="Normal Preview"
                   >
                     <Monitor className="w-3.5 h-3.5" />
-                    Normal
+                    <span className="hidden sm:inline">Normal</span>
                   </button>
                   <button
                     onClick={() => setPreviewMode('eink')}
-                    className={`px-3 py-1.5 text-xs font-mono font-bold uppercase flex items-center gap-1.5 transition-colors ${
+                    className={`px-2 sm:px-3 py-1.5 text-[10px] sm:text-xs font-mono font-bold uppercase flex items-center gap-1.5 transition-colors ${
                       previewMode === 'eink'
                         ? 'bg-[oklch(0.145_0_0)] text-white'
                         : 'bg-white hover:bg-gray-50'
@@ -1169,52 +1244,55 @@ export default function PdfViewerPage() {
                     title="E-ink Preview"
                   >
                     <Tablet className="w-3.5 h-3.5" />
-                    E-ink
+                    <span className="hidden sm:inline">E-ink</span>
                   </button>
                 </div>
 
-                <div className="w-px h-6 bg-gray-300 mx-2" />
+                {!isMobile && <div className="w-px h-6 bg-gray-300 mx-1" />}
 
-                <button
-                  onClick={prevPage}
-                  disabled={currentPage <= 1}
-                  className="p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                >
-                  <ChevronLeftIcon className="w-4 h-4" />
-                </button>
-                
                 <div className="flex items-center gap-1">
-                  <input
-                    type="number"
-                    min={1}
-                    max={totalPages}
-                    value={pageInput}
-                    onChange={(e) => setPageInput(e.target.value)}
-                    onKeyDown={handlePageInputSubmit}
-                    onBlur={() => setPageInput('')}
-                    placeholder={currentPage.toString()}
-                    className="w-12 px-2 py-1 border border-[oklch(0.145_0_0)] rounded text-xs font-mono text-center focus:outline-none focus:border-[#ea580c]"
-                  />
-                  <span className="text-xs font-mono text-gray-500">/ {totalPages}</span>
+                  <button
+                    onClick={prevPage}
+                    disabled={currentPage <= 1}
+                    className="p-1.5 sm:p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <ChevronLeftIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  </button>
+                  
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={1}
+                      max={totalPages}
+                      value={pageInput}
+                      onChange={(e) => setPageInput(e.target.value)}
+                      onKeyDown={handlePageInputSubmit}
+                      onBlur={() => setPageInput('')}
+                      placeholder={currentPage.toString()}
+                      className="w-10 sm:w-12 px-1 sm:px-2 py-1 border border-[oklch(0.145_0_0)] rounded text-[10px] sm:text-xs font-mono text-center focus:outline-none focus:border-[#ea580c]"
+                    />
+                    <span className="text-[10px] sm:text-xs font-mono text-gray-500">/ {totalPages}</span>
+                  </div>
+                  
+                  <button
+                    onClick={nextPage}
+                    disabled={currentPage >= totalPages}
+                    className="p-1.5 sm:p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  </button>
                 </div>
-                
-                <button
-                  onClick={nextPage}
-                  disabled={currentPage >= totalPages}
-                  className="p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
 
-                <div className="w-px h-6 bg-gray-300 mx-2" />
+                {!isMobile && <div className="w-px h-6 bg-gray-300 mx-1" />}
 
                 <select
                   value={scale}
                   onChange={(e) => setScale(Number(e.target.value))}
-                  className="px-2 py-1 border border-[oklch(0.145_0_0)] rounded text-xs font-mono bg-white"
+                  className="px-1 sm:px-2 py-1 border border-[oklch(0.145_0_0)] rounded text-[10px] sm:text-xs font-mono bg-white"
                 >
                   <option value={0.5}>50%</option>
                   <option value={0.75}>75%</option>
+                  <option value={0.8}>80%</option>
                   <option value={1}>100%</option>
                   <option value={1.2}>120%</option>
                   <option value={1.5}>150%</option>
@@ -1222,22 +1300,33 @@ export default function PdfViewerPage() {
                 </select>
               </div>
             </div>
-          )}
+          ) : isMobile ? (
+            <div className="h-14 bg-white border-b border-[oklch(0.145_0_0)] flex items-center px-4 z-10">
+              <button
+                onClick={() => setIsSidebarOpen(true)}
+                className="p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 transition-colors"
+              >
+                <List className="w-4 h-4" />
+              </button>
+              <span className="ml-3 text-sm font-mono font-bold">Select PDF</span>
+            </div>
+          ) : null}
 
           {/* PDF Viewer Area - Virtual Scrolling */}
           <div 
             ref={scrollContainerRef}
-            className="flex-1 overflow-y-auto"
+            className="flex-1 overflow-auto w-full"
             onScroll={handleScroll}
           >
             {currentPdf ? (
-              <div className="p-8">
+              <div className="p-4 sm:p-8">
                 {/* Spacer for total height */}
                 <div style={{ height: totalScrollHeight, position: 'relative' }}>
                   {pagesInfo.map((pageInfo, index) => {
                     const pageNum = index + 1;
                     const canvasWidth = pageInfo.width * scale;
                     const canvasHeight = pageInfo.height * scale;
+                    const isRendered = renderedPages.has(pageNum);
                     
                     return (
                       <div
@@ -1246,13 +1335,18 @@ export default function PdfViewerPage() {
                           if (el) pageRefsRef.current.set(pageNum, el);
                         }}
                         data-page={pageNum}
-                        className="absolute left-1/2 transform -translate-x-1/2"
+                        className="absolute left-1/2 -translate-x-1/2 min-w-max"
                         style={{
                           top: pageOffsets[pageNum - 1]?.top || 0,
+                          width: canvasWidth,
+                          height: canvasHeight,
                           marginBottom: '20px',
                         }}
                       >
-                        <div className={`relative shadow-lg ${previewMode === 'eink' ? 'border border-gray-300' : ''}`}>
+                        <div 
+                          className={`relative shadow-lg ${previewMode === 'eink' ? 'border border-gray-300' : ''} bg-white transition-opacity duration-300 ${isRendered ? 'opacity-100' : 'opacity-0'}`}
+                          style={{ width: canvasWidth, height: canvasHeight }}
+                        >
                           <canvas
                             ref={(el) => {
                               if (el) {
@@ -1266,6 +1360,14 @@ export default function PdfViewerPage() {
                             className="block"
                           />
                         </div>
+                        {!isRendered && (
+                          <div 
+                            className="absolute inset-0 bg-white shadow-lg flex items-center justify-center border border-gray-100"
+                            style={{ width: canvasWidth, height: canvasHeight }}
+                          >
+                            <Loader2 className="w-6 h-6 animate-spin text-gray-200" />
+                          </div>
+                        )}
                       </div>
                     );
                   })}

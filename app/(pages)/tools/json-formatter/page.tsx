@@ -65,7 +65,7 @@ export default function JsonFormatterPage() {
               <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
               </svg>
-              返回工具箱
+              BACK_TO_LIBRARY
             </Link>
           </div>
 

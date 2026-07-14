@@ -18,10 +18,10 @@ export default function SqlSimulatorPage() {
                             className="group inline-flex items-center text-orange-600 dark:text-orange-400 hover:text-orange-700 font-mono text-sm transition-all"
                         >
                             <ChevronLeft className="w-4 h-4 mr-1 transform group-hover:-translate-x-1 transition-transform" />
-                            返回工具箱
+                            Return to Tools
                         </Link>
                     </div>
-
+{/* 
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-10">
                         <div>
                             <h1 className="text-4xl font-black text-neutral-900 dark:text-white tracking-tight mb-2 flex items-center gap-3">
@@ -44,7 +44,7 @@ export default function SqlSimulatorPage() {
                                 WASM Powered
                             </div>
                         </div>
-                    </div>
+                    </div> */}
 
                     <div className="space-y-8">
 
