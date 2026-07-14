@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { SQL_DATASETS, type SqlDatasetId } from '@/lib/sqlDatasets';
+import Editor from 'react-simple-code-editor';
+import { Highlight, Prism } from 'prism-react-renderer';
 import {
     Database,
     Play,
@@ -21,6 +23,25 @@ import {
     Terminal,
     FileUp
 } from 'lucide-react';
+
+const sqlHighlightTheme = {
+    plain: {
+        color: 'var(--hljs-fg)',
+        backgroundColor: 'transparent',
+    },
+    styles: [
+        { types: ['comment'], style: { color: 'var(--hljs-comment)', fontStyle: 'italic' } },
+        { types: ['keyword'], style: { color: 'var(--hljs-keyword)', fontWeight: 'bold' } },
+        { types: ['operator'], style: { color: 'var(--hljs-operator)' } },
+        { types: ['string', 'url', 'attr-value'], style: { color: 'var(--hljs-string)' } },
+        { types: ['function'], style: { color: 'var(--hljs-function)' } },
+        { types: ['number', 'boolean', 'literal'], style: { color: 'var(--hljs-number)' } },
+        { types: ['variable', 'property'], style: { color: 'var(--hljs-variable)' } },
+        { types: ['punctuation'], style: { color: 'var(--hljs-fg)' } },
+        { types: ['class-name', 'type'], style: { color: 'var(--hljs-type)' } },
+        { types: ['built-in'], style: { color: 'var(--hljs-built-in)' } },
+    ],
+};
 
 type SqlJsExecResult = { columns: string[]; values: any[][] };
 
@@ -386,13 +407,41 @@ export default function SqlSimulator({
                                 </button>
                             </div>
                         </div>
-                        <textarea
-                            value={query}
-                            onChange={(e) => setQuery(e.target.value)}
-                            className="flex-1 w-full p-4 font-mono text-sm dark:bg-neutral-950 outline-none resize-none dark:text-orange-100/80 selection:bg-orange-500/30"
-                            spellCheck={false}
-                            placeholder="SELECT * FROM table_name..."
-                        />
+                        <div className="flex-1 overflow-auto dark:bg-neutral-950 relative">
+                            {!query && (
+                                <div className="absolute top-4 left-4 font-mono text-sm text-neutral-400 pointer-events-none select-none">
+                                    SELECT * FROM table_name...
+                                </div>
+                            )}
+                            <Editor
+                                value={query}
+                                onValueChange={setQuery}
+                                highlight={code => (
+                                    <Highlight theme={sqlHighlightTheme as any} code={code} language="sql">
+                                        {({ tokens, getLineProps, getTokenProps }) => (
+                                            <>
+                                                {tokens.map((line, i) => (
+                                                    <div key={i} {...getLineProps({ line })}>
+                                                        {line.map((token, key) => (
+                                                            <span key={key} {...getTokenProps({ token })} />
+                                                        ))}
+                                                    </div>
+                                                ))}
+                                            </>
+                                        )}
+                                    </Highlight>
+                                )}
+                                padding={16}
+                                style={{
+                                    fontFamily: 'var(--font-mono)',
+                                    fontSize: 13,
+                                    lineHeight: 1.6,
+                                    backgroundColor: 'transparent',
+                                    minHeight: '100%',
+                                    outline: 'none',
+                                }}
+                            />
+                        </div>
                     </div>
 
                     {/* Result Area */}

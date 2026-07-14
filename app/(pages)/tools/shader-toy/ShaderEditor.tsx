@@ -1,6 +1,28 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import Editor from 'react-simple-code-editor';
+import { Highlight } from 'prism-react-renderer';
+
+const glslHighlightTheme = {
+    plain: {
+        color: 'var(--hljs-fg)',
+        backgroundColor: 'transparent',
+    },
+    styles: [
+        { types: ['comment'], style: { color: 'var(--hljs-comment)', fontStyle: 'italic' } },
+        { types: ['keyword'], style: { color: 'var(--hljs-keyword)', fontWeight: 'bold' } },
+        { types: ['operator'], style: { color: 'var(--hljs-operator)' } },
+        { types: ['string', 'url', 'attr-value'], style: { color: 'var(--hljs-string)' } },
+        { types: ['function'], style: { color: 'var(--hljs-function)' } },
+        { types: ['number', 'boolean', 'literal'], style: { color: 'var(--hljs-number)' } },
+        { types: ['variable', 'property'], style: { color: 'var(--hljs-variable)' } },
+        { types: ['punctuation'], style: { color: 'var(--hljs-fg)' } },
+        { types: ['class-name', 'type'], style: { color: 'var(--hljs-type)' } },
+        { types: ['built-in'], style: { color: 'var(--hljs-built-in)' } },
+        { types: ['preprocessor'], style: { color: 'var(--hljs-meta)' } },
+    ],
+};
 
 const defaultVertexShader = `
 attribute vec2 position;
@@ -174,6 +196,7 @@ export default function ShaderEditor() {
   const [fragmentShader, setFragmentShader] = useState(defaultFragmentShader);
   const [error, setError] = useState<string>('');
   const [isPlaying, setIsPlaying] = useState(true);
+  const [glReady, setGlReady] = useState(false);
   const [showPresets, setShowPresets] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [importUrl, setImportUrl] = useState('');
@@ -219,8 +242,11 @@ export default function ShaderEditor() {
 
     const container = containerRef.current;
     if (container) {
-      canvas.width = container.clientWidth;
-      canvas.height = container.clientHeight;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (w === 0 || h === 0) return;
+      canvas.width = w;
+      canvas.height = h;
     }
 
     const gl = canvas.getContext('webgl') as WebGLRenderingContext | null;
@@ -261,6 +287,9 @@ export default function ShaderEditor() {
     const positionLocation = gl.getAttribLocation(program, 'position');
     gl.enableVertexAttribArray(positionLocation);
     gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+    setError('');
+    setGlReady(true);
   }, [compileShader, createProgram, fragmentShader]);
 
   const updateShader = useCallback(() => {
@@ -314,8 +343,19 @@ export default function ShaderEditor() {
   }, [isPlaying]);
 
   useEffect(() => {
-    initWebGL();
+    let attempts = 0;
+    const tryInit = () => {
+      const container = containerRef.current;
+      if (container && container.clientWidth > 0 && container.clientHeight > 0) {
+        initWebGL();
+      } else if (attempts < 10) {
+        attempts++;
+        requestAnimationFrame(tryInit);
+      }
+    };
+    const raf = requestAnimationFrame(tryInit);
     return () => {
+      cancelAnimationFrame(raf);
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
@@ -323,23 +363,29 @@ export default function ShaderEditor() {
   }, []);
 
   useEffect(() => {
-    if (isPlaying) {
+    if (isPlaying && glReady) {
       render();
     }
-  }, [render, isPlaying]);
+  }, [render, isPlaying, glReady]);
 
   useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
     const handleResize = () => {
       const canvas = canvasRef.current;
-      const container = containerRef.current;
       if (canvas && container) {
-        canvas.width = container.clientWidth;
-        canvas.height = container.clientHeight;
-        render();
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        if (w > 0 && h > 0) {
+          canvas.width = w;
+          canvas.height = h;
+          render();
+        }
       }
     };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    const ro = new ResizeObserver(handleResize);
+    ro.observe(container);
+    return () => ro.disconnect();
   }, [render]);
 
   const handleCompile = () => {
@@ -546,13 +592,36 @@ export default function ShaderEditor() {
             <span className="font-mono text-[10px] tracking-widest" style={{ fontSize: '10px', fontFamily: 'var(--font-mono)' }}>main.glsl</span>
             <span className="font-mono text-[9px] opacity-50 uppercase" style={{ fontSize: '9px', fontFamily: 'var(--font-mono)', opacity: 0.5, textTransform: 'uppercase' }}>GLSL</span>
           </div>
-          <textarea
-            value={fragmentShader}
-            onChange={(e) => setFragmentShader(e.target.value)}
-            className="flex-1 w-full p-4 font-mono text-xs leading-relaxed bg-neutral-50 dark:bg-neutral-950 text-[oklch(0.145_0_0)] dark:text-neutral-100 resize-none outline-none"
-            style={{ flex: 1, fontSize: '12px', fontFamily: 'var(--font-mono)', lineHeight: 1.6, padding: '16px', resize: 'none', outline: 'none', background: 'var(--color-neutral-100)' }}
-            spellCheck={false}
-          />
+          <div className="flex-1 overflow-auto" style={{ flex: 1, overflow: 'auto', background: 'var(--color-neutral-100)' }}>
+            <Editor
+              value={fragmentShader}
+              onValueChange={setFragmentShader}
+              highlight={code => (
+                <Highlight theme={glslHighlightTheme as any} code={code} language="c">
+                  {({ tokens, getLineProps, getTokenProps }) => (
+                    <>
+                      {tokens.map((line, i) => (
+                        <div key={i} {...getLineProps({ line })}>
+                          {line.map((token, key) => (
+                            <span key={key} {...getTokenProps({ token })} />
+                          ))}
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </Highlight>
+              )}
+              padding={16}
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 12,
+                lineHeight: 1.6,
+                backgroundColor: 'transparent',
+                minHeight: '100%',
+                outline: 'none',
+              }}
+            />
+          </div>
         </div>
 
         <div className="flex gap-2">
@@ -607,8 +676,8 @@ export default function ShaderEditor() {
         
         <div 
           ref={containerRef}
-          className="flex-1 rounded-xl border border-[oklch(0.145_0_0)] shadow-[4px_4px_0_oklch(0.145_0_0)] overflow-hidden bg-black"
-          style={{ flex: 1, borderRadius: '12px', border: '1px solid var(--border-color)', boxShadow: '4px 4px 0 var(--border-color)', background: '#000' }}
+          className="flex-1 rounded-xl border border-[oklch(0.145_0_0)] shadow-[4px_4px_0_oklch(0.145_0_0)] overflow-hidden bg-black relative"
+          style={{ flex: 1, borderRadius: '12px', border: '1px solid var(--border-color)', boxShadow: '4px 4px 0 var(--border-color)', background: '#000', position: 'relative' }}
         >
           <canvas
             ref={canvasRef}
