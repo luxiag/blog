@@ -1119,7 +1119,7 @@ export default function ViewerComponent() {
                                 <Ruler className="w-4 h-4 text-orange-400" />
                                 <span className="text-sm font-mono font-bold text-white/80">{measureDistance}</span>
                                 <span className="text-xs text-white/40">units</span>
-                                <button onClick={() => { setMeasurePoints([]); setMeasureDistance(null); }} className="ml-1 p-0.5 rounded hover:bg-white/10 text-white/60">
+                                <button onClick={() => { setMeasurePoints([]); setMeasureDistance(null); }} className="ml-1 p-0.5 rounded hover:bg-white/10 text-white/60" aria-label="Clear measurement">
                                     <X className="w-3 h-3" />
                                 </button>
                             </div>
@@ -1136,7 +1136,7 @@ export default function ViewerComponent() {
                             <div className="absolute top-12 left-3 w-56 bg-black/70 backdrop-blur-md rounded-xl shadow-lg border border-white/10 p-3 space-y-2">
                                 <div className="flex items-center justify-between">
                                     <span className="text-xs font-bold uppercase text-white/40 tracking-wider">模型信息</span>
-                                    <button onClick={() => setShowInfoPanel(false)} className="p-0.5 rounded hover:bg-white/10 text-white/60">
+                                    <button onClick={() => setShowInfoPanel(false)} className="p-0.5 rounded hover:bg-white/10 text-white/60" aria-label="Close info panel">
                                         <X className="w-3 h-3" />
                                     </button>
                                 </div>
@@ -1242,11 +1242,13 @@ export default function ViewerComponent() {
                                     onChange={(e) => setUrlInput(e.target.value)}
                                     onKeyDown={(e) => e.key === 'Enter' && loadFromUrl()}
                                     placeholder="粘贴模型 URL..."
+                                    aria-label="Model URL"
                                     className="flex-1 text-sm px-3 py-2.5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 outline-none focus:ring-2 focus:ring-orange-500/50 font-mono"
                                 />
                                 <button
                                     onClick={loadFromUrl}
                                     className="px-3 py-2.5 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-black hover:bg-neutral-800 dark:hover:bg-neutral-100 transition-colors"
+                                    aria-label="Load model from URL"
                                 >
                                     <Link className="w-4 h-4" />
                                 </button>
@@ -1265,7 +1267,7 @@ export default function ViewerComponent() {
                             <div className="absolute bottom-8 left-0 right-0 mx-auto w-max max-w-[90%] px-4 py-3 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 rounded-xl shadow-lg border border-red-100 dark:border-red-800/50 flex items-center gap-2 text-sm">
                                 <AlertCircle className="w-4 h-4 shrink-0" />
                                 {error}
-                                <button onClick={() => setError(null)} className="ml-2 hover:bg-red-100 dark:hover:bg-red-800/50 rounded-full p-0.5">
+                                <button onClick={() => setError(null)} className="ml-2 hover:bg-red-100 dark:hover:bg-red-800/50 rounded-full p-0.5" aria-label="Dismiss error">
                                     <X className="w-3 h-3" />
                                 </button>
                             </div>

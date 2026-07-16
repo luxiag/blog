@@ -169,7 +169,7 @@ export default function PdfToMdPage() {
             <div className="flex-1 flex min-h-0">
                 {/* Left: Input */}
                 <div className="w-[360px] shrink-0 border-r border-[var(--border-color)] flex flex-col bg-[var(--background)]">
-                    <div className="px-3 py-1.5 text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider border-b border-[var(--border-color)]">
+                    <div className="px-3 py-1.5 text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider border-b border-[var(--border-color)]">
                         Input
                     </div>
                     <div className="flex-1 p-4 flex flex-col">
@@ -180,7 +180,7 @@ export default function PdfToMdPage() {
                                     ? 'border-[#ea580c] bg-[#ea580c]/5'
                                     : file
                                         ? 'border-[var(--border-color)] bg-white'
-                                        : 'border-[var(--border-color)] bg-white hover:border-[var(--foreground)] hover:border-opacity-20'
+                                        : 'border-[var(--border-color)] bg-white hover:border-[var(--foreground)] hover:border-opacity-30'
                             }`}
                             onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
                             onDragLeave={() => setIsDragOver(false)}
@@ -203,7 +203,7 @@ export default function PdfToMdPage() {
                             {!file ? (
                                 <>
                                     <div className="w-16 h-16 rounded-full border border-dashed border-[var(--border-color)] flex items-center justify-center mb-4">
-                                        <Upload className="w-6 h-6 text-[var(--foreground)] opacity-20" />
+                                        <Upload className="w-6 h-6 text-[var(--foreground)] opacity-30" />
                                     </div>
                                     <p className="text-[11px] font-mono text-[var(--foreground)] opacity-30 mb-3">Drop PDF here or click to browse</p>
                                     <button
@@ -229,7 +229,7 @@ export default function PdfToMdPage() {
                                 <div className="flex items-center justify-between px-3 py-2 bg-white rounded border border-[var(--border-color)]">
                                     <span className="text-[11px] font-mono text-[var(--foreground)] opacity-40 truncate flex-1">{file.name}</span>
                                     <button onClick={() => { setFile(null); setMarkdown(''); setError(''); }}
-                                        className="p-1 text-[var(--foreground)] opacity-20 hover:opacity-50 hover:text-red-500 transition-all shrink-0 ml-2">
+                                        className="p-1 text-[var(--foreground)] opacity-30 hover:opacity-50 hover:text-red-500 transition-all shrink-0 ml-2">
                                         <Trash2 size={12} />
                                     </button>
                                 </div>
@@ -266,9 +266,9 @@ export default function PdfToMdPage() {
                 <div className="flex-1 flex flex-col min-w-0 bg-white">
                     <div className="px-3 py-1.5 flex items-center justify-between border-b border-[var(--border-color)] bg-[var(--background)] shrink-0">
                         <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Output</span>
+                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider">Output</span>
                             {markdown && (
-                                <span className="text-[10px] font-mono text-[var(--foreground)] opacity-15">
+                                <span className="text-[10px] font-mono text-[var(--foreground)] opacity-30">
                                     {wordCount.toLocaleString()} chars · {lineCount} lines
                                 </span>
                             )}
@@ -280,7 +280,7 @@ export default function PdfToMdPage() {
 
                     <div className="flex-1 overflow-auto min-h-0 relative">
                         {!markdown && !isProcessing && (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center text-[var(--foreground)] opacity-10 select-none">
+                            <div className="absolute inset-0 flex flex-col items-center justify-center text-[var(--foreground)] opacity-30 select-none">
                                 <FileCode className="w-16 h-16 mb-3" />
                                 <p className="text-[11px] font-mono font-bold tracking-wider uppercase">Awaiting Input</p>
                             </div>
@@ -299,6 +299,7 @@ export default function PdfToMdPage() {
                             value={markdown}
                             readOnly
                             placeholder=""
+                            aria-label="Markdown output"
                             className="w-full h-full p-4 font-mono text-[13px] leading-[1.7] resize-none outline-none text-[var(--foreground)] opacity-70 selection:bg-orange-500/20"
                         />
                     </div>

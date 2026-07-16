@@ -23,7 +23,7 @@ export default function Header() {
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center py-3">
           <div className="flex items-center">
-            <Link href="/" className="text-xl font-semibold font-sans text-neutral-900 dark:text-neutral-100">
+            <Link href="/" className="text-xl font-semibold font-sans text-neutral-900 dark:text-neutral-100" aria-label="Home">
             </Link>
           </div>
 

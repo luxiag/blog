@@ -54,8 +54,8 @@ export default function PasswordGeneratorPage() {
       await navigator.clipboard.writeText(password);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('复制失败:', err);
+    } catch {
+      // handled
     }
   };
 

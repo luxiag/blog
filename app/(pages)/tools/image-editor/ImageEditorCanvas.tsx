@@ -253,7 +253,7 @@ export default function ImageEditorCanvas() {
                     c.setActiveObject(img);
                     c.renderAll();
                 } catch (err) {
-                    console.error('Failed to load image:', err);
+                    // handled
                 }
             }
         };

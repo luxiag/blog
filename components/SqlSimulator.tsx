@@ -149,7 +149,6 @@ export default function SqlSimulator({
 
       setIsInitialized(true);
     } catch (err: any) {
-      console.error('SQL Init Error:', err);
       setError(`Initialization Error: ${err.message}`);
       setActiveTab('error');
     }
@@ -274,6 +273,7 @@ export default function SqlSimulator({
             disabled={!isInitialized}
             className="w-full h-32 p-3 font-mono text-sm bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-md focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-none text-neutral-800 dark:text-neutral-200 resize-y disabled:opacity-50"
             placeholder={isInitialized ? "输入 SQL 语句..." : "数据库加载中..."}
+            aria-label="SQL query"
           />
           <button
             onClick={runQuery}
@@ -318,6 +318,7 @@ export default function SqlSimulator({
               <select
                 value={activeResultIndex}
                 onChange={(e) => setActiveResultIndex(Number(e.target.value))}
+                aria-label="Select result set"
                 className="text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded px-2 py-1 text-neutral-700 dark:text-neutral-200"
               >
                 {resultSets.map((_, i) => (

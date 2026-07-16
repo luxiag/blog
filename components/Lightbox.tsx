@@ -78,10 +78,11 @@ export default function Lightbox({ isOpen, onClose, items, initialIndex }: Light
   const currentItem = items[currentIndex];
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center">
+    <div className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Image viewer">
       <button
         onClick={onClose}
         className="absolute top-4 right-4 p-2 text-white/80 hover:text-white transition-colors z-10"
+        aria-label="Close"
       >
         <X size={24} />
       </button>
@@ -91,12 +92,14 @@ export default function Lightbox({ isOpen, onClose, items, initialIndex }: Light
           <button
             onClick={goToPrev}
             className="absolute left-4 p-2 text-white/80 hover:text-white transition-colors"
+            aria-label="Previous image"
           >
             <ChevronLeft size={32} />
           </button>
           <button
             onClick={goToNext}
             className="absolute right-4 p-2 text-white/80 hover:text-white transition-colors"
+            aria-label="Next image"
           >
             <ChevronRight size={32} />
           </button>
@@ -112,6 +115,7 @@ export default function Lightbox({ isOpen, onClose, items, initialIndex }: Light
           onClick={() => setZoom(z => Math.max(z - 0.25, 0.5))}
           className="p-2 text-white/80 hover:text-white transition-colors"
           disabled={zoom <= 0.5}
+          aria-label="Zoom out"
         >
           <ZoomOut size={20} />
         </button>
@@ -120,6 +124,7 @@ export default function Lightbox({ isOpen, onClose, items, initialIndex }: Light
           onClick={() => setZoom(z => Math.min(z + 0.25, 3))}
           className="p-2 text-white/80 hover:text-white transition-colors"
           disabled={zoom >= 3}
+          aria-label="Zoom in"
         >
           <ZoomIn size={20} />
         </button>
@@ -127,6 +132,7 @@ export default function Lightbox({ isOpen, onClose, items, initialIndex }: Light
           <button
             onClick={() => setIsPlaying(!isPlaying)}
             className="p-2 text-white/80 hover:text-white transition-colors ml-2"
+            aria-label={isPlaying ? 'Pause video' : 'Play video'}
           >
             {isPlaying ? <Pause size={20} /> : <Play size={20} />}
           </button>

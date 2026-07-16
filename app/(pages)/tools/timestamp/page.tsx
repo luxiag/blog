@@ -138,6 +138,7 @@ export default function TimestampPage() {
                   value={tsInput}
                   onChange={(e) => setTsInput(e.target.value)}
                   placeholder="输入时间戳..."
+                  aria-label="Timestamp to convert"
                   className="flex-1"
                   style={{
                     padding: '10px 16px',
@@ -169,6 +170,7 @@ export default function TimestampPage() {
                   readOnly
                   value={dateOutput}
                   placeholder="结果将在此显示..."
+                  aria-label="Conversion result"
                   className="flex-1"
                   style={{
                     padding: '10px 16px',
@@ -190,6 +192,7 @@ export default function TimestampPage() {
                   value={dateInput}
                   onChange={(e) => setDateInput(e.target.value)}
                   placeholder="输入日期 (例如: 2025-01-01 12:00:00)"
+                  aria-label="Date to convert"
                   className="flex-1"
                   style={{
                     padding: '10px 16px',
@@ -221,6 +224,7 @@ export default function TimestampPage() {
                   readOnly
                   value={tsOutput}
                   placeholder="结果将在此显示..."
+                  aria-label="Conversion result"
                   className="flex-1"
                   style={{
                     padding: '10px 16px',

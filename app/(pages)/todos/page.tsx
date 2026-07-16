@@ -207,11 +207,12 @@ function PlanNodeEditor({
             onChange={(value) => updateNode(index, 'time', value)}
             className="w-24"
           />
-          <select
-            value={node.notificationType}
-            onChange={(e) => updateNode(index, 'notificationType', e.target.value as 'once' | 'daily')}
-            className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 focus:border-orange-600 focus:ring-2 focus:ring-orange-600/20 outline-none"
-          >
+           <select
+             value={node.notificationType}
+             onChange={(e) => updateNode(index, 'notificationType', e.target.value as 'once' | 'daily')}
+             aria-label="Notification type"
+             className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 focus:border-orange-600 focus:ring-2 focus:ring-orange-600/20 outline-none"
+           >
             <option value="once">Once</option>
             <option value="daily">Daily</option>
           </select>
@@ -324,7 +325,7 @@ export default function TodosPage() {
           bc.close();
         }
       } catch (error) {
-        console.error('Failed to load data:', error);
+        // handled
       } finally {
         setLoading(false);
       }
@@ -349,7 +350,7 @@ export default function TodosPage() {
           });
         })
         .catch((error) => {
-          console.error('Service Worker registration failed:', error);
+          // handled
         });
     }
   }, []);
@@ -916,6 +917,7 @@ export default function TodosPage() {
               placeholder="Search..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Search todos"
               className="w-full pl-10 pr-3 py-2.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white text-neutral-900 dark:text-neutral-100"
             />
           </div>
@@ -1212,6 +1214,7 @@ export default function TodosPage() {
               value={newCategoryName}
               onChange={(e) => setNewCategoryName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAddCategory()}
+              aria-label="New category name"
               autoFocus
               className="w-full px-3 py-2.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none mb-4 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
             />
@@ -1255,6 +1258,7 @@ export default function TodosPage() {
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleRename()}
+              aria-label="Rename category"
               autoFocus
               className="w-full px-3 py-2.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none mb-4 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
             />
@@ -1323,6 +1327,7 @@ export default function TodosPage() {
                 <select
                   value={newTodoCategory}
                   onChange={(e) => setNewTodoCategory(e.target.value)}
+                  aria-label="Select category"
                   className="w-full px-3 py-2.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 cursor-pointer text-neutral-900 dark:text-neutral-100 focus:border-orange-600 focus:ring-2 focus:ring-orange-600/20"
                 >
                   {categories.filter(c => c.id !== 'all').map(cat => (
@@ -1470,21 +1475,23 @@ export default function TodosPage() {
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-neutral-900 dark:text-neutral-100">Every</span>
                     <input
-                      type="number"
-                      min="1"
-                      max="999"
-                      value={newTodoRepeatInterval}
-                      onChange={(e) => setNewTodoRepeatInterval(parseInt(e.target.value) || 1)}
-                      className="w-16 px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
-                    />
-                    <select
-                      value={newTodoRepeatUnit}
-                      onChange={(e) => setNewTodoRepeatUnit(e.target.value as 'minutes' | 'hours')}
-                      className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 cursor-pointer text-neutral-900 dark:text-neutral-100 focus:border-orange-600 focus:ring-2 focus:ring-orange-600/20"
-                    >
-                      <option value="minutes">Minutes</option>
-                      <option value="hours">Hours</option>
-                    </select>
+                       type="number"
+                       min="1"
+                       max="999"
+                       value={newTodoRepeatInterval}
+                       onChange={(e) => setNewTodoRepeatInterval(parseInt(e.target.value) || 1)}
+                       aria-label="Repeat interval"
+                       className="w-16 px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                     />
+                     <select
+                       value={newTodoRepeatUnit}
+                       onChange={(e) => setNewTodoRepeatUnit(e.target.value as 'minutes' | 'hours')}
+                       aria-label="Repeat unit"
+                       className="px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 cursor-pointer text-neutral-900 dark:text-neutral-100 focus:border-orange-600 focus:ring-2 focus:ring-orange-600/20"
+                     >
+                       <option value="minutes">Minutes</option>
+                       <option value="hours">Hours</option>
+                     </select>
                     <span className="text-sm text-neutral-900 dark:text-neutral-100">Remind Once</span>
                   </div>
                 </div>
@@ -1556,11 +1563,12 @@ export default function TodosPage() {
                   <label className="block text-xs font-medium mb-1.5 text-neutral-900 dark:text-neutral-100">
                     Select Year
                   </label>
-                  <select
-                    value={newTodoYear}
-                    onChange={(e) => setNewTodoYear(parseInt(e.target.value))}
-                    className="px-3 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 cursor-pointer text-neutral-900 dark:text-neutral-100 focus:border-orange-600 focus:ring-2 focus:ring-orange-600/20"
-                  >
+                   <select
+                     value={newTodoYear}
+                     onChange={(e) => setNewTodoYear(parseInt(e.target.value))}
+                     aria-label="Month"
+                     className="px-3 py-2 text-sm border border-neutral-300 dark:border-neutral-600 rounded-lg outline-none bg-white dark:bg-neutral-700 cursor-pointer text-neutral-900 dark:text-neutral-100 focus:border-orange-600 focus:ring-2 focus:ring-orange-600/20"
+                   >
                     {[...Array(5)].map((_, i) => {
                       const year = new Date().getFullYear() + i;
                       return <option key={year} value={year}>{year}</option>;

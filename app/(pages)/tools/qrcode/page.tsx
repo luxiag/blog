@@ -93,10 +93,11 @@ export default function QrcodePage() {
                     <div className="p-4 border-b border-[var(--border-color)]">
                         <div className="flex items-center gap-1.5 mb-2">
                             <Type size={12} className="text-[var(--foreground)] opacity-30" />
-                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Content</span>
+                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider">Content</span>
                         </div>
                         <textarea value={value} onChange={(e) => setValue(e.target.value)}
                             placeholder="Enter URL or text..."
+                            aria-label="QR code content"
                             className="w-full h-20 p-3 font-mono text-[12px] leading-[1.5] resize-none outline-none border border-[var(--border-color)] rounded bg-white text-[var(--foreground)] opacity-70 selection:bg-orange-500/20" />
                     </div>
 
@@ -104,7 +105,7 @@ export default function QrcodePage() {
                     <div className="p-4 border-b border-[var(--border-color)]">
                         <div className="flex items-center gap-1.5 mb-3">
                             <Palette size={12} className="text-[var(--foreground)] opacity-30" />
-                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Themes</span>
+                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider">Themes</span>
                         </div>
                         <div className="flex flex-wrap gap-2">
                             {THEMES.map((theme, i) => (
@@ -123,7 +124,7 @@ export default function QrcodePage() {
                     <div className="p-4 border-b border-[var(--border-color)]">
                         <div className="flex items-center gap-1.5 mb-3">
                             <Palette size={12} className="text-[var(--foreground)] opacity-30" />
-                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Style</span>
+                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider">Style</span>
                         </div>
                         <div className="space-y-4">
                             <div className="grid grid-cols-2 gap-3">
@@ -131,6 +132,7 @@ export default function QrcodePage() {
                                     <label className="text-[10px] font-mono text-[var(--foreground)] opacity-25 uppercase block mb-1">Foreground</label>
                                     <div className="flex items-center gap-1.5">
                                         <input type="color" value={fgColor} onChange={(e) => setFgColor(e.target.value)}
+                                            aria-label="Foreground color"
                                             className="w-8 h-8 rounded cursor-pointer border border-[var(--border-color)] bg-transparent" />
                                         <input type="text" value={fgColor} onChange={(e) => setFgColor(e.target.value)}
                                             className="flex-1 px-2 py-1 rounded bg-white border border-[var(--border-color)] text-[11px] font-mono text-[var(--foreground)] opacity-50 outline-none" />
@@ -140,6 +142,7 @@ export default function QrcodePage() {
                                     <label className="text-[10px] font-mono text-[var(--foreground)] opacity-25 uppercase block mb-1">Background</label>
                                     <div className="flex items-center gap-1.5">
                                         <input type="color" value={bgColor} onChange={(e) => setBgColor(e.target.value)}
+                                            aria-label="Background color"
                                             className="w-8 h-8 rounded cursor-pointer border border-[var(--border-color)] bg-transparent" />
                                         <input type="text" value={bgColor} onChange={(e) => setBgColor(e.target.value)}
                                             className="flex-1 px-2 py-1 rounded bg-white border border-[var(--border-color)] text-[11px] font-mono text-[var(--foreground)] opacity-50 outline-none" />
@@ -150,10 +153,11 @@ export default function QrcodePage() {
                             <div>
                                 <div className="flex justify-between items-center mb-1">
                                     <label className="text-[10px] font-mono text-[var(--foreground)] opacity-25 uppercase">Size</label>
-                                    <span className="text-[10px] font-mono text-[var(--foreground)] opacity-20">{size}px</span>
+                                    <span className="text-[10px] font-mono text-[var(--foreground)] opacity-30">{size}px</span>
                                 </div>
                                 <input type="range" min="256" max="2048" step="128" value={size}
                                     onChange={(e) => setSize(parseInt(e.target.value))}
+                                    aria-label="QR code size"
                                     className="w-full h-1.5 bg-[var(--border-color)] rounded-lg appearance-none cursor-pointer accent-[#ea580c]" />
                             </div>
 
@@ -183,11 +187,11 @@ export default function QrcodePage() {
                     <div className="p-4">
                         <div className="flex items-center gap-1.5 mb-3">
                             <ScanLine size={12} className="text-[var(--foreground)] opacity-30" />
-                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Logo</span>
+                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider">Logo</span>
                         </div>
                         {!logoSrc ? (
                             <label className="flex flex-col items-center justify-center border-2 border-dashed border-[var(--border-color)] rounded-lg p-6 cursor-pointer hover:bg-black/[0.02] transition-colors">
-                                <Upload size={20} className="text-[var(--foreground)] opacity-15 mb-2" />
+                                <Upload size={20} className="text-[var(--foreground)] opacity-30 mb-2" />
                                 <span className="text-[10px] font-mono text-[var(--foreground)] opacity-25">Upload logo image</span>
                                 <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
                             </label>
@@ -198,14 +202,14 @@ export default function QrcodePage() {
                                         <img src={logoSrc} alt="Logo" className="w-8 h-8 object-contain rounded bg-[var(--background)]" />
                                         <span className="text-[10px] font-mono text-[var(--foreground)] opacity-30">Logo loaded</span>
                                     </div>
-                                    <button onClick={() => setLogoSrc(null)} className="p-1 text-[var(--foreground)] opacity-20 hover:opacity-50 hover:text-red-500 transition-all">
+                                    <button onClick={() => setLogoSrc(null)} aria-label="Remove logo" className="p-1 text-[var(--foreground)] opacity-30 hover:opacity-50 hover:text-red-500 transition-all">
                                         <X size={12} />
                                     </button>
                                 </div>
                                 <div>
                                     <div className="flex justify-between items-center mb-1">
                                         <label className="text-[10px] font-mono text-[var(--foreground)] opacity-25 uppercase">Logo size</label>
-                                        <span className="text-[10px] font-mono text-[var(--foreground)] opacity-20">{logoSize}px</span>
+                                        <span className="text-[10px] font-mono text-[var(--foreground)] opacity-30">{logoSize}px</span>
                                     </div>
                                     <input type="range" min="20" max="120" step="5" value={logoSize}
                                         onChange={(e) => setLogoSize(parseInt(e.target.value))}
@@ -224,7 +228,7 @@ export default function QrcodePage() {
                 {/* Right: Preview */}
                 <div className="flex-1 flex flex-col min-w-0 bg-white">
                     <div className="px-4 py-2 flex items-center justify-between border-b border-[var(--border-color)] bg-[var(--background)] shrink-0">
-                        <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Preview</span>
+                        <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider">Preview</span>
                         <div className="flex items-center gap-1.5">
                             {exportFormat === 'svg' && (
                                 <button onClick={copySvgCode}
@@ -269,7 +273,7 @@ export default function QrcodePage() {
                             />
                         </div>
 
-                        <div className="mt-4 text-[10px] font-mono text-[var(--foreground)] opacity-15">
+                        <div className="mt-4 text-[10px] font-mono text-[var(--foreground)] opacity-30">
                             {size} × {size}px · Level {level}
                         </div>
                     </div>

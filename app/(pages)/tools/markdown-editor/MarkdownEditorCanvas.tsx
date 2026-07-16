@@ -141,7 +141,7 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:0.
             <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--background)] border-b border-[var(--border-color)] shrink-0">
                 <div className="flex items-center gap-1">
                     <button onClick={() => setShowToc(!showToc)}
-                        className="p-1.5 text-[var(--foreground)] opacity-20 hover:opacity-50 transition-opacity" title="Toggle TOC">
+                        className="p-1.5 text-[var(--foreground)] opacity-30 hover:opacity-50 transition-opacity" title="Toggle TOC">
                         {showToc ? <PanelLeftClose size={13} /> : <PanelLeftOpen size={13} />}
                     </button>
                     <div className="w-px h-3 bg-[var(--border-color)] mx-1" />
@@ -149,7 +149,7 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:0.
                         const Icon = item.icon;
                         return (
                             <button key={i} onClick={item.action}
-                                className="p-1.5 text-[var(--foreground)] opacity-20 hover:opacity-50 hover:bg-black/5 rounded transition-all" title={item.title}>
+                                className="p-1.5 text-[var(--foreground)] opacity-30 hover:opacity-50 hover:bg-black/5 rounded transition-all" title={item.title}>
                                 <Icon size={13} />
                             </button>
                         );
@@ -165,10 +165,10 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:0.
                         </button>
                     ))}
                     <div className="w-px h-3 bg-[var(--border-color)] mx-1" />
-                    <button onClick={handleCopyMd} className="p-1.5 text-[var(--foreground)] opacity-20 hover:opacity-50 transition-opacity" title="Copy markdown">
+                    <button onClick={handleCopyMd} className="p-1.5 text-[var(--foreground)] opacity-30 hover:opacity-50 transition-opacity" title="Copy markdown">
                         {copied ? <Check size={13} /> : <Copy size={13} />}
                     </button>
-                    <button onClick={handleExportHtml} className="p-1.5 text-[var(--foreground)] opacity-20 hover:opacity-50 transition-opacity" title="Export HTML">
+                    <button onClick={handleExportHtml} className="p-1.5 text-[var(--foreground)] opacity-30 hover:opacity-50 transition-opacity" title="Export HTML">
                         <Download size={13} />
                     </button>
                 </div>
@@ -179,7 +179,7 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:0.
                 {/* TOC sidebar */}
                 {showToc && toc.length > 0 && (
                     <div className="w-48 shrink-0 bg-[var(--background)] border-r border-[var(--border-color)] flex flex-col">
-                        <div className="px-3 py-1.5 text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider border-b border-[var(--border-color)]">
+                        <div className="px-3 py-1.5 text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider border-b border-[var(--border-color)]">
                             TOC
                         </div>
                         <div className="flex-1 overflow-y-auto py-1">
@@ -200,7 +200,7 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:0.
                         <div className="shrink-0 bg-white text-right select-none overflow-hidden" style={{ width: gutterWidth, fontSize: 13, lineHeight: '1.6', fontFamily: 'var(--font-mono)' }}>
                             <div className="pt-4">
                                 {Array.from({ length: lineCount }, (_, i) => (
-                                    <div key={i} className="text-[var(--foreground)] opacity-15 pr-3">{i + 1}</div>
+                                    <div key={i} className="text-[var(--foreground)] opacity-30 pr-3">{i + 1}</div>
                                 ))}
                             </div>
                         </div>
@@ -208,6 +208,8 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:0.
                             <Editor
                                 value={markdown}
                                 onValueChange={setMarkdown}
+                                textareaId="markdown-editor-textarea"
+                                aria-label="Markdown editor"
                                 highlight={code => (
                                     <Highlight theme={codeHighlightTheme as any} code={code} language="markdown">
                                         {({ tokens, getLineProps, getTokenProps }) => (
@@ -242,12 +244,12 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:0.
 
             {/* Status bar */}
             <div className="px-4 py-1 bg-[var(--background)] border-t border-[var(--border-color)] flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-4 text-[10px] font-mono text-[var(--foreground)] opacity-15">
+                <div className="flex items-center gap-4 text-[10px] font-mono text-[var(--foreground)] opacity-30">
                     <span>{markdown.length} chars</span>
                     <span>{lineCount} lines</span>
                     <span>{toc.length} headings</span>
                 </div>
-                <span className="text-[10px] font-mono text-[var(--foreground)] opacity-10">GFM</span>
+                <span className="text-[10px] font-mono text-[var(--foreground)] opacity-30">GFM</span>
             </div>
         </div>
     );

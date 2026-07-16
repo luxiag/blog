@@ -30,7 +30,7 @@ export default function SqlSimulatorPage() {
                     <span className="text-[12px] font-mono text-[var(--foreground)] opacity-50">SQL Simulator</span>
                 </div>
                 <div className="flex items-center gap-3">
-                    <span className="text-[10px] font-mono text-[var(--foreground)] opacity-20 tracking-wider">⌘+ENTER TO RUN</span>
+                    <span className="text-[10px] font-mono text-[var(--foreground)] opacity-30 tracking-wider">⌘+ENTER TO RUN</span>
                     <div className="w-1.5 h-1.5 rounded-full bg-[#ea580c]" />
                 </div>
             </div>

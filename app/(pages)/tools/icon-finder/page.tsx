@@ -89,6 +89,7 @@ export default function IconFinderPage() {
                                 placeholder="搜索图标名称 (例如: user, home, arrow...)"
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
+                                aria-label="Search icons"
                                 style={{
                                     width: '100%',
                                     padding: '16px 20px 16px 48px',

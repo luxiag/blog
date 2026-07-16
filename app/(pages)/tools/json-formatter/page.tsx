@@ -72,7 +72,7 @@ function TreeNodeItem({ node, depth, expandedPaths, togglePath, queryResult, cop
                 ) : <span className="w-[11px] shrink-0" />}
 
                 <span className="text-[12px] font-mono text-[#ea580c] shrink-0">{node.key}</span>
-                <span className="text-[12px] font-mono text-[var(--foreground)] opacity-20 shrink-0">:</span>
+                <span className="text-[12px] font-mono text-[var(--foreground)] opacity-30 shrink-0">:</span>
 
                 {isContainer ? (
                     <span className="text-[11px] font-mono text-[var(--foreground)] opacity-30">
@@ -83,7 +83,7 @@ function TreeNodeItem({ node, depth, expandedPaths, togglePath, queryResult, cop
                         node.type === 'string' ? 'text-[#ea580c]' :
                         node.type === 'number' ? 'text-[#2563eb]' :
                         node.type === 'boolean' ? 'text-[#7c3aed]' :
-                        'text-[var(--foreground)] opacity-20 italic'
+                        'text-[var(--foreground)] opacity-30 italic'
                     }`}>
                         {node.type === 'string' ? `"${node.value}"` : String(node.value)}
                     </span>
@@ -252,7 +252,7 @@ export default function JsonFormatterPage() {
                         </button>
                     ))}
                     <div className="w-px h-3 bg-[var(--border-color)] mx-1" />
-                    <button onClick={() => { setInput(SAMPLE_JSON); setError(''); }} className="p-1.5 text-[var(--foreground)] opacity-20 hover:opacity-50 transition-opacity" title="Load sample">
+                    <button onClick={() => { setInput(SAMPLE_JSON); setError(''); }} className="p-1.5 text-[var(--foreground)] opacity-30 hover:opacity-50 transition-opacity" title="Load sample">
                         <FileJson size={13} />
                     </button>
                 </div>
@@ -263,11 +263,11 @@ export default function JsonFormatterPage() {
                 {/* Left: Input */}
                 <div className="flex-1 flex flex-col min-w-0 border-r border-[var(--border-color)]">
                     <div className="px-3 py-1.5 flex items-center justify-between border-b border-[var(--border-color)] bg-[var(--background)] shrink-0">
-                        <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Input</span>
+                        <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider">Input</span>
                         <div className="flex items-center gap-1">
-                            {stats && <span className="text-[10px] font-mono text-[var(--foreground)] opacity-15">{stats.keys} keys · {stats.size} chars</span>}
+                            {stats && <span className="text-[10px] font-mono text-[var(--foreground)] opacity-30">{stats.keys} keys · {stats.size} chars</span>}
                             <button onClick={() => { setInput(''); setOutput(''); setError(''); }}
-                                className="p-1 text-[var(--foreground)] opacity-15 hover:opacity-40 transition-opacity" title="Clear">
+                                className="p-1 text-[var(--foreground)] opacity-30 hover:opacity-40 transition-opacity" title="Clear">
                                 <Trash2 size={11} />
                             </button>
                         </div>
@@ -275,6 +275,7 @@ export default function JsonFormatterPage() {
                     <div className="flex-1 min-h-0">
                         <textarea value={input} onChange={(e) => { setInput(e.target.value); setError(''); }}
                             placeholder="Paste JSON here..."
+                            aria-label="JSON input"
                             className="w-full h-full p-4 font-mono text-[13px] leading-[1.6] resize-none outline-none text-[var(--foreground)] opacity-70 bg-white selection:bg-orange-500/20" />
                     </div>
                     {error && (
@@ -294,7 +295,7 @@ export default function JsonFormatterPage() {
                             Minify
                         </button>
                         <div className="flex items-center gap-1 ml-auto">
-                            <span className="text-[10px] font-mono text-[var(--foreground)] opacity-15">Indent:</span>
+                            <span className="text-[10px] font-mono text-[var(--foreground)] opacity-30">Indent:</span>
                             {[2, 4].map(n => (
                                 <button key={n} onClick={() => setIndentSize(n)}
                                     className={`px-1.5 py-0.5 text-[10px] font-mono rounded transition-colors ${indentSize === n ? 'bg-[var(--foreground)] text-white' : 'text-[var(--foreground)] opacity-25 hover:opacity-50'}`}>
@@ -308,26 +309,27 @@ export default function JsonFormatterPage() {
                 {/* Right: Output */}
                 <div className="flex-1 flex flex-col min-w-0">
                     <div className="px-3 py-1.5 flex items-center justify-between border-b border-[var(--border-color)] bg-[var(--background)] shrink-0">
-                        <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">
+                        <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider">
                             {viewMode === 'formatted' ? 'Output' : viewMode === 'tree' ? 'Tree View' : 'Diff'}
                         </span>
                         <div className="flex items-center gap-1">
                             {viewMode === 'tree' && (
                                 <div className="flex items-center gap-1 mr-2">
-                                    <Search size={10} className="text-[var(--foreground)] opacity-20" />
+                                    <Search size={10} className="text-[var(--foreground)] opacity-30" />
                                     <input value={jsonPath} onChange={(e) => setJsonPath(e.target.value)}
                                         placeholder="$.config.theme"
+                                        aria-label="JSONPath query"
                                         className="w-32 px-1.5 py-0.5 text-[11px] font-mono bg-white border border-[var(--border-color)] rounded outline-none text-[var(--foreground)] opacity-50 focus:opacity-80" />
                                 </div>
                             )}
                             {viewMode === 'formatted' && output && (
                                 <>
                                     <button onClick={() => handleCopy(output, 'output')}
-                                        className="p-1 text-[var(--foreground)] opacity-15 hover:opacity-40 transition-opacity" title="Copy">
+                                        className="p-1 text-[var(--foreground)] opacity-30 hover:opacity-40 transition-opacity" title="Copy">
                                         {copied === 'output' ? <Check size={11} /> : <Copy size={11} />}
                                     </button>
                                     <button onClick={handleDownload}
-                                        className="p-1 text-[var(--foreground)] opacity-15 hover:opacity-40 transition-opacity" title="Download">
+                                        className="p-1 text-[var(--foreground)] opacity-30 hover:opacity-40 transition-opacity" title="Download">
                                         <Download size={11} />
                                     </button>
                                 </>
@@ -338,6 +340,7 @@ export default function JsonFormatterPage() {
                     <div className="flex-1 overflow-auto min-h-0">
                         {viewMode === 'formatted' && (
                             <textarea value={output} readOnly placeholder="Formatted JSON will appear here..."
+                                aria-label="Formatted JSON output"
                                 className="w-full h-full p-4 font-mono text-[13px] leading-[1.6] resize-none outline-none text-[var(--foreground)] opacity-70 bg-[var(--background)] selection:bg-orange-500/20" />
                         )}
 
@@ -349,7 +352,7 @@ export default function JsonFormatterPage() {
                         )}
 
                         {viewMode === 'tree' && !parsed && input.trim() && (
-                            <div className="flex items-center justify-center h-full text-[var(--foreground)] opacity-15">
+                            <div className="flex items-center justify-center h-full text-[var(--foreground)] opacity-30">
                                 <span className="text-[11px] font-mono">Invalid JSON — fix input to see tree</span>
                             </div>
                         )}
@@ -357,9 +360,10 @@ export default function JsonFormatterPage() {
                         {viewMode === 'diff' && (
                             <div className="h-full flex flex-col">
                                 <div className="px-3 py-1.5 border-b border-[var(--border-color)] bg-[var(--background)] shrink-0">
-                                    <span className="text-[10px] font-mono text-[var(--foreground)] opacity-20 uppercase tracking-wider">Compare with</span>
+                                    <span className="text-[10px] font-mono text-[var(--foreground)] opacity-30 uppercase tracking-wider">Compare with</span>
                                     <textarea value={diffInput} onChange={(e) => setDiffInput(e.target.value)}
                                         placeholder="Paste second JSON to compare..."
+                                        aria-label="Second JSON for diff"
                                         className="w-full h-20 mt-1 p-2 font-mono text-[12px] leading-[1.5] resize-none outline-none border border-[var(--border-color)] rounded bg-white text-[var(--foreground)] opacity-60 selection:bg-orange-500/20" />
                                 </div>
                                 <div className="flex-1 overflow-auto min-h-0 font-mono text-[12px] leading-[1.6]">
@@ -369,13 +373,13 @@ export default function JsonFormatterPage() {
                                             line.type === 'removed' ? 'bg-red-50 text-red-700 line-through opacity-60' :
                                             'text-[var(--foreground)] opacity-50'
                                         }`}>
-                                            <span className="inline-block w-5 text-[var(--foreground)] opacity-20 select-none">
+                                            <span className="inline-block w-5 text-[var(--foreground)] opacity-30 select-none">
                                                 {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
                                             </span>
                                             {line.left || line.right}
                                         </div>
                                     )) : (
-                                        <div className="flex items-center justify-center h-full text-[var(--foreground)] opacity-10">
+                                        <div className="flex items-center justify-center h-full text-[var(--foreground)] opacity-30">
                                             <span className="text-[11px] font-mono">Paste both JSONs to compare</span>
                                         </div>
                                     )}

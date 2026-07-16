@@ -127,6 +127,7 @@ export default function ColorPickerPage() {
                                         type="file"
                                         accept="image/*"
                                         onChange={handleImageUpload}
+                                        aria-label="Upload image"
                                         style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }}
                                     />
                                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" style={{ color: 'var(--color-neutral-300)', marginBottom: '16px' }}>

@@ -160,79 +160,79 @@ export { greet };`);
                     </button>
                     <div className="w-px h-3 bg-[var(--border-color)] mx-1" />
                     <button onClick={() => setIgnoreCase(!ignoreCase)}
-                        className={`p-1.5 rounded transition-colors ${ignoreCase ? 'bg-[#ea580c] text-white' : 'text-[var(--foreground)] opacity-20 hover:opacity-50'}`} title="Ignore case">
+                        className={`p-1.5 rounded transition-colors ${ignoreCase ? 'bg-[#ea580c] text-white' : 'text-[var(--foreground)] opacity-30 hover:opacity-50'}`} title="Ignore case">
                         <CaseSensitive size={13} />
                     </button>
                     <button onClick={() => setIgnoreWhitespace(!ignoreWhitespace)}
-                        className={`p-1.5 rounded transition-colors ${ignoreWhitespace ? 'bg-[#ea580c] text-white' : 'text-[var(--foreground)] opacity-20 hover:opacity-50'}`} title="Ignore whitespace">
+                        className={`p-1.5 rounded transition-colors ${ignoreWhitespace ? 'bg-[#ea580c] text-white' : 'text-[var(--foreground)] opacity-30 hover:opacity-50'}`} title="Ignore whitespace">
                         <Space size={13} />
                     </button>
                     <div className="w-px h-3 bg-[var(--border-color)] mx-1" />
-                    <button onClick={handleLoadSample} className="p-1.5 text-[var(--foreground)] opacity-20 hover:opacity-50 transition-opacity" title="Load sample">
+                    <button onClick={handleLoadSample} className="p-1.5 text-[var(--foreground)] opacity-30 hover:opacity-50 transition-opacity" title="Load sample">
                         <FileText size={13} />
                     </button>
                 </div>
             </div>
 
-            {/* Editor area */}
-            <div className="flex-1 flex min-h-0">
-                <div className={`flex ${viewMode === 'side-by-side' || !hasDiff ? 'flex-1' : 'h-[40%] shrink-0'}`}>
-                    <div className="flex-1 flex flex-col min-w-0 border-r border-[var(--border-color)]">
-                        <div className="px-3 py-1.5 flex items-center justify-between border-b border-[var(--border-color)] bg-[var(--background)] shrink-0">
-                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Original</span>
-                            <div className="flex items-center gap-1">
-                                <button onClick={handleSwap} className="p-1 text-[var(--foreground)] opacity-15 hover:opacity-40 transition-opacity" title="Swap">
-                                    <ArrowRightLeft size={11} />
-                                </button>
-                                <button onClick={() => setOldText('')} className="p-1 text-[var(--foreground)] opacity-15 hover:opacity-40 transition-opacity" title="Clear">
-                                    <Trash2 size={11} />
-                                </button>
-                            </div>
-                        </div>
-                        <textarea value={oldText} onChange={(e) => setOldText(e.target.value)}
-                            placeholder="Paste original text..."
-                            className="w-full flex-1 p-4 font-mono text-[13px] leading-[1.6] resize-none outline-none text-[var(--foreground)] opacity-70 bg-white selection:bg-orange-500/20 min-h-0" />
-                    </div>
-                    <div className="flex-1 flex flex-col min-w-0">
-                        <div className="px-3 py-1.5 flex items-center justify-between border-b border-[var(--border-color)] bg-[var(--background)] shrink-0">
-                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Modified</span>
-                            <button onClick={() => setNewText('')} className="p-1 text-[var(--foreground)] opacity-15 hover:opacity-40 transition-opacity" title="Clear">
+            {/* Editors — direct child of outer flex-col for consistent sizing */}
+            <div className={`flex ${viewMode === 'unified' && hasDiff ? 'h-[38%] shrink-0' : 'flex-1 min-h-0'}`}>
+                <div className="flex-1 flex flex-col min-w-0 border-r border-[var(--border-color)]">
+                    <div className="px-3 py-1.5 flex items-center justify-between border-b border-[var(--border-color)] bg-[var(--background)] shrink-0">
+                        <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider">Original</span>
+                        <div className="flex items-center gap-1">
+                            <button onClick={handleSwap} className="p-1 text-[var(--foreground)] opacity-30 hover:opacity-40 transition-opacity" title="Swap">
+                                <ArrowRightLeft size={11} />
+                            </button>
+                            <button onClick={() => setOldText('')} className="p-1 text-[var(--foreground)] opacity-30 hover:opacity-40 transition-opacity" title="Clear">
                                 <Trash2 size={11} />
                             </button>
                         </div>
-                        <textarea value={newText} onChange={(e) => setNewText(e.target.value)}
-                            placeholder="Paste modified text..."
-                            className="w-full flex-1 p-4 font-mono text-[13px] leading-[1.6] resize-none outline-none text-[var(--foreground)] opacity-70 bg-white selection:bg-orange-500/20 min-h-0" />
                     </div>
+                    <textarea value={oldText} onChange={(e) => setOldText(e.target.value)}
+                        placeholder="Paste original text..."
+                        aria-label="Original text"
+                        className="w-full flex-1 p-4 font-mono text-[13px] leading-[1.6] resize-none outline-none text-[var(--foreground)] opacity-70 bg-white selection:bg-orange-500/20 min-h-0" />
+                </div>
+                <div className="flex-1 flex flex-col min-w-0">
+                    <div className="px-3 py-1.5 flex items-center justify-between border-b border-[var(--border-color)] bg-[var(--background)] shrink-0">
+                        <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider">Modified</span>
+                        <button onClick={() => setNewText('')} className="p-1 text-[var(--foreground)] opacity-30 hover:opacity-40 transition-opacity" title="Clear">
+                            <Trash2 size={11} />
+                        </button>
+                    </div>
+                    <textarea value={newText} onChange={(e) => setNewText(e.target.value)}
+                        placeholder="Paste modified text..."
+                        aria-label="Modified text"
+                        className="w-full flex-1 p-4 font-mono text-[13px] leading-[1.6] resize-none outline-none text-[var(--foreground)] opacity-70 bg-white selection:bg-orange-500/20 min-h-0" />
                 </div>
             </div>
 
-            {/* Diff result */}
-            {hasDiff && (
-                <div className="border-t border-[var(--border-color)] flex flex-col shrink-0" style={{ height: viewMode === 'side-by-side' ? '0px' : '50%' }}>
+            {/* Diff result — unified only, fills remaining space */}
+            {viewMode === 'unified' && hasDiff && (
+                <div className="border-t border-[var(--border-color)] flex flex-col flex-1 min-h-0">
                     <div className="px-3 py-1.5 flex items-center justify-between bg-[var(--background)] border-b border-[var(--border-color)] shrink-0">
                         <div className="flex items-center gap-4">
-                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Result</span>
+                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-30 uppercase tracking-wider">Result</span>
                             <div className="flex items-center gap-3 text-[10px] font-mono">
                                 <span className="text-green-600">+{stats.added}</span>
                                 <span className="text-red-500">-{stats.removed}</span>
-                                <span className="text-[var(--foreground)] opacity-20">{stats.unchanged} same</span>
+                                <span className="text-[var(--foreground)] opacity-30">{stats.unchanged} same</span>
                             </div>
                         </div>
                         <button onClick={() => {
                             const text = unifiedLines.map(l => `${l.type === 'added' ? '+' : l.type === 'removed' ? '-' : ' '} ${l.text}`).join('\n');
                             handleCopy(text, 'diff');
-                        }} className="p-1 text-[var(--foreground)] opacity-15 hover:opacity-40 transition-opacity" title="Copy diff">
+                        }} className="p-1 text-[var(--foreground)] opacity-30 hover:opacity-40 transition-opacity" title="Copy diff">
                             {copied === 'diff' ? <Check size={11} /> : <Copy size={11} />}
                         </button>
                     </div>
 
                     <div className="flex-1 overflow-auto min-h-0 font-mono text-[12px] leading-[1.5]">
-                        {viewMode === 'unified' && unifiedLines.map((line, i) => (
+                        {unifiedLines.map((line, i) => (
                             <div key={i} className={`flex ${line.type === 'added' ? 'bg-green-50' : line.type === 'removed' ? 'bg-red-50' : ''}`}>
-                                <span className="w-10 shrink-0 text-right pr-2 text-[var(--foreground)] opacity-15 select-none">{line.oldNum ?? ''}</span>
-                                <span className="w-10 shrink-0 text-right pr-2 text-[var(--foreground)] opacity-15 select-none border-l border-[var(--border-color)]">{line.newNum ?? ''}</span>
-                                <span className={`w-5 shrink-0 text-center select-none ${line.type === 'added' ? 'text-green-600' : line.type === 'removed' ? 'text-red-500' : 'text-[var(--foreground)] opacity-15'}`}>
+                                <span className="w-10 shrink-0 text-right pr-2 text-[var(--foreground)] opacity-30 select-none">{line.oldNum ?? ''}</span>
+                                <span className="w-10 shrink-0 text-right pr-2 text-[var(--foreground)] opacity-30 select-none border-l border-[var(--border-color)]">{line.newNum ?? ''}</span>
+                                <span className={`w-5 shrink-0 text-center select-none ${line.type === 'added' ? 'text-green-600' : line.type === 'removed' ? 'text-red-500' : 'text-[var(--foreground)] opacity-30'}`}>
                                     {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
                                 </span>
                                 <span className={`${line.type === 'added' ? 'text-green-700' : line.type === 'removed' ? 'text-red-600' : 'text-[var(--foreground)] opacity-50'}`}>

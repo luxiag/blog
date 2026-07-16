@@ -48,6 +48,7 @@ export default function SearchBox({ posts }: SearchBoxProps) {
         </div>
         <input
           type="text"
+          aria-label="Search articles"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           onFocus={() => setIsSearchOpen(true)}
@@ -57,10 +58,11 @@ export default function SearchBox({ posts }: SearchBoxProps) {
       </div>
 
       {isSearchOpen && searchResults.length > 0 && (
-        <div className="absolute z-10 w-full mt-2 max-h-96 overflow-auto bg-white dark:bg-neutral-800 rounded-lg shadow-lg border border-neutral-200 dark:border-neutral-700 p-1">
+        <div role="listbox" aria-label="Search results" className="absolute z-10 w-full mt-2 max-h-96 overflow-auto bg-white dark:bg-neutral-800 rounded-lg shadow-lg border border-neutral-200 dark:border-neutral-700 p-1">
           {searchResults.map((post) => (
             <div
               key={post.slug}
+              role="option"
               className="cursor-pointer p-3 rounded mb-0.5 transition-colors hover:bg-neutral-100 dark:hover:bg-neutral-700"
               onClick={() => handlePostClick(post.slug)}
             >

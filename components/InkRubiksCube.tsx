@@ -104,7 +104,7 @@ const toonMaterial = useMemo(() => {
           >
             <button style={{ ...btnStyle, gridColumn: '2', gridRow: '1' }} onClick={() => { arrowActions.up(); onSelect(null); }}>▲</button>
             <button style={{ ...btnStyle, gridColumn: '1', gridRow: '2' }} onClick={() => { arrowActions.left(); onSelect(null); }}>◀</button>
-            <div style={{ ...btnStyle, gridColumn: '2', gridRow: '2', backgroundColor: '#1a1a1a', color: '#fff', fontSize: '10px' }} onClick={() => onSelect(null)}>●</div>
+            <div role="button" tabIndex={0} aria-label="Deselect" style={{ ...btnStyle, gridColumn: '2', gridRow: '2', backgroundColor: '#1a1a1a', color: '#fff', fontSize: '10px' }} onClick={() => onSelect(null)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(null); } }}>●</div>
             <button style={{ ...btnStyle, gridColumn: '3', gridRow: '2' }} onClick={() => { arrowActions.right(); onSelect(null); }}>▶</button>
             <button style={{ ...btnStyle, gridColumn: '2', gridRow: '3' }} onClick={() => { arrowActions.down(); onSelect(null); }}>▼</button>
           </div>

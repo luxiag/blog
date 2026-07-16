@@ -134,8 +134,7 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
         }
       }
     } catch (error) {
-      console.error('Error sending message:', error);
-      
+
       setMessages(prev => {
         const withoutEmpty = prev.filter(msg => msg.id !== assistantMessageId);
         return [...withoutEmpty, {
@@ -189,6 +188,7 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
               <button
                 onClick={toggleMinimize}
                 className="p-1 rounded hover:bg-neutral-100 transition-colors"
+                aria-label={isMinimized ? 'Maximize chat' : 'Minimize chat'}
               >
                 {isMinimized ? (
                   <Maximize2 size={14} className="text-neutral-500" />
@@ -199,6 +199,7 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
               <button
                 onClick={toggleChat}
                 className="p-1 rounded hover:bg-neutral-100 transition-colors"
+                aria-label="Close chat"
               >
                 <X size={14} className="text-neutral-500" />
               </button>
@@ -274,12 +275,14 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
                     onChange={(e) => setInput(e.target.value)}
                     onKeyPress={handleKeyPress}
                     placeholder="输入你的问题..."
+                    aria-label="Type your question"
                     className="flex-1 px-3 py-2.5 rounded-lg border border-neutral-200 font-mono text-xs outline-none transition-colors focus:border-neutral-400"
                     disabled={isLoading}
                   />
                   <button
                     onClick={sendMessage}
                     disabled={isLoading || !input.trim()}
+                    aria-label="Send message"
                     className={`px-4 py-2.5 rounded-lg border transition-all cursor-pointer ${
                       isLoading || !input.trim()
                         ? 'bg-white border-neutral-200 text-neutral-400 cursor-not-allowed opacity-50'
@@ -299,6 +302,7 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
         <button
           onClick={toggleChat}
           className="w-12 h-12 rounded-full border border-neutral-200 bg-white flex items-center justify-center cursor-pointer shadow-sm hover:shadow-md transition-all"
+          aria-label="Open AI chat"
         >
           <Bot size={20} className="text-neutral-500" />
         </button>

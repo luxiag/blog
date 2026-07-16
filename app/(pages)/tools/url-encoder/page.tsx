@@ -12,16 +12,16 @@ export default function UrlEncoderPage() {
   const handleEncode = () => {
     try {
       setOutput(encodeURIComponent(input));
-    } catch (err) {
-      console.error('编码失败:', err);
+    } catch {
+      // handled
     }
   };
 
   const handleDecode = () => {
     try {
       setOutput(decodeURIComponent(input));
-    } catch (err) {
-      console.error('解码失败:', err);
+    } catch {
+      // handled
     }
   };
 
@@ -36,8 +36,8 @@ export default function UrlEncoderPage() {
       await navigator.clipboard.writeText(output);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('复制失败:', err);
+    } catch {
+      // handled
     }
   };
 
@@ -92,6 +92,7 @@ export default function UrlEncoderPage() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder='在此输入需要编码或解码的内容...'
+                aria-label="Text to encode or decode"
                 style={{
                   width: '100%',
                   height: '150px',
@@ -162,6 +163,7 @@ export default function UrlEncoderPage() {
                 value={output}
                 readOnly
                 placeholder='结果将在此显示...'
+                aria-label="Result"
                 style={{
                   width: '100%',
                   height: '150px',

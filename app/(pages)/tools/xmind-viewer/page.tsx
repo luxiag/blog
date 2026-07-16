@@ -291,7 +291,7 @@ export default function XMindViewerPage() {
           {hasFile && (
             <>
               <span className="text-[10px] font-mono text-[var(--foreground)] opacity-25">{scale}%</span>
-              <span className="text-[10px] font-mono text-[var(--foreground)] opacity-15">{nodeCount} nodes</span>
+              <span className="text-[10px] font-mono text-[var(--foreground)] opacity-30">{nodeCount} nodes</span>
               <div className="w-px h-3 bg-[var(--border-color)]" />
               <button onClick={handleZoomOut} className="p-1 text-[var(--foreground)] opacity-30 hover:opacity-70 transition-opacity" title="Zoom Out">
                 <ZoomOut size={14} />
@@ -356,7 +356,7 @@ export default function XMindViewerPage() {
             <div className={`w-20 h-20 rounded-2xl flex items-center justify-center transition-colors ${
               dragOver ? 'bg-[#ea580c]/10' : 'bg-[var(--foreground)]/[0.03]'
             }`}>
-              <Upload size={32} className={dragOver ? 'text-[#ea580c]' : 'text-[var(--foreground)] opacity-20'} />
+              <Upload size={32} className={dragOver ? 'text-[#ea580c]' : 'text-[var(--foreground)] opacity-30'} />
             </div>
             <div className="text-center">
               <p className="text-sm font-mono text-[var(--foreground)] opacity-50 mb-2">

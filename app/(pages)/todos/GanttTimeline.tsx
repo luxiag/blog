@@ -395,19 +395,19 @@ export default function GanttTimeline({
       {/* Toolbar */}
       <div className="flex items-center justify-between px-3 h-9 border-b border-neutral-200 dark:border-neutral-700 flex-shrink-0 bg-white dark:bg-neutral-900">
         <div className="flex items-center gap-1.5">
-          <button onClick={() => onNavigate(-1)} className="w-6 h-6 rounded border border-neutral-200 dark:border-neutral-700 flex items-center justify-center bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6" /></svg></button>
+          <button onClick={() => onNavigate(-1)} aria-label="Navigate backward" className="w-6 h-6 rounded border border-neutral-200 dark:border-neutral-700 flex items-center justify-center bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6" /></svg></button>
           <button onClick={() => onNavigate(0)} className="px-2 h-6 text-[9px] font-mono font-medium rounded border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700 text-neutral-600 dark:text-neutral-300">Today</button>
-          <button onClick={() => onNavigate(1)} className="w-6 h-6 rounded border border-neutral-200 dark:border-neutral-700 flex items-center justify-center bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m9 18 6-6-6-6" /></svg></button>
+          <button onClick={() => onNavigate(1)} aria-label="Navigate forward" className="w-6 h-6 rounded border border-neutral-200 dark:border-neutral-700 flex items-center justify-center bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m9 18 6-6-6-6" /></svg></button>
           <div className="w-px h-4 bg-neutral-200 dark:bg-neutral-700 mx-1" />
           <div className="flex items-center gap-0.5">
-            <button onClick={() => setDayWidth(w => Math.max(MIN_DAY_W, w - 4))} className="w-6 h-6 rounded text-[11px] font-mono border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700">−</button>
+            <button onClick={() => setDayWidth(w => Math.max(MIN_DAY_W, w - 4))} aria-label="Zoom out" className="w-6 h-6 rounded text-[11px] font-mono border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700">−</button>
             <span className="text-[9px] font-mono text-neutral-400 w-7 text-center">{Math.round(dayWidth / DEFAULT_DAY_W * 100)}%</span>
-            <button onClick={() => setDayWidth(w => Math.min(MAX_DAY_W, w + 4))} className="w-6 h-6 rounded text-[11px] font-mono border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700">+</button>
+            <button onClick={() => setDayWidth(w => Math.min(MAX_DAY_W, w + 4))} aria-label="Zoom in" className="w-6 h-6 rounded text-[11px] font-mono border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700">+</button>
           </div>
           <span className="text-[9px] font-mono text-neutral-400 ml-1">{zoomLabel}</span>
         </div>
         <div className="flex items-center gap-2">
-          <select value={filterCat} onChange={e => setFilterCat(e.target.value)} className="h-6 px-1.5 text-[9px] font-mono rounded border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 outline-none">
+          <select value={filterCat} onChange={e => setFilterCat(e.target.value)} aria-label="Filter by category" className="h-6 px-1.5 text-[9px] font-mono rounded border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 outline-none">
             <option value="all">All</option>
             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
@@ -415,10 +415,10 @@ export default function GanttTimeline({
           <div className="flex items-center gap-1.5 ml-1">
             {(Object.keys(TODO_TYPE_COLORS) as TodoType[]).map(t => { const c = TODO_TYPE_COLORS[t]; return <div key={t} className="flex items-center gap-0.5">{t === 'onetime' ? <svg width="7" height="7" viewBox="0 0 8 8" fill={c.color} transform="rotate(45 4 4)"><rect x="2" y="2" width="4" height="4" rx="0.5" /></svg> : <div className="w-1.5 h-1.5 rounded-sm" style={{ backgroundColor: c.color }} />}<span className="text-[7px] font-mono text-neutral-400">{c.name}</span></div>; })}
           </div>
-          <button onClick={() => setIsFullscreen(f => !f)} className="w-6 h-6 rounded border border-neutral-200 dark:border-neutral-700 flex items-center justify-center bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700" title="Fullscreen">
+          <button onClick={() => setIsFullscreen(f => !f)} className="w-6 h-6 rounded border border-neutral-200 dark:border-neutral-700 flex items-center justify-center bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700" title="Fullscreen" aria-label="Toggle fullscreen">
             {isFullscreen ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /></svg> : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" /></svg>}
           </button>
-          <button onClick={exportPNG} className="w-6 h-6 rounded border border-neutral-200 dark:border-neutral-700 flex items-center justify-center bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700" title="Export PNG"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg></button>
+          <button onClick={exportPNG} className="w-6 h-6 rounded border border-neutral-200 dark:border-neutral-700 flex items-center justify-center bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700" title="Export PNG" aria-label="Export as PNG"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg></button>
         </div>
       </div>
 

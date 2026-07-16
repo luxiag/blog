@@ -127,7 +127,6 @@ export default function CodeBlock({ children, className, codeContent: propCodeCo
 
       setHighlightedCode(html);
     } catch (error) {
-      console.error('Error highlighting code:', error);
       setHighlightedCode(displayContent);
     }
   }, [displayContent, className]);

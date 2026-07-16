@@ -221,7 +221,6 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code }) => {
           setPan({ x: 0, y: 0 });
         }
       } catch (err: any) {
-        console.error("Mermaid render error:", err);
         if (mounted) {
           setError(err?.message || "Failed to render Mermaid diagram.");
           setSvg(null);

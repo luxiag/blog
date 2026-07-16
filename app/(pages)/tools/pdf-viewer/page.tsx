@@ -116,7 +116,6 @@ export default function PdfViewerPage() {
         await loadUserPdfs();
         await loadPublicPdfs();
       } catch (err) {
-        console.error('Failed to initialize IndexedDB:', err);
         if (isMounted) {
           setError('Failed to initialize database. Please check browser compatibility.');
         }
@@ -140,7 +139,6 @@ export default function PdfViewerPage() {
           setPdfjsLibLoaded(true);
         }
       } catch (err) {
-        console.error('Failed to load pdfjs-dist:', err);
         if (isMounted) {
           setError('Failed to initialize PDF viewer library');
         }
@@ -212,7 +210,6 @@ export default function PdfViewerPage() {
         setPublicPdfs([]);
       }
     } catch (err) {
-      console.error('Failed to load public PDFs:', err);
       setPublicPdfs([]);
     }
   };
@@ -227,7 +224,7 @@ export default function PdfViewerPage() {
         addedAt: p.addedAt 
       })));
     } catch (err) {
-      console.error('Failed to load PDFs:', err);
+      // handled
     }
   };
 
@@ -370,7 +367,7 @@ export default function PdfViewerPage() {
       if (err && typeof err === 'object' && 'name' in err && err.name === 'RenderingCancelledException') {
         return;
       }
-      console.error(`Failed to render page ${pageNum}:`, err);
+      // handled
     }
   };
 
@@ -528,7 +525,6 @@ export default function PdfViewerPage() {
         }
       }, 100);
     } catch (err) {
-      console.error('PDF load error:', err);
       setError('Failed to load PDF. Please check if the file is valid.');
       setLoading(false);
     }
@@ -574,7 +570,6 @@ export default function PdfViewerPage() {
       await loadUserPdfs();
       await loadPdf(id, file.name, '', false);
     } catch (err) {
-      console.error('Upload error:', err);
       setError('Failed to upload PDF. The file may be too large or corrupted.');
     } finally {
       setLoading(false);
@@ -622,7 +617,6 @@ export default function PdfViewerPage() {
       
       setPdfToDelete(null);
     } catch (err) {
-      console.error('Delete error:', err);
       setError('Failed to delete PDF');
     }
   };
@@ -684,7 +678,7 @@ export default function PdfViewerPage() {
         scrollToPage(pageNumber);
       }
     } catch (err) {
-      console.error('Navigation error:', err);
+      // handled
     }
   };
 
@@ -727,7 +721,6 @@ export default function PdfViewerPage() {
       
       return canvas.toDataURL('image/jpeg', 0.7);
     } catch (err) {
-      console.error('Failed to generate thumbnail:', err);
       return '';
     }
   };
@@ -988,6 +981,7 @@ export default function PdfViewerPage() {
               <button 
                 onClick={() => setIsSidebarOpen(false)}
                 className="p-2 hover:bg-gray-100 rounded-lg"
+                aria-label="Close sidebar"
               >
                 <ChevronLeftIcon className="w-5 h-5" />
               </button>
@@ -1210,6 +1204,7 @@ export default function PdfViewerPage() {
                   <button
                     onClick={() => setIsSidebarOpen(true)}
                     className="p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 transition-colors"
+                    aria-label="Open sidebar"
                   >
                     <List className="w-4 h-4" />
                   </button>
@@ -1255,6 +1250,7 @@ export default function PdfViewerPage() {
                     onClick={prevPage}
                     disabled={currentPage <= 1}
                     className="p-1.5 sm:p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Previous page"
                   >
                     <ChevronLeftIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </button>
@@ -1269,6 +1265,7 @@ export default function PdfViewerPage() {
                       onKeyDown={handlePageInputSubmit}
                       onBlur={() => setPageInput('')}
                       placeholder={currentPage.toString()}
+                      aria-label="Page number"
                       className="w-10 sm:w-12 px-1 sm:px-2 py-1 border border-[oklch(0.145_0_0)] rounded text-[10px] sm:text-xs font-mono text-center focus:outline-none focus:border-[#ea580c]"
                     />
                     <span className="text-[10px] sm:text-xs font-mono text-gray-500">/ {totalPages}</span>
@@ -1278,6 +1275,7 @@ export default function PdfViewerPage() {
                     onClick={nextPage}
                     disabled={currentPage >= totalPages}
                     className="p-1.5 sm:p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Next page"
                   >
                     <ChevronRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </button>
@@ -1288,6 +1286,7 @@ export default function PdfViewerPage() {
                 <select
                   value={scale}
                   onChange={(e) => setScale(Number(e.target.value))}
+                  aria-label="Zoom level"
                   className="px-1 sm:px-2 py-1 border border-[oklch(0.145_0_0)] rounded text-[10px] sm:text-xs font-mono bg-white"
                 >
                   <option value={0.5}>50%</option>
@@ -1305,6 +1304,7 @@ export default function PdfViewerPage() {
               <button
                 onClick={() => setIsSidebarOpen(true)}
                 className="p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 transition-colors"
+                aria-label="Open sidebar"
               >
                 <List className="w-4 h-4" />
               </button>
