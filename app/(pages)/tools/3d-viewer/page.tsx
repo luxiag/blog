@@ -21,10 +21,8 @@ export default function ThreeDViewerPage() {
     return (
         <>
             <PageTitle title="3D 模型预览" />
-            <div className="min-h-screen  text-neutral-900 dark:text-neutral-100 p-4 md:p-8">
-                <div className="max-w-6xl mx-auto h-[calc(100vh-100px)]">
-                    <ViewerComponent />
-                </div>
+            <div className="h-screen text-neutral-900 dark:text-neutral-100">
+                <ViewerComponent />
             </div>
         </>
     );

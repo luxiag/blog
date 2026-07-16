@@ -1,227 +1,254 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Editor from 'react-simple-code-editor';
 import { Highlight } from 'prism-react-renderer';
-import { Edit3, Eye, Columns, Terminal } from 'lucide-react';
-
-const initialMarkdown = `# MARKDOWN_IDE_v1.0
-
-## SYSTEM_OVERVIEW
-Minimalist, high-performance Markdown editor with real-time feedback.
-
-### FEATURES
-- **TECHNICAL_CONTRAST**: Oklch-based color palette
-- **STRUCTURAL_INTEGRITY**: Remark-GFM compliant
-- **MONO_TYPOGRAPHY**: IBM Plex Mono for technical labels
-
-\`\`\`javascript
-const engine = "Markdown/Editor";
-function render(input) {
-  return parse(input);
-}
-\`\`\`
-
-> NOTICE: Always verify structural coherence before export.
-
-| COMPONENT | STATUS |
-| :--- | :--- |
-| Core Engine | OPERATIONAL |
-| GFM Parser | ACTIVE |
-| Previewer | ONLINE |
-`;
+import {
+    Edit3, Eye, Columns, Bold, Italic, Link2, Code2,
+    List, ListOrdered, Heading1, Heading2, Quote,
+    Download, Copy, Check, PanelLeftOpen, PanelLeftClose,
+    FileText
+} from 'lucide-react';
 
 const codeHighlightTheme = {
-    plain: {
-        color: 'oklch(0.145 0 0)',
-        backgroundColor: 'transparent',
-    },
+    plain: { color: 'oklch(0.32 0 0)', backgroundColor: 'transparent' },
     styles: [
-        { types: ['comment'], style: { color: '#888', fontStyle: 'italic' } },
-        { types: ['keyword', 'operator'], style: { color: 'oklch(0.145 0 0)', fontWeight: 'bold' } },
+        { types: ['comment'], style: { color: '#9ca3af', fontStyle: 'italic' } },
+        { types: ['keyword', 'operator'], style: { color: '#ea580c', fontWeight: 'bold' } },
         { types: ['string', 'url', 'attr-value'], style: { color: '#ea580c' } },
-        { types: ['function', 'property'], style: { color: 'oklch(0.145 0 0)' } },
-        { types: ['number', 'boolean'], style: { color: '#ea580c' } },
-        { types: ['tag', 'selector'], style: { color: 'oklch(0.145 0 0)' } },
+        { types: ['function', 'property'], style: { color: '#7c3aed' } },
+        { types: ['number', 'boolean'], style: { color: '#2563eb' } },
+        { types: ['tag', 'selector'], style: { color: '#ea580c' } },
     ],
 };
 
+const initialMarkdown = `# Markdown Editor
+
+A minimalist editor with **real-time preview** and useful features.
+
+## Features
+
+- **Live preview** with GFM support
+- **Toolbar** for quick formatting
+- **Table of contents** sidebar
+- **Export** to HTML
+
+### Code Example
+
+\`\`\`javascript
+const greeting = "Hello, World!";
+console.log(greeting);
+\`\`\`
+
+### Table
+
+| Feature | Status |
+| :--- | :--- |
+| Live Preview | Active |
+| GFM Support | Enabled |
+| Export HTML | Ready |
+
+> This is a blockquote. Useful for notes and callouts.
+
+---
+
+*Enjoy writing!*
+`;
+
+interface TocItem { id: string; text: string; level: number; }
+
+function extractToc(md: string): TocItem[] {
+    const items: TocItem[] = [];
+    const lines = md.split('\n');
+    for (const line of lines) {
+        const match = line.match(/^(#{1,6})\s+(.+)/);
+        if (match) {
+            const level = match[1].length;
+            const text = match[2].replace(/[*_`\[\]()]/g, '').trim();
+            const id = text.toLowerCase().replace(/[^\w\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '');
+            items.push({ id, text, level });
+        }
+    }
+    return items;
+}
+
+type ViewMode = 'both' | 'edit' | 'preview';
+
 export default function MarkdownEditorCanvas() {
     const [markdown, setMarkdown] = useState(initialMarkdown);
-    const [activeTab, setActiveTab] = useState<'both' | 'edit' | 'preview'>('both');
+    const [viewMode, setViewMode] = useState<ViewMode>('both');
+    const [showToc, setShowToc] = useState(true);
+    const [copied, setCopied] = useState(false);
+    const previewRef = useRef<HTMLDivElement>(null);
+
+    const toc = useMemo(() => extractToc(markdown), [markdown]);
+
+    const insertMarkdown = useCallback((before: string, after: string = '') => {
+        const textarea = document.querySelector('.md-editor textarea') as HTMLTextAreaElement;
+        if (!textarea) return;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const selected = markdown.substring(start, end);
+        const newMd = markdown.substring(0, start) + before + selected + after + markdown.substring(end);
+        setMarkdown(newMd);
+    }, [markdown]);
+
+    const toolbarActions = useMemo(() => [
+        { icon: Heading1, action: () => insertMarkdown('## ', ''), title: 'Heading' },
+        { icon: Bold, action: () => insertMarkdown('**', '**'), title: 'Bold' },
+        { icon: Italic, action: () => insertMarkdown('*', '*'), title: 'Italic' },
+        { icon: Code2, action: () => insertMarkdown('`', '`'), title: 'Code' },
+        { icon: Link2, action: () => insertMarkdown('[', '](url)'), title: 'Link' },
+        { icon: List, action: () => insertMarkdown('- ', ''), title: 'Unordered list' },
+        { icon: ListOrdered, action: () => insertMarkdown('1. ', ''), title: 'Ordered list' },
+        { icon: Quote, action: () => insertMarkdown('> ', ''), title: 'Quote' },
+    ], [insertMarkdown]);
+
+    const handleExportHtml = useCallback(() => {
+        const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Markdown Export</title>
+<style>body{font-family:system-ui,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#333}
+h1,h2,h3{margin-top:1.5em;margin-bottom:0.5em}code{background:#f0f0f0;padding:0.2em 0.4em;border-radius:3px}
+pre{background:#f5f5f5;padding:1rem;border-radius:6px;overflow-x:auto}blockquote{border-left:4px solid #ea580c;padding:0.5em 1em;margin:1em 0;color:#666}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:0.5em 1em;text-align:left}th{background:#f5f5f5}</style>
+</head><body>${previewRef.current?.innerHTML || ''}</body></html>`;
+        const blob = new Blob([html], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'document.html'; a.click();
+        URL.revokeObjectURL(url);
+    }, []);
+
+    const handleCopyMd = useCallback(async () => {
+        await navigator.clipboard.writeText(markdown);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    }, [markdown]);
+
+    const scrollToHeading = useCallback((id: string) => {
+        const el = previewRef.current?.querySelector(`[data-heading="${id}"]`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, []);
+
+    const lineCount = markdown.split('\n').length;
+    const gutterWidth = Math.max(3, String(lineCount).length) * 8 + 24;
 
     return (
-        <>
-            {/* View Controls */}
-            <div className="flex bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] p-1.5 rounded-xl shadow-[4px_4px_0_oklch(0.145_0_0)] h-fit items-center">
-                {[
-                    { id: 'edit', label: 'EDIT_MODE', icon: Edit3 },
-                    { id: 'both', label: 'SPLIT_VIEW', icon: Columns },
-                    { id: 'preview', label: 'READ_ONLY', icon: Eye }
-                ].map((tab) => {
-                    const Icon = tab.icon;
-                    return (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id as any)}
-                            className={`flex items-center gap-2 px-5 py-2 font-mono font-bold text-[10px] tracking-widest transition-all rounded-lg ${activeTab === tab.id
-                                    ? 'bg-[oklch(0.145_0_0)] text-white'
-                                    : 'hover:bg-neutral-100 text-neutral-400'
-                                }`}
-                        >
-                            <Icon className="w-3 h-3" />
-                            {tab.label}
+        <div className="h-full flex flex-col bg-white">
+            {/* Toolbar */}
+            <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--background)] border-b border-[var(--border-color)] shrink-0">
+                <div className="flex items-center gap-1">
+                    <button onClick={() => setShowToc(!showToc)}
+                        className="p-1.5 text-[var(--foreground)] opacity-20 hover:opacity-50 transition-opacity" title="Toggle TOC">
+                        {showToc ? <PanelLeftClose size={13} /> : <PanelLeftOpen size={13} />}
+                    </button>
+                    <div className="w-px h-3 bg-[var(--border-color)] mx-1" />
+                    {toolbarActions.map((item, i) => {
+                        const Icon = item.icon;
+                        return (
+                            <button key={i} onClick={item.action}
+                                className="p-1.5 text-[var(--foreground)] opacity-20 hover:opacity-50 hover:bg-black/5 rounded transition-all" title={item.title}>
+                                <Icon size={13} />
+                            </button>
+                        );
+                    })}
+                </div>
+                <div className="flex items-center gap-1">
+                    {(['edit', 'both', 'preview'] as ViewMode[]).map(mode => (
+                        <button key={mode} onClick={() => setViewMode(mode)}
+                            className={`flex items-center gap-1 px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider rounded transition-colors ${
+                                viewMode === mode ? 'bg-[var(--foreground)] text-white' : 'text-[var(--foreground)] opacity-25 hover:opacity-50 hover:bg-black/5'
+                            }`}>
+                            {mode === 'edit' ? <><Edit3 size={10} />Edit</> : mode === 'both' ? <><Columns size={10} />Split</> : <><Eye size={10} />Preview</>}
                         </button>
-                    );
-                })}
+                    ))}
+                    <div className="w-px h-3 bg-[var(--border-color)] mx-1" />
+                    <button onClick={handleCopyMd} className="p-1.5 text-[var(--foreground)] opacity-20 hover:opacity-50 transition-opacity" title="Copy markdown">
+                        {copied ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
+                    <button onClick={handleExportHtml} className="p-1.5 text-[var(--foreground)] opacity-20 hover:opacity-50 transition-opacity" title="Export HTML">
+                        <Download size={13} />
+                    </button>
+                </div>
             </div>
 
-            <div className={`grid gap-8 items-start h-[calc(100vh-320px)] min-h-[700px] transition-all ${activeTab === 'both' ? 'grid-cols-2' : 'grid-cols-1'
-                }`}>
-                {(activeTab === 'both' || activeTab === 'edit') && (
-                    <div className="flex flex-col h-full bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl overflow-hidden shadow-[2px_2px_0_oklch(0.145_0_0)]">
-                        <div className="px-6 py-4 border-b border-[oklch(0.145_0_0)] flex items-center justify-between bg-[#f5f5f5] dark:bg-neutral-800/50">
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 border border-[oklch(0.145_0_0)] rounded-sm" />
-                                <span className="text-xs font-mono font-bold uppercase tracking-widest">Editor_Buffer</span>
-                            </div>
-                            <div className="flex gap-1.5">
-                                <div className="w-2 h-2 rounded-full bg-neutral-300" />
-                                <div className="w-2 h-2 rounded-full bg-neutral-300" />
+            {/* Main content */}
+            <div className="flex-1 flex min-h-0">
+                {/* TOC sidebar */}
+                {showToc && toc.length > 0 && (
+                    <div className="w-48 shrink-0 bg-[var(--background)] border-r border-[var(--border-color)] flex flex-col">
+                        <div className="px-3 py-1.5 text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider border-b border-[var(--border-color)]">
+                            TOC
+                        </div>
+                        <div className="flex-1 overflow-y-auto py-1">
+                            {toc.map((item, i) => (
+                                <button key={i} onClick={() => scrollToHeading(item.id)}
+                                    className="w-full text-left px-3 py-1 text-[11px] font-mono text-[var(--foreground)] opacity-30 hover:opacity-70 hover:bg-black/5 transition-all truncate"
+                                    style={{ paddingLeft: `${(item.level - 1) * 12 + 12}px` }}>
+                                    {item.text}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Editor */}
+                {(viewMode === 'both' || viewMode === 'edit') && (
+                    <div className="md-editor flex-1 flex min-w-0 border-r border-[var(--border-color)]">
+                        <div className="shrink-0 bg-white text-right select-none overflow-hidden" style={{ width: gutterWidth, fontSize: 13, lineHeight: '1.6', fontFamily: 'var(--font-mono)' }}>
+                            <div className="pt-4">
+                                {Array.from({ length: lineCount }, (_, i) => (
+                                    <div key={i} className="text-[var(--foreground)] opacity-15 pr-3">{i + 1}</div>
+                                ))}
                             </div>
                         </div>
-                        <div className="flex-1 overflow-auto bg-white dark:bg-neutral-900">
+                        <div className="flex-1 overflow-auto min-w-0 bg-white">
                             <Editor
                                 value={markdown}
                                 onValueChange={setMarkdown}
                                 highlight={code => (
                                     <Highlight theme={codeHighlightTheme as any} code={code} language="markdown">
                                         {({ tokens, getLineProps, getTokenProps }) => (
-                                            <>
-                                                {tokens.map((line, i) => (
-                                                    <div key={i} {...getLineProps({ line })}>
-                                                        <span className="inline-block w-8 text-[10px] font-mono opacity-20 select-none mr-4">{i + 1}</span>
-                                                        {line.map((token, key) => (
-                                                            <span key={key} {...getTokenProps({ token })} />
-                                                        ))}
-                                                    </div>
-                                                ))}
-                                            </>
+                                            <>{tokens.map((line, i) => (
+                                                <div key={i} {...getLineProps({ line })}>
+                                                    {line.map((token, key) => <span key={key} {...getTokenProps({ token })} />)}
+                                                </div>
+                                            ))}</>
                                         )}
                                     </Highlight>
                                 )}
-                                padding={24}
-                                style={{
-                                    fontFamily: 'var(--font-mono)',
-                                    fontSize: 13,
-                                    minHeight: '100%',
-                                    outline: 'none',
-                                }}
-                                placeholder="// TYPE_MARKDOWN_HERE..."
+                                padding={16}
+                                style={{ fontFamily: 'var(--font-mono)', fontSize: 13, lineHeight: 1.6, backgroundColor: 'transparent', minHeight: '100%', outline: 'none' }}
                             />
                         </div>
                     </div>
                 )}
 
-                {(activeTab === 'both' || activeTab === 'preview') && (
-                    <div className="flex flex-col h-full bg-white dark:bg-neutral-900 border border-[oklch(0.145_0_0)] rounded-2xl overflow-hidden shadow-[2px_2px_0_oklch(0.145_0_0)]">
-                        <div className="px-6 py-4 border-b border-[oklch(0.145_0_0)] flex items-center justify-between bg-[#f5f5f5] dark:bg-neutral-800/50">
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 border border-[oklch(0.145_0_0)] bg-[oklch(0.145_0_0)] rounded-sm" />
-                                <span className="text-xs font-mono font-bold uppercase tracking-widest">Rendered_View</span>
-                            </div>
-                            <Terminal className="w-4 h-4 opacity-40" />
-                        </div>
-                        <div className="flex-1 overflow-auto p-12 bg-white dark:bg-neutral-900 markdown-body">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                {markdown}
-                            </ReactMarkdown>
-                        </div>
+                {/* Preview */}
+                {(viewMode === 'both' || viewMode === 'preview') && (
+                    <div ref={previewRef} className="flex-1 overflow-auto min-w-0 bg-white mdx-content" style={{ padding: '24px 32px' }}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                            h1: ({ children, ...props }: any) => <h1 data-heading={String(children).toLowerCase().replace(/[^\w\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '')} {...props}>{children}</h1>,
+                            h2: ({ children, ...props }: any) => <h2 data-heading={String(children).toLowerCase().replace(/[^\w\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '')} {...props}>{children}</h2>,
+                            h3: ({ children, ...props }: any) => <h3 data-heading={String(children).toLowerCase().replace(/[^\w\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '')} {...props}>{children}</h3>,
+                        }}>
+                            {markdown}
+                        </ReactMarkdown>
                     </div>
                 )}
             </div>
 
-            <div className="mt-8 flex justify-between items-center text-[10px] font-mono opacity-40 uppercase tracking-[0.2em]">
-                <div className="flex items-center gap-4">
-                    <span>LENGTH: {markdown.length}</span>
-                    <span>LINES: {markdown.split('\n').length}</span>
+            {/* Status bar */}
+            <div className="px-4 py-1 bg-[var(--background)] border-t border-[var(--border-color)] flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-4 text-[10px] font-mono text-[var(--foreground)] opacity-15">
+                    <span>{markdown.length} chars</span>
+                    <span>{lineCount} lines</span>
+                    <span>{toc.length} headings</span>
                 </div>
-                <span>SYNC_STATUS: ENCRYPTED_LOCAL_SAVE</span>
+                <span className="text-[10px] font-mono text-[var(--foreground)] opacity-10">GFM</span>
             </div>
-
-            <style jsx global>{`
-                .markdown-body {
-                    color: oklch(0.145 0 0);
-                    line-height: 1.6;
-                }
-                .markdown-body h1, .markdown-body h2, .markdown-body h3 {
-                    font-weight: 900;
-                    letter-spacing: -0.02em;
-                    text-transform: uppercase;
-                    border-bottom: 2px solid oklch(0.145 0 0);
-                    padding-bottom: 0.5rem;
-                    margin-bottom: 1.5rem;
-                    margin-top: 2rem;
-                    color: oklch(0.145 0 0);
-                }
-                .markdown-body h1 { font-size: 2rem; }
-                .markdown-body h2 { font-size: 1.5rem; }
-                .markdown-body h3 { font-size: 1.25rem; }
-                .markdown-body p { margin-bottom: 1rem; }
-                .markdown-body ul, .markdown-body ol { margin-bottom: 1rem; padding-left: 1.5rem; }
-                .markdown-body li { margin-bottom: 0.25rem; }
-                .markdown-body blockquote {
-                    padding: 1.5rem;
-                    background: #f5f5f5;
-                    border: 1px solid oklch(0.145 0 0);
-                    border-left-width: 6px;
-                    border-left-color: #ea580c;
-                    border-radius: 8px;
-                    margin: 2rem 0;
-                    font-style: italic;
-                    color: oklch(0.145 0 0 / 0.7);
-                }
-                .markdown-body code:not(pre code) {
-                    background: #ea580c;
-                    color: white;
-                    padding: 0.2rem 0.4rem;
-                    border-radius: 4px;
-                    font-size: 0.85em;
-                }
-                .markdown-body pre {
-                    background: white;
-                    border: 1px solid oklch(0.145 0 0);
-                    padding: 1.5rem;
-                    border-radius: 12px;
-                    margin: 1.5rem 0;
-                    overflow: auto;
-                    box-shadow: 4px 4px 0 oklch(0.145 0 0);
-                }
-                .markdown-body table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin: 2rem 0;
-                    font-size: 0.9em;
-                }
-                .markdown-body th, .markdown-body td {
-                    border: 1px solid oklch(0.145 0 0);
-                    padding: 0.75rem 1rem;
-                    text-align: left;
-                }
-                .markdown-body th {
-                    background: oklch(0.145 0 0);
-                    color: white;
-                    text-transform: uppercase;
-                    letter-spacing: 0.1em;
-                }
-                .markdown-body hr {
-                    border: none;
-                    border-top: 1px dashed oklch(0.145 0 0);
-                    margin: 3rem 0;
-                }
-            `}</style>
-        </>
+        </div>
     );
 }

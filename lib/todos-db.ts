@@ -123,6 +123,9 @@ export interface Todo {
   // Yearly plan specific
   year?: number;
   
+  // Dependencies
+  dependsOn?: number[];
+  
   // Legacy compatibility (optional)
   isAllDay?: boolean;
   isDaily?: boolean;

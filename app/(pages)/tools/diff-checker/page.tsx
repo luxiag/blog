@@ -1,226 +1,248 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import PageTitle from '@/components/PageTitle';
+import { useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
-import { diffLines, Change } from 'diff';
+import { diffLines, diffChars, Change } from 'diff';
+import {
+    Copy, Check, Trash2, ArrowRightLeft, Rows, Columns,
+    CaseSensitive, Space, FileText
+} from 'lucide-react';
+
+type ViewMode = 'unified' | 'side-by-side';
+
+function highlightCharDiff(oldStr: string, newStr: string): { oldParts: { text: string; changed: boolean }[]; newParts: { text: string; changed: boolean }[] } {
+    const charChanges = diffChars(oldStr, newStr);
+    const oldParts: { text: string; changed: boolean }[] = [];
+    const newParts: { text: string; changed: boolean }[] = [];
+    for (const part of charChanges) {
+        if (part.added) newParts.push({ text: part.value, changed: true });
+        else if (part.removed) oldParts.push({ text: part.value, changed: true });
+        else { oldParts.push({ text: part.value, changed: false }); newParts.push({ text: part.value, changed: false }); }
+    }
+    return { oldParts, newParts };
+}
 
 export default function DiffCheckerPage() {
     const [oldText, setOldText] = useState('');
     const [newText, setNewText] = useState('');
-    const [diffResult, setDiffResult] = useState<Change[]>([]);
+    const [viewMode, setViewMode] = useState<ViewMode>('side-by-side');
+    const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
+    const [ignoreCase, setIgnoreCase] = useState(false);
+    const [copied, setCopied] = useState<string | null>(null);
 
-    const handleCompare = useCallback(() => {
-        const changes = diffLines(oldText, newText);
-        setDiffResult(changes);
+    const preprocess = useCallback((text: string) => {
+        let result = text;
+        if (ignoreWhitespace) result = result.replace(/\s+/g, ' ').trim();
+        if (ignoreCase) result = result.toLowerCase();
+        return result;
+    }, [ignoreWhitespace, ignoreCase]);
+
+    const changes = useMemo(() => {
+        if (!oldText && !newText) return [];
+        return diffLines(preprocess(oldText), preprocess(newText));
+    }, [oldText, newText, preprocess]);
+
+    const stats = useMemo(() => {
+        let added = 0, removed = 0, unchanged = 0;
+        for (const c of changes) {
+            const lineCount = c.value.split('\n').filter((_, i, arr) => i < arr.length - 1 || arr[i] !== '').length;
+            if (c.added) added += lineCount;
+            else if (c.removed) removed += lineCount;
+            else unchanged += lineCount;
+        }
+        return { added, removed, unchanged };
+    }, [changes]);
+
+    const handleCopy = useCallback(async (text: string, id: string) => {
+        await navigator.clipboard.writeText(text);
+        setCopied(id);
+        setTimeout(() => setCopied(null), 2000);
+    }, []);
+
+    const handleSwap = useCallback(() => {
+        setOldText(newText);
+        setNewText(oldText);
     }, [oldText, newText]);
 
-    const handleClear = () => {
-        setOldText('');
-        setNewText('');
-        setDiffResult([]);
-    };
+    const handleLoadSample = useCallback(() => {
+        setOldText(`function greet(name) {
+  console.log("Hello, " + name);
+  return true;
+}
+
+const users = ["Alice", "Bob", "Charlie"];
+for (const user of users) {
+  greet(user);
+}`);
+        setNewText(`function greet(name: string): boolean {
+  console.log(\`Hello, \${name}!\`);
+  return true;
+}
+
+const users = ["Alice", "Bob", "Charlie", "Diana"];
+for (const user of users) {
+  greet(user);
+}
+
+// Added export
+export { greet };`);
+    }, []);
+
+    const lineNums = useMemo(() => {
+        let oldLine = 0, newLine = 0;
+        return changes.map(c => {
+            const lines = c.value.split('\n');
+            const count = lines.length - (lines[lines.length - 1] === '' ? 1 : 0);
+            const nums = { oldStart: c.removed ? oldLine + 1 : (c.added ? null : oldLine + 1), newStart: c.added ? newLine + 1 : (c.removed ? null : newLine + 1), count };
+            if (!c.added) oldLine += count;
+            if (!c.removed) newLine += count;
+            return nums;
+        });
+    }, [changes]);
+
+    const unifiedLines = useMemo(() => {
+        let oldLine = 0, newLine = 0;
+        const result: { type: 'same' | 'added' | 'removed'; oldNum: number | null; newNum: number | null; text: string }[] = [];
+        for (const c of changes) {
+            const lines = c.value.split('\n');
+            for (const line of lines) {
+                if (line === '' && lines.indexOf(line) === lines.length - 1) continue;
+                if (c.added) { newLine++; result.push({ type: 'added', oldNum: null, newNum: newLine, text: line }); }
+                else if (c.removed) { oldLine++; result.push({ type: 'removed', oldNum: oldLine, newNum: null, text: line }); }
+                else { oldLine++; newLine++; result.push({ type: 'same', oldNum: oldLine, newNum: newLine, text: line }); }
+            }
+        }
+        return result;
+    }, [changes]);
+
+    const sideBySideLines = useMemo(() => {
+        const left: { type: 'same' | 'removed'; num: number; text: string }[] = [];
+        const right: { type: 'same' | 'added'; num: number; text: string }[] = [];
+        let oldLine = 0, newLine = 0;
+        for (const c of changes) {
+            const lines = c.value.split('\n');
+            for (const line of lines) {
+                if (line === '' && lines.indexOf(line) === lines.length - 1) continue;
+                if (c.added) { newLine++; right.push({ type: 'added', num: newLine, text: line }); }
+                else if (c.removed) { oldLine++; left.push({ type: 'removed', num: oldLine, text: line }); }
+                else { oldLine++; newLine++; left.push({ type: 'same', num: oldLine, text: line }); right.push({ type: 'same', num: newLine, text: line }); }
+            }
+        }
+        const maxLen = Math.max(left.length, right.length);
+        while (left.length < maxLen) left.push({ type: 'same', num: 0, text: '' });
+        while (right.length < maxLen) right.push({ type: 'same', num: 0, text: '' });
+        return { left, right };
+    }, [changes]);
+
+    const hasContent = oldText || newText;
+    const hasDiff = changes.length > 0 && (stats.added > 0 || stats.removed > 0);
 
     return (
-        <>
-            <PageTitle title="文本对比" />
-            <div className="min-h-screen" style={{ backgroundColor: 'var(--background)' }}>
-                <div className="max-w-6xl mx-auto px-2 sm:px-4 py-6 sm:py-12">
-                    <div style={{ marginBottom: '32px' }}>
-                        <Link
-                            href="/tools"
-                            className="inline-flex items-center transition-colors"
-                            style={{ color: 'var(--color-orange-800)', fontSize: '14px', fontFamily: 'var(--font-mono)' }}
-                        >
-                            <svg
-                                style={{ width: '16px', height: '16px', marginRight: '8px' }}
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth="1.5"
-                            >
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                            </svg>
-                            BACK_TO_LIBRARY
-                        </Link>
-                    </div>
-
-                    <h1 className="text-2xl md:text-3xl" style={{
-                        fontWeight: 700,
-                        marginBottom: '8px',
-                        fontFamily: 'var(--font-sans)',
-                        color: 'var(--foreground)'
-                    }}>
-                        文本对比
-                    </h1>
-                    <p style={{
-                        fontSize: '14px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--color-neutral-500)',
-                        marginBottom: '32px'
-                    }}>
-                        对比两个文本的差异，支持行级比较。
-                    </p>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6" style={{
-                        marginBottom: '24px'
-                    }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--foreground)', opacity: 0.7 }}>原文本 (Old)</label>
-                            <textarea
-                                value={oldText}
-                                onChange={(e) => setOldText(e.target.value)}
-                                placeholder="在此输入旧文本..."
-                                style={{
-                                    width: '100%',
-                                    height: '300px',
-                                    padding: '16px',
-                                    borderRadius: '8px',
-                                    border: '1px solid var(--border-color)',
-                                    background: 'white',
-                                    color: 'var(--foreground)',
-                                    fontFamily: 'var(--font-mono)',
-                                    fontSize: '14px',
-                                    outline: 'none',
-                                    resize: 'vertical'
-                                }}
-                            />
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--foreground)', opacity: 0.7 }}>新文本 (New)</label>
-                            <textarea
-                                value={newText}
-                                onChange={(e) => setNewText(e.target.value)}
-                                placeholder="在此输入新文本..."
-                                style={{
-                                    width: '100%',
-                                    height: '300px',
-                                    padding: '16px',
-                                    borderRadius: '8px',
-                                    border: '1px solid var(--border-color)',
-                                    background: 'white',
-                                    color: 'var(--foreground)',
-                                    fontFamily: 'var(--font-mono)',
-                                    fontSize: '14px',
-                                    outline: 'none',
-                                    resize: 'vertical'
-                                }}
-                            />
-                        </div>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '12px', marginBottom: '32px' }}>
-                        <button
-                            onClick={handleCompare}
-                            style={{
-                                background: 'var(--foreground)',
-                                color: 'white',
-                                border: 'none',
-                                padding: '10px 24px',
-                                borderRadius: '6px',
-                                fontSize: '14px',
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                                fontFamily: 'var(--font-sans)',
-                                transition: 'opacity 0.2s'
-                            }}
-                            onMouseOver={(e) => e.currentTarget.style.opacity = '0.9'}
-                            onMouseOut={(e) => e.currentTarget.style.opacity = '1'}
-                        >
-                            对比差异
-                        </button>
-                        <button
-                            onClick={handleClear}
-                            style={{
-                                background: 'white',
-                                color: 'var(--foreground)',
-                                border: '1px solid var(--border-color)',
-                                padding: '10px 24px',
-                                borderRadius: '6px',
-                                fontSize: '14px',
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                                fontFamily: 'var(--font-sans)',
-                            }}
-                        >
-                            清空
-                        </button>
-                    </div>
-
-                    {diffResult.length > 0 && (
-                        <div style={{
-                            background: 'white',
-                            border: '1px solid var(--border-color)',
-                            borderRadius: '8px',
-                            overflow: 'hidden',
-                            boxShadow: 'var(--shadow-subtle)'
-                        }}>
-                            <div style={{
-                                padding: '12px 16px',
-                                background: 'var(--color-neutral-100)',
-                                borderBottom: '1px solid var(--border-color)',
-                                fontSize: '13px',
-                                fontWeight: 600,
-                                color: 'var(--foreground)',
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'center'
-                            }}>
-                                <span>对比结果</span>
-                                <div style={{ display: 'flex', gap: '12px', fontSize: '12px', fontWeight: 400 }}>
-                                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <span style={{ width: '12px', height: '12px', background: '#dcfce7', border: '1px solid #166534' }}></span> 新增
-                                    </span>
-                                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <span style={{ width: '12px', height: '12px', background: '#fee2e2', border: '1px solid #991b1b' }}></span> 删除
-                                    </span>
-                                </div>
-                            </div>
-                            <div style={{
-                                padding: '0',
-                                fontFamily: 'var(--font-mono)',
-                                fontSize: '13px',
-                                lineHeight: '1.6',
-                                maxHeight: '600px',
-                                overflowY: 'auto'
-                            }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-                                    <tbody>
-                                        {diffResult.map((part, index) => {
-                                            const bgColor = part.added ? '#dcfce7' : part.removed ? '#fee2e2' : 'transparent';
-                                            const textColor = part.added ? '#166534' : part.removed ? '#991b1b' : 'var(--foreground)';
-                                            const prefix = part.added ? '+' : part.removed ? '-' : ' ';
-
-                                            return (
-                                                <tr key={index} style={{ backgroundColor: bgColor, color: textColor }}>
-                                                    <td style={{
-                                                        width: '30px',
-                                                        textAlign: 'center',
-                                                        userSelect: 'none',
-                                                        opacity: 0.5,
-                                                        borderRight: '1px solid rgba(0,0,0,0.05)',
-                                                        padding: '4px 0',
-                                                        verticalAlign: 'top'
-                                                    }}>
-                                                        {prefix}
-                                                    </td>
-                                                    <td style={{
-                                                        padding: '4px 12px',
-                                                        whiteSpace: 'pre-wrap',
-                                                        wordBreak: 'break-all'
-                                                    }}>
-                                                        {part.value}
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    )}
+        <div className="h-[calc(100vh-45px)] flex flex-col bg-white overflow-hidden">
+            {/* Top bar */}
+            <div className="flex items-center justify-between px-4 py-2 bg-[var(--background)] border-b border-[var(--border-color)] shrink-0">
+                <div className="flex items-center gap-4">
+                    <Link href="/tools" className="flex items-center gap-1.5 text-[11px] font-mono text-[var(--foreground)] opacity-40 hover:opacity-70 transition-opacity uppercase tracking-wider">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5m7-7-7 7 7 7" /></svg>
+                        Tools
+                    </Link>
+                    <div className="w-px h-3 bg-[var(--border-color)]" />
+                    <span className="text-[12px] font-mono text-[var(--foreground)] opacity-50">Diff Checker</span>
+                </div>
+                <div className="flex items-center gap-1">
+                    <button onClick={() => setViewMode('side-by-side')}
+                        className={`flex items-center gap-1 px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider rounded transition-colors ${viewMode === 'side-by-side' ? 'bg-[var(--foreground)] text-white' : 'text-[var(--foreground)] opacity-25 hover:opacity-50 hover:bg-black/5'}`}>
+                        <Columns size={11} />Side by Side
+                    </button>
+                    <button onClick={() => setViewMode('unified')}
+                        className={`flex items-center gap-1 px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider rounded transition-colors ${viewMode === 'unified' ? 'bg-[var(--foreground)] text-white' : 'text-[var(--foreground)] opacity-25 hover:opacity-50 hover:bg-black/5'}`}>
+                        <Rows size={11} />Unified
+                    </button>
+                    <div className="w-px h-3 bg-[var(--border-color)] mx-1" />
+                    <button onClick={() => setIgnoreCase(!ignoreCase)}
+                        className={`p-1.5 rounded transition-colors ${ignoreCase ? 'bg-[#ea580c] text-white' : 'text-[var(--foreground)] opacity-20 hover:opacity-50'}`} title="Ignore case">
+                        <CaseSensitive size={13} />
+                    </button>
+                    <button onClick={() => setIgnoreWhitespace(!ignoreWhitespace)}
+                        className={`p-1.5 rounded transition-colors ${ignoreWhitespace ? 'bg-[#ea580c] text-white' : 'text-[var(--foreground)] opacity-20 hover:opacity-50'}`} title="Ignore whitespace">
+                        <Space size={13} />
+                    </button>
+                    <div className="w-px h-3 bg-[var(--border-color)] mx-1" />
+                    <button onClick={handleLoadSample} className="p-1.5 text-[var(--foreground)] opacity-20 hover:opacity-50 transition-opacity" title="Load sample">
+                        <FileText size={13} />
+                    </button>
                 </div>
             </div>
-        </>
+
+            {/* Editor area */}
+            <div className="flex-1 flex min-h-0">
+                <div className={`flex ${viewMode === 'side-by-side' || !hasDiff ? 'flex-1' : 'h-[40%] shrink-0'}`}>
+                    <div className="flex-1 flex flex-col min-w-0 border-r border-[var(--border-color)]">
+                        <div className="px-3 py-1.5 flex items-center justify-between border-b border-[var(--border-color)] bg-[var(--background)] shrink-0">
+                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Original</span>
+                            <div className="flex items-center gap-1">
+                                <button onClick={handleSwap} className="p-1 text-[var(--foreground)] opacity-15 hover:opacity-40 transition-opacity" title="Swap">
+                                    <ArrowRightLeft size={11} />
+                                </button>
+                                <button onClick={() => setOldText('')} className="p-1 text-[var(--foreground)] opacity-15 hover:opacity-40 transition-opacity" title="Clear">
+                                    <Trash2 size={11} />
+                                </button>
+                            </div>
+                        </div>
+                        <textarea value={oldText} onChange={(e) => setOldText(e.target.value)}
+                            placeholder="Paste original text..."
+                            className="w-full flex-1 p-4 font-mono text-[13px] leading-[1.6] resize-none outline-none text-[var(--foreground)] opacity-70 bg-white selection:bg-orange-500/20 min-h-0" />
+                    </div>
+                    <div className="flex-1 flex flex-col min-w-0">
+                        <div className="px-3 py-1.5 flex items-center justify-between border-b border-[var(--border-color)] bg-[var(--background)] shrink-0">
+                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Modified</span>
+                            <button onClick={() => setNewText('')} className="p-1 text-[var(--foreground)] opacity-15 hover:opacity-40 transition-opacity" title="Clear">
+                                <Trash2 size={11} />
+                            </button>
+                        </div>
+                        <textarea value={newText} onChange={(e) => setNewText(e.target.value)}
+                            placeholder="Paste modified text..."
+                            className="w-full flex-1 p-4 font-mono text-[13px] leading-[1.6] resize-none outline-none text-[var(--foreground)] opacity-70 bg-white selection:bg-orange-500/20 min-h-0" />
+                    </div>
+                </div>
+            </div>
+
+            {/* Diff result */}
+            {hasDiff && (
+                <div className="border-t border-[var(--border-color)] flex flex-col shrink-0" style={{ height: viewMode === 'side-by-side' ? '0px' : '50%' }}>
+                    <div className="px-3 py-1.5 flex items-center justify-between bg-[var(--background)] border-b border-[var(--border-color)] shrink-0">
+                        <div className="flex items-center gap-4">
+                            <span className="text-[10px] font-mono font-bold text-[var(--foreground)] opacity-20 uppercase tracking-wider">Result</span>
+                            <div className="flex items-center gap-3 text-[10px] font-mono">
+                                <span className="text-green-600">+{stats.added}</span>
+                                <span className="text-red-500">-{stats.removed}</span>
+                                <span className="text-[var(--foreground)] opacity-20">{stats.unchanged} same</span>
+                            </div>
+                        </div>
+                        <button onClick={() => {
+                            const text = unifiedLines.map(l => `${l.type === 'added' ? '+' : l.type === 'removed' ? '-' : ' '} ${l.text}`).join('\n');
+                            handleCopy(text, 'diff');
+                        }} className="p-1 text-[var(--foreground)] opacity-15 hover:opacity-40 transition-opacity" title="Copy diff">
+                            {copied === 'diff' ? <Check size={11} /> : <Copy size={11} />}
+                        </button>
+                    </div>
+
+                    <div className="flex-1 overflow-auto min-h-0 font-mono text-[12px] leading-[1.5]">
+                        {viewMode === 'unified' && unifiedLines.map((line, i) => (
+                            <div key={i} className={`flex ${line.type === 'added' ? 'bg-green-50' : line.type === 'removed' ? 'bg-red-50' : ''}`}>
+                                <span className="w-10 shrink-0 text-right pr-2 text-[var(--foreground)] opacity-15 select-none">{line.oldNum ?? ''}</span>
+                                <span className="w-10 shrink-0 text-right pr-2 text-[var(--foreground)] opacity-15 select-none border-l border-[var(--border-color)]">{line.newNum ?? ''}</span>
+                                <span className={`w-5 shrink-0 text-center select-none ${line.type === 'added' ? 'text-green-600' : line.type === 'removed' ? 'text-red-500' : 'text-[var(--foreground)] opacity-15'}`}>
+                                    {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
+                                </span>
+                                <span className={`${line.type === 'added' ? 'text-green-700' : line.type === 'removed' ? 'text-red-600' : 'text-[var(--foreground)] opacity-50'}`}>
+                                    {line.text}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
     );
 }

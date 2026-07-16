@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import PageTitle from '@/components/PageTitle';
 import { CustomDateInput } from './CustomDateInput';
 import { CustomTimeInput } from './CustomTimeInput';
+import GanttTimeline from './GanttTimeline';
 import {
   getCategories,
   getTodos,
@@ -293,6 +294,10 @@ export default function TodosPage() {
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: string; data: any } | null>(null);
 
+  const [selectedTodoId, setSelectedTodoId] = useState<number | null>(null);
+  const [ganttViewMode, setGanttViewMode] = useState<'2week' | 'month' | 'quarter'>('month');
+  const [ganttCurrentDate, setGanttCurrentDate] = useState(new Date());
+
   // Initialize and load data
   useEffect(() => {
     async function loadData() {
@@ -541,6 +546,56 @@ export default function TodosPage() {
     }
   };
 
+  // Gantt handlers
+  const handleGanttDateClick = (dateStr: string) => {
+    if (selectedDate === dateStr) {
+      setSelectedDate(null);
+    } else {
+      setSelectedDate(dateStr);
+    }
+  };
+
+  const handleGanttTodoClick = (todoId: number) => {
+    setSelectedTodoId(prev => prev === todoId ? null : todoId);
+  };
+
+  const handleGanttNavigate = (direction: -1 | 1 | 0) => {
+    if (direction === 0) {
+      setGanttCurrentDate(new Date());
+      return;
+    }
+    if (ganttViewMode === '2week') {
+      setGanttCurrentDate(prev => {
+        const d = new Date(prev);
+        d.setDate(d.getDate() + direction * 14);
+        return d;
+      });
+    } else if (ganttViewMode === 'month') {
+      setGanttCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + direction, 1));
+    } else {
+      setGanttCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + direction * 3, 1));
+    }
+  };
+
+  const handleGanttAddAtDate = async (dateStr: string) => {
+    const newTodo: Todo = {
+      id: Date.now(),
+      title: 'New task',
+      category: categories.find(c => c.id !== 'all')?.id || 'personal',
+      completed: false,
+      isImportant: false,
+      todoType: 'onetime',
+      enableNotification: false,
+      date: dateStr,
+      dateTimeMode: 'full_day',
+    };
+    await addTodo(newTodo);
+    const newTodos = [...todos, newTodo];
+    setTodos(newTodos);
+    syncTodosToSW(newTodos);
+    setSelectedTodoId(newTodo.id);
+  };
+
   // Add category
   const handleAddCategory = async () => {
     if (newCategoryName.trim()) {
@@ -772,7 +827,9 @@ export default function TodosPage() {
   return (
     <>
       <PageTitle title="Todos" />
-      <div className="flex h-[calc(100vh-60px)] bg-white relative">
+      <div className="flex flex-col" style={{ height: 'calc(100vh - 45px)' }}>
+      {/* Upper: original three-column layout */}
+      <div className="flex h-[55%] bg-white relative">
       {/* Left sidebar category navigation */}
       <div className="w-60 border-r p-6">
         <h2 className="text-xl font-semibold font-sans mb-6 text-neutral-900 dark:text-neutral-100">
@@ -1099,6 +1156,28 @@ export default function TodosPage() {
             })}
           </div>
         </div>
+      </div>
+      </div>
+
+      {/* Lower: full-width Gantt chart */}
+      <div className="h-[45%] border-t border-neutral-200 dark:border-neutral-700 flex-shrink-0">
+        <GanttTimeline
+          todos={todos}
+          currentDate={ganttCurrentDate}
+          selectedDate={selectedDate}
+          selectedTodoId={selectedTodoId}
+          onDateClick={handleGanttDateClick}
+          onTodoClick={handleGanttTodoClick}
+          onNavigate={handleGanttNavigate}
+          viewMode={ganttViewMode}
+          onViewModeChange={(m: string) => setGanttViewMode(m as 'month' | '2week' | 'quarter')}
+          onTodoUpdate={async (todo: Todo) => { await updateTodo(todo); const newTodos = todos.map(t => t.id === todo.id ? todo : t); setTodos(newTodos); syncTodosToSW(newTodos); }}
+          onTodoEdit={(todo: Todo) => { handleRenameTodo(todo); }}
+          onTodoDelete={handleDeleteTodo}
+          onTodoAddAtDate={handleGanttAddAtDate}
+          categories={categories.filter(c => c.id !== 'all')}
+        />
+      </div>
       </div>
 
       {/* Context menu */}
@@ -1528,7 +1607,6 @@ export default function TodosPage() {
           </div>
         </div>
       )}
-      </div>
     </>
   );
 }
