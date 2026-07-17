@@ -23,7 +23,8 @@ export interface Post {
 export interface PostFrontMatter {
   title: string;
   date: string;
-  excerpt: string;
+  excerpt?: string;
+  description?: string;
   coverImage?: string;
   author?: {
     name: string;

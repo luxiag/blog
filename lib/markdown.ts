@@ -11,7 +11,7 @@ import { slugify } from './slugify';
 const postsDirectory = path.join(process.cwd(), 'posts');
 
 // 模块级缓存：避免重复读取和编译所有文章
-let allPostsCache: Post[] | null = null;
+const allPostsCache: Post[] | null = null;
 
 // 单篇文章缓存
 const postCache = new Map<string, Post>();
@@ -251,7 +251,7 @@ export async function getAllPosts(): Promise<Post[]> {
         date: typeof frontMatter.date === 'object' && frontMatter.date !== null
           ? new Date(frontMatter.date as unknown as string).toISOString().split('T')[0]
           : (frontMatter.date || new Date().toISOString().split('T')[0]),
-        excerpt: frontMatter.excerpt || '',
+        excerpt: frontMatter.excerpt || frontMatter.description,
         category: postFile.category,
         tags: ensureCategoryInTags(frontMatter.tags || [], postFile.category),
         readingTime: calculateReadingTime(content),

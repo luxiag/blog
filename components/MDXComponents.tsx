@@ -43,6 +43,7 @@ const InteractiveComponent = dynamic(() => import('./InteractiveComponent'), { s
 const ShaderPreview = dynamic(() => import('./ShaderPreview'), { ssr: false });
 const CodePenDemo = dynamic(() => import('./CodePenDemo'), { ssr: false });
 const SqlSimulator = dynamic(() => import('./SqlSimulator'), { ssr: false });
+const FunctionPlotter = dynamic(() => import('./FunctionPlotter'), { ssr: false });
 
 
 
@@ -530,6 +531,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     CodePenDemo,
     codependemo: CodePenDemo,
     SqlSimulator,
+    FunctionPlotter,
   }), [resolveImagePath, lightbox]);
 
   if (isMdxCompiled && CompiledMDX) {

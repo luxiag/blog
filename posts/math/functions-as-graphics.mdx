@@ -1,0 +1,374 @@
+﻿---
+title: '函数即图形：图形学数学的第一层基石'
+date: '2026-07-16'
+description: '图形学中每一个函数都对应一条曲线，每一条曲线都对应一种视觉效果。本文从幂、绝对值、取模到 smoothstep、mix，帮你建立对函数图像的直觉——看到一个函数名，脑子里就浮现出它的曲线形状。'
+tags: ['Math', 'Graphics', 'GLSL', 'Functions']
+---
+
+# 函数即图形：图形学数学的第一层基石
+
+你可能觉得"加减乘除谁不会？"——但在图形学里，同样的算术，含义完全不同。一个 `1.0 - x` 不是简单的减法，而是"反色"；一个 `x * x` 不是简单的乘法，而是"让暗的更暗、亮的更亮"。
+
+这一层的目标不是学会计算，而是**建立对函数图像的直觉**。当你看到一个函数名，脑子里应该立刻浮现出它的曲线形状——这才是图形学数学的入门标准。
+
+---
+
+## 一、 幂与开方：控制对比度的旋钮
+
+**幂运算** $x^n$ 是图形学中最常用的"曲线塑形器"。
+
+- $n > 1$（如 $x^2$, $x^3$）：曲线向下弯。**暗的更暗，亮的稍微更亮**。用来增强对比度。
+- $n < 1$（如 $\sqrt{x}$, $x^{0.5}$）：曲线向上弯。**暗的变亮，亮的几乎不变**。用来提亮阴影。
+- $n = 1$：就是 $y = x$，一条直线，什么都没改。
+
+
+<FunctionPlotter
+  xMin={0} xMax={1.1} yMin={-0.1} yMax={1.2}
+  expressions={[
+    { expr: "x^(n*1.5)", color: "#ff6b6b" },
+    { expr: "x^n", color: "#ffd93d" },
+    { expr: "x", color: "#6bcb77" },
+    { expr: "x^(1/n)", color: "#4d96ff" },
+  ]}
+  paramExpr="n" paramMin={0.3} paramMax={4} paramStep={0.1} paramDefault={2}
+/>
+
+
+**典型用途**：
+
+- `pow(x, 2.2)`：Gamma 校正，把线性颜色转到 sRGB 空间（让画面看起来"正确"）
+- `pow(x, 1.0/2.2)`：反 Gamma 校正，把 sRGB 转回线性空间（光照计算前必须做）
+- `x * x`：快速计算高光衰减（比 `pow(x, 2)` 更快）
+
+**开方** $\sqrt{x}$ 就是 $x^{0.5}$，曲线方向相反。最经典的用途是**距离公式**：
+
+$$ \text{distance} = \sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2} $$
+
+在 GLSL 中直接用 `length()`，但底层就是这个公式。
+
+---
+
+## 二、 绝对值：镜像对称的造物主
+
+$\text{abs}(x)$ 把负数翻到正数，几何上就是**把左半边的曲线镜像到右半边**。
+
+这个"镜像"操作在 Shader 里极其常用——它让你只需要定义一个形状的一半，另一半自动对称。
+
+
+<FunctionPlotter
+  xMin={-2} xMax={3} yMin={-1} yMax={3}
+  expressions={[{ expr: "abs(x-1)", color: "#4d96ff" }]}
+/>
+
+
+**典型用途**：
+
+- `abs(x - center)`：计算到某点的对称距离，SDF 的基础操作
+- `abs(uv.x - 0.5)`：计算到画布中心的水平距离，常用于画对称图形
+- `abs(dot(N, L))`：忽略法线朝向，双面照明
+
+```glsl
+// 用 abs 画一个对称的 V 形
+float vShape = abs(uv.x - 0.5) * 2.0;
+```
+
+---
+
+## 三、 取模：无限复制的复印机
+
+$\text{mod}(x, period)$ 把一个值限制在 $[0, period)$ 范围内，超出就从头开始。
+
+这就像一台复印机：你画一个图案，取模让它无限重复。
+
+
+<FunctionPlotter
+  xMin={-1} xMax={3} yMin={-0.5} yMax={1.5}
+  expressions={[{ expr: "fract(x/p)*p", color: "#ff6b6b" }]}
+  paramExpr="p" paramMin={0.3} paramMax={2} paramStep={0.1} paramDefault={1}
+/>
+
+
+**典型用途**：
+
+- `mod(uv.x, 0.2)`：纹理水平重复，每 0.2 一个周期
+- `mod(time, 2.0 * PI)`：让动画循环播放
+- `fract(x)` = `mod(x, 1.0)`：GLSL 中更常用的写法，只保留小数部分
+
+```glsl
+// 网格平铺：把 UV 拆成 10x10 的小格子
+vec2 tiledUV = fract(uv * 10.0);
+// 在每个小格子内画同样的圆
+float circle = 1.0 - step(0.3, length(tiledUV - 0.5));
+```
+
+---
+
+## 四、 符号函数与阶跃函数：硬边界
+
+这两个函数是"判断"的基础——把连续的数值变成离散的 0/1 决策。
+
+**sign(x)**：判断正负。正数返回 1，负数返回 -1，零返回 0。
+
+**step(edge, x)**：判断是否超过阈值。$x < \text{edge}$ 返回 0，$x \geq \text{edge}$ 返回 1。
+
+
+
+<FunctionPlotter
+  xMin={-3} xMax={3} yMin={-2} yMax={2}
+  expressions={[
+    { expr: "sign(x)", color: "#4d96ff" },
+    { expr: "step(p, x)", color: "#ffd93d" },
+  ]}
+  paramExpr="edge" paramMin={0} paramMax={2} paramStep={0.1} paramDefault={0.5}
+/>
+
+
+
+**典型用途**：
+
+- `step(0.5, uv.x)`：画面的左半黑右半白，最简单的硬分割
+- `sign(dot(N, L))`：判断光在正面还是背面（-1/0/1）
+- `step(distance, radius)`：画硬边圆（0 = 圆外，1 = 圆内）
+
+:::warning step 的锯齿问题
+`step` 产生的是绝对硬边，在像素级别会产生锯齿（Aliasing）。在最终输出时，应该优先使用 `smoothstep` 替代，只有在确实需要硬边（如二值遮罩）时才用 `step`。
+:::
+
+---
+
+## 五、 smoothstep：图形学最重要的函数
+
+如果只能记住一个函数，记住 `smoothstep`。
+
+它解决的问题是：**如何让一条硬边界变柔和？**
+
+`smoothstep(edge0, edge1, x)` 在 `edge0` 到 `edge1` 之间生成一条 **S 型平滑曲线**（Hermite 插值），外部是硬的 0 或 1。
+
+$$ \text{smoothstep}(e_0, e_1, x) = \begin{cases} 0 & x \leq e_0 \\ t^2(3 - 2t) & e_0 < x < e_1 \\ 1 & x \geq e_1 \end{cases} $$
+
+其中 $t = \frac{x - e_0}{e_1 - e_0}$。
+
+
+<FunctionPlotter
+  xMin={-0.5} xMax={1.5} yMin={-0.2} yMax={1.3}
+  expressions={[
+    { expr: "smoothstep(p, min(p+0.2, 1.0), x)", color: "#6bcb77" },
+    { expr: "step(p, x)", color: "#ff6b6b" },
+  ]}
+  paramExpr="edge0" paramMin={0} paramMax={0.8} paramStep={0.05} paramDefault={0.4}
+/>
+
+
+注意那条 S 曲线的形状：**在两端（0 和 1 附近）变化缓慢，中间变化快**。这意味着过渡区的开始和结束都是柔和的，没有突兀的感觉。
+
+**典型用途**（几乎每个 Shader 都会用到）：
+
+```glsl
+// 1. 画柔和边缘的圆（抗锯齿）
+float d = length(uv - center);
+float circle = smoothstep(radius, radius - 0.01, d);
+
+// 2. 混合两种颜色，在某个区域过渡
+vec3 color = mix(colorA, colorB, smoothstep(0.4, 0.6, uv.x));
+
+// 3. 消除锯齿（Anti-Aliasing）
+// pixelWidth 是一个像素的宽度
+float edge = smoothstep(threshold - pixelWidth, threshold + pixelWidth, value);
+```
+
+:::important smoothstep 的常见陷阱
+1. **edge0 必须小于 edge1**：如果反过来，结果会反转（但不会有错误提示）
+2. **过渡区太窄会退化成 step**：如果 `edge1 - edge0` 接近像素宽度，过渡效果消失
+3. **不要在循环变量里用它**：$t^2(3-2t)$ 的导数在 $t=0$ 和 $t=1$ 处为 0，可能导致动画在起止点"卡住"
+:::
+
+<ShaderPreview title="smoothstep vs step 对比" code={`
+varying vec2 vUv;
+
+void main() {
+    float x = vUv.x;
+
+    // 上半部分：硬切 (step)
+    float hard = step(0.5, x);
+
+    // 下半部分：软切 (smoothstep)，在 0.4 到 0.6 之间平滑过渡
+    float soft = smoothstep(0.4, 0.6, x);
+
+    // 中间分隔线
+    float divider = smoothstep(0.495, 0.505, abs(vUv.y - 0.5));
+
+    // 上半 step，下半 smoothstep
+    float val = (vUv.y > 0.5) ? hard : soft;
+
+    vec3 colStep = vec3(0.9, 0.3, 0.3);
+    vec3 colSoft = vec3(0.3, 0.8, 0.4);
+    vec3 color = (vUv.y > 0.5) ? colStep * val : colSoft * val;
+    color = mix(color, vec3(1.0), divider * 0.6);
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+---
+
+## 六、 线性插值 mix / lerp：万物皆可过渡
+
+`mix(a, b, t)` 是图形学的**万能胶水**——任何两个值之间需要过渡，就用它。
+
+$$ \text{mix}(a, b, t) = a \cdot (1 - t) + b \cdot t $$
+
+- $t = 0$：结果是 $a$
+- $t = 1$：结果是 $b$
+- $t = 0.5$：结果是 $a$ 和 $b$ 的中点
+
+
+<FunctionPlotter
+  xMin={-0.1} xMax={1.1} yMin={-0.1} yMax={1.2}
+  expressions={[{ expr: "mix(0, 1, x)", color: "#6bcb77" }]}
+  editable={false}
+/>
+
+
+它的本质就是一条**直线**——从 $a$ 到 $b$ 的最短路径。
+
+**典型用途**：
+
+```glsl
+// 1. 颜色渐变
+vec3 skyColor = mix(vec3(0.2, 0.4, 0.8), vec3(1.0, 0.9, 0.7), uv.y);
+
+// 2. 动画位移
+vec3 pos = mix(startPos, endPos, progress);
+
+// 3. 配合 smoothstep 实现区域过渡
+float mask = smoothstep(0.4, 0.6, uv.x);
+vec3 color = mix(leftColor, rightColor, mask);
+
+// 4. t 可以超过 0~1 范围（外插）
+// 但通常不推荐，因为结果不可预测
+```
+
+:::tip mix + smoothstep 是黄金搭档
+`mix(A, B, smoothstep(e0, e1, x))` 是图形学中最常见的模式：**用 smoothstep 生成一个 0→1 的过渡系数，再用 mix 在两个值之间插值**。只要看到"从 A 过渡到 B"，就写这个组合。
+:::
+
+<ShaderPreview title="mix 颜色插值" code={`
+varying vec2 vUv;
+
+void main() {
+    vec3 red = vec3(1.0, 0.2, 0.1);
+    vec3 blue = vec3(0.1, 0.3, 1.0);
+
+    // 随 X 轴从左到右，从红平滑过渡到蓝
+    vec3 color = mix(red, blue, vUv.x);
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+---
+
+## 七、 反函数与复合函数：换个角度看世界
+
+**反函数** 就是"倒过来想"。在图形学中，最常见的反函数思维：
+
+| 操作 | 反操作 | 含义 |
+|------|--------|------|
+| `x` | `1.0 - x` | 反色 / 反转 |
+| `pow(x, 2.2)` | `pow(x, 1.0/2.2)` | Gamma 编码 / 解码 |
+| `exp(x)` | `log(x)` | 指数增长 / 对数衰减 |
+| `mix(a, b, t)` | 反推 $t$：$\frac{x - a}{b - a}$ | 从结果反算比例 |
+
+**复合函数** 就是把函数套函数，这在 Shader 中无处不在：
+
+```glsl
+// 由内而外读：
+// 1. uv * 3.0 → 把 UV 放大 3 倍
+// 2. fract(...) → 取小数部分，实现平铺
+// 3. abs(...) → 镜像对称
+// 4. smoothstep(...) → 柔化边缘
+float pattern = smoothstep(0.5, 0.48, abs(fract(uv * 3.0) - 0.5));
+```
+
+这种"俄罗斯套娃"式的写法是 Shader 的特色。**从内向外读**，每层做一件简单的事，组合起来就是复杂的效果。
+
+<ShaderPreview title="复合函数：平铺对称网格" code={`
+varying vec2 vUv;
+
+void main() {
+    vec2 uv = vUv;
+
+    // 1. uv * 4.0 → 把 UV 放大 4 倍
+    vec2 scaled = uv * 4.0;
+
+    // 2. fract(...) → 取小数部分，实现 4×4 平铺
+    vec2 tiled = fract(scaled);
+
+    // 3. abs(... - 0.5) → 镜像对称，让每个格子中心对称
+    vec2 mirrored = abs(tiled - 0.5);
+
+    // 4. smoothstep → 柔化边缘，画出网格线
+    float d = max(mirrored.x, mirrored.y);
+    float line = smoothstep(0.42, 0.40, d);
+
+    vec3 bg = vec3(0.08, 0.08, 0.15);
+    vec3 lineColor = vec3(0.3, 0.7, 1.0);
+
+    gl_FragColor = vec4(mix(bg, lineColor, line), 1.0);
+}
+`} />
+
+---
+
+## 八、 对数与指数：衰减与曝光
+
+$\exp(x)$ 和 $\log(x)$ 互为反函数。它们的曲线特征：
+
+- **指数函数** $e^x$：缓慢起步，然后**爆炸式增长**。用来模拟衰减（距离越远，光照越弱——反过来想就是指数衰减）。
+- **对数函数** $\log(x)$：快速起步，然后**增长越来越慢**。用来模拟感知（人眼对亮度的感知是对数的）。
+
+
+<FunctionPlotter
+  xMin={-1} xMax={3} yMin={-2} yMax={8}
+  expressions={[
+    { expr: "exp(x)", color: "#ff6b6b" },
+    { expr: "x>0.01?log(x):NaN", color: "#4d96ff" },
+  ]}
+/>
+
+
+**典型用途**：
+
+- `exp(-distance * decay)`：光照衰减，距离越远亮度指数下降
+- `log(x)`：HDR 到 LDR 的对数色调映射
+- `pow(2.0, x)`：用 2 的幂代替 $e^x$，计算更快（位移代替乘法）
+- `1.0 - exp(-exposure * luminance)`：曝光公式，模拟相机的响应曲线
+
+---
+
+## 算术与函数速查表
+
+| 函数 | 图像形状 | 一句话直觉 | GLSL |
+|------|----------|-----------|------|
+| $x^n,\ n>1$ | 下弯曲线 | 暗的更暗 | `pow(x, n)` |
+| $x^n,\ n<1$ | 上弯曲线 | 暗的变亮 | `pow(x, n)` |
+| $\text{abs}(x)$ | V 形 | 镜像对称 | `abs(x)` |
+| $\text{mod}(x, p)$ | 锯齿波 | 无限重复 | `mod(x, p)` / `fract(x)` |
+| $\text{sign}(x)$ | 阶梯 (-1/0/1) | 正负判断 | `sign(x)` |
+| $\text{step}(e, x)$ | 一步跳 (0→1) | 硬边界 | `step(e, x)` |
+| $\text{smoothstep}$ | S 曲线 (0→1) | 柔和边界 | `smoothstep(e0, e1, x)` |
+| $\text{mix}(a,b,t)$ | 直线 (a→b) | 万能插值 | `mix(a, b, t)` |
+| $\exp(x)$ | 爆炸增长 | 衰减（反过来用） | `exp(x)` |
+| $\log(x)$ | 越来越慢 | 感知曲线 | `log(x)` |
+
+> **自检**：遮住右边，看到函数名你能立刻画出它的曲线吗？`smoothstep` 的 S 曲线在两端是平的还是陡的？`mix` 在 $t=0.3$ 时，结果更接近 $a$ 还是 $b$？如果犹豫了，回头再看一遍对应章节。
+
+---
+
+## 小结
+
+图形学数学的第一层，核心只有一件事：**把函数当成图形来理解**。
+
+每一个函数都对应一条曲线，每一条曲线都对应一种视觉效果——`pow` 控制明暗对比，`abs` 创造镜像对称，`fract` 实现无限平铺，`step` 画出硬边界，`smoothstep` 让边界变柔和，`mix` 在两个值之间架起桥梁。而复合函数则是把这些简单工具像积木一样拼装，从内向外逐层构建出复杂图案。
+
+当你能做到"看到函数名，脑子里就浮现曲线形状"时，这一层就算通关了。接下来要做的就是拿起 GLSL，用这些函数去画画——图形学的乐趣，正是从这一刻开始的。
