@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, IBM_Plex_Mono, Noto_Serif_SC } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import Header from "@/components/Header";
 import BambooRuler from "@/components/BambooRuler";
@@ -16,22 +16,29 @@ export const viewport: Viewport = {
   ],
 };
 
-const inter = Inter({
-  subsets: ["latin"],
+const inter = localFont({
+  src: [
+    { path: "./fonts/inter-latin-400-normal.woff2", style: "normal", weight: "400" },
+    { path: "./fonts/inter-latin-700-normal.woff2", style: "normal", weight: "700" },
+  ],
   variable: "--font-inter",
   display: 'swap',
 });
 
-const ibmPlexMono = IBM_Plex_Mono({
-  weight: ["300", "400", "500", "600", "700"],
-  subsets: ["latin"],
+const ibmPlexMono = localFont({
+  src: [
+    { path: "./fonts/ibm-plex-mono-latin-300-normal.woff2", style: "normal", weight: "300" },
+    { path: "./fonts/ibm-plex-mono-latin-400-normal.woff2", style: "normal", weight: "400" },
+    { path: "./fonts/ibm-plex-mono-latin-500-normal.woff2", style: "normal", weight: "500" },
+    { path: "./fonts/ibm-plex-mono-latin-600-normal.woff2", style: "normal", weight: "600" },
+    { path: "./fonts/ibm-plex-mono-latin-700-normal.woff2", style: "normal", weight: "700" },
+  ],
   variable: "--font-ibm-plex-mono",
   display: 'swap',
 });
 
-const notoSerifSC = Noto_Serif_SC({
-  weight: ["400", "500", "600", "700"],
-  subsets: ["latin"],
+const notoSerifSC = localFont({
+  src: "./fonts/ZCOOLKuaiLe-Regular.ttf",
   variable: "--font-noto-serif-sc",
   display: 'swap',
 });
