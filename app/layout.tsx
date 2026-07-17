@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import localFont from "next/font/local";
+import { Inter, IBM_Plex_Mono, Noto_Serif_SC } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
 import BambooRuler from "@/components/BambooRuler";
@@ -16,32 +16,26 @@ export const viewport: Viewport = {
   ],
 };
 
-const inter = localFont({
-  src: [
-    { path: "./fonts/inter-latin-400-normal.woff2", style: "normal", weight: "400" },
-    { path: "./fonts/inter-latin-700-normal.woff2", style: "normal", weight: "700" },
-  ],
+const inter = Inter({
+  subsets: ["latin"],
   variable: "--font-inter",
   display: 'swap',
 });
 
-const ibmPlexMono = localFont({
-  src: [
-    { path: "./fonts/ibm-plex-mono-latin-300-normal.woff2", style: "normal", weight: "300" },
-    { path: "./fonts/ibm-plex-mono-latin-400-normal.woff2", style: "normal", weight: "400" },
-    { path: "./fonts/ibm-plex-mono-latin-500-normal.woff2", style: "normal", weight: "500" },
-    { path: "./fonts/ibm-plex-mono-latin-600-normal.woff2", style: "normal", weight: "600" },
-    { path: "./fonts/ibm-plex-mono-latin-700-normal.woff2", style: "normal", weight: "700" },
-  ],
+const ibmPlexMono = IBM_Plex_Mono({
+  weight: ["300", "400", "500", "600", "700"],
+  subsets: ["latin"],
   variable: "--font-ibm-plex-mono",
   display: 'swap',
 });
 
-const notoSerifSC = localFont({
-  src: "./fonts/ZCOOLKuaiLe-Regular.ttf",
+const notoSerifSC = Noto_Serif_SC({
+  weight: ["400", "500", "600", "700"],
+  subsets: ["latin"],
   variable: "--font-noto-serif-sc",
   display: 'swap',
 });
+
 
 export const metadata: Metadata = {
   title: {
@@ -54,7 +48,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "zh_CN",
-    url: "https://yourblog.com",
+    url: "https://luxiag.vercel.app/",
     title: "我的博客",
     description: "分享技术见解、学习心得和思考感悟的个人博客",
     siteName: "我的博客",
