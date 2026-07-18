@@ -1,0 +1,1201 @@
+---
+title: 'Shell 脚本编程：让 Linux 替你干活'
+date: '2026-02-09'
+excerpt: '一条命令只能做一件事，但把命令串成脚本，就能让 Linux 替你自动完成重复工作。本文从变量与条件判断讲起，到循环、函数与安全模式，最后通过三个实战脚本（批量备份、日志清理、健康检查），带你从"会敲命令"跃升为"会写脚本"。'
+tags: ['linux', 'shell', 'bash', 'scripting', 'devops']
+---
+
+# Shell 脚本编程：让 Linux 替你干活
+
+在上一篇[《深入浅出 Linux》](/posts/linux/linux-fundamentals)中，我们学会了用管道把命令串联起来、用 grep/awk/sed 处理文本、用 find 定位文件、用 ps/top 管理进程。这些技能已经让你能完成很多复杂操作——但每次都要手动输入一长串命令，既容易出错，也无法复用。
+
+**脚本就是把这些一次性命令固化成可重复执行的程序。** 把你每天手动做的备份、清理、检查工作写成脚本，配合 cron 定时任务，就能让 Linux 在凌晨自动替你干活。
+
+本文从零开始讲 Shell 脚本编程，覆盖变量、条件判断、循环、函数、安全模式，最后给出三个可以直接用在生产环境的实战脚本。适合已经熟悉基本 Linux 命令、想迈入自动化门槛的读者。
+
+---
+
+## 1. 从命令到脚本：第一个 Shell 脚本
+
+### 1.1 什么是 Shell 脚本
+
+Shell 脚本本质上就是一个文本文件，里面按顺序写着你本来要手动输入的命令。Bash 逐行读取这个文件并执行，就像有人在键盘上依次敲下每一行一样。
+
+### 1.2 Shebang：告诉系统用谁执行
+
+脚本第一行 `#!/bin/bash` 叫做 **shebang**（也叫 hashbang），它的作用是告诉操作系统：请用 `/bin/bash` 来解释这个文件。
+
+```bash
+#!/bin/bash
+echo "Hello, Shell Script!"
+```
+
+:::tip 为什么不写 #!/bin/sh
+`/bin/sh` 是 POSIX 标准的 Shell，功能比 Bash 少。如果你的脚本用到了 Bash 特有语法（如 `[[ ]]`、数组），用 `/bin/sh` 执行会报错。除非你有意写可移植脚本，否则一律用 `#!/bin/bash`。
+:::
+
+### 1.3 创建、授权、执行
+
+```bash
+# 创建脚本文件
+cat > hello.sh << 'EOF'
+#!/bin/bash
+echo "Hello, Shell Script!"
+EOF
+
+# 添加可执行权限
+chmod +x hello.sh
+
+# 三种执行方式
+./hello.sh           # 方式1：作为可执行程序运行（需要 shebang 和 +x 权限）
+bash hello.sh        # 方式2：显式用 bash 解释执行（不需要 +x 权限）
+source hello.sh      # 方式3：在当前 shell 环境中执行（会影响当前环境变量）
+```
+
+三种方式的区别至关重要：
+
+| 方式 | 子进程？ | 需要 shebang？ | 需要 +x？ | 影响当前环境？ |
+|------|---------|---------------|----------|--------------|
+| `./script.sh` | 是（新子进程） | 是 | 是 | 否 |
+| `bash script.sh` | 是（新子进程） | 否 | 否 | 否 |
+| `source script.sh` | 否（当前进程） | 否 | 否 | **是** |
+
+:::warning source 的副作用
+`source` 在当前 shell 中执行脚本，脚本里的变量修改、目录切换（`cd`）都会影响你当前的终端环境。通常只用于加载配置文件（如 `source ~/.bashrc`），执行业务脚本时应该用前两种方式。
+:::
+
+---
+
+## 2. 变量与字符串
+
+变量是脚本的核心——没有变量，脚本就只是命令的复读机；有了变量，脚本才能根据不同输入做出不同行为。
+
+### 2.1 变量赋值与使用
+
+```bash
+#!/bin/bash
+
+name="Linux"
+# 注意：等号两边不能有空格！
+# name = "Linux"  ← 错误，Bash 会把 name 当命令执行
+
+echo $name
+echo "Hello, ${name}!"
+```
+
+**核心规则：赋值时等号两边不能有空格。** 这是最常踩的坑——`name = "Linux"` 会被 Bash 解析为"执行命令 `name`，参数是 `=` 和 `Linux`"。
+
+### 2.2 读取用户输入
+
+```bash
+#!/bin/bash
+
+echo "What is your name?"
+read username
+echo "Welcome, ${username}!"
+
+# read 也可以带提示符（-p 参数）
+read -p "Enter your age: " age
+echo "You are ${age} years old."
+
+# 静默输入（用于密码）
+read -s -p "Enter password: " password
+echo
+echo "Password received (length: ${#password})"
+```
+
+### 2.3 字符串操作
+
+Bash 内置了丰富的字符串处理能力，很多场景下不需要再调用 `awk` 或 `sed`：
+
+```bash
+#!/bin/bash
+
+str="Hello World"
+
+# 字符串长度
+echo ${#str}                    # 11
+
+# 子字符串（从索引 0 开始，取 5 个字符）
+echo ${str:0:5}                 # Hello
+
+# 从第 6 个字符取到末尾
+echo ${str:6}                   # World
+
+# 从右边截取（取最后 5 个字符）
+echo ${str: -5}                 # World（注意冒号后有空格）
+
+# 替换（只替换第一个匹配）
+echo ${str/World/Bash}          # Hello Bash
+
+# 替换所有匹配
+file="photo.jpg.bak.jpg"
+echo ${file//jpg/png}           # photo.png.bak.png
+
+# 删除前缀
+filepath="/home/user/docs/report.txt"
+echo ${filepath#/home/user}     # /docs/report.txt（删除最短前缀）
+echo ${filepath##*/}            # report.txt（删除最长前缀，取文件名）
+
+# 删除后缀
+filename="report.txt"
+echo ${filename%.txt}           # report（删除最短后缀）
+echo ${filename##*.}            # txt（取扩展名）
+```
+
+### 2.4 特殊变量
+
+Bash 预定义了一组特殊变量，在脚本中极为常用：
+
+```bash
+#!/bin/bash
+
+# 演示所有特殊变量
+echo "Script name: $0"          # 脚本自身的名称
+echo "First arg: $1"            # 第 1 个参数
+echo "Second arg: $2"           # 第 2 个参数
+echo "All args: $@"             # 所有参数（各自独立）
+echo "All args as one: $*"      # 所有参数（合为一个字符串）
+echo "Arg count: $#"            # 参数个数
+echo "Last exit code: $?"       # 上一条命令的退出码
+echo "Current PID: $$"          # 当前脚本的进程 ID
+```
+
+执行 `./special.sh foo bar baz`，输出：
+
+```
+Script name: ./special.sh
+First arg: foo
+Second arg: bar
+All args: foo bar baz
+All args as one: foo bar baz
+Arg count: 3
+Last exit code: 0
+Current PID: 12345
+```
+
+`$@` 和 `$*` 的区别在循环中体现：
+
+```bash
+#!/bin/bash
+
+echo 'Using $*:'
+for arg in "$*"; do
+  echo "  $arg"
+done
+
+echo 'Using $@:'
+for arg in "$@"; do
+  echo "  $arg"
+done
+```
+
+执行 `./args.sh "hello world" foo`：
+
+```
+Using $*:
+  hello world foo        ← 所有参数合为一个字符串
+Using $@:
+  hello world            ← 各参数保持独立
+  foo
+```
+
+:::tip 始终用双引号包裹 $@
+循环中写 `for arg in "$@"` 而不是 `for arg in $@`。不加双引号时，含空格的参数会被拆散。
+:::
+
+---
+
+## 3. 条件判断
+
+条件判断让脚本拥有"思考"能力——根据不同情况走不同路径。
+
+### 3.1 if/elif/else/fi
+
+```bash
+#!/bin/bash
+
+age=25
+
+if [ "$age" -ge 60 ]; then
+  echo "Senior"
+elif [ "$age" -ge 18 ]; then
+  echo "Adult"
+else
+  echo "Minor"
+fi
+```
+
+注意 `if` 和 `then` 的配合：`then` 必须换行或用 `;` 隔开。`fi` 是 `if` 的倒写，表示条件块结束。
+
+### 3.2 测试操作符一览
+
+**文件测试：**
+
+| 操作符 | 含义 |
+|--------|------|
+| `-e file` | 文件存在（不限类型） |
+| `-f file` | 存在且是普通文件 |
+| `-d file` | 存在且是目录 |
+| `-r file` | 文件可读 |
+| `-w file` | 文件可写 |
+| `-x file` | 文件可执行 |
+| `-s file` | 文件存在且非空 |
+
+**字符串测试：**
+
+| 操作符 | 含义 |
+|--------|------|
+| `-z str` | 字符串为空 |
+| `-n str` | 字符串非空 |
+| `str1 = str2` | 字符串相等 |
+| `str1 != str2` | 字符串不等 |
+
+**整数比较：**
+
+| 操作符 | 含义 |
+|--------|------|
+| `-eq` | 等于 |
+| `-ne` | 不等于 |
+| `-gt` | 大于 |
+| `-ge` | 大于等于 |
+| `-lt` | 小于 |
+| `-le` | 小于等于 |
+
+:::important 整数比较不要用 < > =
+`[ "$a" > "$b" ]` 不会报整数比较错误，而是做字符串的字典序比较——`[ 9 -gt 10 ]` 为假，但 `[ "9" \> "10" ]` 为真（因为 "9" 字典序在 "10" 之后）。整数比较一定要用 `-gt`、`-lt` 等。
+:::
+
+### 3.3 `[[ ]]` vs `[ ]` vs `test`
+
+```bash
+# 方式1：test 命令（最古老）
+if test "$age" -ge 18; then ...
+
+# 方式2：[ ] 是 test 的语法糖（POSIX 标准）
+if [ "$age" -ge 18 ]; then ...
+
+# 方式3：[[ ]] 是 Bash 增强版（推荐）
+if [[ $age -ge 18 ]]; then ...
+```
+
+`[[ ]]` 相比 `[ ]` 的优势：
+
+- 变量不需要加双引号保护（`[[ $str = "" ]]` 安全，`[ $str = "" ]` 在 str 为空时会语法错误）
+- 支持 `&&`、`||`、`!` 逻辑运算符（`[ ]` 只能用 `-a`、`-o`）
+- 支持 `=~` 正则匹配
+- 支持 `<`、`>` 字符串比较（不需要转义）
+
+```bash
+#!/bin/bash
+
+read -p "Enter an email: " email
+
+if [[ $email =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+  echo "Valid email format"
+else
+  echo "Invalid email format"
+fi
+```
+
+:::note 可移植性
+如果你的脚本可能在 dash 或其他非 Bash 的 shell 上运行，应该用 `[ ]`。如果确定运行在 Bash 上，优先用 `[[ ]]`。
+:::
+
+### 3.4 case/esac：多分支匹配
+
+当你需要判断一个变量可能等于多个值时，`case` 比 `if/elif` 链更清晰：
+
+```bash
+#!/bin/bash
+
+read -p "Enter file extension: " ext
+
+case "$ext" in
+  jpg|jpeg|png|gif)
+    echo "Image file"
+    ;;
+  mp4|avi|mkv)
+    echo "Video file"
+    ;;
+  mp3|flac|wav)
+    echo "Audio file"
+    ;;
+  *)
+    echo "Unknown file type"
+    ;;
+esac
+```
+
+每个分支以 `;;` 结束，`*)` 是默认分支（类似其他语言的 `default`）。`esac` 是 `case` 的倒写。
+
+### 3.5 完整示例：检查服务是否运行
+
+```bash
+#!/bin/bash
+
+read -p "Enter service name: " service
+
+if ! command -v systemctl &> /dev/null; then
+  echo "systemctl not found, trying service command..."
+  if service "$service" status &> /dev/null; then
+    echo "Service '$service' is running."
+  else
+    echo "Service '$service' is NOT running."
+  fi
+else
+  case "$(systemctl is-active "$service" 2>/dev/null)" in
+    active)
+      echo "Service '$service' is running (active)."
+      ;;
+    inactive)
+      echo "Service '$service' is stopped (inactive)."
+      ;;
+    failed)
+      echo "Service '$service' has failed! Check 'journalctl -u $service'."
+      ;;
+    *)
+      echo "Unable to determine status of '$service'."
+      ;;
+  esac
+fi
+```
+
+---
+
+## 4. 循环
+
+循环让脚本拥有重复执行的能力——处理一批文件、遍历一组参数、等待某个条件满足。
+
+### 4.1 for 循环
+
+**列表迭代：**
+
+```bash
+#!/bin/bash
+
+for fruit in apple banana cherry; do
+  echo "I like $fruit"
+done
+```
+
+**遍历文件：**
+
+```bash
+#!/bin/bash
+
+for file in /var/log/*.log; do
+  echo "Processing: $file ($(wc -l < "$file") lines)"
+done
+```
+
+**C 风格 for 循环（适合数值迭代）：**
+
+```bash
+#!/bin/bash
+
+for ((i = 1; i <= 10; i++)); do
+  echo "Count: $i"
+done
+```
+
+### 4.2 while 循环
+
+**计数器：**
+
+```bash
+#!/bin/bash
+
+count=1
+while [[ $count -le 5 ]]; do
+  echo "Round $count"
+  ((count++))
+done
+```
+
+**逐行读取文件：**
+
+```bash
+#!/bin/bash
+
+while IFS= read -r line; do
+  echo "Line: $line"
+done < /etc/hostname
+```
+
+:::tip IFS= 和 -r 不能省略
+- `IFS=` 防止行首尾的空白被截断
+- `-r` 防止反斜杠被当作转义符处理
+
+这是逐行读取文件的标准写法，务必记住。
+:::
+
+### 4.3 until 循环
+
+`until` 是 `while` 的反面——条件为假时执行，为真时停止：
+
+```bash
+#!/bin/bash
+
+response=""
+until [[ "$response" == "yes" || "$response" == "no" ]]; do
+  read -p "Do you agree? (yes/no): " response
+done
+
+echo "You chose: $response"
+```
+
+### 4.4 break 与 continue
+
+```bash
+#!/bin/bash
+
+# break：跳出整个循环
+for i in 1 2 3 4 5; do
+  if [[ $i -eq 3 ]]; then
+    break
+  fi
+  echo "i = $i"
+done
+# 输出：i = 1, i = 2
+
+# continue：跳过本次，进入下一次
+for i in 1 2 3 4 5; do
+  if [[ $i -eq 3 ]]; then
+    continue
+  fi
+  echo "i = $i"
+done
+# 输出：i = 1, i = 2, i = 4, i = 5
+```
+
+### 4.5 完整示例：批量重命名文件
+
+```bash
+#!/bin/bash
+
+if [[ $# -lt 2 ]]; then
+  echo "Usage: $0 <old_extension> <new_extension>"
+  echo "Example: $0 txt md"
+  exit 1
+fi
+
+old_ext="$1"
+new_ext="$2"
+count=0
+
+for file in *."$old_ext"; do
+  if [[ ! -e "$file" ]]; then
+    echo "No .${old_ext} files found."
+    exit 0
+  fi
+
+  new_name="${file%."$old_ext"}.${new_ext}"
+  mv "$file" "$new_name"
+  echo "Renamed: $file -> $new_name"
+  ((count++))
+done
+
+echo "Done. $count file(s) renamed."
+```
+
+执行 `./rename.sh txt md` 会把当前目录所有 `.txt` 文件重命名为 `.md` 文件。
+
+---
+
+## 5. 函数
+
+当脚本变长，函数是组织代码的基本手段——把重复逻辑封装起来，让脚本更清晰、更易维护。
+
+### 5.1 定义与调用
+
+```bash
+#!/bin/bash
+
+greet() {
+  echo "Hello, $1!"
+}
+
+greet "Alice"
+greet "Bob"
+```
+
+函数定义必须在调用之前（Bash 是从上到下解释的）。函数名后跟 `()`，函数体用 `{}` 包裹。
+
+### 5.2 参数与返回值
+
+函数通过位置参数（`$1`、`$2`...）接收参数，通过 `return` 返回退出码（0-255 的整数）：
+
+```bash
+#!/bin/bash
+
+is_even() {
+  local num="$1"
+  if [[ $((num % 2)) -eq 0 ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+for n in 1 2 3 4 5; do
+  if is_even "$n"; then
+    echo "$n is even"
+  else
+    echo "$n is odd"
+  fi
+done
+```
+
+:::note return 不是 return value
+Shell 函数的 `return` 返回的是**退出码**（0 表示成功，非 0 表示失败），不是返回值。如果需要函数"返回"一个字符串，用 `echo` 输出，然后调用方用 `$(func)` 捕获：
+:::
+
+```bash
+#!/bin/bash
+
+get_absolute_path() {
+  local path="$1"
+  cd "$(dirname "$path")"
+  echo "$(pwd)/$(basename "$path")"
+  cd - > /dev/null
+}
+
+abs=$(get_absolute_path "../config.yaml")
+echo "Absolute path: $abs"
+```
+
+### 5.3 local 与作用域
+
+```bash
+#!/bin/bash
+
+global_var="I am global"
+
+demo() {
+  local local_var="I am local to demo()"
+  global_var="Modified inside function"
+  echo "Inside: local_var=$local_var, global_var=$global_var"
+}
+
+demo
+echo "Outside: local_var=$local_var, global_var=$global_var"
+```
+
+输出：
+
+```
+Inside: local_var=I am local to demo(), global_var=Modified inside function
+Outside: local_var=, global_var=Modified inside function
+```
+
+函数内的 `local` 变量不会污染外部，但未声明 `local` 的变量会修改全局作用域。**养成习惯：函数内的变量一律加 `local`。**
+
+### 5.4 完整示例：可复用的日志函数
+
+```bash
+#!/bin/bash
+
+LOG_FILE="/tmp/myapp.log"
+
+log() {
+  local level="$1"
+  local message="$2"
+  local timestamp
+  timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+  local entry="[$timestamp] [$level] $message"
+
+  case "$level" in
+    ERROR)
+      echo -e "\033[31m$entry\033[0m" >&2
+      ;;
+    WARN)
+      echo -e "\033[33m$entry\033[0m" >&2
+      ;;
+    INFO)
+      echo -e "\033[32m$entry\033[0m"
+      ;;
+    DEBUG)
+      echo -e "\033[36m$entry\033[0m"
+      ;;
+    *)
+      echo "$entry"
+      ;;
+  esac
+
+  echo "$entry" >> "$LOG_FILE"
+}
+
+log INFO "Application started"
+log WARN "Disk usage above 80%"
+log ERROR "Database connection failed"
+log DEBUG "Query execution time: 0.3s"
+```
+
+这个日志函数同时输出到终端（带颜色）和日志文件，`ERROR` 和 `WARN` 还会输出到 stderr，方便与其他输出分离。
+
+---
+
+## 6. 安全模式与最佳实践
+
+Shell 脚本有一个臭名昭著的特点：**默认太宽容。** 命令失败了？继续执行。变量拼错了？当作空字符串。管道中某个命令崩了？只看最后一个的退出码。这些"宽容"在自动化脚本中是灾难。
+
+### 6.1 set -e：出错即停
+
+```bash
+#!/bin/bash
+
+# 没有 set -e 时：
+mkdir /root/backup    # 这行会失败（权限不够）
+echo "Backup complete" # 但这行仍然会执行！输出误导信息
+```
+
+加上 `set -e`：
+
+```bash
+#!/bin/bash
+set -e
+
+mkdir /root/backup    # 失败 → 脚本立即退出
+echo "Backup complete" # 不会执行
+```
+
+### 6.2 set -u：未定义变量报错
+
+```bash
+#!/bin/bash
+
+# 没有 set -u 时：
+echo "Hello, $USERNAME"  # 拼错了变量名 → 输出 "Hello, "（空字符串）
+rm -rf "$HOMEDIR/backups" # $HOMEDIR 为空 → rm -rf /backups ← 灾难！
+```
+
+加上 `set -u`：
+
+```bash
+#!/bin/bash
+set -u
+
+echo "Hello, $USERNAMEE"  # 报错：USERNAMEE: unbound variable，脚本退出
+```
+
+### 6.3 set -o pipefail：管道中任何一步失败都算失败
+
+```bash
+#!/bin/bash
+set -e
+
+# 没有 pipefail 时：
+cat /nonexistent | grep "pattern" | wc -l
+# cat 失败了，但 wc -l 成功返回 0 → 整个管道退出码为 0 → set -e 不会触发
+echo "This still runs"
+```
+
+加上 `pipefail`：
+
+```bash
+#!/bin/bash
+set -eo pipefail
+
+cat /nonexistent | grep "pattern" | wc -l  # cat 失败 → 管道退出码非 0 → 脚本退出
+echo "This won't run"
+```
+
+### 6.4 组合使用：set -euo pipefail
+
+这是 Shell 脚本的事实标准安全头：
+
+```bash
+#!/bin/bash
+set -euo pipefail
+```
+
+| 选项 | 作用 | 防止的坑 |
+|------|------|---------|
+| `-e` | 命令失败即退出 | 错误被静默忽略 |
+| `-u` | 未定义变量报错 | 拼错变量名变成空字符串 |
+| `-o pipefail` | 管道任何步骤失败都报错 | 管道中前面的错误被吞掉 |
+
+:::important 所有生产脚本都应加上这一行
+除非你有意让脚本在错误后继续（比如检查某个可选命令是否存在），否则不要省略。不写 `set -euo pipefail` 的脚本就像不系安全带开车——大部分时候没事，出事就是大事。
+:::
+
+### 6.5 shellcheck：你的 Shell 脚本 linter
+
+即使加了安全模式，很多隐患仍靠人眼发现不了。`shellcheck` 是一个静态分析工具，能自动检测数百种常见错误：
+
+```bash
+# 安装
+sudo apt install shellcheck
+
+# 使用
+shellcheck myscript.sh
+```
+
+示例——shellcheck 能发现的问题：
+
+```bash
+#!/bin/bash
+# SC2086: Double quote to prevent globbing and word splitting
+echo $1                          # 应改为 echo "$1"
+
+# SC2006: Use $(...) instead of legacy backticks
+today=`date +%Y-%m-%d`           # 应改为 today=$(date +%Y-%m-%d)
+
+# SC2164: Use 'cd ... || exit' in case cd fails
+cd /tmp                          # 应改为 cd /tmp || exit 1
+
+# SC2034: var appears unused
+unused_var="hello"               # 变量定义后从未使用
+```
+
+### 6.6 防御性编程模式
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+# 模式1：检查必需命令是否存在
+for cmd in jq curl aws; do
+  if ! command -v "$cmd" &> /dev/null; then
+    echo "Error: Required command '$cmd' not found." >&2
+    exit 1
+  fi
+done
+
+# 模式2：cd 失败时退出
+cd /opt/myapp || { echo "Failed to cd to /opt/myapp" >&2; exit 1; }
+
+# 模式3：锁定脚本，防止并发执行
+LOCKFILE="/tmp/myapp.lock"
+if ! mkdir "$LOCKFILE" 2>/dev/null; then
+  echo "Another instance is already running." >&2
+  exit 1
+fi
+trap 'rm -rf "$LOCKFILE"' EXIT
+
+# 模式4：验证输入参数
+if [[ $# -ne 2 ]]; then
+  echo "Usage: $0 <source> <destination>" >&2
+  exit 1
+fi
+
+source_dir="$1"
+dest_dir="$2"
+
+if [[ ! -d "$source_dir" ]]; then
+  echo "Error: Source directory '$source_dir' does not exist." >&2
+  exit 1
+fi
+```
+
+---
+
+## 7. 实战脚本
+
+现在把前面学到的所有知识串起来，写三个真正能用在生产环境的脚本。
+
+### 7.1 批量备份脚本
+
+需求：备份指定目录，文件名带时间戳，保留最近 N 份，自动清理旧备份。
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+SOURCE_DIR="${1:?Usage: $0 <source_dir> [keep_count]}"
+KEEP_COUNT="${2:-5}"
+BACKUP_DIR="/backup"
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+BACKUP_NAME="backup_${TIMESTAMP}.tar.gz"
+
+if [[ ! -d "$SOURCE_DIR" ]]; then
+  echo "Error: Source directory '$SOURCE_DIR' does not exist." >&2
+  exit 1
+fi
+
+mkdir -p "$BACKUP_DIR"
+
+echo "Backing up '$SOURCE_DIR' ..."
+if ! tar -czf "${BACKUP_DIR}/${BACKUP_NAME}" -C "$(dirname "$SOURCE_DIR")" "$(basename "$SOURCE_DIR")" 2>/dev/null; then
+  echo "Error: Backup failed!" >&2
+  rm -f "${BACKUP_DIR}/${BACKUP_NAME}"
+  exit 1
+fi
+
+SIZE=$(du -sh "${BACKUP_DIR}/${BACKUP_NAME}" | cut -f1)
+echo "Backup created: ${BACKUP_NAME} (${SIZE})"
+
+count=$(find "$BACKUP_DIR" -name 'backup_*.tar.gz' | wc -l)
+if [[ $count -gt $KEEP_COUNT ]]; then
+  delete_count=$((count - KEEP_COUNT))
+  echo "Cleaning up old backups (keeping ${KEEP_COUNT}, removing ${delete_count})..."
+  find "$BACKUP_DIR" -name 'backup_*.tar.gz' -printf '%T+ %p\n' \
+    | sort \
+    | head -n "$delete_count" \
+    | awk '{print $2}' \
+    | xargs rm -f
+  echo "Cleanup done."
+fi
+
+echo "Backup completed successfully."
+```
+
+:::tip ${1:?message} 用法
+`${1:?Usage: ...}` 是一种简洁的参数校验写法——如果 `$1` 为空或未设置，脚本会输出冒号后的消息并退出（退出码 1）。比手动写 if 判断更紧凑。
+:::
+
+### 7.2 日志清理脚本
+
+需求：删除 N 天前的旧日志，支持 dry-run 模式（只显示将删除什么，不真删），备份重要日志后再删。
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+LOG_DIR="/var/log/app"
+DAYS="${1:-30}"
+DRY_RUN=false
+ARCHIVE_DIR="/var/log/archive"
+
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run)
+      DRY_RUN=true
+      ;;
+    --days=*)
+      DAYS="${arg#--days=}"
+      ;;
+    --help)
+      echo "Usage: $0 [--days=N] [--dry-run]"
+      echo "  --days=N    Delete logs older than N days (default: 30)"
+      echo "  --dry-run   Show what would be deleted without actually deleting"
+      exit 0
+      ;;
+  esac
+done
+
+if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
+  echo "Error: --days must be a positive integer, got '$DAYS'" >&2
+  exit 1
+fi
+
+if [[ ! -d "$LOG_DIR" ]]; then
+  echo "Error: Log directory '$LOG_DIR' does not exist." >&2
+  exit 1
+fi
+
+old_files=()
+while IFS= read -r -d '' file; do
+  old_files+=("$file")
+done < <(find "$LOG_DIR" -name '*.log' -mtime +"$DAYS" -print0)
+
+if [[ ${#old_files[@]} -eq 0 ]]; then
+  echo "No log files older than $DAYS days found."
+  exit 0
+fi
+
+total_size=0
+for file in "${old_files[@]}"; do
+  size=$(du -b "$file" | cut -f1)
+  total_size=$((total_size + size))
+  if $DRY_RUN; then
+    echo "[DRY RUN] Would delete: $file ($(numfmt --to=iec "$size"))"
+  fi
+done
+
+if $DRY_RUN; then
+  echo "[DRY RUN] Total: ${#old_files[@]} files, $(numfmt --to=iec "$total_size") would be freed."
+  exit 0
+fi
+
+mkdir -p "$ARCHIVE_DIR"
+ARCHIVE_NAME="logs_before_cleanup_$(date '+%Y%m%d_%H%M%S').tar.gz"
+tar -czf "${ARCHIVE_DIR}/${ARCHIVE_NAME}" -C "$LOG_DIR" \
+  $(find "$LOG_DIR" -name '*.log' -mtime +"$DAYS" -printf '%f ') 2>/dev/null || true
+
+echo "Archived old logs to ${ARCHIVE_DIR}/${ARCHIVE_NAME}"
+
+for file in "${old_files[@]}"; do
+  rm -f "$file"
+done
+
+echo "Deleted ${#old_files[@]} log files, freed $(numfmt --to=iec "$total_size")."
+```
+
+### 7.3 健康检查脚本
+
+需求：检查磁盘空间、内存使用、关键服务状态、负载，任何一项超标就发送告警。
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+DISK_THRESHOLD=80
+MEM_THRESHOLD=85
+LOAD_THRESHOLD=$(nproc)
+SERVICES=(nginx sshd cron)
+ALERT_EMAIL="admin@example.com"
+ALERT=false
+REPORT=""
+
+send_alert() {
+  local subject="$1"
+  local body="$2"
+  if command -v mail &> /dev/null; then
+    echo "$body" | mail -s "$subject" "$ALERT_EMAIL"
+  else
+    echo "ALERT (mail not configured): $subject"
+    echo "$body"
+  fi
+}
+
+check_disk() {
+  local section=""
+  section+="=== Disk Usage ===\n"
+  while IFS= read -r line; do
+    partition=$(echo "$line" | awk '{print $1}')
+    usage=$(echo "$line" | awk '{print $5}' | tr -d '%')
+    mount=$(echo "$line" | awk '{print $6}')
+    section+="  $partition ($mount): ${usage}%"
+
+    if [[ $usage -ge $DISK_THRESHOLD ]]; then
+      section+=" ⚠ EXCEEDED ${DISK_THRESHOLD}%\n"
+      ALERT=true
+    else
+      section+=" OK\n"
+    fi
+  done < <(df -h | grep '^/dev/')
+
+  REPORT+="$section"
+}
+
+check_memory() {
+  local section=""
+  section+="=== Memory Usage ===\n"
+  local total used pct
+  if command -v free &> /dev/null; then
+    read -r _ total used _ _ pct _ < <(free -m | grep '^Mem:')
+    pct=$(free | grep '^Mem:' | awk '{print $3/$2 * 100.0}' | cut -d. -f1)
+    section+="  Total: ${total}MB, Used: ${used}MB (${pct}%)\n"
+
+    if [[ $pct -ge $MEM_THRESHOLD ]]; then
+      section+="  ⚠ EXCEEDED ${MEM_THRESHOLD}%\n"
+      ALERT=true
+    else
+      section+="  OK\n"
+    fi
+  fi
+  REPORT+="$section"
+}
+
+check_load() {
+  local section=""
+  section+="=== System Load ===\n"
+  local load1 load5 load15
+  read -r load1 load5 load15 _ < /proc/loadavg
+  section+="  1min: ${load1}, 5min: ${load5}, 15min: ${load15} (cores: $(nproc))\n"
+
+  load_int=$(echo "$load1" | cut -d. -f1)
+  if [[ $load_int -ge $LOAD_THRESHOLD ]]; then
+    section+="  ⚠ 1-min load exceeds core count!\n"
+    ALERT=true
+  else
+    section+="  OK\n"
+  fi
+  REPORT+="$section"
+}
+
+check_services() {
+  local section=""
+  section+="=== Service Status ===\n"
+  for svc in "${SERVICES[@]}"; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+      section+="  $svc: Running\n"
+    else
+      section+="  $svc: ⚠ NOT RUNNING\n"
+      ALERT=true
+    fi
+  done
+  REPORT+="$section"
+}
+
+echo "Running health check at $(date '+%Y-%m-%d %H:%M:%S')..."
+echo
+
+check_disk
+check_memory
+check_load
+check_services
+
+echo -e "$REPORT"
+
+if $ALERT; then
+  HOSTNAME=$(hostname)
+  send_alert "[$HOSTNAME] Health Check Alert" "$(echo -e "$REPORT")"
+  echo "Alert sent to $ALERT_EMAIL"
+  exit 1
+else
+  echo "All checks passed."
+  exit 0
+fi
+```
+
+配合 cron 定时执行，每天早上 8 点检查一次：
+
+```bash
+0 8 * * * /opt/scripts/health-check.sh >> /var/log/health-check.log 2>&1
+```
+
+---
+
+## 8. 调试技巧
+
+脚本写出来了，但运行结果和预期不一样？以下方法帮你快速定位问题。
+
+### 8.1 bash -x：追踪执行过程
+
+`-x` 选项（xtrace）会在执行每条命令前先打印该命令（变量已展开），是调试的首选工具：
+
+```bash
+bash -x myscript.sh
+```
+
+输出类似：
+
+```
++ name=Linux
++ echo 'Hello, Linux'
+Hello, Linux
++ '[' Linux = Linux ']'
++ echo 'Match!'
+Match!
+```
+
+每行前的 `+` 表示这是脚本中的命令（不是脚本的输出）。通过这种方式你能看到每一步实际执行了什么。
+
+### 8.2 bash -n：语法检查
+
+`-n` 只检查语法，不执行脚本。适合在编辑后快速验证：
+
+```bash
+bash -n myscript.sh
+```
+
+如果没有任何输出，说明语法正确。有错误时会报告行号：
+
+```
+myscript.sh: line 10: syntax error near unexpected token `fi'
+myscript.sh: line 10: `fi'
+```
+
+### 8.3 选择性追踪
+
+不想追踪整个脚本，只想看某一段的执行过程：
+
+```bash
+#!/bin/bash
+
+echo "This line is NOT traced"
+
+set -x
+# 以下部分会被追踪
+for i in 1 2 3; do
+  echo "i = $i"
+done
+set +x
+
+echo "This line is NOT traced either"
+```
+
+### 8.4 trap：退出时的清理工作
+
+`trap` 可以捕获信号或脚本退出事件，执行指定的清理操作——无论脚本是正常结束还是被 Ctrl+C 中断：
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+TEMP_DIR=$(mktemp -d)
+
+cleanup() {
+  echo "Cleaning up temp directory: $TEMP_DIR"
+  rm -rf "$TEMP_DIR"
+}
+
+trap cleanup EXIT
+
+echo "Working in $TEMP_DIR"
+echo "important data" > "$TEMP_DIR/data.txt"
+cat "$TEMP_DIR/data.txt"
+
+# 无论脚本正常结束还是被中断，cleanup 都会被调用
+```
+
+`trap` 常见的信号：
+
+| 信号 | 触发场景 |
+|------|---------|
+| `EXIT` | 脚本退出时（无论原因） |
+| `INT` | Ctrl+C |
+| `TERM` | kill 命令默认信号 |
+| `ERR` | 命令失败时（配合 set -e 使用） |
+
+更完善的 trap 示例——同时记录错误行号：
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+error_handler() {
+  local line_no=$1
+  echo "Error at line $line_no" >&2
+  cleanup
+}
+
+cleanup() {
+  rm -rf "$TEMP_DIR"
+}
+
+TEMP_DIR=$(mktemp -d)
+trap 'error_handler $LINENO' ERR
+trap cleanup EXIT
+
+echo "Script running..."
+false   # 这行会触发 ERR trap
+echo "This won't print"
+```
+
+### 8.5 调试流程小结
+
+```mermaid
+graph TD
+  A[脚本行为异常] --> B{语法报错？}
+  B -- 是 --> C[bash -n 检查语法]
+  C --> D[修复语法错误]
+  D --> A
+  B -- 否 --> E[bash -x 追踪执行]
+  E --> F{找到问题？}
+  F -- 否 --> G[set -x/+x 缩小范围]
+  G --> E
+  F -- 是 --> H[修复逻辑错误]
+  H --> I[shellcheck 全面检查]
+  I --> J[运行验证]
+```
+
+---
+
+## 总结
+
+这篇文章我们走完了从"敲命令"到"写脚本"的跃迁：
+
+- **脚本基础**：shebang、执行方式、变量与字符串操作
+- **控制流**：`if/case` 条件判断、`for/while/until` 循环
+- **函数**：参数传递、返回值、`local` 变量作用域
+- **安全编程**：`set -euo pipefail` + `shellcheck` 是底线
+- **实战**：备份、清理、健康检查三个生产级脚本
+- **调试**：`-x` 追踪、`-n` 语法检查、`trap` 清理
+
+写脚本的终极原则：**让脚本替你做重复的事，让你自己去做更有价值的事。**
+
+下一篇[《云服务器入门：从购买、连接到安全加固》](/posts/linux/cloud-server-getting-started)中，我们将把这些脚本搬到真实的服务器上。你写的备份脚本、健康检查脚本，都将在云端真正发挥作用——但在那之前，先得有一台服务器，并确保它不会在上线第一天就被攻破。

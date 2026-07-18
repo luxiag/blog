@@ -7,7 +7,7 @@ tags: ['linux', 'server', 'nginx', 'mysql', 'redis', 'nodejs', 'devops']
 
 # 云服务器环境搭建：运行时、数据库与 Nginx
 
-在上一篇《[云服务器入门](/blog/posts/linux/cloud-server-getting-started)》中，我们拿到了一台干净、安全的服务器，并完成了密钥登录、用户管理和防火墙加固。但此时它还是一张"白纸"——只有操作系统，没有任何能运行你项目的环境。
+在上一篇《[云服务器入门](/posts/linux/cloud-server-getting-started)》中，我们拿到了一台干净、安全的服务器，并完成了密钥登录、用户管理和防火墙加固。但此时它还是一张"白纸"——只有操作系统，没有任何能运行你项目的环境。
 
 这篇文章的目标，就是把这张白纸变成一个**完整的生产环境**。我们会按"一个 Web 请求从外到内的路径"来组织内容，这样你能清楚每个组件在系统里扮演什么角色：
 
@@ -186,6 +186,87 @@ bind 127.0.0.1 ::1
 
 修改后重启：`sudo systemctl restart redis-server`。
 
+### 3.3 Redis 持久化：别让缓存数据丢了
+
+Redis 是内存数据库，默认数据只存在内存中，重启就没了。生产环境必须配置持久化，否则一次意外重启就能让你丢失所有缓存数据。
+
+Redis 提供两种持久化方式：
+
+| 方式 | 原理 | 优点 | 缺点 |
+| :--- | :--- | :--- | :--- |
+| **RDB** | 定时把内存快照写入磁盘 | 恢复快，文件紧凑 | 可能丢失最近几分钟的数据 |
+| **AOF** | 把每条写命令追加到日志文件 | 最多丢 1 秒数据 | 文件更大，恢复较慢 |
+
+Ubuntu 默认开启了 RDB。建议同时开启 AOF 以获得更好的数据安全：
+
+```text
+# 编辑 /etc/redis/redis.conf
+
+# 开启 AOF
+appendonly yes
+
+# 每秒同步一次（兼顾性能和安全）
+appendfsync everysec
+```
+
+修改后 `sudo systemctl restart redis-server`。验证 AOF 是否生效：
+
+```bash
+# 进入 Redis 命令行
+redis-cli
+
+# 查看持久化配置
+CONFIG GET appendonly
+```
+
+### 3.4 MySQL 备份基础
+
+数据库数据是整个项目最值钱的部分，代码可以重写，数据丢了就是灾难。备份不是"以后再说"的事，而是装好数据库的第一天就该配置的。
+
+```bash
+# 手动备份单个数据库
+mysqldump -u myapp_user -p myapp > backup_$(date +%Y%m%d).sql
+
+# 手动备份所有数据库
+sudo mysqldump -u root -p --all-databases > full_backup_$(date +%Y%m%d).sql
+
+# 恢复备份
+mysql -u myapp_user -p myapp < backup_20260210.sql
+```
+
+:::tip 自动备份
+把备份命令写成脚本，配合 cron 定时执行，就能实现每天自动备份。具体做法见《[系统运维与安全](/posts/linux/system-ops-and-security)》的定时任务章节。
+:::
+
+### 3.5 MySQL 字符集：utf8 vs utf8mb4
+
+MySQL 的 `utf8` 其实是"伪 UTF-8"，最多只支持 3 字节字符，存不了 emoji 表情。真正的 UTF-8 是 `utf8mb4`（最多 4 字节）。
+
+创建数据库时务必指定 `utf8mb4`（前面创建数据库时已经这样做了）：
+
+```sql
+CREATE DATABASE myapp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+如果已有数据库用了 `utf8`，可以转换：
+
+```sql
+ALTER DATABASE myapp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+同时检查连接字符集，在 `/etc/mysql/mysql.conf.d/mysqld.cnf` 中确保：
+
+```text
+[mysqld]
+character-set-server=utf8mb4
+collation-server=utf8mb4_unicode_ci
+
+[client]
+default-character-set=utf8mb4
+```
+
+修改后 `sudo systemctl restart mysql`。
+
 ---
 
 ## 4. Nginx：流量的入口与守门人
@@ -283,7 +364,7 @@ sudo systemctl reload nginx
 - `reload`：平滑重载配置，**不中断**正在处理的请求，日常改配置用这个。
 - `restart`：完全停止再启动，会**短暂中断**服务，一般只在大改动或服务异常时用。
 
-这正是上一篇《[进阶之路](/blog/posts/linux/linux-advanced-commands)》里讲的 **SIGHUP 信号重载配置**在实际中的体现——`reload` 本质就是给 Nginx 主进程发了重载信号。
+这正是《[深入浅出 Linux](/posts/linux/linux-fundamentals)》里讲的 **SIGHUP 信号重载配置**在实际中的体现——`reload` 本质就是给 Nginx 主进程发了重载信号。
 :::
 
 ### 4.4 用 Nginx 直接托管静态网站
@@ -304,6 +385,117 @@ server {
         try_files $uri $uri/ /index.html;
     }
 }
+```
+
+---
+
+### 4.5 Nginx 多站点：一台服务器跑多个项目
+
+一台服务器完全可以同时服务多个网站。Nginx 通过 **server_name** 区分不同域名的请求，转发到不同的后端。
+
+假设你有两个项目：`blog.example.com` 和 `api.example.com`：
+
+```bash
+# 为两个站点分别创建配置
+sudo nano /etc/nginx/sites-available/blog
+sudo nano /etc/nginx/sites-available/api
+```
+
+```nginx
+# /etc/nginx/sites-available/blog
+server {
+    listen 80;
+    server_name blog.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+```nginx
+# /etc/nginx/sites-available/api
+server {
+    listen 80;
+    server_name api.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+```bash
+# 启用两个站点
+sudo ln -s /etc/nginx/sites-available/blog /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/api /etc/nginx/sites-enabled/
+
+# 测试并重载
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Nginx 的匹配规则是：请求到达后，优先匹配 `server_name` 与请求头中 `Host` 字段一致的 `server` 块。如果都不匹配，走默认站点（`sites-enabled` 中按字母序第一个，或显式标记 `default_server` 的）。
+
+### 4.6 Nginx 常见错误排错
+
+**502 Bad Gateway**：最常见，Nginx 成功接收了请求，但后端应用没有响应。
+
+```bash
+# 1. 后端应用是否在运行？
+sudo systemctl status myapp
+
+# 2. 应用是否真的在监听 3000 端口？
+ss -lnt | grep :3000
+
+# 3. 看 Nginx 错误日志获取具体原因
+sudo tail -n 20 /var/log/nginx/error.log
+```
+
+常见原因：应用崩溃了、端口配错了（Nginx 写 3000 但应用监听 8080）、应用启动慢还没就绪。
+
+**413 Request Entity Too Large**：上传文件太大，超过了 Nginx 默认的 1MB 限制。
+
+```nginx
+# 在 server 或 location 块中加大限制
+client_max_body_size 50m;
+```
+
+**403 Forbidden**：Nginx 无权读取静态文件。
+
+```bash
+# 检查文件权限和所有者
+ls -la /var/www/myapp/dist/
+
+# Nginx 工作进程以 www-data 用户运行，确保它能读取文件
+sudo chown -R www-data:www-data /var/www/myapp/dist/
+```
+
+### 4.7 Nginx 日志
+
+Nginx 的日志是你排查问题的主要依据，默认存放在 `/var/log/nginx/`：
+
+```bash
+# 访问日志（每次请求一条记录）
+sudo tail -f /var/log/nginx/access.log
+
+# 错误日志（Nginx 自身的错误，如后端不可达）
+sudo tail -f /var/log/nginx/error.log
+```
+
+默认的访问日志格式包含：客户端 IP、请求方法与路径、状态码、响应大小、耗时等。结合第一篇学的 `awk`，可以快速分析：
+
+```bash
+# 统计每个状态码出现的次数
+awk '{print $9}' /var/log/nginx/access.log | sort | uniq -c | sort -nr
+
+# 找出耗时最长的 10 个请求（默认格式最后一列是耗时）
+awk '{print $NF, $0}' /var/log/nginx/access.log | sort -nr | head -n 10
 ```
 
 ---
@@ -338,7 +530,7 @@ Certbot 会：自动验证域名归属、签发证书、**自动修改你的 Ngi
 - **崩溃自愈**：进程意外退出后自动重启。
 - **统一管理**：用一套命令管理所有后台服务，并集中收集日志。
 
-我们也应该把**自己的应用**注册成 systemd 服务，而不是用上一篇提到的 `nohup ... &` 这种简陋方式（一旦崩溃就再也起不来了）。
+我们也应该把**自己的应用**注册成 systemd 服务，而不是用 `nohup ... &` 这种简陋方式（一旦崩溃就再也起不来了，还记得《[深入浅出 Linux](/posts/linux/linux-fundamentals)》里讲的 nohup 吗）。
 
 ### 6.1 systemctl 常用命令速查
 
@@ -426,8 +618,8 @@ sudo journalctl -u myapp --since today
 经过这一篇，你的服务器已经从一张白纸变成了一个**完整可用的生产环境**。我们按照请求流转的路径把各组件串了起来：
 
 - **运行时**：用 `nvm` 管理 Node.js、用 `venv` 隔离 Python，让应用代码能跑起来。
-- **数据库**：安装 MySQL 与 Redis，并遵循**最小权限**和**绝不暴露公网**两条铁律。
-- **Nginx**：作为流量入口，理解并配置**反向代理**，托管静态资源，再用 **Certbot** 一键上 HTTPS。
+- **数据库**：安装 MySQL 与 Redis，遵循**最小权限**和**绝不暴露公网**两条铁律；MySQL 备份与 utf8mb4 字符集、Redis AOF 持久化都不容忽视。
+- **Nginx**：作为流量入口，理解并配置**反向代理**，托管静态资源，多站点配置，常见错误排错；再用 **Certbot** 一键上 HTTPS。
 - **systemd**：把 Nginx、数据库乃至**你自己的应用**都管理成开机自启、崩溃自愈的可靠服务，并用 `journalctl` 查日志。
 
-至此，环境万事俱备。下一篇《[项目部署实战](/blog/posts/linux/project-deployment-in-practice)》，我们将把这些组件真正用起来——把一份代码从本地仓库一步步搬上服务器、构建、运行、对外提供服务，并介绍用 **Docker** 和 **CI/CD** 实现更现代、更自动化的部署方式。
+至此，环境万事俱备。下一篇《[系统运维与安全](/posts/linux/system-ops-and-security)》，我们将为这台跑着服务的服务器装上"仪表盘"和"安保系统"——日志查询、定时任务、性能监控与安全加固，让它从"能跑"变成"能放心跑"。
