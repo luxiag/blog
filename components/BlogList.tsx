@@ -1,16 +1,63 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import TagFilter from './TagFilter';
 import { Post } from '@/types/blog';
 import { Terminal, Calendar, Hash, ArrowRight } from 'lucide-react';
 
 const POSTS_PER_PAGE = 20;
+const STORAGE_KEY = 'blog_list_state';
+
+interface SavedState {
+  category: string;
+  visibleCount: number;
+  scrollY: number;
+}
+
+function loadState(): SavedState | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveState(state: SavedState) {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // ignore quota errors
+  }
+}
 
 export default function BlogList({ posts }: { posts: Post[] }) {
-  const [filteredPosts, setFilteredPosts] = useState<Post[]>(posts);
+  const [selectedCategory, setSelectedCategory] = useState('');
   const [visibleCount, setVisibleCount] = useState(POSTS_PER_PAGE);
+  const [hydrated, setHydrated] = useState(false);
+
+  // Restore from sessionStorage after mount to avoid hydration mismatch
+  useEffect(() => {
+    const saved = loadState();
+    if (saved) {
+      if (saved.category) setSelectedCategory(saved.category);
+      if (saved.visibleCount > POSTS_PER_PAGE) setVisibleCount(saved.visibleCount);
+      if (saved.scrollY > 0) {
+        requestAnimationFrame(() => {
+          window.scrollTo(0, saved!.scrollY!);
+        });
+      }
+    }
+    setHydrated(true);
+  }, []);
+
+  const filteredPosts = useMemo(() => {
+    if (!selectedCategory) return posts;
+    return posts.filter((post) => (post.category || 'Article') === selectedCategory);
+  }, [posts, selectedCategory]);
 
   const postsByYear = useMemo(() => {
     const visiblePosts = filteredPosts.slice(0, visibleCount);
@@ -31,15 +78,46 @@ export default function BlogList({ posts }: { posts: Post[] }) {
     setVisibleCount((prev) => prev + POSTS_PER_PAGE);
   };
 
-  const handleFilter = (filtered: Post[]) => {
-    setFilteredPosts(filtered);
+  const handleCategoryChange = useCallback((category: string) => {
+    setSelectedCategory(category);
     setVisibleCount(POSTS_PER_PAGE);
-  };
+  }, []);
+
+  // Save state before navigating away
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      saveState({
+        category: selectedCategory,
+        visibleCount,
+        scrollY: window.scrollY,
+      });
+    };
+
+    // Save on link click (before navigation)
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const anchor = target.closest('a');
+      if (anchor && anchor.href) {
+        handleBeforeUnload();
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('click', handleClick);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('click', handleClick);
+    };
+  }, [selectedCategory, visibleCount]);
 
   return (
     <div className="flex flex-col gap-12 overflow-hidden">
       <div className="p-2 sm:p-6">
-        <TagFilter posts={posts} onFilter={handleFilter} />
+        <TagFilter
+          posts={posts}
+          selectedCategory={selectedCategory}
+          onCategoryChange={handleCategoryChange}
+        />
       </div>
 
       {postsByYear.length > 0 ? (

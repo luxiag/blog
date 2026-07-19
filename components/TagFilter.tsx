@@ -1,14 +1,14 @@
 'use client';
 
-import { useState } from 'react';
 import { Post } from '@/types/blog';
 
 interface TagFilterProps {
   posts: Post[];
-  onFilter: (filteredPosts: Post[]) => void;
+  selectedCategory: string;
+  onCategoryChange: (category: string) => void;
 }
 
-export default function TagFilter({ posts, onFilter }: TagFilterProps) {
+export default function TagFilter({ posts, selectedCategory, onCategoryChange }: TagFilterProps) {
   const categoriesWithCounts = Array.from(
     posts.reduce((acc, post) => {
       const cat = post.category || 'Article';
@@ -17,24 +17,12 @@ export default function TagFilter({ posts, onFilter }: TagFilterProps) {
     }, new Map<string, number>())
   ).sort((a, b) => b[1] - a[1]);
 
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
-
   const handleCategoryClick = (category: string) => {
-    if (selectedCategory === category) {
-      setSelectedCategory('');
-      onFilter(posts);
-    } else {
-      setSelectedCategory(category);
-      const filteredPosts = posts.filter((post) =>
-        (post.category || 'Article') === category
-      );
-      onFilter(filteredPosts);
-    }
+    onCategoryChange(selectedCategory === category ? '' : category);
   };
 
   const handleClearFilter = () => {
-    setSelectedCategory('');
-    onFilter(posts);
+    onCategoryChange('');
   };
 
   return (
@@ -68,4 +56,3 @@ export default function TagFilter({ posts, onFilter }: TagFilterProps) {
     </div>
   );
 }
-
