@@ -1,19 +1,19 @@
 ---
-title: 'MySQL 入门：从安装到索引与事务的系统指南'
+title: 'MySQL 入门：安装、特性与实战要点'
 date: '2025-04-22'
-description: '一篇系统全面、通俗易懂的 MySQL 入门文章：基础概念、表设计、常用 SQL、索引与执行计划、事务与锁、性能优化、备份恢复、权限与运维要点。'
-tags: ['MySQL', 'Database', 'SQL', 'Tutorial', 'Backend']
+description: '面向已掌握通用 SQL 基础的开发者，聚焦 MySQL 特有概念与实战要点：安装配置、存储引擎、字符集、特有函数、JSON 操作、MySQL 8.0 新特性、UPSERT、权限、备份、监控排障。'
+tags: ['MySQL', 'Database', 'Tutorial', 'Backend']
 ---
 
-# MySQL 入门：从安装到索引与事务的系统指南（面向初学者）
+# MySQL 入门：安装、特性与实战要点
 
-MySQL 是最常用的关系型数据库之一，很多 Web 应用（电商、内容站、后台系统）都离不开它。它既能让你写出简单的 CRUD，也能支撑高并发与复杂统计。
+:::tip 前置知识
+本文不讲解 SQL 语法基础（SELECT / WHERE / JOIN / GROUP BY / 子查询等）。如果你还不熟悉通用 SQL，请先阅读 [SQL 入门指南](/posts/sql/sql-beginner-guide) 和 [SQL 实战练习](/posts/sql/sql-exercises)。
+:::
 
-本文按“从会用到用得好”的路线组织：
+MySQL 是最常用的关系型数据库之一，很多 Web 应用（电商、内容站、后台系统）都离不开它。通用 SQL 是它的"普通话"，但 MySQL 有自己的"口音"——存储引擎、字符集、特有函数、特有 DDL 语法、8.0 新特性等。
 
-- 先建立 MySQL 的整体认知（它和 SQL 的关系、核心组件）
-- 再学常用 SQL（建表、查询、写入）
-- 最后补齐实战能力（索引、执行计划、事务与锁、性能、备份、权限、运维）
+本文聚焦** MySQL 和通用 SQL 的差异点**，帮你把"会写 SQL"变成"会用 MySQL"。
 
 > 默认以 **MySQL 8.0** 为参考版本。MySQL 5.7 仍常见，但部分特性（例如窗口函数、CTE、默认字符集、权限细节）会有差异。
 
@@ -21,16 +21,67 @@ MySQL 是最常用的关系型数据库之一，很多 Web 应用（电商、内
 
 ## 1. MySQL 是什么？和 SQL 是什么关系？
 
-- **SQL**：一门“操作关系型数据”的语言（查、改、建表、事务）。
+- **SQL**：一门"操作关系型数据"的语言（查、改、建表、事务）。
 - **MySQL**：一种具体的关系型数据库产品，用 SQL 作为主要接口。
 
-你可以把 SQL 当作“普通话”，把 MySQL 当作“会说普通话的一家公司”。同一句 SQL，在不同数据库里可能有一些“口音差异”（函数、分页、类型、行为细节）。
+同一句 SQL，在不同数据库里可能有一些"口音差异"——函数、分页、类型、行为细节。本文就是讲这些差异。
 
 ---
 
-## 2. 先把 MySQL 的核心概念搞清楚
+## 2. 安装与配置
 
-### 2.1 服务器、库、表、行、列
+### 2.1 Linux（Ubuntu/Debian）
+
+```bash
+sudo apt update
+sudo apt install mysql-server
+sudo systemctl start mysql
+sudo mysql_secure_installation
+```
+
+### 2.2 macOS
+
+```bash
+brew install mysql
+brew services start mysql
+```
+
+### 2.3 Docker（推荐开发环境）
+
+```bash
+docker run -d \
+  --name mysql8 \
+  -p 3306:3306 \
+  -e MYSQL_ROOT_PASSWORD=your_password \
+  mysql:8.0
+```
+
+### 2.4 关键配置参数（my.cnf）
+
+```ini
+[mysqld]
+character-set-server = utf8mb4
+collation-server = utf8mb4_0900_ai_ci
+default-authentication-plugin = caching_sha2_password
+max_connections = 200
+innodb_buffer_pool_size = 1G
+slow_query_log = 1
+long_query_time = 1
+```
+
+配置文件位置：
+
+- Linux：`/etc/mysql/my.cnf` 或 `/etc/my.cnf`
+- macOS（Homebrew）：`/opt/homebrew/etc/my.cnf`
+- Docker：挂载自定义配置文件
+
+修改后需要重启：`sudo systemctl restart mysql`
+
+---
+
+## 3. MySQL 核心概念
+
+### 3.1 服务器、库、表、行、列
 
 - **MySQL Server**：数据库服务进程，负责存储、查询、权限、事务等。
 - **Database（库）**：表的集合，通常按业务拆分。
@@ -38,37 +89,55 @@ MySQL 是最常用的关系型数据库之一，很多 Web 应用（电商、内
 - **Row（行）**：一条记录。
 - **Column（列）**：字段（类型、约束）。
 
-### 2.2 存储引擎（非常重要）
+### 3.2 存储引擎（非常重要）
 
-MySQL 的表背后有不同的“存储引擎”。最常见的是：
+MySQL 的表背后有不同的"存储引擎"。最常见的是：
 
 - **InnoDB**（默认）：支持事务、行级锁、外键、崩溃恢复，适合绝大多数业务。
 - **MyISAM**（老引擎）：不支持事务，锁粒度粗，更多历史遗留。
 
 结论：**新项目几乎都选 InnoDB**。
 
-### 2.3 字符集与排序规则（charset/collation）
+建表时指定引擎：
 
-实际业务里最容易踩坑的是“乱码”和“大小写/比较规则不一致”。
+```sql
+CREATE TABLE users (
+  id BIGINT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL
+) ENGINE=InnoDB;
+```
+
+### 3.3 字符集与排序规则（charset/collation）
+
+实际业务里最容易踩坑的是"乱码"和"大小写/比较规则不一致"。
 
 建议：
 
-- 字符集统一使用 `utf8mb4`
+- 字符集统一使用 `utf8mb4`（不要用 `utf8`，MySQL 的 `utf8` 最多 3 字节，存不了 emoji）
 - 排序规则（collation）按业务选择：
   - 想更贴近语言规则、对大小写更友好：`utf8mb4_0900_ai_ci`（8.0 常用）
   - 想严格区分大小写：选择 `*_bin` 或明确的区分大小写规则
 
+建表时指定：
+
+```sql
+CREATE TABLE users (
+  id BIGINT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+```
+
 ---
 
-## 3. 快速开始：连接 MySQL 与常用命令
+## 4. 快速开始：连接 MySQL 与常用命令
 
-### 3.1 连接
+### 4.1 连接
 
 ```bash
 mysql -h 127.0.0.1 -P 3306 -u root -p
 ```
 
-### 3.2 常用命令
+### 4.2 常用命令
 
 ```sql
 SHOW DATABASES;
@@ -81,163 +150,79 @@ SELECT VERSION();
 
 ---
 
-## 4. 建表（DDL）：把“规则”写进数据库
+## 5. MySQL 特有的数据类型与 DDL
 
-下面我们用一套电商式的示例表贯穿全文：
+通用 SQL 的数据类型（INT、VARCHAR、DATE 等）在 [SQL 入门指南](/posts/sql/sql-beginner-guide) 中已讲过。这里只补充 MySQL 特有的。
+
+### 5.1 MySQL 独有或差异的类型
+
+| 类型 | 说明 |
+|------|------|
+| `TINYINT` | 1 字节整数，MySQL 独有（通用 SQL 一般只有 SMALLINT 起） |
+| `MEDIUMINT` | 3 字节整数，MySQL 独有 |
+| `ENUM` | 枚举类型，MySQL 特有 |
+| `SET` | 集合类型，MySQL 特有 |
+| `TIMESTAMP` | MySQL 的 TIMESTAMP 有自动更新行为（`ON UPDATE CURRENT_TIMESTAMP`），与 DATETIME 行为不同 |
+| `JSON` | MySQL 8.0 原生支持，可配合 `->>` 操作符查询 |
+| `YEAR` | 年份类型，MySQL 特有 |
+
+### 5.2 TIMESTAMP vs DATETIME
+
+这是 MySQL 初学者最常见的困惑之一：
+
+| 对比项 | `DATETIME` | `TIMESTAMP` |
+|--------|-----------|-------------|
+| 存储 | 不做时区转换 | 存 UTC，读时转当前时区 |
+| 范围 | `1000-01-01` ~ `9999-12-31` | `1970-01-01` ~ `2038-01-19`（4 字节限制） |
+| 自动更新 | 需手动设 `DEFAULT` | 支持 `ON UPDATE CURRENT_TIMESTAMP` |
+| 空间 | 8 字节 | 4 字节 |
+
+建议：
+
+- 需要自动更新时间戳用 `TIMESTAMP`
+- 需要存历史/未来远期日期用 `DATETIME`
+- 团队统一一种策略，不要混用
+
+### 5.3 MySQL 的 AUTO_INCREMENT
+
+MySQL 用 `AUTO_INCREMENT` 实现自增主键：
 
 ```sql
-CREATE TABLE users (
-  id BIGINT PRIMARY KEY,
-  name VARCHAR(50) NOT NULL,
-  email VARCHAR(200) NOT NULL,
-  created_at DATETIME NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 CREATE TABLE orders (
-  id BIGINT PRIMARY KEY,
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
   user_id BIGINT NOT NULL,
-  status VARCHAR(20) NOT NULL,
-  created_at DATETIME NOT NULL,
-  INDEX idx_orders_user_created (user_id, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  status VARCHAR(20) NOT NULL
+) ENGINE=InnoDB;
 ```
 
-### 4.1 常用约束
+注意：`AUTO_INCREMENT` 只能在 InnoDB 的主键或唯一键上使用。
 
-- `PRIMARY KEY`：主键（唯一且非空）
-- `NOT NULL`：不允许空
-- `UNIQUE`：唯一
-- `FOREIGN KEY`：外键（InnoDB 支持，但很多团队用应用逻辑保证）
-- `CHECK`：检查约束（MySQL 8.0 起逐步可用，仍需结合实际验证）
+### 5.4 MySQL 特有的建表选项
 
-### 4.2 主键怎么选？
+```sql
+CREATE TABLE orders (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  status ENUM('pending', 'paid', 'shipped', 'cancelled') DEFAULT 'pending',
+  remark TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+  AUTO_INCREMENT=1000
+  ROW_FORMAT=DYNAMIC;
+```
 
-常见方案：
-
-- 自增整型 `BIGINT AUTO_INCREMENT`：简单、写入顺序友好。
-- 分布式 ID（雪花等）：适合多机生成，但写入不一定完全顺序，可能影响 B+Tree 局部性。
-
-### 4.3 常见字段类型速览
-
-- 数字：`INT`、`BIGINT`、`DECIMAL(10,2)`（金额优先 `DECIMAL`，不要用 `FLOAT/DOUBLE`）
-- 字符串：`VARCHAR(n)`（变长），`TEXT`（大文本）
-- 时间：`DATETIME`、`TIMESTAMP`
-  - `TIMESTAMP` 带时区转换语义更强（受系统时区影响更明显）
-  - 团队要统一时间策略：存 UTC 还是本地时区
-- JSON：`JSON`（MySQL 8.0 支持不错，但索引与查询要理解其成本）
+- `ENGINE`：指定存储引擎
+- `DEFAULT CHARSET / COLLATE`：字符集和排序规则
+- `AUTO_INCREMENT`：起始值
+- `ROW_FORMAT`：行格式（COMPACT / DYNAMIC / COMPRESSED）
 
 ---
 
-## 5. 查询（DQL）：写出正确且好读的 SELECT
+## 6. MySQL 8.0 的两件利器：CTE 与窗口函数
 
-### 5.1 SELECT 的基本结构
+MySQL 8.0 之前没有 CTE 和窗口函数，这让很多复杂查询只能用子查询或应用层拼接。8.0 终于支持了。
 
-```sql
-SELECT 列
-FROM 表
-WHERE 条件
-GROUP BY 分组
-HAVING 分组过滤
-ORDER BY 排序
-LIMIT 分页;
-```
-
-### 5.2 过滤与排序
-
-```sql
-SELECT id, user_id, status, created_at
-FROM orders
-WHERE status = 'PAID'
-  AND created_at >= '2026-01-01'
-  AND created_at <  '2026-02-01'
-ORDER BY created_at DESC
-LIMIT 20;
-```
-
-#### NULL 一定用 IS NULL / IS NOT NULL
-
-```sql
-SELECT id
-FROM users
-WHERE email IS NULL;
-```
-
-### 5.3 聚合：GROUP BY / HAVING
-
-统计每个用户订单数：
-
-```sql
-SELECT user_id, COUNT(*) AS order_count
-FROM orders
-GROUP BY user_id;
-```
-
-筛选“订单数 >= 3 的用户”：
-
-```sql
-SELECT user_id, COUNT(*) AS order_count
-FROM orders
-GROUP BY user_id
-HAVING COUNT(*) >= 3;
-```
-
-### 5.4 多表 JOIN（业务查询最常见）
-
-```sql
-SELECT o.id, o.status, u.name
-FROM orders o
-JOIN users u ON u.id = o.user_id
-WHERE o.status = 'PAID';
-```
-
-LEFT JOIN 常用来“主表全保留”：
-
-```sql
-SELECT u.id, u.name, o.id AS order_id
-FROM users u
-LEFT JOIN orders o ON o.user_id = u.id;
-```
-
-#### JOIN 的经典坑：WHERE 位置导致 LEFT JOIN 失效
-
-想要“所有用户 + 只显示已支付订单（没有也要出现）”时：
-
-```sql
-SELECT u.id, u.name, o.id AS order_id
-FROM users u
-LEFT JOIN orders o
-  ON o.user_id = u.id
- AND o.status = 'PAID';
-```
-
-不要写成：
-
-```sql
-SELECT u.id, u.name, o.id AS order_id
-FROM users u
-LEFT JOIN orders o ON o.user_id = u.id
-WHERE o.status = 'PAID';
-```
-
-第二种会过滤掉 `NULL` 行，效果更像 INNER JOIN。
-
-### 5.5 子查询与 EXISTS
-
-查“下过单的用户”：
-
-```sql
-SELECT u.id, u.name
-FROM users u
-WHERE EXISTS (
-  SELECT 1
-  FROM orders o
-  WHERE o.user_id = u.id
-);
-```
-
-### 5.6 MySQL 8.0 的两件利器：CTE 与窗口函数
-
-CTE（WITH）让复杂 SQL 更可读：
+### 6.1 CTE（WITH）
 
 ```sql
 WITH paid_orders AS (
@@ -250,7 +235,7 @@ FROM paid_orders
 GROUP BY user_id;
 ```
 
-窗口函数适合排名、每组取 TopN 等：
+### 6.2 窗口函数
 
 ```sql
 WITH ranked AS (
@@ -263,37 +248,198 @@ FROM ranked
 WHERE rn = 1;
 ```
 
+更详细的窗口函数用法见 [SQL 入门指南](/posts/sql/sql-beginner-guide)。
+
 ---
 
-## 6. 写数据（DML）：INSERT / UPDATE / DELETE
+## 7. MySQL 特有的函数
 
-### 6.1 INSERT
+通用 SQL 的标准函数（`COALESCE`、`CASE WHEN`、`CAST` 等）在 [SQL 入门指南](/posts/sql/sql-beginner-guide) 中已讲过。MySQL 有自己的"方言函数"——功能等价，但语法不同。了解它们可以帮你读懂别人的代码，但新代码建议优先用标准写法。
 
-```sql
-INSERT INTO users (id, name, email, created_at)
-VALUES (1, 'Alice', 'alice@example.com', NOW());
-```
+### 7.1 IF() —— MySQL 的三元表达式
 
-### 6.2 UPDATE
+标准 SQL 用 `CASE WHEN ... THEN ... ELSE ... END`，MySQL 提供了简写：
 
 ```sql
-UPDATE orders
-SET status = 'SHIPPED'
-WHERE id = 1001;
+SELECT name, IF(age >= 18, '成年', '未成年') AS age_group
+FROM users;
 ```
 
-### 6.3 DELETE
+等价标准写法：
 
 ```sql
-DELETE FROM orders
-WHERE id = 1001;
+SELECT name, CASE WHEN age >= 18 THEN '成年' ELSE '未成年' END AS age_group
+FROM users;
 ```
 
-实战习惯：写 `UPDATE/DELETE` 前，先把 `WHERE` 拿去跑 `SELECT` 确认影响范围。
+建议：**新代码用 `CASE WHEN`**，跨数据库可移植。
 
-### 6.4 UPSERT（插入或更新）
+### 7.2 IFNULL() —— MySQL 的空值替换
 
-MySQL 常用：
+```sql
+SELECT name, IFNULL(phone, '未填写') AS phone_display
+FROM users;
+```
+
+等价标准写法：
+
+```sql
+SELECT name, COALESCE(phone, '未填写') AS phone_display
+FROM users;
+```
+
+区别：`IFNULL` 只支持两个参数，`COALESCE` 支持多个。建议**优先 `COALESCE`**。
+
+### 7.3 GROUP_CONCAT() —— 分组拼接字符串
+
+MySQL 特有的聚合函数，把分组内的值拼成一个字符串：
+
+```sql
+SELECT
+  department,
+  GROUP_CONCAT(name ORDER BY name SEPARATOR ', ') AS members
+FROM employees
+GROUP BY department;
+```
+
+结果示例：
+
+| department | members |
+|-----------|---------|
+| 工程部 | Alice, Bob, Carol |
+| 市场部 | Dave, Eve |
+
+其他数据库的等价写法：
+
+- PostgreSQL：`STRING_AGG(name, ', ')`
+- SQL Server：`STRING_AGG(name, ', ')`
+- Oracle：`LISTAGG(name, ', ')`
+
+注意：
+
+- `GROUP_CONCAT` 默认最大长度 1024 字节，超长会被截断。可通过 `SET group_concat_max_len = 1000000;` 调大
+- 结果长度不确定，不要用来做业务逻辑判断
+
+### 7.4 其他常用 MySQL 方言函数速查
+
+| MySQL 函数 | 标准等价 | 说明 |
+|-----------|---------|------|
+| `IF(cond, a, b)` | `CASE WHEN cond THEN a ELSE b END` | 三元表达式 |
+| `IFNULL(a, b)` | `COALESCE(a, b)` | 空值替换 |
+| `GROUP_CONCAT(col)` | `STRING_AGG` (PG/SS) | 分组拼接 |
+| `DATE_FORMAT(date, fmt)` | `TO_CHAR` (PG/Oracle) | 日期格式化 |
+| `FIND_IN_SET(str, strlist)` | 无标准等价 | 在逗号分隔字符串中查找位置 |
+| `INET_ATON / INET_NTOA` | 无标准等价 | IP 地址与整数互转 |
+
+---
+
+## 8. MySQL JSON 操作（8.0+）
+
+MySQL 8.0 对 JSON 的支持是它区别于很多传统关系数据库的亮点。如果你有半结构化数据（配置、标签、动态属性），JSON 类型比额外建表或用 EAV 模式更方便。
+
+### 8.1 JSON 列定义与插入
+
+```sql
+CREATE TABLE products (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  attrs JSON,
+  tags JSON
+);
+
+INSERT INTO products (name, attrs, tags) VALUES
+  ('iPhone 15', '{"color": "蓝色", "storage": 256}', '["5G", "旗舰"]'),
+  ('Pixel 8', '{"color": "黑色", "storage": 128}', '["5G", "中端"]');
+```
+
+MySQL 会自动校验 JSON 格式，非法 JSON 会报错。
+
+### 8.2 提取值：->> 和 JSON_EXTRACT
+
+```sql
+SELECT
+  name,
+  attrs->>'$.color' AS color,
+  attrs->>'$.storage' AS storage
+FROM products;
+```
+
+`->>` 是 MySQL 5.7.13+ 引入的内联路径操作符，等价于 `JSON_UNQUOTE(JSON_EXTRACT(...))`：
+
+- `attrs->'$.color'` → 返回带引号的 JSON 值（如 `"蓝色"`）
+- `attrs->>'$.color'` → 返回去掉引号的纯字符串（如 `蓝色`）
+
+**日常查询建议用 `->>`**，结果更干净。
+
+### 8.3 条件查询
+
+```sql
+SELECT name
+FROM products
+WHERE attrs->>'$.color' = '蓝色';
+```
+
+```sql
+SELECT name
+FROM products
+WHERE JSON_CONTAINS(tags, '"5G"');
+```
+
+`JSON_CONTAINS(target, candidate)` 判断 target JSON 是否包含 candidate 指定的值。
+
+### 8.4 修改 JSON 值
+
+```sql
+UPDATE products
+SET attrs = JSON_SET(attrs, '$.storage', 512)
+WHERE id = 1;
+```
+
+常用 JSON 修改函数：
+
+| 函数 | 说明 |
+|------|------|
+| `JSON_SET(doc, path, val)` | 存在则更新，不存在则新增 |
+| `JSON_REPLACE(doc, path, val)` | 只更新已存在的路径 |
+| `JSON_REMOVE(doc, path)` | 删除指定路径 |
+| `JSON_INSERT(doc, path, val)` | 只在不存在的路径插入 |
+
+### 8.5 JSON 数组操作
+
+```sql
+SELECT name
+FROM products
+WHERE JSON_LENGTH(tags) > 1;
+
+SELECT name, JSON_EXTRACT(tags, '$[0]') AS first_tag
+FROM products;
+```
+
+### 8.6 虚拟列与索引
+
+JSON 列本身不能直接建普通索引，但可以提取为虚拟列再索引：
+
+```sql
+ALTER TABLE products
+ADD COLUMN color VARCHAR(50)
+  GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(attrs, '$.color'))) STORED,
+ADD INDEX idx_color (color);
+```
+
+`STORED` 表示实际存储，`VIRTUAL` 表示查询时计算。索引需要 `STORED` 列。
+
+### 8.7 JSON 使用的边界建议
+
+1. **不要把所有数据都塞进 JSON**——频繁查询/排序的字段还是用普通列
+2. JSON 列适合"可选的、动态的、不常单独查询"的属性
+3. JSON 内部的值不会参与统计信息优化，查询性能不如普通列
+4. JSON 文档不宜过大（建议 1MB 以内），否则更新代价高
+
+---
+
+## 9. MySQL 特有的 DML：UPSERT
+
+MySQL 的 `ON DUPLICATE KEY UPDATE` 是其独有的"插入或更新"语法：
 
 ```sql
 INSERT INTO users (id, name, email, created_at)
@@ -303,92 +449,53 @@ ON DUPLICATE KEY UPDATE
   email = VALUES(email);
 ```
 
-> MySQL 8.0.20+ 开始不推荐依赖 `VALUES(col)` 的旧行为，建议结合你实际版本与官方文档选择写法。
+> MySQL 8.0.20+ 开始不推荐依赖 `VALUES(col)` 的旧行为，建议用别名写法：
+>
+> ```sql
+> INSERT INTO users (id, name, email, created_at)
+> VALUES (1, 'Alice', 'alice@example.com', NOW()) AS new_val
+> ON DUPLICATE KEY UPDATE
+>   name = new_val.name,
+>   email = new_val.email;
+> ```
+
+对比其他数据库：PostgreSQL 用 `ON CONFLICT`，SQLite 用 `INSERT OR REPLACE`。
 
 ---
 
-## 7. 事务（TCL）：保证一致性的基础
+## 10. MySQL 特有的分页：LIMIT / OFFSET
 
-InnoDB 支持事务：一组操作要么全部成功，要么全部失败。
+MySQL 用 `LIMIT offset, count` 或 `LIMIT count OFFSET offset` 做分页：
 
 ```sql
-START TRANSACTION;
-
-UPDATE orders
-SET status = 'PAID'
-WHERE id = 1001;
-
-COMMIT;
+SELECT * FROM orders
+ORDER BY created_at DESC
+LIMIT 10 OFFSET 20;
 ```
 
-出错回滚：
+对比其他数据库：PostgreSQL 也用 `LIMIT/OFFSET`，SQL Server 用 `OFFSET ... FETCH`，Oracle 用 `ROWNUM`。
 
-```sql
-ROLLBACK;
-```
-
-### 7.1 隔离级别与常见现象
-
-隔离级别决定并发时“能看到什么”：
-
-- `READ UNCOMMITTED`：可能脏读
-- `READ COMMITTED`：避免脏读
-- `REPEATABLE READ`：MySQL InnoDB 默认
-- `SERIALIZABLE`：最强但性能最低
-
-你不需要一开始就把所有并发理论背熟，但要知道：**隔离级别不同，锁与性能表现会不同**。
+深分页优化（游标分页）在 [SQL 进阶：执行计划与查询优化](/posts/sql/sql-advanced-performance) 中有通用讲解，MySQL 的具体实践在 [MySQL 进阶](/posts/mysql/mysql-advanced-guide) 中展开。
 
 ---
 
-## 8. 锁：为什么一条 SQL 会“卡住”？
+## 11. 索引与 EXPLAIN：MySQL 的实现细节
 
-在 InnoDB 里，锁大致分为：
+索引的通用原理（B-Tree、最左前缀、覆盖索引）已在 [SQL 进阶：执行计划与查询优化](/posts/sql/sql-advanced-performance) 中讲过。这里补充 MySQL 特有的实现细节。
 
-- **行锁**：锁住满足条件的行（或范围）
-- **间隙锁/Next-Key Lock**：默认隔离级别下为防止幻读而出现的范围锁（会影响并发）
+### 11.1 InnoDB 的聚簇索引
 
-初学者最常遇到的现象：
+与 PostgreSQL 的堆存储不同，**InnoDB 的主键就是聚簇索引**——数据按主键顺序存在 B+Tree 里：
 
-- A 事务更新某行未提交
-- B 事务更新同一行会等待（看起来“卡住”）
+- 二级索引叶子节点存的是**主键值**（不是物理指针）
+- 二级索引查询通常需要**回表**：先查到主键，再到聚簇索引查完整行
 
-排查思路：
+这意味着：
 
-- 先确认是否有长事务
-- 再看是否命中索引（没命中可能锁更大范围）
+- 主键选择影响写入性能（随机主键导致频繁页分裂）
+- 覆盖索引对 InnoDB 尤其重要（避免回表）
 
----
-
-## 9. 索引：让查询快起来（MySQL 性能核心）
-
-### 9.1 B+Tree 索引的直觉
-
-你可以把索引理解成“按某种规则排序过的目录”。
-
-- 优点：按条件查、按范围查、按顺序取数据会很快
-- 代价：占空间；写入/更新要维护索引，会变慢
-
-### 9.2 什么时候建索引？
-
-最常见的候选列：
-
-- `WHERE` 经常过滤的列
-- `JOIN ... ON` 的连接列
-- `ORDER BY` 的排序列（尤其配合 `LIMIT`）
-
-### 9.3 复合索引与最左前缀
-
-如果索引是 `(user_id, created_at)`：
-
-- `WHERE user_id = ?` 通常可用
-- `WHERE user_id = ? AND created_at >= ?` 通常可用
-- `WHERE created_at >= ?` 通常不可用（缺最左列）
-
-### 9.4 覆盖索引
-
-如果一个查询需要的列全部在索引里，MySQL 可能不必回表读取数据页，性能更好。
-
-### 9.5 用 EXPLAIN 看执行计划
+### 11.2 MySQL 的 EXPLAIN 输出
 
 ```sql
 EXPLAIN
@@ -399,59 +506,58 @@ ORDER BY created_at DESC
 LIMIT 20;
 ```
 
-你最该先关注的字段：
+MySQL EXPLAIN 的关键字段：
 
-- `type`：访问类型（越“精准”越好）
-- `key`：用了哪个索引
-- `rows`：预计扫描行数
-- `Extra`：是否出现 `Using filesort`、`Using temporary`
+| 字段 | 说明 |
+|------|------|
+| `type` | 访问类型：`const` > `eq_ref` > `ref` > `range` > `index` > `ALL` |
+| `key` | 实际使用的索引 |
+| `key_len` | 索引使用长度（判断复合索引用了几列） |
+| `rows` | 预估扫描行数 |
+| `Extra` | `Using index`（覆盖索引）、`Using filesort`、`Using temporary` 等 |
 
-执行计划是优化的入口：别靠猜。
+注意：`type` 字段中 `eq_ref` 是 MySQL 特有的，表示 JOIN 时被驱动表用主键/唯一键匹配。
 
----
-
-## 10. 常见性能问题与优化套路
-
-### 10.1 深分页慢
-
-`LIMIT 20 OFFSET 100000` 往往很慢。
-
-更常见的替代方案：基于游标（Keyset Pagination）：
-
-```sql
-SELECT id, user_id, created_at
-FROM orders
-WHERE user_id = 1
-  AND created_at < '2026-01-20 00:00:00'
-ORDER BY created_at DESC
-LIMIT 20;
-```
-
-### 10.2 对列做函数导致不走索引
-
-```sql
--- 可能导致索引失效
-WHERE DATE(created_at) = '2026-01-01'
-```
-
-改写为范围条件更容易走索引：
-
-```sql
-WHERE created_at >= '2026-01-01'
-  AND created_at <  '2026-01-02'
-```
-
-### 10.3 只查需要的列
-
-`SELECT *` 容易造成不必要 IO，也更难利用覆盖索引。
+更详细的 EXPLAIN 分析见 [MySQL 性能优化指南](/posts/mysql/mysql-optimization-guide)。
 
 ---
 
-## 11. 备份与恢复：生产环境必会
+## 12. 事务与锁：MySQL InnoDB 特有行为
 
-### 11.1 逻辑备份：mysqldump
+事务的通用概念（ACID、隔离级别）在 [SQL 入门指南](/posts/sql/sql-beginner-guide) 中已有介绍。这里讲 MySQL 的实现差异。
 
-适合中小数据量、跨版本迁移、可读性强。
+### 12.1 InnoDB 的默认隔离级别
+
+MySQL InnoDB 默认是 `REPEATABLE READ`，而 PostgreSQL 和 Oracle 默认是 `READ COMMITTED`。
+
+### 12.2 InnoDB 在 REPEATABLE READ 下的 Next-Key Lock
+
+InnoDB 在 `REPEATABLE READ` 下使用 **Next-Key Lock**（记录锁 + 间隙锁）来防止幻读，这是 MySQL 特有的实现：
+
+```sql
+START TRANSACTION;
+UPDATE orders
+SET status = 'CLOSED'
+WHERE user_id = 1 AND created_at >= '2026-01-01';
+```
+
+如果条件不够精准、索引不匹配，锁的范围可能扩大，导致大量阻塞。
+
+- PostgreSQL 用 `SERIALIZABLE` 隔离级别 + SSI 来防幻读，不使用间隙锁
+- Oracle 用多版本读一致性，也不使用间隙锁
+
+### 12.3 锁观察命令
+
+```sql
+SHOW PROCESSLIST;
+SHOW ENGINE INNODB STATUS;
+```
+
+---
+
+## 13. 备份与恢复
+
+### 13.1 逻辑备份：mysqldump
 
 ```bash
 mysqldump -h 127.0.0.1 -u root -p your_db > your_db.sql
@@ -463,15 +569,13 @@ mysqldump -h 127.0.0.1 -u root -p your_db > your_db.sql
 mysql -h 127.0.0.1 -u root -p your_db < your_db.sql
 ```
 
-### 11.2 物理备份：xtrabackup（常见选择）
+### 13.2 物理备份：xtrabackup
 
 适合大数据量与在线备份，但学习成本更高。
 
 ---
 
-## 12. 权限与账号：别让数据库“裸奔”
-
-### 12.1 创建用户与授权
+## 14. 权限与账号
 
 ```sql
 CREATE USER 'app'@'%' IDENTIFIED BY 'strong_password';
@@ -487,33 +591,16 @@ FLUSH PRIVILEGES;
 
 ---
 
-## 13. 复制与高可用：知道基本概念就够用
-
-常见目标：
-
-- 读写分离（主写从读）
-- 容灾（主挂了能切）
-
-核心概念：
-
-- binlog（复制基础）
-- 主从复制/半同步复制
-- GTID（简化复制拓扑管理）
-
-这些属于“运维/架构”范畴，建议在你需要扩展系统时再深入。
-
----
-
-## 14. 监控与排障：从“感觉慢”到“定位慢”
+## 15. 监控与排障
 
 建议至少掌握这些：
 
 - 慢查询日志（Slow Query Log）
-- `EXPLAIN` / `EXPLAIN ANALYZE`（按版本支持情况）
+- `EXPLAIN` / `EXPLAIN ANALYZE`（8.0.18+）
 - `SHOW PROCESSLIST`（看当前连接与执行状态）
 - 关注长事务与锁等待
 
-当你遇到“突然变慢”，优先按顺序排查：
+当你遇到"突然变慢"，优先按顺序排查：
 
 - 是否全表扫描（索引/SQL 改写）
 - 是否锁等待（长事务/条件不走索引）
@@ -521,19 +608,20 @@ FLUSH PRIVILEGES;
 
 ---
 
-## 15. 常见坑合集（初学者最容易踩）
+## 16. 常见坑合集
 
-- 字符集没统一导致乱码：全链路统一 `utf8mb4`
-- 时间处理混乱：明确时区策略与字段类型
+- 字符集没统一导致乱码：全链路统一 `utf8mb4`，不要用 `utf8`
+- `utf8` 不是真 UTF-8：MySQL 的 `utf8` 最多 3 字节，emoji 存不了，必须用 `utf8mb4`
+- 时间处理混乱：明确时区策略与字段类型（TIMESTAMP vs DATETIME）
 - `NOT IN` 遇到 `NULL` 行为诡异：优先 `NOT EXISTS`
-- JOIN 条件不完整导致结果倍增：逐步 JOIN + 检查行数
 - 事务开太久导致锁等待：减少事务范围、避免在事务里做慢操作
+- 隐式类型转换导致索引失效：参数类型与列类型保持一致
+- JSON 列不做索引就做条件查询：性能会很差，需要虚拟列 + 索引
+- `GROUP_CONCAT` 结果被截断：默认 1024 字节，长结果需调 `group_concat_max_len`
 
 ---
 
-## 16. 安全：永远不要拼接 SQL 字符串
-
-最常见漏洞是 SQL 注入。
+## 17. 安全：永远不要拼接 SQL 字符串
 
 - 使用参数化查询（Prepared Statement）
 - 输入校验是必要的，但不是注入防护的核心
@@ -541,25 +629,10 @@ FLUSH PRIVILEGES;
 
 ---
 
-## 17. 学习路线（把 MySQL 真正用起来）
+## 18. 学习路线
 
-1. 先把 CRUD + JOIN + GROUP BY 写熟
-2. 学会看 `EXPLAIN`，理解索引与回表
-3. 理解事务、隔离级别、锁等待的基本现象
-4. 学会做备份恢复与最小权限
-5. 再逐步扩展到复制、高可用、分库分表（按需）
-
----
-
-## 18. 练习题（建议动手写）
-
-使用本文示例 `users/orders` 表，尝试写出：
-
-1. 查询最近 7 天新增用户数
-2. 查询每个用户最近一笔订单
-3. 查询订单数最多的前 10 个用户
-4. 查询某用户的订单列表（按时间倒序）并做游标分页
-5. 用索引优化第 4 题，并用 `EXPLAIN` 验证
-
-写完这些，你就能在真实项目里比较自信地用 MySQL 了。
-
+1. 掌握通用 SQL 基础（[SQL 入门指南](/posts/sql/sql-beginner-guide) → [SQL 实战练习](/posts/sql/sql-exercises)）
+2. 理解 MySQL 特有概念（存储引擎、字符集、特有语法）——本文
+3. 理解 InnoDB 内部原理与性能优化（[MySQL 进阶](/posts/mysql/mysql-advanced-guide)）
+4. 理解通用性能原理（[SQL 进阶：执行计划与查询优化](/posts/sql/sql-advanced-performance)）
+5. 再逐步扩展到复制高可用（[MySQL 复制与高可用](/posts/mysql/mysql-replication-guide)）和分库分表（[MySQL 分片实战指南](/posts/mysql/mysql-sharding-guide)）

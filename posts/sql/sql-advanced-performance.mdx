@@ -8,18 +8,18 @@ tags: ['SQL', 'Database', 'Performance', 'Index', 'Backend']
 # SQL 系统进阶 · Part 4：执行计划、索引原理与查询优化
 
 :::info 本文是「SQL 从入门到专家」系列的第四篇
-1. [Part 1 · 入门指南](/blog/sql/sql-beginner-guide) —— 建立 SQL 心智模型
-2. [Part 2 · 实战练习（一）：基础巩固](/blog/sql/sql-exercises) —— 10 道题巩固单表与双表基础
-3. [Part 3 · 实战练习（二）：进阶应用](/blog/sql/sql-practice-lab) —— 21 道电商数据集题
+1. [Part 1 · 入门指南](/posts/sql/sql-beginner-guide) —— 建立 SQL 心智模型
+2. [Part 2 · 实战练习（一）：基础巩固](/posts/sql/sql-exercises) —— 10 道题巩固单表与双表基础
+3. [Part 3 · 实战练习（二）：进阶应用](/posts/sql/sql-practice-lab) —— 21 道电商数据集题
 4. **Part 4 · 进阶：执行计划、索引原理与查询优化（本文）** —— 从「会写」到「写得快」的方法论
-5. [Part 5 · PostgreSQL 深度实战](/blog/sql/postgresql-guide) —— 把进阶知识落到一个具体数据库
+5. [Part 5 · PostgreSQL 深度实战](/posts/postgresql/postgresql-guide) —— 把进阶知识落到一个具体数据库
 :::
 
 在 Part 1~3 里，你学会了写出**正确**的 SQL。但在真实生产中，"正确"只是及格线：同一个结果，写法不同、有没有索引，性能可能差 10 倍甚至 1000 倍。
 
 这一篇要回答的核心问题是：**为什么一条 SQL 慢，以及如何让它变快？**
 
-我们会刻意保持**数据库中立**——讲的是所有关系型数据库（MySQL、PostgreSQL、SQL Server、Oracle、SQLite）共通的原理。具体到某个数据库的命令细节会标注差异，但思维方式是通用的。读完这一篇，你再去看 [Part 5 的 PostgreSQL 专精](/blog/sql/postgresql-guide)，会发现那些"高级特性"背后都是这里讲的同一套逻辑。
+我们会刻意保持**数据库中立**——讲的是所有关系型数据库（MySQL、PostgreSQL、SQL Server、Oracle、SQLite）共通的原理。具体到某个数据库的命令细节会标注差异，但思维方式是通用的。读完这一篇，你再去看 [Part 5 的 PostgreSQL 专精](/posts/postgresql/postgresql-guide)，会发现那些"高级特性"背后都是这里讲的同一套逻辑。
 
 :::tip 阅读前提
 本文假设你已经能熟练写出 `JOIN`、`GROUP BY`、子查询和窗口函数（即完成了 Part 1~3）。如果对这些还不熟，建议先回头补一补。
@@ -460,7 +460,7 @@ LEFT JOIN pay_amt pay ON pay.order_id = o.id;
 
 ### 6.1 ACID 与隔离级别（快速回顾）
 
-事务保证一组操作"要么全成、要么全败"，由 ACID 描述：原子性、一致性、隔离性、持久性（详见 [Part 1 第 12 节](/blog/sql/sql-beginner-guide)）。
+事务保证一组操作"要么全成、要么全败"，由 ACID 描述：原子性、一致性、隔离性、持久性（详见 [Part 1 第 12 节](/posts/sql/sql-beginner-guide)）。
 
 并发的核心难点是**隔离性**。SQL 标准定义了 4 个隔离级别，权衡"一致性 vs 性能"：
 
@@ -485,7 +485,7 @@ PostgreSQL、MySQL InnoDB、Oracle 都采用 **MVCC（多版本并发控制）**
 
 这带来一个巨大好处：**读操作不会阻塞写操作，写也不阻塞读**。读永远读到一个一致的快照，不用等锁。
 
-代价是旧版本数据需要后台清理（PG 的 `VACUUM`、InnoDB 的 purge），否则会膨胀——这部分在 [Part 5](/blog/sql/postgresql-guide) 会展开。
+代价是旧版本数据需要后台清理（PG 的 `VACUUM`、InnoDB 的 purge），否则会膨胀——这部分在 [Part 5](/posts/postgresql/postgresql-guide) 会展开。
 
 ### 6.3 悲观锁 vs 乐观锁
 
@@ -608,4 +608,4 @@ flowchart TD
 
 这些原理是**数据库中立**的。但纸上谈兵不如落到实处——
 
-**下一步：** 进入系列最后一篇 [Part 5 · PostgreSQL 深度实战](/blog/sql/postgresql-guide)，看这些通用原理如何在一个功能最完善的开源数据库上具体落地：PG 的 MVCC 实现、丰富的索引类型（GIN/GiST/BRIN）、`EXPLAIN` 实战、`pg_stat_statements` 找 Top SQL、`VACUUM` 与表膨胀、连接池、分区表，以及一个完整的博客系统数据模型设计。
+**下一步：** 进入系列最后一篇 [Part 5 · PostgreSQL 深度实战](/posts/postgresql/postgresql-guide)，看这些通用原理如何在一个功能最完善的开源数据库上具体落地：PG 的 MVCC 实现、丰富的索引类型（GIN/GiST/BRIN）、`EXPLAIN` 实战、`pg_stat_statements` 找 Top SQL、`VACUUM` 与表膨胀、连接池、分区表，以及一个完整的博客系统数据模型设计。

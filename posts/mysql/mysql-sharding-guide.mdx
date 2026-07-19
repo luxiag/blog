@@ -1,0 +1,1079 @@
+---
+title: 'MySQL 分片实战指南：分片键设计、热点治理、跨分片查询与不停机迁移'
+date: '2026-04-02'
+excerpt: '系统覆盖 MySQL 分库分表的核心难题：分片键怎么选、热点怎么识别和治理、跨分片查询和分页怎么做、不停机迁移怎么落地。从设计到运维一篇覆盖。'
+tags: ['mysql', 'sharding', 'hotspot', 'cross-shard', 'migration', 'database', 'architecture']
+---
+
+# MySQL 分片实战指南：分片键设计、热点治理、跨分片查询与不停机迁移
+
+分片是数据库扩展的另一条主线——一份数据拆多份，解决写压力和容量上限。
+
+> 分片是"横向拆分不同的数据"，目标是写扩展 + 容量扩展。
+
+复制解决读的问题，分片解决写和容量的问题。如果还没走到复制那一步，先看 [MySQL 复制与高可用](/posts/mysql/mysql-replication-guide)。
+
+---
+
+## 一、什么时候考虑分片
+
+1. 单表数据量过大（亿级甚至更高）
+2. 单库写入瓶颈明显（CPU、IO、锁冲突）
+3. 单机容量和连接数快到上限
+
+优先顺序：SQL 优化 → 缓存 → 复制 + 读写分离 → 分片
+
+分片是最后的手段，复杂度很高，不要过早引入。
+
+---
+
+## 二、分片的基本形态
+
+### 2.1 垂直拆分
+
+按业务域拆库：用户库、订单库、库存库。
+
+实战里通常先做垂直拆分，因为成本低、收益明显。
+
+### 2.2 水平拆分
+
+同一张表按规则拆到多个库表。
+
+常见形式：
+
+- 分库分表：`db0.orders_0`、`db0.orders_1`、`db1.orders_0`、`db1.orders_1`
+- 仅分表：`orders_0`、`orders_1`（同库内拆表，适用于单库容量够但单表太大的场景）
+
+### 2.3 实操：分片库与分片表 DDL
+
+以 4 库 × 4 表 = 16 分片为例，按 `user_id % 16` 路由：
+
+```sql
+-- 创建 4 个库
+CREATE DATABASE shard_0;
+CREATE DATABASE shard_1;
+CREATE DATABASE shard_2;
+CREATE DATABASE shard_3;
+
+-- 在每个库中创建 4 张分片表
+-- shard_0: orders_0, orders_4, orders_8, orders_12
+-- shard_1: orders_1, orders_5, orders_9, orders_13
+-- shard_2: orders_2, orders_6, orders_10, orders_14
+-- shard_3: orders_3, orders_7, orders_11, orders_15
+```
+
+每个分片表的 DDL 必须同构：
+
+```sql
+CREATE TABLE shard_0.orders_0 (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  order_no VARCHAR(32) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  pay_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_order_no (order_no),
+  KEY idx_user_created (user_id, created_at DESC, id DESC),
+  KEY idx_status_created (status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+```
+
+批量建表脚本：
+
+```bash
+#!/bin/bash
+SHARDS=16
+DB_COUNT=4
+TABLES_PER_DB=4
+
+for db_idx in $(seq 0 $((DB_COUNT - 1))); do
+  DB="shard_${db_idx}"
+  for t_offset in $(seq 0 $((TABLES_PER_DB - 1))); do
+    TABLE_IDX=$((db_idx * TABLES_PER_DB + t_offset))
+    TABLE="orders_${TABLE_IDX}"
+    mysql -u root -p -e "
+      CREATE TABLE IF NOT EXISTS ${DB}.${TABLE} (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        order_no VARCHAR(32) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        pay_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_order_no (order_no),
+        KEY idx_user_created (user_id, created_at DESC, id DESC),
+        KEY idx_status_created (status, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+    "
+  done
+done
+```
+
+---
+
+## 三、分片键设计（分片系统成败的 80%）
+
+分片键同时决定三件事：
+
+1. 数据落在哪个分片
+2. 查询是否命中单分片
+3. 流量是否均衡
+
+### 3.1 分片键选择原则
+
+1. **高频查询可命中**：常用查询应带分片键
+2. **分布尽量均匀**：避免少数分片过热
+3. **值稳定**：不要用经常变化的字段
+4. **可扩展**：后续扩容迁移成本可控
+5. **业务语义清晰**：排障和治理易理解
+
+### 3.2 常见候选分片键对比
+
+**`user_id`**
+
+- 优点：用户维度查询命中率高，数据通常分布较均匀
+- 缺点：按订单号查单可能跨路由
+
+**`order_id`**
+
+- 优点：唯一性强，路由简单
+- 缺点：按用户维度查订单易跨分片
+
+**时间字段（如 `created_date`）**
+
+- 优点：归档方便
+- 缺点：极易形成时间热点，不建议单独使用
+
+实战中订单系统常优先 `user_id`。
+
+### 3.3 分片算法
+
+**取模（`key % N`）**
+
+- 优点：简单、快
+- 缺点：扩容时迁移量大
+
+**一致性哈希**
+
+- 优点：扩容迁移更平滑
+- 缺点：实现复杂度更高
+
+**范围分片**
+
+- 优点：按时间管理方便
+- 缺点：热点明显，需要配套冷热拆分
+
+默认建议：
+
+1. 早期可用取模
+2. 预留扩容迁移方案
+
+---
+
+## 四、路由层实操
+
+需要一层路由中间件或应用内路由逻辑：
+
+1. 根据分片键算目标库表
+2. 执行 SQL
+3. 聚合结果（跨分片时）
+
+### 4.1 应用层路由（TypeScript 示例）
+
+```ts
+const SHARD_COUNT = 16
+const DB_COUNT = 4
+const TABLES_PER_DB = 4
+
+interface ShardRoute {
+  db: string
+  table: string
+  dbIdx: number
+  tableIdx: number
+}
+
+function routeShard(userId: number): ShardRoute {
+  const tableIdx = userId % SHARD_COUNT
+  const dbIdx = Math.floor(tableIdx / TABLES_PER_DB)
+  return {
+    db: `shard_${dbIdx}`,
+    table: `orders_${tableIdx}`,
+    dbIdx,
+    tableIdx,
+  }
+}
+
+async function getUserOrders(userId: number, limit = 20) {
+  const { db, table } = routeShard(userId)
+  return pool.query(
+    `SELECT * FROM ${table} WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`,
+    [userId, limit],
+    db
+  )
+}
+```
+
+### 4.2 ShardingSphere 中间件配置
+
+ShardingSphere 是最常用的 Java 分片中间件，应用无需改代码即可分片。
+
+**YAML 配置示例（ShardingSphere-JDBC）：**
+
+```yaml
+mode:
+  type: Standalone
+  repository:
+    type: JDBC
+
+dataSources:
+  ds_0:
+    url: jdbc:mysql://10.0.0.11:3306/shard_0?useSSL=false
+    username: app
+    password: App@123456
+    connectionTimeoutMilliseconds: 3000
+    maxPoolSize: 20
+  ds_1:
+    url: jdbc:mysql://10.0.0.12:3306/shard_1?useSSL=false
+    username: app
+    password: App@123456
+    connectionTimeoutMilliseconds: 3000
+    maxPoolSize: 20
+  ds_2:
+    url: jdbc:mysql://10.0.0.13:3306/shard_2?useSSL=false
+    username: app
+    password: App@123456
+    connectionTimeoutMilliseconds: 3000
+    maxPoolSize: 20
+  ds_3:
+    url: jdbc:mysql://10.0.0.14:3306/shard_3?useSSL=false
+    username: app
+    password: App@123456
+    connectionTimeoutMilliseconds: 3000
+    maxPoolSize: 20
+
+rules:
+  - !SHARDING
+    tables:
+      orders:
+        actualDataNodes: ds_${0..3}.orders_${0..15}
+        tableStrategy:
+          standard:
+            shardingColumn: user_id
+            shardingAlgorithmName: orders_mod
+        keyGenerateStrategy:
+          column: id
+          keyGeneratorName: snowflake
+    shardingAlgorithms:
+      orders_mod:
+        type: MOD
+        props:
+          sharding-count: 16
+    keyGenerators:
+      snowflake:
+        type: SNOWFLAKE
+        props:
+          worker-id: 1
+```
+
+应用配置后，SQL 写逻辑表名 `orders`，ShardingSphere 自动路由到具体分片：
+
+```sql
+-- 应用写的 SQL
+SELECT * FROM orders WHERE user_id = 12345 ORDER BY created_at DESC LIMIT 20;
+
+-- ShardingSphere 自动路由到
+SELECT * FROM shard_3.orders_7 WHERE user_id = 12345 ORDER BY created_at DESC LIMIT 20;
+```
+
+---
+
+## 五、热点分片识别与治理
+
+### 5.1 如何识别热点
+
+不要只看全局 QPS，必须按分片看。
+
+**按分片查询 QPS（每个分片单独查询）：**
+
+```sql
+-- 在每个分片库上执行
+SHOW GLOBAL STATUS LIKE 'Com_select';
+SHOW GLOBAL STATUS LIKE 'Com_insert';
+SHOW GLOBAL STATUS LIKE 'Com_update';
+SHOW GLOBAL STATUS LIKE 'Com_delete';
+```
+
+**用 Prometheus + Grafana 按实例监控：**
+
+每个分片部署独立的 `mysqld_exporter`：
+
+```yaml
+scrape_configs:
+  - job_name: 'mysql_shard_0'
+    static_configs:
+      - targets: ['10.0.0.11:9104']
+        labels:
+          shard: '0'
+  - job_name: 'mysql_shard_1'
+    static_configs:
+      - targets: ['10.0.0.12:9104']
+        labels:
+          shard: '1'
+  - job_name: 'mysql_shard_2'
+    static_configs:
+      - targets: ['10.0.0.13:9104']
+        labels:
+          shard: '2'
+  - job_name: 'mysql_shard_3'
+    static_configs:
+      - targets: ['10.0.0.14:9104']
+        labels:
+          shard: '3'
+```
+
+Grafana 按 `shard` label 分面板，一眼看出哪个分片过热。
+
+热点判定阈值：
+
+1. 某分片流量 > 平均值 2-3 倍
+2. 某分片延迟长期高于其他分片
+
+**查询每个分片的数据量分布：**
+
+```sql
+-- 在每个分片库执行
+SELECT COUNT(*) AS row_count FROM orders_0;
+SELECT COUNT(*) AS row_count FROM orders_4;
+-- ...
+```
+
+汇总对比即可发现数据倾斜。
+
+### 5.2 热点成因
+
+1. 大客户/大卖家集中在同一分片
+2. 活动流量命中同一批 key
+3. 时间分片导致当前分片过热
+4. 分片键低基数（可选值太少）
+
+### 5.3 热点治理策略
+
+**1. 路由打散（最常用）**
+
+在分片键上增加"打散因子"：
+
+```ts
+function routeWithSalt(userId: number, orderType: string): number {
+  const salted = `${userId}:${orderType}`
+  return hashCode(salted) % SHARD_COUNT
+}
+```
+
+适合新系统，老系统改造成本较高。
+
+**2. 热点分片再拆分**
+
+对热点分片做二次拆分：
+
+1. 只迁热点租户/用户
+2. 非热点数据保持不动
+
+这是最常见的增量治理方法。
+
+**3. 缓存吸收热点读**
+
+1. 热门查询前置 Redis
+2. 本地缓存 + 短 TTL
+3. 防击穿和雪崩
+
+**4. 写入削峰**
+
+1. 异步化非核心写
+2. 批量写合并
+3. 限流与队列缓冲
+
+### 5.4 热点迁移实战流程
+
+当某分片长期过热：
+
+1. 识别热点对象（租户/用户/商品）
+2. 给热点对象分配新分片路由
+3. 上线双写（旧分片 + 新分片）
+4. 回填历史数据
+5. 校验一致性
+6. 切读路由
+7. 停旧写并下线旧路由
+
+全程需要开关控制和回滚能力。
+
+### 5.5 热点路由覆盖表（TypeScript 完整示例）
+
+```ts
+const SHARD_COUNT = 16
+const DB_COUNT = 4
+const TABLES_PER_DB = 4
+
+interface ShardRoute {
+  db: string
+  table: string
+}
+
+const defaultRoute = (userId: number): ShardRoute => {
+  const tableIdx = userId % SHARD_COUNT
+  const dbIdx = Math.floor(tableIdx / TABLES_PER_DB)
+  return { db: `shard_${dbIdx}`, table: `orders_${tableIdx}` }
+}
+
+const hotOverride = new Map<number, ShardRoute>()
+
+function routeShard(userId: number): ShardRoute {
+  return hotOverride.get(userId) ?? defaultRoute(userId)
+}
+
+async function migrateHotUser(userId: number, targetDbIdx: number, targetTableIdx: number) {
+  const target: ShardRoute = { db: `shard_${targetDbIdx}`, table: `orders_${targetTableIdx}` }
+  hotOverride.set(userId, target)
+  console.log(`User ${userId} routed to ${target.db}.${target.table}`)
+}
+```
+
+---
+
+## 六、跨分片查询与分页
+
+分库分表后最容易"突然变难"的不是写入，而是查询。
+
+### 6.1 核心原则
+
+> 能单分片命中，就不要跨分片。
+
+设计 API 时，优先提供：
+
+1. 按分片键查询（如 `user_id`）
+2. 带时间范围的查询
+3. 可游标翻页的查询
+
+### 6.2 跨分片查询的四种方案
+
+**1. 应用层聚合（最常见）**
+
+流程：
+
+1. 并发查询多个分片
+2. 内存合并结果
+3. 排序、截断、返回
+
+适合：结果集不大、实时性要求高
+
+**2. 预聚合表（离线/准实时）**
+
+把跨分片统计提前算好落一张汇总表。
+
+适合：报表类查询、对实时性要求不是毫秒级
+
+**3. 搜索引擎协同（ES/OpenSearch）**
+
+把复杂搜索、排序、分页交给搜索引擎。
+
+适合：多条件检索、复杂排序、大规模分页
+
+**4. 中间件聚合**
+
+用分片中间件做 SQL 解析和聚合。
+
+优点：开发接入快。缺点：复杂查询仍可能性能差。
+
+### 6.3 跨分片分页：为什么 offset 会崩
+
+单库常见：
+
+```sql
+SELECT * FROM orders
+ORDER BY created_at DESC
+LIMIT 100000, 20;
+```
+
+分片后如果每个分片都跑深分页再聚合，成本极高。
+
+### 6.4 游标分页（推荐）
+
+**单分片游标 SQL：**
+
+```sql
+SELECT order_no, user_id, status, created_at
+FROM orders
+WHERE user_id = ?
+  AND (created_at < ? OR (created_at = ? AND id < ?))
+ORDER BY created_at DESC, id DESC
+LIMIT 20;
+```
+
+关键点：
+
+1. 排序字段要稳定（常用 `created_at, id`）
+2. 游标携带最后一条记录的排序键
+
+**跨分片游标思路：**
+
+1. 每个分片都按游标取 `k` 条（如 20）
+2. 应用层做 K 路归并
+3. 取前 `N` 条返回
+4. 生成下一页游标
+
+### 6.5 Node.js 跨分片游标分页完整示例
+
+```ts
+type OrderRow = {
+  id: number
+  orderNo: string
+  userId: number
+  status: string
+  createdAt: string
+}
+
+type Cursor = {
+  byShard: Record<number, { createdAt: string; id: number } | null>
+}
+
+async function queryCrossShardPage(
+  cursor: Cursor | null,
+  pageSize = 20
+): Promise<{ list: OrderRow[]; nextCursor: Cursor }> {
+  const shardCount = 16
+
+  const shardRows = await Promise.all(
+    Array.from({ length: shardCount }, async (_, shard) => {
+      const shardCursor = cursor?.byShard[shard] ?? null
+      const { db, table } = defaultRoute(shard)
+      const params: (string | number)[] = [pageSize]
+      let whereClause = ''
+
+      if (shardCursor) {
+        whereClause = 'WHERE (created_at < ? OR (created_at = ? AND id < ?))'
+        params.unshift(shardCursor.createdAt, shardCursor.createdAt, shardCursor.id)
+      }
+
+      const rows = await pool.query(
+        `SELECT id, order_no, user_id, status, created_at
+         FROM ${table} ${whereClause}
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?`,
+        params,
+        db
+      )
+      return rows.map((r: OrderRow) => ({ ...r, shard }))
+    })
+  )
+
+  const merged = shardRows
+    .flat()
+    .sort((a, b) => {
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1
+      return b.id - a.id
+    })
+
+  const page = merged.slice(0, pageSize)
+
+  const byShard: Record<number, { createdAt: string; id: number }> = {}
+  for (const row of page) {
+    byShard[row.shard] = { createdAt: row.createdAt, id: row.id }
+  }
+
+  return {
+    list: page,
+    nextCursor: { byShard },
+  }
+}
+```
+
+### 6.6 跨分片排序（全局 TopN）
+
+1. 每分片先取本地 TopK
+2. 应用层再合并取全局 TopN
+3. `K` 一般略大于 `N`，防止误差
+
+不要直接全量拉每个分片再排序。
+
+### 6.7 跨分片聚合（COUNT/SUM）
+
+**实时小规模：** 每分片执行后在应用层求和：
+
+```sql
+SELECT COUNT(*) AS c, SUM(pay_amount) AS s
+FROM orders
+WHERE created_at >= ? AND created_at < ?;
+```
+
+**大规模报表：** 预聚合——按小时/天落汇总表，查询直接读汇总。
+
+### 6.8 索引设计要点（跨分片时代）
+
+每个分片都要有"同构索引"，至少覆盖：
+
+1. 分片内高频过滤条件
+2. 分页排序字段
+3. 关联回表最少化
+
+```sql
+KEY idx_user_created_id (user_id, created_at DESC, id DESC)
+KEY idx_status_created (status, created_at)
+```
+
+---
+
+## 七、不停机迁移实战
+
+分库分表最难的不是设计分片算法，而是迁移上线。
+
+### 7.1 迁移目标与原则
+
+目标：
+
+1. 业务不停机
+2. 数据不丢、不乱
+3. 可灰度切流
+4. 异常可快速回退
+
+原则：
+
+1. 先建新路，再切旧路
+2. 先双写，再切读，再切写
+3. 每一步都可验证、可回滚
+
+### 7.2 迁移前准备
+
+1. 明确分片键（如 `user_id`）
+2. 明确分片规则（取模/一致性哈希）
+3. 上线路由层（应用内或中间件）
+4. 新分片库建表和索引完成
+5. 增加迁移开关（双写开关、读路由开关、回退开关）
+
+建议先在预发全链路演练一遍。
+
+### 7.3 总体迁移流程（7 步）
+
+```text
+1. 新库准备
+2. 发布双写代码（默认只写旧库）
+3. 开启双写（旧+新）
+4. 历史数据回填
+5. 增量追平与一致性校验
+6. 灰度切读 -> 切写
+7. 稳定后下线旧路径
+```
+
+### 7.4 双写策略（不停机核心）
+
+**推荐策略：**
+
+1. 主写旧库（事实来源）
+2. 异步或同步写新分片库
+3. 双写失败要可观测和可补偿
+
+**Node.js 伪代码：**
+
+```ts
+async function createOrder(input: OrderInput) {
+  const order = await oldDb.createOrder(input)
+
+  if (featureFlags.dualWriteEnabled) {
+    try {
+      const { db, table } = routeShard(input.userId)
+      await newShardPool.query(
+        `INSERT INTO ${table} (id, user_id, order_no, status, pay_amount, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [order.id, order.userId, order.orderNo, order.status, order.payAmount, order.createdAt],
+        db
+      )
+    } catch (err) {
+      await migrationErrorLog.save({
+        bizType: 'ORDER_CREATE',
+        bizId: order.orderNo,
+        payload: order,
+        reason: String(err),
+      })
+    }
+  }
+
+  return order
+}
+```
+
+重点：
+
+1. 不要让新库失败直接影响主链路（迁移阶段）
+2. 失败必须可追踪、可补偿
+
+### 7.5 历史数据回填脚本
+
+**Node.js 回填脚本（支持断点续传和限速）：**
+
+```ts
+const BATCH_SIZE = 1000
+const SLEEP_MS = 200
+
+async function backfillOrders(resumeFromId = 0) {
+  let lastId = resumeFromId
+  let totalMigrated = 0
+
+  while (true) {
+    const rows = await oldDb.query(
+      'SELECT * FROM orders WHERE id > ? ORDER BY id LIMIT ?',
+      [lastId, BATCH_SIZE]
+    )
+
+    if (rows.length === 0) {
+      console.log(`Backfill done. Total migrated: ${totalMigrated}`)
+      break
+    }
+
+    for (const row of rows) {
+      const { db, table } = routeShard(row.user_id)
+      await newShardPool.query(
+        `INSERT INTO ${table} (id, user_id, order_no, status, pay_amount, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           status = VALUES(status),
+           pay_amount = VALUES(pay_amount)`,
+        [row.id, row.user_id, row.order_no, row.status, row.pay_amount, row.created_at],
+        db
+      )
+    }
+
+    lastId = rows[rows.length - 1].id
+    totalMigrated += rows.length
+    console.log(`Migrated ${totalMigrated} rows, lastId=${lastId}`)
+
+    await sleep(SLEEP_MS)
+  }
+}
+```
+
+`ON DUPLICATE KEY UPDATE` 保证幂等——重跑不会产生重复数据。
+
+回填顺序建议：
+
+1. 主表先回填
+2. 明细表、日志表跟进
+3. 最后校验关联完整性
+
+### 7.6 增量追平（CDC）
+
+历史回填只覆盖过去数据，迁移期间新变更要靠增量同步。
+
+**Canal 配置示例（Docker）：**
+
+```yaml
+version: '3.8'
+services:
+  canal-server:
+    image: canal/canal-server:v1.1.7
+    container_name: canal-server
+    ports:
+      - '11111:11111'
+    environment:
+      canal.instance.master.address: '10.0.0.11:3306'
+      canal.instance.dbUsername: 'canal'
+      canal.instance.dbPassword: 'Canal@123456'
+      canal.instance.filter.regex: 'your_db\\..*'
+      canal.instance.tsdb.enable: 'true'
+```
+
+Canal 会订阅主库 binlog，将变更推送到你的消费者。消费者按分片键路由写入新分片库。
+
+目标：在切流前让"旧库数据状态"和"新库数据状态"尽可能一致。
+
+### 7.7 一致性校验（必须做）
+
+**自动化校验脚本：**
+
+```ts
+async function validateConsistency() {
+  console.log('=== 总量校验 ===')
+  const oldCount = await oldDb.query('SELECT COUNT(*) AS c FROM orders')
+  let newCount = 0
+  for (let shard = 0; shard < 16; shard++) {
+    const { db, table } = defaultRoute(shard)
+    const rows = await newShardPool.query(`SELECT COUNT(*) AS c FROM ${table}`, [], db)
+    newCount += rows[0].c
+  }
+  console.log(`Old: ${oldCount[0].c}, New: ${newCount}, Match: ${oldCount[0].c === newCount}`)
+
+  console.log('=== 分片维度校验 ===')
+  const shardDistribution = await oldDb.query(
+    'SELECT user_id % 16 AS shard_key, COUNT(*) AS c FROM orders GROUP BY shard_key ORDER BY shard_key'
+  )
+  for (const row of shardDistribution) {
+    const { db, table } = defaultRoute(row.shard_key)
+    const newRows = await newShardPool.query(`SELECT COUNT(*) AS c FROM ${table}`, [], db)
+    const match = row.c === newRows[0].c
+    if (!match) {
+      console.log(`SHARD ${row.shard_key} MISMATCH: old=${row.c} new=${newRows[0].c}`)
+    }
+  }
+
+  console.log('=== 抽样字段校验 ===')
+  const samples = await oldDb.query('SELECT * FROM orders ORDER BY RAND() LIMIT 100')
+  let mismatchCount = 0
+  for (const sample of samples) {
+    const { db, table } = routeShard(sample.user_id)
+    const newRow = await newShardPool.query(
+      `SELECT * FROM ${table} WHERE id = ?`,
+      [sample.id],
+      db
+    )
+    if (newRow.length === 0) {
+      console.log(`MISSING: id=${sample.id}`)
+      mismatchCount++
+    } else if (
+      newRow[0].status !== sample.status ||
+      Number(newRow[0].pay_amount) !== Number(sample.pay_amount)
+    ) {
+      console.log(`DIFF: id=${sample.id} old_status=${sample.status} new_status=${newRow[0].status}`)
+      mismatchCount++
+    }
+  }
+  console.log(`Sample check: ${mismatchCount}/100 mismatches`)
+}
+```
+
+### 7.8 灰度切流策略
+
+**先切读：** 按小流量用户（1%）切到新库读，核对延迟和结果一致性。
+
+**再切写：** 1% → 10% → 50% → 100%，每阶段观察业务成功率、错误率、慢 SQL。
+
+**切流期间保留双写：** 先保持一段时间"新主写 + 旧库兜底写"，稳定后再下线旧写。
+
+**灰度开关配置示例：**
+
+```ts
+const GRAY_CONFIG = {
+  readPercent: 0.01,    // 1% 读流量走新库
+  writePercent: 0,      // 写流量仍全走旧库
+  grayUserRange: [1, 1000],  // user_id 在此范围走新库
+}
+
+function shouldReadNew(userId: number): boolean {
+  if (userId >= GRAY_CONFIG.grayUserRange[0] && userId <= GRAY_CONFIG.grayUserRange[1]) {
+    return true
+  }
+  return Math.random() < GRAY_CONFIG.readPercent
+}
+```
+
+### 7.9 回滚预案（必须提前准备）
+
+回滚触发条件：
+
+1. 新库关键接口错误率 > 1%
+2. 查询结果差异超阈值
+3. 状态流转异常增多
+
+回滚动作：
+
+1. 读路由切回旧库
+2. 写路由切回旧库
+3. 保留新库写入日志用于问题分析
+4. 启动数据修复任务
+
+没有回滚预案，就不算可上线方案。
+
+### 7.10 迁移期监控指标
+
+1. 双写失败率
+2. 回填进度与速率
+3. 增量积压（CDC lag）
+4. 新旧库数据差异数
+5. 分片热点（QPS/CPU/锁等待）
+
+迁移期建议单独仪表盘，不和常规业务混在一起。
+
+---
+
+## 八、复制和分片怎么组合
+
+最常见组合：
+
+1. 每个分片内部再做主从复制
+2. 写进分片主库，读走分片从库
+
+结构：
+
+```text
+Shard-0: master + replicas
+Shard-1: master + replicas
+Shard-2: master + replicas
+```
+
+同时拿到分片的写扩展能力 + 复制的读扩展和高可用能力。
+
+复制细节见 [MySQL 复制与高可用](/posts/mysql/mysql-replication-guide)。
+
+---
+
+## 九、全局 ID 设计
+
+分片后不能依赖单表自增主键做全局唯一。
+
+### 9.1 方案对比
+
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| 雪花算法 | 时间 + 机器 + 序列，趋势递增，索引友好 | 依赖时钟，机器数有限 |
+| 号段模式 | 批量取号，减少网络开销 | 需要发号服务 |
+| UUID | 简单 | 索引局部性差，不适合 InnoDB 主键 |
+
+### 9.2 雪花算法 ID 生成示例（TypeScript）
+
+```ts
+const EPOCH = 1704067200000n  // 2024-01-01 00:00:00 UTC
+const WORKER_ID = 1n
+const SEQUENCE_BITS = 12n
+const WORKER_ID_BITS = 10n
+const MAX_SEQUENCE = (1n << SEQUENCE_BITS) - 1n
+
+let sequence = 0n
+let lastTimestamp = 0n
+
+function nextId(): string {
+  const now = BigInt(Date.now()) - EPOCH
+
+  if (now === lastTimestamp) {
+    sequence = (sequence + 1n) & MAX_SEQUENCE
+    if (sequence === 0n) {
+      while (BigInt(Date.now()) - EPOCH <= lastTimestamp) {}
+    }
+  } else {
+    sequence = 0n
+  }
+
+  lastTimestamp = now
+  const id = (now << (SEQUENCE_BITS + WORKER_ID_BITS))
+    | (WORKER_ID << SEQUENCE_BITS)
+    | sequence
+
+  return id.toString()
+}
+```
+
+业务上通常更推荐雪花或号段。
+
+---
+
+## 十、事务与一致性
+
+分片后跨库事务成本高，不建议重度依赖 2PC。
+
+实用方案：
+
+1. 单分片内强事务
+2. 跨分片用消息最终一致
+3. 配套幂等 + 补偿任务 + 对账
+
+核心原则：
+
+> 把强一致范围缩到最小，把最终一致链路补齐。
+
+### 10.1 跨分片事务的补偿模式
+
+```ts
+async function transferBalance(fromUserId: number, toUserId: number, amount: number) {
+  const fromRoute = routeShard(fromUserId)
+  const toRoute = routeShard(toUserId)
+
+  if (fromRoute.db === toRoute.db) {
+    // 同分片：直接事务
+    await pool.transaction(fromRoute.db, async (tx) => {
+      await tx.query(`UPDATE accounts SET balance = balance - ? WHERE user_id = ?`, [amount, fromUserId])
+      await tx.query(`UPDATE accounts SET balance = balance + ? WHERE user_id = ?`, [amount, toUserId])
+    })
+  } else {
+    // 跨分片：补偿模式
+    const txId = nextId()
+    try {
+      await pool.query(
+        `UPDATE accounts SET balance = balance - ? WHERE user_id = ? AND balance >= ?`,
+        [amount, fromUserId, amount],
+        fromRoute.db
+      )
+      await pool.query(
+        `UPDATE accounts SET balance = balance + ? WHERE user_id = ?`,
+        [amount, toUserId],
+        toRoute.db
+      )
+      // 记录事务成功
+      await recordTxSuccess(txId)
+    } catch (err) {
+      // 补偿：对账任务会定期扫描并修复不一致
+      await recordTxFailed(txId, { fromUserId, toUserId, amount, error: String(err) })
+      throw err
+    }
+  }
+}
+```
+
+---
+
+## 十一、性能优化建议
+
+1. 限制跨分片并发度（防止打爆连接池）
+2. 结果集做上限保护
+3. 常用查询加缓存
+4. 热门聚合做异步预计算
+5. 查询超时要明确配置
+6. 分页统一改游标模式
+7. 报表类查询迁移到预聚合/搜索引擎
+
+---
+
+## 十二、常见坑与误区
+
+1. 过早分片，复杂度爆炸
+2. 只做分片，不做运维自动化
+3. 分片键选错导致热点
+4. 继续使用深分页 `limit offset`
+5. 跨分片 JOIN 当常规查询用
+6. 没有排序稳定键，分页重复/漏数据
+7. 双写无幂等导致重复数据
+8. 只做总量校验，不做字段校验
+9. 切流过快，问题放大
+10. 迁移脚本无限速，拖垮线上
+11. 没有迁移回滚预案
+12. 回填脚本不支持断点续传，中断后从头开始
+
+---
+
+## 十三、检查清单
+
+### 分片上线前
+
+1. 分片键是否命中核心查询
+2. 是否有每分片监控看板
+3. 是否有热点识别阈值
+4. 是否有热点迁移开关
+5. 是否有回滚方案
+
+### 迁移上线前
+
+1. 新库与路由层就绪
+2. 双写代码上线并可开关控制
+3. 回填任务支持断点续传
+4. CDC 增量同步可观测
+5. 校验脚本自动化
+6. 灰度切流与回滚脚本演练通过
+
+---
+
+## 总结
+
+分片系统长期稳定运行，关键不是"先分出去"，而是"能持续治理"。
+
+你可以记住这条落地链路：
+
+1. 先优化 → 再复制 → 后分片
+2. 选对分片键 → 盯住分片级指标 → 热点增量治理
+3. 双写可控 → 回填可追 → 校验可证 → 切流可回
+
+把这四步做扎实，分库分表才会真正变成可持续的扩展能力。
