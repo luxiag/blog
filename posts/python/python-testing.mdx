@@ -1,0 +1,1321 @@
+---
+title: 'Python 测试系统教程：pytest 从入门到工程实践'
+date: '2026-07-19'
+excerpt: '系统讲解 Python 测试框架 pytest 的核心功能与工程实践。覆盖测试发现与执行、断言机制、fixture 依赖注入、参数化测试、mark 标记与筛选、mock 与 patch、测试组织与配置、覆盖率、异步测试，最后用完整的测试项目串联所有知识点。'
+tags: ['python', 'pytest', 'testing', 'mock', 'coverage']
+---
+
+# Python 测试系统教程：pytest 从入门到工程实践
+
+写代码时你一定遇到过这些问题：改了一处逻辑，不确定有没有破坏其他地方；函数逻辑越来越复杂，手动验证越来越费时；上线后发现边界条件没处理，但本地测试时根本没想到那个场景。
+
+测试解决的就是这些问题——它给你**重构的信心**（改了代码跑一遍测试就知道有没有问题）、**活文档**（测试用例就是函数行为的可执行规格说明）、**提前捕获 bug**（自动化测试比人脑更快覆盖边界条件）。
+
+Python 标准库自带 `unittest`，但 pytest 已经成为事实标准。原因很简单：
+
+- **更少的样板代码**：不需要写类、不需要 `self.assertEqual`，直接 `assert` 就行
+- **强大的 fixture 系统**：比 `setUp/tearDown` 灵活得多，支持依赖注入、作用域控制、自动复用
+- **丰富的插件生态**：覆盖率、异步测试、并行执行、属性测试……都有现成插件
+
+这篇文章从最简单的测试用例开始，逐步深入 fixture、参数化、mock、覆盖率、异步测试，最后用一个完整项目串联所有知识点。
+
+---
+
+## 一、快速上手
+
+### 安装 pytest
+
+```bash
+pip install pytest
+# 或用 uv
+uv add pytest --dev
+```
+
+### 第一个测试
+
+pytest 的测试发现规则：文件名匹配 `test_*.py` 或 `*_test.py`，函数名以 `test_` 开头，类名以 `Test` 开头（其中的方法以 `test_` 开头）。
+
+```python
+# test_calc.py
+
+def add(a: int, b: int) -> int:
+    return a + b
+
+def test_add():
+    assert add(1, 2) == 3
+    assert add(-1, 1) == 0
+    assert add(0, 0) == 0
+```
+
+就这样——没有类，没有 `self`，一个 `assert` 搞定。运行：
+
+```bash
+pytest
+```
+
+### 运行测试的常用方式
+
+```bash
+pytest                           # 发现当前目录下所有测试
+pytest -v                        # 详细输出
+pytest -k "add"                  # 只运行名字匹配模式的测试
+pytest test_calc.py::test_add    # 运行指定函数
+pytest -s                        # 显示 print 输出
+pytest -x                        # 遇到第一个失败就停止
+```
+
+### 测试发现规则总结
+
+1. 从命令行指定的路径开始（默认当前目录），递归进入所有非隐藏目录
+2. 在目录中寻找匹配 `test_*.py` 或 `*_test.py` 的文件
+3. 在文件中寻找匹配 `test_*` 的函数，或 `Test*` 类中匹配 `test_*` 的方法
+4. `conftest.py` 中的 fixture 会被自动发现，无需 import
+
+:::note
+如果测试类有 `__init__` 方法，pytest 不会收集其中的测试方法。测试类应该避免定义 `__init__`。
+:::
+
+---
+
+## 二、断言与内省
+
+### assert 语句
+
+pytest 不需要你学一套新的断言 API，直接用 Python 原生的 `assert`：
+
+```python
+def test_equality():
+    assert 1 + 1 == 2
+
+def test_comparison():
+    assert 5 > 3
+    assert 2 <= 2
+
+def test_containment():
+    assert 3 in [1, 2, 3]
+    assert "hello" in "hello world"
+    assert "key" in {"key": "value"}
+
+def test_type_checking():
+    assert isinstance(42, int)
+    assert isinstance([1, 2], list)
+```
+
+### 断言内省：为什么 assert x == y 输出那么有用
+
+普通 Python 中 `assert x == y` 失败只告诉你 `AssertionError`，不告诉你 x 和 y 的值。pytest 通过重写 assert 语句自动输出详细对比：
+
+```python
+def test_assert_introspection():
+    result = {"name": "Alice", "age": 30, "scores": [85, 90, 78]}
+    expected = {"name": "Alice", "age": 25, "scores": [85, 92, 78]}
+    assert result == expected
+    # 失败时自动输出：Differing items: {'age': 30} != {'age': 25}
+```
+
+你不需要手动写 `f"expected {expected}, got {result}"`，pytest 自动帮你做。
+
+### 浮点数比较：pytest.approx
+
+```python
+def test_float_without_approx():
+    assert 0.1 + 0.2 == 0.3  # 失败！浮点精度问题
+
+def test_float_with_approx():
+    assert 0.1 + 0.2 == pytest.approx(0.3)
+
+def test_approx_with_tolerance():
+    assert 3.14159 == pytest.approx(3.14, abs=0.01)
+
+def test_approx_sequence_and_dict():
+    assert [0.1 + 0.2, 0.2 + 0.3] == pytest.approx([0.3, 0.5])
+    assert {"value": 0.1 + 0.2} == pytest.approx({"value": 0.3})
+```
+
+### 异常断言：pytest.raises
+
+```python
+def divide(a: int, b: int) -> float:
+    if b == 0:
+        raise ValueError("Division by zero")
+    return a / b
+
+def test_raises_with_match():
+    with pytest.raises(ValueError, match="Division by zero"):
+        divide(1, 0)
+
+def test_exception_details():
+    with pytest.raises(ValueError) as exc_info:
+        divide(1, 0)
+    assert str(exc_info.value) == "Division by zero"
+```
+
+### 警告断言：pytest.warns
+
+```python
+import warnings
+
+def deprecated_func() -> int:
+    warnings.warn("This function is deprecated", DeprecationWarning, stacklevel=2)
+    return 42
+
+def test_warns():
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        deprecated_func()
+
+def test_warns_count():
+    with pytest.warns(DeprecationWarning) as warning_list:
+        deprecated_func()
+        deprecated_func()
+    assert len(warning_list) == 2
+```
+
+### 自定义断言辅助函数
+
+当你的测试需要反复做同一种断言时，封装成辅助函数：
+
+```python
+def assert_valid_user(user: dict) -> None:
+    assert "id" in user
+    assert "name" in user
+    assert isinstance(user["id"], int)
+    assert isinstance(user["name"], str)
+    assert len(user["name"]) > 0
+
+def test_create_user():
+    user = create_user(name="Alice")
+    assert_valid_user(user)
+```
+
+:::tip
+自定义断言函数中直接用 `assert`，pytest 的断言内省同样生效。不要把它们改成返回 bool 的函数——那样就丢失了详细错误信息。
+:::
+
+---
+
+## 三、Fixture：依赖注入
+
+Fixture 是 pytest 最核心也最强大的功能：**测试需要的所有资源（数据、连接、配置、临时文件……）都通过 fixture 注入，测试函数只声明自己需要什么，不关心怎么创建和销毁。**
+
+### 基本 fixture
+
+```python
+import pytest
+
+@pytest.fixture
+def sample_data() -> list[int]:
+    return [1, 2, 3, 4, 5]
+
+def test_sum(sample_data: list[int]):
+    assert sum(sample_data) == 15
+
+def test_len(sample_data: list[int]):
+    assert len(sample_data) == 5
+```
+
+测试函数通过参数名 `sample_data` 声明依赖，pytest 自动找到同名的 fixture 并注入。多个测试复用同一个 fixture，无需手动传递。
+
+### Fixture 的作用域
+
+默认 fixture 的 scope 是 `function`——每个测试函数调用一次。你可以控制更大的复用范围：
+
+```python
+@pytest.fixture(scope="function")     # 每个测试函数调用一次（默认）
+def func_scope_data() -> str: return "function"
+
+@pytest.fixture(scope="class")        # 每个测试类调用一次
+def class_scope_data() -> str: return "class"
+
+@pytest.fixture(scope="module")       # 每个测试文件调用一次
+def module_scope_data() -> str: return "module"
+
+@pytest.fixture(scope="package")      # 每个包调用一次
+def package_scope_data() -> str: return "package"
+
+@pytest.fixture(scope="session")      # 整个测试会话只调用一次
+def session_scope_data() -> str: return "session"
+```
+
+:::warning
+大作用域 fixture 在多个测试间共享状态。如果测试修改了 fixture 返回的对象，后续测试看到的是被修改过的版本。共享 fixture 应该返回不可变对象，或者在 yield 后做清理。
+:::
+
+典型场景——数据库连接在 session 级别创建，测试数据在 function 级别隔离：
+
+```python
+@pytest.fixture(scope="session")
+def db_connection() -> dict[str, dict]:
+    return {}
+
+@pytest.fixture(scope="function")
+def db(db_connection: dict[str, dict]) -> dict[str, dict]:
+    db_connection.clear()
+    return db_connection
+
+def test_insert(db: dict[str, dict]):
+    db["user:1"] = {"name": "Alice"}
+    assert "user:1" in db
+
+def test_db_is_clean(db: dict[str, dict]):
+    assert len(db) == 0
+```
+
+### Fixture 依赖注入：fixture 使用其他 fixture
+
+fixture 本身也可以声明对其他 fixture 的依赖，形成依赖注入链：
+
+```python
+@pytest.fixture
+def config() -> dict[str, str]:
+    return {"host": "localhost", "port": "5432"}
+
+@pytest.fixture
+def db_url(config: dict[str, str]) -> str:
+    return f"postgresql://{config['host']}:{config['port']}/testdb"
+
+@pytest.fixture
+def api_client(db_url: str) -> dict[str, str]:
+    return {"base_url": "http://localhost:8000", "db_url": db_url}
+
+def test_api_client_has_db_url(api_client: dict[str, str]):
+    assert api_client["db_url"] == "postgresql://localhost:5432/testdb"
+```
+
+pytest 会自动按依赖顺序调用 fixture，不需要你手动管理调用链。
+
+### yield fixture：带清理的 setup/teardown
+
+fixture 用 `yield` 代替 `return`，yield 之后的代码就是 teardown 逻辑：
+
+```python
+import tempfile
+import shutil
+from pathlib import Path
+
+@pytest.fixture
+def temp_dir() -> Path:
+    dir_path = Path(tempfile.mkdtemp())
+    yield dir_path
+    shutil.rmtree(dir_path, ignore_errors=True)
+
+def test_write_file(temp_dir: Path):
+    file_path = temp_dir / "test.txt"
+    file_path.write_text("hello")
+    assert file_path.read_text() == "hello"
+```
+
+多个 yield fixture 的 teardown 按依赖反序执行——先创建的最后销毁。
+
+### conftest.py：跨文件共享 fixture
+
+`conftest.py` 放在某个目录下，其中定义的 fixture 该目录及子目录下所有测试都能使用，无需 import：
+
+```
+project/
+├── conftest.py          # 所有测试共享
+├── tests/
+│   ├── conftest.py      # tests/ 下共享
+│   ├── unit/
+│   │   ├── conftest.py  # unit/ 下共享
+│   │   └── test_a.py
+│   └── integration/
+│       └── test_b.py
+```
+
+```python
+# tests/conftest.py
+import pytest
+from pathlib import Path
+import tempfile
+import shutil
+
+@pytest.fixture
+def project_root() -> Path:
+    return Path(__file__).parent.parent
+
+@pytest.fixture
+def temp_workspace() -> Path:
+    workspace = Path(tempfile.mkdtemp())
+    yield workspace
+    shutil.rmtree(workspace, ignore_errors=True)
+```
+
+测试文件中直接用 `temp_workspace` 参数即可，不需要 import。
+
+### 内置 fixture
+
+**tmp_path**——每个测试独立的临时目录（pathlib.Path）：
+
+```python
+def test_with_tmp_path(tmp_path: Path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text('{"debug": true}')
+    assert config_file.exists()
+```
+
+**capsys**——捕获 stdout/stderr：
+
+```python
+def test_capture_stdout(capsys):
+    print("hello world")
+    captured = capsys.readouterr()
+    assert captured.out == "hello world\n"
+```
+
+**monkeypatch**——临时修改环境变量、属性、字典项（测试结束后自动恢复）：
+
+```python
+import os
+
+def test_env_var(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    assert os.environ["DATABASE_URL"] == "sqlite:///:memory:"
+
+def test_modify_attribute(monkeypatch):
+    import json
+    monkeypatch.setattr(json, "dumps", lambda obj: "mocked")
+    assert json.dumps({"a": 1}) == "mocked"
+```
+
+**request**——获取测试上下文（参数化值、测试名等）：
+
+```python
+@pytest.fixture
+def report_test_name(request):
+    return request.node.name
+
+def test_knows_its_name(report_test_name):
+    assert report_test_name == "test_knows_its_name"
+```
+
+### Fixture 参数化
+
+fixture 可以通过 `params` 参数化，每个参数值生成一个独立的 fixture 实例，使用该 fixture 的测试也会相应复制：
+
+```python
+@pytest.fixture(params=["csv", "json", "yaml"])
+def file_format(request) -> str:
+    return request.param
+
+def test_parse_file(file_format: str):
+    assert file_format in ("csv", "json", "yaml")
+```
+
+使用 `ids` 给参数化用例命名：
+
+```python
+@pytest.fixture(
+    params=[
+        {"host": "localhost", "port": 5432},
+        {"host": "db.example.com", "port": 3306},
+    ],
+    ids=["local-postgres", "remote-mysql"],
+)
+def db_config(request) -> dict:
+    return request.param
+
+def test_connect(db_config: dict):
+    assert "host" in db_config
+    assert "port" in db_config
+```
+
+### autouse：自动使用的 fixture
+
+`autouse=True` 的 fixture 不需要测试函数显式声明参数，会自动应用：
+
+```python
+import time
+
+@pytest.fixture(autouse=True)
+def verify_no_slow_tests(request):
+    start = time.time()
+    yield
+    elapsed = time.time() - start
+    if elapsed > 1.0:
+        raise AssertionError(f"Test {request.node.name} took {elapsed:.2f}s")
+```
+
+常见用法：自动清理日志、注入 mock 对象、重置全局状态。
+
+---
+
+## 四、参数化测试
+
+当同一个逻辑需要多组输入验证时，参数化测试让你写一次测试逻辑、多组数据驱动：
+
+### 基本用法
+
+```python
+def fibonacci(n: int) -> int:
+    if n <= 1:
+        return n
+    a, b = 0, 1
+    for _ in range(2, n + 1):
+        a, b = b, a + b
+    return b
+
+@pytest.mark.parametrize("n, expected", [
+    (0, 0),
+    (1, 1),
+    (2, 1),
+    (3, 2),
+    (5, 5),
+    (10, 55),
+])
+def test_fibonacci(n: int, expected: int):
+    assert fibonacci(n) == expected
+```
+
+这等价于写了 6 个独立的测试函数，pytest 输出中会显示每组参数的值。
+
+### 多参数组合
+
+多个 `parametrize` 装饰器会产生笛卡尔积组合：
+
+```python
+@pytest.mark.parametrize("x", [1, 2])
+@pytest.mark.parametrize("y", [10, 20])
+def test_multiply(x: int, y: int):
+    # 2 x 2 = 4 个组合
+    assert x * y in (10, 20, 20, 40)
+```
+
+小心测试数量爆炸。
+
+### 自定义测试 ID
+
+```python
+@pytest.mark.parametrize("input_str, expected", [
+    ("hello", "HELLO"),
+    ("World", "WORLD"),
+    ("", ""),
+], ids=["lowercase", "mixed", "empty"])
+def test_upper(input_str: str, expected: str):
+    assert input_str.upper() == expected
+```
+
+### pytest.param：带标记的参数
+
+`pytest.param()` 可以为单个参数组合指定 id 和 mark：
+
+```python
+@pytest.mark.parametrize("n, expected", [
+    pytest.param(0, 0, id="zero"),
+    pytest.param(1, 1, id="one"),
+    pytest.param(10, 55, id="ten"),
+    pytest.param(-1, None, marks=pytest.mark.xfail(reason="negative not supported"), id="negative"),
+])
+def test_fibonacci_param(n: int, expected: int):
+    assert fibonacci(n) == expected
+```
+
+### 参数化 fixture vs 参数化测试
+
+- **参数化测试**：测试逻辑不变，只是输入/输出不同——用 `@pytest.mark.parametrize`
+- **参数化 fixture**：多组环境/配置下的测试（如不同数据库、不同文件格式）——用 fixture `params`
+
+```python
+@pytest.fixture(params=["sqlite", "postgresql"], ids=["sqlite", "pg"])
+def db_engine(request):
+    if request.param == "sqlite":
+        return create_sqlite_engine()
+    return create_pg_engine()
+
+def test_db_query(db_engine):
+    result = db_engine.execute("SELECT 1")
+    assert result is not None
+```
+
+---
+
+## 五、Mark 标记与筛选
+
+### 内置标记
+
+**skip**——无条件跳过：
+
+```python
+@pytest.mark.skip(reason="Not implemented yet")
+def test_future_feature():
+    ...
+```
+
+**skipif**——条件跳过：
+
+```python
+import sys
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix only")
+def test_unix_permission():
+    ...
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="Requires Python 3.11+")
+def test_exception_group():
+    ...
+```
+
+**xfail**——预期失败（失败不算错误，但意外通过会报告）：
+
+```python
+@pytest.mark.xfail(reason="Known bug #123")
+def test_known_bug():
+    assert 1 == 2
+
+@pytest.mark.xfail(strict=True, reason="Must fail, passing means bug is fixed")
+def test_must_fail():
+    assert 1 == 2
+
+@pytest.mark.xfail(raises=NotImplementedError)
+def test_not_implemented():
+    raise NotImplementedError
+```
+
+`strict=True` 表示如果测试意外通过，整个测试运行会失败——确保已知的 bug 一旦被修复你能立刻发现。
+
+### 自定义标记
+
+在 `pyproject.toml` 中注册：
+
+```toml
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks integration tests",
+    "network: marks tests requiring network access",
+]
+```
+
+使用：
+
+```python
+@pytest.mark.slow
+def test_large_dataset():
+    ...
+
+@pytest.mark.integration
+def test_database_round_trip():
+    ...
+```
+
+### 按标记筛选测试
+
+```bash
+pytest -m integration            # 只运行 integration 标记的测试
+pytest -m "not slow"             # 排除 slow 标记
+pytest -m "integration and not slow"  # 同时需要两个条件
+pytest -m "integration or network"    # 任一标记
+```
+
+这在 CI 中特别有用：快速测试跑 `pytest -m "not slow"`，完整测试跑 `pytest`。
+
+:::important 标记必须注册
+未注册的标记会触发警告。在 `pyproject.toml` 的 `[tool.pytest.ini_options]` 中注册所有自定义标记可以消除警告。
+:::
+
+---
+
+## 六、Mock 与 Patch
+
+测试的核心原则之一是**隔离**——单元测试只测一个单元的逻辑，不依赖外部系统（数据库、网络、文件系统）。Mock 就是帮你隔离外部依赖的工具。
+
+### unittest.mock.patch 基础
+
+Python 标准库 `unittest.mock` 提供 `patch`，pytest 直接使用它：
+
+```python
+from unittest.mock import patch
+import json
+
+def save_user(user: dict, file_path: str) -> None:
+    with open(file_path, "w") as f:
+        json.dump(user, f)
+
+@patch("builtins.open")
+def test_save_user_decorator(mock_open):
+    save_user({"name": "Alice"}, "/fake/path/user.json")
+    mock_open.assert_called_once_with("/fake/path/user.json", "w")
+
+def test_save_user_context():
+    with patch("builtins.open") as mock_open:
+        save_user({"name": "Bob"}, "/fake/path/user.json")
+        mock_open.assert_called_once_with("/fake/path/user.json", "w")
+```
+
+### patch 作为 fixture
+
+把 mock 逻辑封装成 fixture，多个测试可以复用：
+
+```python
+@pytest.fixture
+def mock_db():
+    with patch("myapp.database.Database") as mock:
+        mock.return_value.query.return_value = [{"id": 1, "name": "Alice"}]
+        yield mock
+
+def test_get_users(mock_db):
+    users = get_users()
+    assert len(users) == 1
+    assert users[0]["name"] == "Alice"
+```
+
+### Mock 和 MagicMock
+
+```python
+from unittest.mock import Mock, MagicMock
+
+def test_mock_return_value():
+    m = Mock()
+    m.some_method.return_value = 42
+    assert m.some_method() == 42
+
+def test_magic_mock():
+    # MagicMock 支持魔术方法（__getitem__, __iter__ 等）
+    m = MagicMock()
+    m.__getitem__.return_value = "hello"
+    assert m["key"] == "hello"
+
+def test_mock_with_spec():
+    # spec 限制 mock 只能访问真实对象拥有的属性
+    class UserService:
+        def get_user(self, user_id: int) -> dict: ...
+
+    m = Mock(spec=UserService)
+    m.get_user.return_value = {"id": 1, "name": "Alice"}
+    assert m.get_user(1) == {"id": 1, "name": "Alice"}
+```
+
+### Mock 断言
+
+```python
+def test_mock_assertions():
+    m = Mock()
+    m(1, 2, key="value")
+    m(3, 4)
+
+    assert m.called
+    assert m.call_count == 2
+    assert m.call_args == ((3, 4),)
+    assert m.call_args.kwargs == {}
+    m.assert_called_once_with(3, 4)
+
+def test_mock_call_list():
+    m = Mock()
+    m("first")
+    m("second")
+    assert len(m.call_args_list) == 2
+```
+
+### side_effect
+
+控制 mock 被调用时的行为——返回序列、抛异常、调用真实函数：
+
+```python
+def test_side_effect_sequence():
+    m = Mock()
+    m.side_effect = [1, 2, 3]
+    assert m() == 1
+    assert m() == 2
+    assert m() == 3
+
+def test_side_effect_exception():
+    m = Mock()
+    m.side_effect = ConnectionError("Network down")
+
+def test_side_effect_function():
+    m = Mock(side_effect=lambda a, b: a + b)
+    assert m(1, 2) == 3
+```
+
+### pytest-mock 插件：mocker fixture
+
+```bash
+pip install pytest-mock
+```
+
+提供 `mocker` fixture，更符合 pytest 风格：
+
+```python
+def test_with_mocker(mocker):
+    mock_open = mocker.patch("builtins.open")
+    mocker.patch("json.dump")
+    save_user({"name": "Alice"}, "/fake/path.json")
+    mock_open.assert_called_once_with("/fake/path.json", "w")
+
+def test_mocker_spy(mocker):
+    # spy 真实调用，同时记录调用信息
+    real_func = mocker.patch.object(json, "dumps", wraps=json.dumps)
+    json.dumps({"key": "value"})
+    real_func.assert_called_once()
+```
+
+### Mock HTTP 请求
+
+```python
+from unittest.mock import patch, MagicMock
+
+def fetch_user_name(api_url: str) -> str:
+    import urllib.request
+    response = urllib.request.urlopen(api_url)
+    data = json.loads(response.read())
+    return data["name"]
+
+@patch("urllib.request.urlopen")
+def test_fetch_user_name(mock_urlopen):
+    mock_response = MagicMock()
+    mock_response.read.return_value = b'{"name": "Alice"}'
+    mock_urlopen.return_value = mock_response
+
+    name = fetch_user_name("https://api.example.com/users/1")
+    assert name == "Alice"
+```
+
+### 常见陷阱
+
+:::warning patch 的位置
+`patch` 必须打在**被测代码使用对象的位置**，而不是对象定义的位置。这就是"patch where it's used, not where it's defined"原则。
+
+```python
+# myapp/utils.py
+from myapp.database import get_connection
+
+def get_data():
+    conn = get_connection()  # 使用的是 myapp.utils.get_connection
+    return conn.query("SELECT *")
+
+# 正确：patch 使用位置
+@patch("myapp.utils.get_connection")
+def test_get_data(mock_get_conn): ...
+
+# 错误：patch 定义位置——被测代码已经 import 了局部引用，patch 定义位置不会影响
+```
+:::
+
+:::warning 不要过度 mock
+过度 mock 会让测试和实现强耦合——重构内部实现时，所有 mock 测试都会失败，即使外部行为没变。原则：对外部依赖做 mock，对内部逻辑做集成测试；如果 mock 比真实实现还复杂，考虑用真实实现 + 测试环境。
+:::
+
+---
+
+## 七、测试组织与配置
+
+### 项目布局
+
+推荐使用 `src/` 布局，避免隐式导入问题：
+
+```
+myproject/
+├── pyproject.toml
+├── src/
+│   └── myapp/
+│       ├── __init__.py
+│       ├── models.py
+│       └── services.py
+└── tests/
+    ├── __init__.py
+    ├── conftest.py
+    ├── unit/
+    │   ├── conftest.py
+    │   ├── test_models.py
+    │   └── test_services.py
+    └── integration/
+        ├── conftest.py
+        └── test_api.py
+```
+
+### conftest.py 层级
+
+```
+conftest.py                → 全局 fixture
+tests/conftest.py          → tests/ 下所有测试可用
+tests/unit/conftest.py     → 只在 unit/ 下可用
+tests/integration/conftest.py → 只在 integration/ 下可用
+```
+
+pytest 按目录层级向上查找 `conftest.py`，子目录的 fixture 不会向上"泄漏"。
+
+### pyproject.toml 配置
+
+```toml
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks integration tests",
+    "network: marks tests requiring network access",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:oldlib.*",
+    "error::FutureWarning",
+]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+```
+
+### 常见配置项
+
+- `testpaths`：指定搜索目录
+- `addopts`：每次运行自动附加的选项
+- `markers`：注册自定义标记，消除未知标记警告
+- `filterwarnings`：控制警告行为，`ignore` 忽略、`error` 转为错误
+- `python_files/classes/functions`：自定义发现规则
+
+---
+
+## 八、覆盖率
+
+### 安装与运行
+
+```bash
+pip install pytest-cov
+```
+
+```bash
+pytest --cov=myapp                           # 运行测试并输出覆盖率
+pytest --cov=myapp --cov-report=term-missing  # 显示未覆盖的行号
+pytest --cov=myapp --cov-report=html          # HTML 报告
+pytest --cov=myapp --cov-branch               # 分支覆盖率
+```
+
+`term-missing` 输出示例：
+
+```
+Name                Stmts   Miss  Cover   Missing
+-------------------------------------------------
+myapp/models.py        45      3    93%   23-25
+myapp/services.py      62      8    87%   41-48
+-------------------------------------------------
+TOTAL                 107     11    90%
+```
+
+### 在 pyproject.toml 中配置
+
+```toml
+[tool.pytest.ini_options]
+addopts = "--cov=myapp --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["myapp"]
+omit = ["*/tests/*", "*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+fail_under = 80
+show_missing = true
+```
+
+`fail_under = 80` 表示覆盖率低于 80% 时测试运行失败——适合在 CI 中强制覆盖率底线。
+
+### 分支覆盖率 vs 行覆盖率
+
+默认报告行覆盖率。`--cov-branch` 测量分支覆盖率：
+
+```python
+def classify(n: int) -> str:
+    if n > 0:
+        return "positive"
+    elif n < 0:
+        return "negative"
+    else:
+        return "zero"
+```
+
+如果只测了 `classify(1)` 和 `classify(-1)`，行覆盖率 100%（每行都执行了），但分支覆盖率只有 67%（`else` 分支没覆盖）。分支覆盖率更能反映测试的真实完整性。
+
+:::important
+100% 覆盖率不等于没有 bug。覆盖率只告诉你哪些代码被执行了，不告诉你是否验证了正确的行为。合理的覆盖率目标：核心业务逻辑 90%+，CLI/脚本 70-80%，不要追求 100%。
+:::
+
+---
+
+## 九、异步测试
+
+### pytest-asyncio
+
+```bash
+pip install pytest-asyncio
+```
+
+### 基本用法
+
+```python
+import asyncio
+
+async def async_add(a: int, b: int) -> int:
+    await asyncio.sleep(0.01)
+    return a + b
+
+@pytest.mark.asyncio
+async def test_async_add():
+    result = await async_add(1, 2)
+    assert result == 3
+```
+
+### 异步 fixture
+
+```python
+@pytest.fixture
+async def async_data() -> list[int]:
+    await asyncio.sleep(0.01)
+    return [1, 2, 3]
+
+@pytest.mark.asyncio
+async def test_with_async_fixture(async_data: list[int]):
+    assert sum(async_data) == 6
+```
+
+### 配置 asyncio mode
+
+```toml
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+```
+
+- `"strict"`（默认）：必须显式加 `@pytest.mark.asyncio`
+- `"auto"`：自动识别 `async def` 测试函数，不需要加装饰器
+
+### 事件循环作用域
+
+`pytest-asyncio` 默认为每个 `async` 测试函数创建新的事件循环。session 级别共享需要手动配置：
+
+```python
+@pytest.fixture(scope="session")
+def event_loop():
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+```
+
+:::warning
+修改事件循环作用域是高级用法，可能导致难以调试的状态泄漏问题。除非有明确的性能需求，否则保持默认的 function 作用域。
+:::
+
+---
+
+## 十、综合实战：完整测试项目
+
+用一个完整项目串联前面所有知识点——基于文件的键值存储库。
+
+### 被测模块
+
+```python
+# src/kvstore/store.py
+from pathlib import Path
+import json
+from typing import Any
+
+class KVStore:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._data: dict[str, Any] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if self._path.exists():
+            self._data = json.loads(self._path.read_text(encoding="utf-8"))
+
+    def _save(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(
+            json.dumps(self._data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._data.get(key, default)
+
+    def set(self, key: str, value: Any) -> None:
+        self._data[key] = value
+        self._save()
+
+    def delete(self, key: str) -> bool:
+        if key in self._data:
+            del self._data[key]
+            self._save()
+            return True
+        return False
+
+    def keys(self) -> list[str]:
+        return list(self._data.keys())
+
+    def clear(self) -> None:
+        self._data.clear()
+        self._save()
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._data
+```
+
+### 项目结构
+
+```
+kvstore-project/
+├── pyproject.toml
+├── src/kvstore/
+│   ├── __init__.py
+│   └── store.py
+└── tests/
+    ├── __init__.py
+    ├── conftest.py
+    ├── unit/
+    │   ├── test_store_basic.py
+    │   ├── test_store_parametrize.py
+    │   └── test_store_mock.py
+    └── integration/
+        └── test_file_operations.py
+```
+
+### 配置文件
+
+```toml
+# pyproject.toml
+[project]
+name = "kvstore"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "pytest-mock"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --cov=kvstore --cov-report=term-missing"
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks integration tests",
+]
+
+[tool.coverage.run]
+source = ["kvstore"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+```
+
+### conftest.py
+
+```python
+# tests/conftest.py
+import pytest
+from pathlib import Path
+from kvstore.store import KVStore
+
+@pytest.fixture
+def store(tmp_path: Path) -> KVStore:
+    return KVStore(tmp_path / "test.json")
+
+@pytest.fixture
+def populated_store(store: KVStore) -> KVStore:
+    store.set("name", "Alice")
+    store.set("age", 30)
+    store.set("active", True)
+    return store
+```
+
+注意 `populated_store` 依赖 `store` fixture——这就是 fixture 依赖注入。`tmp_path` 是 pytest 内置 fixture，每个测试有独立的临时目录。
+
+### 单元测试：基本操作
+
+```python
+# tests/unit/test_store_basic.py
+import pytest
+from kvstore.store import KVStore
+
+def test_create_empty(store: KVStore):
+    assert len(store) == 0
+    assert store.keys() == []
+
+def test_set_and_get(store: KVStore):
+    store.set("key1", "value1")
+    assert store.get("key1") == "value1"
+
+def test_get_default(store: KVStore):
+    assert store.get("nonexistent") is None
+    assert store.get("nonexistent", "default") == "default"
+
+def test_overwrite(store: KVStore):
+    store.set("key", "value1")
+    store.set("key", "value2")
+    assert store.get("key") == "value2"
+
+def test_delete(store: KVStore):
+    store.set("key", "value")
+    assert store.delete("key") is True
+    assert store.get("key") is None
+
+def test_delete_nonexistent(store: KVStore):
+    assert store.delete("nonexistent") is False
+
+def test_contains(store: KVStore):
+    store.set("key", "value")
+    assert "key" in store
+    assert "other" not in store
+
+def test_keys(populated_store: KVStore):
+    assert set(populated_store.keys()) == {"name", "age", "active"}
+
+def test_clear(populated_store: KVStore):
+    populated_store.clear()
+    assert len(populated_store) == 0
+
+def test_various_value_types(store: KVStore):
+    store.set("float", 3.14)
+    store.set("list", [1, 2, 3])
+    store.set("dict", {"nested": True})
+    store.set("none", None)
+    assert store.get("float") == pytest.approx(3.14)
+    assert store.get("list") == [1, 2, 3]
+    assert store.get("dict") == {"nested": True}
+    assert store.get("none") is None
+```
+
+### 单元测试：参数化
+
+```python
+# tests/unit/test_store_parametrize.py
+import pytest
+from kvstore.store import KVStore
+
+@pytest.mark.parametrize("key, value", [
+    ("str_key", "str_value"),
+    ("int_key", 42),
+    ("bool_key", False),
+    ("list_key", [1, 2, 3]),
+    ("none_key", None),
+    ("empty_str", ""),
+])
+def test_set_get_various_types(store: KVStore, key: str, value):
+    store.set(key, value)
+    if isinstance(value, float):
+        assert store.get(key) == pytest.approx(value)
+    else:
+        assert store.get(key) == value
+
+@pytest.mark.parametrize("key", [
+    "simple", "with-dash", "with_underscore", "with.dot",
+    "with space", "CamelCase", "snake_case",
+])
+def test_various_key_formats(store: KVStore, key: str):
+    store.set(key, "value")
+    assert store.get(key) == "value"
+
+@pytest.mark.parametrize("n", [1, 10, 100])
+def test_many_keys(store: KVStore, n: int):
+    for i in range(n):
+        store.set(f"key_{i}", i)
+    assert len(store) == n
+```
+
+### 单元测试：Mock
+
+```python
+# tests/unit/test_store_mock.py
+import pytest
+from pathlib import Path
+import json
+from kvstore.store import KVStore
+
+def test_load_calls_read_text(mocker):
+    mocker.patch.object(Path, "exists", return_value=True)
+    mock_read = mocker.patch.object(Path, "read_text", return_value='{"key": "value"}')
+    store = KVStore(Path("/fake/db.json"))
+    assert store.get("key") == "value"
+    mock_read.assert_called_once()
+
+def test_save_calls_write_text(mocker):
+    mocker.patch.object(Path, "exists", return_value=False)
+    mocker.patch.object(Path, "mkdir")
+    mock_write = mocker.patch.object(Path, "write_text")
+    store = KVStore(Path("/fake/db.json"))
+    store.set("key", "value")
+    written = mock_write.call_args[0][0]
+    assert json.loads(written) == {"key": "value"}
+
+def test_init_with_corrupted_file(mocker):
+    mocker.patch.object(Path, "exists", return_value=True)
+    mocker.patch.object(Path, "read_text", return_value="not valid json{{{")
+    mocker.patch.object(Path, "mkdir")
+    with pytest.raises(json.JSONDecodeError):
+        KVStore(Path("/fake/corrupt.json"))
+```
+
+### 集成测试：真实文件操作
+
+```python
+# tests/integration/test_file_operations.py
+import pytest
+import json
+from pathlib import Path
+from kvstore.store import KVStore
+
+@pytest.mark.integration
+class TestFileOperations:
+    def test_persistence(self, tmp_path: Path):
+        db_path = tmp_path / "persist.json"
+        KVStore(db_path).set("name", "Alice")
+
+        store2 = KVStore(db_path)
+        assert store2.get("name") == "Alice"
+
+    def test_file_format(self, tmp_path: Path):
+        db_path = tmp_path / "format.json"
+        KVStore(db_path).set("key", "value")
+        assert json.loads(db_path.read_text(encoding="utf-8")) == {"key": "value"}
+
+    def test_clear(self, tmp_path: Path):
+        db_path = tmp_path / "clear.json"
+        store = KVStore(db_path)
+        store.set("key", "value")
+        store.clear()
+        assert json.loads(db_path.read_text(encoding="utf-8")) == {}
+
+@pytest.mark.integration
+def test_directory_auto_creation(tmp_path: Path):
+    db_path = tmp_path / "deep" / "nested" / "db.json"
+    KVStore(db_path).set("key", "value")
+    assert db_path.exists()
+```
+
+### 运行测试
+
+```bash
+pytest                                    # 所有测试（带覆盖率）
+pytest tests/unit/                        # 只运行单元测试
+pytest -m integration                     # 只运行集成测试
+pytest tests/unit/test_store_basic.py::test_set_and_get  # 指定测试
+```
+
+---
+
+## 十一、总结与下一步
+
+这篇文章覆盖了 pytest 的核心知识体系：
+
+1. **测试发现与执行**：命名规则、运行方式、筛选测试
+2. **断言与内知**：`assert` 语句、`pytest.approx`、`pytest.raises`、`pytest.warns`
+3. **Fixture**：依赖注入、作用域、yield 清理、conftest.py 共享、内置 fixture、参数化、autouse
+4. **参数化**：`@pytest.mark.parametrize`、多参数组合、自定义 ID、`pytest.param`
+5. **标记与筛选**：skip/skipif/xfail、自定义标记、`-m` 筛选
+6. **Mock 与 Patch**：patch 位置原则、Mock 断言、side_effect、pytest-mock、常见陷阱
+7. **测试组织**：src 布局、conftest 层级、pyproject.toml 配置
+8. **覆盖率**：pytest-cov、行覆盖率 vs 分支覆盖率、合理目标
+9. **异步测试**：pytest-asyncio、异步 fixture、事件循环作用域
+
+掌握这些已经足以应对日常 Python 项目的测试需求。如果你在使用 FastAPI，可以参考 [/posts/python/fastapi-complete-guide](/posts/python/fastapi-complete-guide) 中的测试章节，了解如何用 TestClient 测试 HTTP 接口。
+
+继续深入的方向：
+
+- **hypothesis**：基于属性的测试，自动生成大量边界输入，比手写参数化更系统
+- **pytest-benchmark**：性能基准测试，跟踪函数执行时间变化
+- **pytest-xdist**：并行执行测试，大幅缩短大型测试套件的运行时间
+- **tox**：多环境测试，确保代码在不同 Python 版本下都能正常工作

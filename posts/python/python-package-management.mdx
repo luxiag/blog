@@ -1,0 +1,1641 @@
+---
+title: 'Python 包管理与虚拟环境：从 pip 到 uv 的工程实践'
+date: '2026-07-19'
+excerpt: '系统讲解 Python 包管理与虚拟环境的核心概念与工具链。覆盖 import 机制与模块搜索路径、虚拟环境原理与 venv、pip 与 requirements.txt、pyproject.toml 与现代项目标准、uv 现代包管理器、依赖冲突与锁定、发布自己的包，最后用完整的项目工作流串联所有知识点。'
+tags: ['python', 'pip', 'uv', 'venv', 'packaging', 'pyproject']
+---
+
+# Python 包管理与虚拟环境：从 pip 到 uv 的工程实践
+
+如果你曾在自己的电脑上运行过 `pip install requests`，然后在另一个项目里发现版本冲突，或者把代码分享给别人后对方跑不起来——你已经遇到了 Python 包管理要解决的核心问题。
+
+这篇文章会从 Python 的 import 机制讲起（这是理解一切的基础），到虚拟环境的原理，到 pip 和 requirements.txt 的用法与局限，再到 pyproject.toml 带来的现代标准，最后重点讲解 uv 这个新一代工具如何把所有事情简化。每个概念都配有可运行的代码示例。
+
+---
+
+## 一、为什么包管理很重要
+
+三个场景说明问题：
+
+**可复现性**——你的代码在本地能跑，部署到服务器就报错。原因往往是依赖版本不一致：你本地装的是 `requests 2.31.0`，服务器上是 `2.28.0`，API 行为变了。
+
+**依赖隔离**——项目 A 需要 `numpy 1.24`，项目 B 需要 `numpy 1.26`。如果都装在全局 site-packages 里，不可能同时满足。
+
+**协作**——团队里每个人的开发环境必须一致，否则"在我机器上能跑"会成为日常。
+
+Python 的包管理生态经历了几代演进：
+
+```
+2000s   setup.py            ← 一切都在一个 Python 脚本里
+2011    pip + virtualenv    ← 隔离环境 + 包安装
+2013    venv (stdlib)       ← 虚拟环境进入标准库
+2016    pip-tools           ← 锁定依赖版本
+2018    PEP 517/518         ← 构建系统标准化
+2020    PEP 621             ← 项目元数据标准化（pyproject.toml）
+2023    Poetry / PDM        ← 一体化工具
+2024    uv                  ← Rust 实现，比 pip 快 10-100 倍
+```
+
+现在的最佳实践是：**pyproject.toml 定义项目 + uv 管理依赖 + lock 文件保证可复现**。但为了理解为什么走到这一步，我们需要从底层机制讲起。
+
+---
+
+## 二、Python 的 import 机制
+
+大多数 Python 教程直接教你怎么装包，但很少有人解释 import 背后发生了什么。不理解这个，后面遇到 `ModuleNotFoundError` 时你只能靠猜。
+
+### Python 如何找到模块
+
+当你写 `import requests` 时，Python 按以下顺序搜索：
+
+1. `sys.modules` — 已经加载过的模块缓存
+2. 内置模块（`sys`、`os` 等）
+3. `sys.path` 中的目录列表
+
+```python
+import sys
+
+for path in sys.path:
+    print(path)
+```
+
+输出类似：
+
+```
+/usr/lib/python312.zip
+/usr/lib/python3.12
+/usr/lib/python3.12/lib-dynload
+/home/user/.venv/lib/python3.12/site-packages
+```
+
+最后一个路径就是第三方包的安装位置。虚拟环境的核心原理就是修改这个列表。
+
+### `__pycache__` 和 `.pyc` 文件
+
+Python 不会每次都重新编译源码。第一次 import 时，它会把编译后的字节码缓存到 `__pycache__/` 目录：
+
+```
+my_package/
+    __pycache__/
+        utils.cpython-312.pyc    ← 编译缓存
+    utils.py
+```
+
+:::tip
+如果修改了 `.py` 文件但行为没变，可能是 `.pyc` 缓存作祟。删除 `__pycache__` 目录或用 `python -B` 运行可以绕过缓存。
+:::
+
+### Package vs Module vs Namespace Package
+
+```python
+# module：单个 .py 文件
+# my_utils.py → import my_utils
+
+# package：包含 __init__.py 的目录
+# my_package/
+#     __init__.py
+#     utils.py
+# → import my_package.utils
+
+# namespace package：没有 __init__.py 的目录（PEP 420）
+# 可跨多个目录拆分同一个包
+```
+
+### `__init__.py` 的作用
+
+`__init__.py` 告诉 Python"这个目录是一个包"。它可以是空文件，也可以包含初始化代码：
+
+```python
+# my_package/__init__.py
+
+from my_package.core import main_function
+from my_package.utils import helper
+
+__version__ = "1.0.0"
+
+__all__ = ["main_function", "helper"]
+```
+
+有了上面的 `__init__.py`，用户可以直接写：
+
+```python
+from my_package import main_function, __version__
+```
+
+而不用写 `from my_package.core import main_function`。
+
+:::warning
+Python 3.3+ 支持 namespace package（没有 `__init__.py` 也能 import），但显式写 `__init__.py` 仍是推荐做法，能避免隐式行为带来的困惑。
+:::
+
+### 相对导入与绝对导入
+
+```python
+# 绝对导入：从项目根路径开始（推荐）
+from my_package.core import Processor
+from my_package.utils import format_output
+
+# 相对导入：基于当前模块位置
+from .core import Processor           # 同级目录的 core
+from ..utils import format_output     # 上级目录的 utils
+from . import models                  # 同级目录的 __init__.py
+```
+
+:::important
+相对导入只能用在包内部（即被 import 的模块里）。如果你直接运行一个包含相对导入的脚本（`python my_package/core.py`），会报 `ImportError: attempted relative import with no known parent package`。解决办法是用 `python -m my_package.core` 运行。
+:::
+
+### PYTHONPATH 环境变量
+
+`PYTHONPATH` 会被添加到 `sys.path` 的开头，让 Python 在额外目录中搜索模块：
+
+```bash
+# 临时添加搜索路径
+export PYTHONPATH="/home/user/my_libs:$PYTHONPATH"
+python -c "import sys; print(sys.path)"
+
+# Windows
+set PYTHONPATH=C:\Users\user\my_libs
+```
+
+:::warning
+尽量少用 `PYTHONPATH`。虚拟环境和可编辑安装（下一节）是更规范的解决方案。全局修改 `PYTHONPATH` 容易导致不可预期的 import 行为。
+:::
+
+### 可编辑安装（Editable Install）
+
+开发自己的包时，你希望改了代码立即生效，不用每次重新安装：
+
+```bash
+pip install -e .
+```
+
+它的原理是在 `site-packages` 里创建一个 `.pth` 文件，指向你的项目源码目录，让 Python 直接从源码目录 import：
+
+```
+# site-packages/my_package.pth 的内容
+/home/user/projects/my-package/src
+```
+
+这样你修改源码后，下次 import 就会看到新代码。
+
+### 常见 import 错误
+
+| 错误 | 原因 | 解决 |
+|---|---|---|
+| `ModuleNotFoundError` | 模块不在 `sys.path` 中 | 检查安装和 `sys.path` |
+| `ImportError: attempted relative import` | 直接运行了包内模块 | 用 `python -m` 运行 |
+| `AttributeError: module has no attribute` | 文件名和标准库冲突 | 重命名你的文件 |
+| `CircularImportError` | A 导入 B，B 又导入 A | 重构代码，提取公共部分 |
+
+一个典型的命名冲突陷阱：
+
+```python
+# 如果你把文件命名为 random.py
+import random
+print(random.randint(1, 10))
+# AttributeError: module 'random' has no attribute 'randint'
+# 因为 Python 导入的是你自己的 random.py，不是标准库
+```
+
+---
+
+## 三、虚拟环境
+
+### 全局安装的问题
+
+没有虚拟环境时，所有包都装到 Python 的全局 `site-packages`：
+
+```bash
+pip install requests
+# 安装到 /usr/lib/python3.12/site-packages/
+# 所有项目共享，无法隔离
+```
+
+这会导致：
+
+- 项目 A 和项目 B 的依赖互相冲突
+- 升级一个包可能破坏另一个项目
+- 无法确定某个项目到底依赖哪些包
+
+### 虚拟环境的本质
+
+虚拟环境不是"另一个 Python"，而是**一套指向原始 Python 的符号链接 + 一个独立的 site-packages 目录**：
+
+```bash
+python -m venv .venv
+
+# .venv 内部结构
+.venv/
+    pyvenv.cfg           # 配置：指向原始 Python
+    bin/                 # Linux/macOS
+        python           # → 符号链接到 /usr/bin/python3.12
+        pip              # 独立的 pip
+        activate         # 激活脚本
+    lib/
+        python3.12/
+            site-packages/  # 全新的空目录
+```
+
+```python
+# pyvenv.cfg 的内容
+home = /usr/bin
+include-system-site-packages = false
+version = 3.12.0
+```
+
+关键是 `include-system-site-packages = false`，这让虚拟环境的包完全独立。
+
+### venv 模块（标准库）
+
+Python 3.3+ 内置 `venv` 模块，无需额外安装：
+
+```bash
+# 创建虚拟环境
+python -m venv .venv
+
+# 激活 —— Linux / macOS
+source .venv/bin/activate
+
+# 激活 —— Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+
+# 激活 —— Windows (CMD)
+.venv\Scripts\activate.bat
+
+# 退出虚拟环境
+deactivate
+```
+
+激活后，命令行提示符会变化：
+
+```bash
+(.venv) user@host:~/project$
+```
+
+### 激活到底做了什么
+
+`activate` 脚本的核心操作：
+
+1. 修改 `PATH`，把 `.venv/bin` 放到最前面，这样 `python` 和 `pip` 指向虚拟环境的版本
+2. 修改命令行提示符，加上 `(.venv)` 前缀
+3. 设置 `VIRTUAL_ENV` 环境变量
+
+```bash
+# 激活前
+which python
+# /usr/bin/python
+
+# 激活后
+which python
+# /home/user/project/.venv/bin/python
+
+echo $VIRTUAL_ENV
+# /home/user/project/.venv
+```
+
+:::tip
+即使不激活虚拟环境，也可以直接用完整路径运行：`.venv/bin/python script.py`。这在自动化脚本和 CI 中很常见。
+:::
+
+### virtualenv vs venv
+
+| 特性 | venv | virtualenv |
+|---|---|---|
+| 来源 | 标准库 | 第三方包 |
+| 速度 | 较慢 | 更快 |
+| Python 版本 | 只能基于当前 Python | 可指定任意版本 |
+| 可定制性 | 有限 | 支持 plugins |
+| 安装 | 无需安装 | `pip install virtualenv` |
+
+日常开发中 `venv` 够用，但 `virtualenv` 在 CI 和需要指定 Python 版本的场景下更灵活。
+
+### 虚拟环境放在哪里
+
+**推荐：放在项目目录下（`.venv/`）**
+
+```
+my-project/
+    .venv/           # 虚拟环境
+    src/
+    pyproject.toml
+    .gitignore       # 包含 .venv/
+```
+
+```bash
+# .gitignore
+.venv/
+```
+
+:::important
+虚拟环境目录绝不能提交到 Git。它包含的是二进制文件和绝对路径，在其他机器上无法使用。
+:::
+
+---
+
+## 四、pip 与 requirements.txt
+
+### 安装包
+
+```bash
+# 安装最新版本
+pip install requests
+
+# 安装指定版本
+pip install requests==2.31.0
+
+# 安装版本范围
+pip install "requests>=2.28.0"
+
+# 从 Git 仓库安装
+pip install git+https://github.com/psf/requests.git
+
+# 从本地路径安装
+pip install ./my-local-package
+```
+
+### 检查和查询
+
+```bash
+# 列出已安装的包
+pip list
+
+# 查看包的详细信息
+pip show requests
+# Name: requests
+# Version: 2.31.0
+# Summary: Python HTTP for Humans.
+# Requires: charset-normalizer, idna, urllib3, certifi
+# Required-by: fastapi, httpx
+
+# 检查依赖冲突
+pip check
+# requests 2.28.0 requires urllib3<1.27, but you have urllib3 2.0.0
+```
+
+### requirements.txt 格式
+
+```
+# 基本格式：包名==版本号（精确锁定）
+requests==2.31.0
+flask==3.0.0
+
+# 带 extras（额外功能）
+fastapi[standard]==0.110.0
+
+# 版本范围
+pydantic>=2.0.0,<3.0.0
+
+# 条件安装（环境标记）
+pywin32==306; sys_platform == "win32"
+watchfiles>=0.21.0; sys_platform != "win32"
+
+# 从 URL 安装
+my-lib @ git+https://github.com/user/my-lib.git@v1.0.0
+
+# 从本地路径安装
+my-local-lib @ file:///home/user/my-local-lib
+```
+
+### pip freeze 的问题
+
+```bash
+pip freeze > requirements.txt
+```
+
+这会把所有已安装的包（包括传递依赖）都写进去：
+
+```
+requests==2.31.0
+urllib3==2.0.7        ← 你没直接依赖这个
+certifi==2023.7.22    ← 也没直接依赖
+charset-normalizer==3.3.0
+idna==3.4
+```
+
+问题在于：
+
+1. **分不清直接依赖和传递依赖** — 你不知道哪些包是你主动选的
+2. **过度锁定** — 把传递依赖也锁定，升级困难
+3. **不同平台可能不同** — Linux 和 Windows 的传递依赖可能不一样
+
+### pip-tools：确定性构建
+
+`pip-tools` 把依赖声明和锁定分成两步，解决这个问题：
+
+```bash
+pip install pip-tools
+```
+
+先写一个 `requirements.in`，只声明直接依赖：
+
+```
+# requirements.in
+requests>=2.28.0
+flask>=3.0.0
+pydantic>=2.0.0
+```
+
+然后编译生成锁定的 `requirements.txt`：
+
+```bash
+pip-compile requirements.in
+```
+
+生成的 `requirements.txt` 包含所有传递依赖和精确版本号，并且标注了每个包是谁引入的：
+
+```
+# This file is autogenerated by pip-compile
+# To update, run:
+#    pip-compile requirements.in
+certifi==2023.7.22
+    # via requests
+charset-normalizer==3.3.0
+    # via requests
+flask==3.0.0
+    # via -r requirements.in
+idna==3.4
+    # via requests
+pydantic==2.5.0
+    # via -r requirements.in
+requests==2.31.0
+    # via -r requirements.in
+urllib3==2.0.7
+    # via requests
+```
+
+同步安装：
+
+```bash
+pip-sync requirements.txt
+```
+
+`pip-sync` 会确保环境完全匹配 `requirements.txt`，多余的包会被卸载，缺失的会被安装。
+
+### constraints.txt
+
+`constraints.txt` 只限制版本范围，不安装包。它用于控制传递依赖的版本而不改变依赖声明：
+
+```
+# constraints.txt
+urllib3<2.0.0
+numpy!=1.24.0
+```
+
+```bash
+# 安装时应用约束
+pip install -c constraints.txt requests flask
+```
+
+`constraints.txt` 和 `requirements.txt` 的区别：`requirements.txt` 声明"我需要什么"，`constraints.txt` 声明"版本不能超过什么"。
+
+---
+
+## 五、pyproject.toml 与现代项目标准
+
+### PEP 517/518：构建系统标准化
+
+在 PEP 517/518 之前，构建 Python 包只能用 `setup.py`，而且构建工具（pip）需要猜测怎么调用它。PEP 518 定义了 `[build-system]`，让 pip 知道用什么工具构建：
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+```
+
+这告诉 pip：构建这个包需要先安装 `hatchling`，然后用 `hatchling.build` 作为构建后端。
+
+常用的构建后端：
+
+| 构建后端 | 特点 |
+|---|---|
+| `hatchling` | Hatch 的构建后端，现代推荐 |
+| `setuptools.build_meta` | 传统方案，兼容性好 |
+| `flit-core` | 极简，适合纯 Python 包 |
+| `maturin` | Rust 扩展模块 |
+
+### PEP 621：项目元数据标准化
+
+PEP 621 定义了 `[project]` 段的规范，让所有构建后端使用统一的元数据格式：
+
+```toml
+[project]
+name = "my-package"
+version = "1.0.0"
+description = "A demo package"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Alice", email = "alice@example.com" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+]
+dependencies = [
+    "requests>=2.28.0",
+    "pydantic>=2.0.0",
+]
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.0",
+]
+```
+
+### 完整的 pyproject.toml 示例
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "text-process"
+version = "0.1.0"
+description = "A text processing library"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Alice", email = "alice@example.com" },
+]
+keywords = ["text", "nlp", "processing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Text Processing",
+]
+dependencies = [
+    "requests>=2.28.0",
+    "pydantic>=2.0.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+cli = [
+    "click>=8.0",
+    "rich-click>=1.0",
+]
+
+[project.scripts]
+text-process = "text_process.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/alice/text-process"
+Documentation = "https://text-process.readthedocs.io"
+Repository = "https://github.com/alice/text-process"
+Issues = "https://github.com/alice/text-process/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+```
+
+`[project.scripts]` 定义了命令行入口点。安装后，用户可以直接运行 `text-process` 命令，它会被映射到 `text_process.cli:main` 函数：
+
+```python
+# src/text_process/cli.py
+def main() -> None:
+    print("text-process CLI")
+```
+
+### src layout vs flat layout
+
+```
+# Flat layout（传统）
+my-package/
+    text_process/
+        __init__.py
+    tests/
+    pyproject.toml
+
+# src layout（推荐）
+my-package/
+    src/
+        text_process/
+            __init__.py
+    tests/
+    pyproject.toml
+```
+
+:::tip
+src layout 的优势：你必须先安装包才能 import，避免了"没安装也能跑"的假象。flat layout 下 Python 会把项目根目录加入 `sys.path`，你可能在没装包的情况下就 import 成功了，这掩盖了打包问题。
+:::
+
+对于 src layout，需要在 pyproject.toml 中配置：
+
+```toml
+[tool.hatch.build.targets.wheel]
+packages = ["src/text_process"]
+```
+
+### `__init__.py` 与版本号
+
+```python
+# src/text_process/__init__.py
+
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("text-process")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
+
+from text_process.core import Processor, process_text
+
+__all__ = ["Processor", "process_text", "__version__"]
+```
+
+用 `importlib.metadata` 读取版本号，而不是在 `__init__.py` 里硬编码，这样版本号只有一个来源（pyproject.toml）。
+
+### 构建包
+
+```bash
+# 安装构建工具
+pip install build
+
+# 构建
+python -m build
+
+# 生成两个文件：
+# dist/text_process-0.1.0-py3-none-any.whl   ← wheel（二进制分发包）
+# dist/text_process-0.1.0.tar.gz              ← sdist（源码分发包）
+```
+
+### 旧格式：setup.py 和 setup.cfg
+
+```python
+# setup.py（旧式写法，仍广泛存在）
+from setuptools import setup, find_packages
+
+setup(
+    name="my-package",
+    version="0.1.0",
+    packages=find_packages(),
+    install_requires=[
+        "requests>=2.28.0",
+    ],
+)
+```
+
+```ini
+# setup.cfg（过渡格式）
+[metadata]
+name = my-package
+version = 0.1.0
+
+[options]
+packages = find:
+install_requires =
+    requests>=2.28.0
+```
+
+:::info
+新项目请直接使用 pyproject.toml。setup.py 和 setup.cfg 是历史遗留，不需要在新项目中使用。遇到旧项目时能读懂即可。
+:::
+
+---
+
+## 六、uv：现代 Python 包管理器
+
+### 为什么需要 uv
+
+pip 有几个长期痛点：
+
+1. **慢** — 依赖解析和下载都是串行的，大型项目可能等几分钟
+2. **没有统一工作流** — pip 只管安装，你要分别用 venv、pip-tools、pyenv 等工具
+3. **解析器不够强** — pip 的依赖解析可能找到不兼容的方案而不报错
+4. **没有锁文件** — pip 本身不生成 lock 文件，需要额外工具
+
+uv 用 Rust 重写了整个工具链，速度提升 10-100 倍，并且把 pip、venv、pip-tools、pyenv、pipx 的功能统一到一个命令里。
+
+### 安装 uv
+
+```bash
+# Linux / macOS
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# 用 pip
+pip install uv
+
+# 用 Homebrew
+brew install uv
+```
+
+### uv init：创建新项目
+
+```bash
+uv init my-project
+cd my-project
+```
+
+生成的基础结构：
+
+```
+my-project/
+    .python-version     # Python 版本
+    pyproject.toml      # 项目配置
+    uv.lock             # 锁文件
+    hello.py            # 示例文件
+```
+
+```toml
+# 自动生成的 pyproject.toml
+[project]
+name = "my-project"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.10"
+dependencies = []
+```
+
+### uv add / uv remove：管理依赖
+
+```bash
+# 添加运行时依赖
+uv add requests
+uv add "pydantic>=2.0.0"
+
+# 添加开发依赖
+uv add --dev pytest
+uv add --dev ruff mypy
+
+# 添加可选依赖组
+uv add --group docs mkdocs mkdocs-material
+
+# 移除依赖
+uv remove requests
+
+# 移除开发依赖
+uv remove --dev ruff
+```
+
+每次 `uv add` 都会：
+
+1. 更新 `pyproject.toml` 中的 `dependencies` 或 `[dependency-groups]`
+2. 解析所有依赖
+3. 更新 `uv.lock` 锁文件
+4. 安装到项目的虚拟环境中
+
+### uv sync：从锁文件安装
+
+```bash
+# 安装所有依赖
+uv sync
+
+# 只安装生产依赖（不含 dev）
+uv sync --no-dev
+
+# 安装指定依赖组
+uv sync --group docs
+```
+
+这是 CI/CD 中的标准用法：拉取代码后执行 `uv sync`，环境就完全复现了。
+
+### uv run：在项目环境中运行命令
+
+```bash
+# 运行 Python 脚本
+uv run python hello.py
+
+# 运行任意命令
+uv run pytest
+uv run ruff check .
+uv run mypy src/
+
+# 运行入口点
+uv run text-process
+```
+
+`uv run` 会自动确保虚拟环境存在且依赖已同步，然后在该环境中执行命令。不需要手动激活虚拟环境。
+
+### uv lock：锁定依赖
+
+```bash
+# 生成/更新锁文件但不安装
+uv lock
+
+# 检查锁文件是否与 pyproject.toml 一致
+uv lock --check
+```
+
+### uv pip：pip 兼容接口
+
+```bash
+# 大部分 pip 命令可以直接替换
+uv pip install requests
+uv pip install -r requirements.txt
+uv pip list
+uv pip show requests
+uv pip check
+
+# 但不支持 install --edit（请用 uv add 替代）
+```
+
+适合从 pip 迁移的过渡期，或者需要兼容 requirements.txt 的项目。
+
+### uv venv：创建虚拟环境
+
+```bash
+# 在当前目录创建 .venv
+uv venv
+
+# 指定 Python 版本
+uv venv --python 3.12
+
+# 指定路径
+uv venv /path/to/env
+
+# 创建时不包含 pip（uv 自身可以替代）
+uv venv --no-pip
+```
+
+### uv python：管理 Python 安装
+
+```bash
+# 列出可用的 Python 版本
+uv python list
+
+# 安装指定版本
+uv python install 3.12
+
+# 查看已安装版本
+uv python find 3.12
+
+# 固定项目使用的 Python 版本
+uv python pin 3.12
+```
+
+这替代了 pyenv 的核心功能。`uv python pin` 会写入 `.python-version` 文件。
+
+### uv tool：一次性运行 CLI 工具
+
+```bash
+# 直接运行，不安装到当前环境
+uv tool run ruff check .
+uv tool run black --check .
+uv tool run mypy src/
+
+# 安装到全局隔离环境
+uv tool install ruff
+uv tool install black
+
+# 查看已安装的工具
+uv tool list
+```
+
+这替代了 pipx。适合那些你想用但不想污染项目依赖的 CLI 工具。
+
+### uv.lock 文件
+
+```toml
+# uv.lock 片段
+[[package]]
+name = "requests"
+version = "2.31.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "charset-normalizer" },
+    { name = "idna" },
+    { name = "urllib3" },
+]
+
+[[package]]
+name = "certifi"
+version = "2023.7.22"
+source = { registry = "https://pypi.org/simple" }
+```
+
+`uv.lock` 记录了所有依赖的精确版本和来源，确保在不同机器上安装结果完全一致。
+
+:::important
+`uv.lock` 应该提交到 Git。它是保证团队协作和 CI/CD 可复现性的关键文件。
+:::
+
+### 从 pip 迁移
+
+| pip 命令 | uv 等价 |
+|---|---|
+| `pip install requests` | `uv add requests` |
+| `pip install -r requirements.txt` | `uv pip install -r requirements.txt` |
+| `pip freeze > requirements.txt` | `uv pip freeze > requirements.txt` |
+| `python -m venv .venv` | `uv venv` |
+| `pip install -e .` | `uv add --editable .` 或 `uv sync` |
+| `pip-compile requirements.in` | `uv lock` |
+| `pip-sync requirements.txt` | `uv sync` |
+| `pipx run ruff` | `uv tool run ruff` |
+| `pyenv install 3.12` | `uv python install 3.12` |
+
+---
+
+## 七、依赖冲突与锁定
+
+### 依赖解析为什么难：菱形依赖问题
+
+```
+你的项目
+    ├── A 包 (要求 C>=1.0,<2.0)
+    └── B 包 (要求 C>=2.0)
+            └── C 包 ← 版本冲突！A 要 <2.0，B 要 >=2.0
+```
+
+A 和 B 都依赖 C，但对 C 的版本要求互相矛盾。解析器必须发现这个矛盾并报错，而不是静默安装一个不兼容的版本。
+
+### 版本说明符
+
+```
+requests==2.31.0        # 精确匹配
+requests>=2.28.0        # 大于等于
+requests>=2.28.0,<3.0.0 # 范围
+requests~=2.31.0        # 兼容发布（>=2.31.0,<2.32.0）
+requests~=2.31          # 兼容发布（>=2.31,<3.0）
+requests!=2.30.0        # 排除特定版本
+```
+
+`~=` 是兼容发布操作符，规则是：**允许最右边的版本号递增**。`~=2.31.0` 等价于 `>=2.31.0,<2.32.0`；`~=2.31` 等价于 `>=2.31,<3.0`。
+
+### 解析器回溯
+
+当解析器尝试一个版本组合发现冲突时，它会回退尝试其他组合。这就是为什么 pip 解析慢——它可能需要尝试很多组合。uv 使用更高效的解析算法（基于 SAT 求解的思路），所以速度快很多。
+
+### 为什么锁文件至关重要
+
+`pyproject.toml` 中的版本说明符是**范围**（`>=2.28.0`），而锁文件记录的是**精确版本**（`2.31.0`）。
+
+没有锁文件时：
+
+```bash
+# 今天安装
+pip install "requests>=2.28.0"
+# 安装了 2.31.0
+
+# 半年后另一个同事安装
+pip install "requests>=2.28.0"
+# 安装了 2.33.0（期间发布了新版本）
+# 行为可能不同！
+```
+
+有锁文件时：
+
+```bash
+# 两个时间点、两台机器都安装同一个精确版本
+uv sync
+# 始终安装 requests 2.31.0（锁文件记录的版本）
+```
+
+### uv.lock vs requirements.txt
+
+| 特性 | requirements.txt | uv.lock |
+|---|---|---|
+| 格式 | 简单文本 | TOML |
+| 传递依赖可见性 | 需要手动标注 | 自动记录来源 |
+| 多平台支持 | 需要多个文件 | 一个文件涵盖所有平台 |
+| 哈希校验 | 可选 | 默认启用 |
+| 依赖分组 | 不支持 | 支持 |
+| 工具生成 | pip-compile | uv lock |
+
+### 解决冲突：理解错误信息
+
+```bash
+uv add "package-a==1.0" "package-b==2.0"
+```
+
+如果出现冲突，uv 会给出清晰的错误：
+
+```
+error: Unable to resolve dependencies
+  Because package-a==1.0 depends on numpy>=1.20,<2.0
+  and package-b==2.0 depends on numpy>=2.0
+  and you require package-a==1.0 and package-b==2.0,
+  we can conclude that the requirements are unsatisfiable.
+```
+
+解决思路：
+
+1. 升级或降级其中一个直接依赖
+2. 检查是否有可选的 extras 可以绕过冲突
+3. 如果是自己的包，放宽版本约束
+
+### 依赖分组
+
+```toml
+[project]
+dependencies = [
+    "requests>=2.28.0",
+    "pydantic>=2.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "coverage>=7.0",
+]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.0",
+]
+```
+
+```bash
+uv sync --group dev
+uv sync --group test
+uv sync --group dev --group test
+```
+
+这比 `[project.optional-dependencies]` 更适合开发阶段的分组，因为 optional-dependencies 主要是给包的下游用户用的（安装 extras），而 dependency-groups 是给自己团队用的。
+
+---
+
+## 八、发布自己的包
+
+### 构建
+
+```bash
+# 用 build
+pip install build
+python -m build
+
+# 用 uv（更简单）
+uv build
+```
+
+两个命令都会在 `dist/` 目录生成 wheel 和 sdist。
+
+### 检查包的合法性
+
+```bash
+pip install twine
+twine check dist/*
+```
+
+`twine check` 会验证：
+- 元数据是否完整
+- README 是否能正确渲染
+- 版本号是否符合规范
+
+### 发布到 PyPI
+
+```bash
+# 用 twine
+twine upload dist/*
+
+# 用 uv
+uv publish
+```
+
+:::warning 首次发布必读
+PyPI 不允许覆盖已发布的版本。如果 `0.1.0` 已经上传，即使有 bug 也不能重新上传 `0.1.0`，只能发布 `0.1.1`。上传前务必仔细检查。
+:::
+
+### 用 TestPyPI 测试
+
+```bash
+# 先注册 TestPyPI 账号：https://test.pypi.org/
+
+# 上传到 TestPyPI
+twine upload --repository testpypi dist/*
+
+# 从 TestPyPI 安装测试
+pip install --index-url https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
+    my-package==0.1.0
+```
+
+### 版本编号
+
+**语义化版本（SemVer）** — 最常用：
+
+```
+MAJOR.MINOR.PATCH
+1.0.0 → 1.0.1 → 1.1.0 → 2.0.0
+
+MAJOR：不兼容的 API 变更
+MINOR：向后兼容的功能新增
+PATCH：向后兼容的 bug 修复
+```
+
+**日历版本（CalVer）** — 适合持续发布的项目：
+
+```
+2024.1.0 → 2024.2.0 → 2024.6.0
+```
+
+:::tip
+Python 生态没有强制版本方案，但 SemVer 是事实标准。如果你的包是库，建议严格遵循 SemVer。
+:::
+
+### README 和长描述
+
+pyproject.toml 中的 `readme` 字段决定包在 PyPI 上的展示页面：
+
+```toml
+[project]
+readme = "README.md"
+
+# 或者指定内容和格式
+# readme = {text = "A short description", content-type = "text/plain"}
+```
+
+PyPI 支持 Markdown 渲染，确保 README 包含：
+
+- 项目简介
+- 安装方式
+- 快速上手示例
+- 许可证信息
+
+### License 和 Classifiers
+
+```toml
+[project]
+license = "MIT"
+
+# 或者指定文件
+# license = {text = "MIT License"}
+
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+```
+
+Classifiers 是 PyPI 的分类标签，帮助用户搜索和筛选。完整列表见 https://pypi.org/classifiers/。
+
+---
+
+## 九、综合实战：完整项目工作流
+
+我们从零开始创建一个 Python 库项目，走完从初始化到发布的全流程。
+
+### 第一步：初始化项目
+
+```bash
+uv init text-normalizer
+cd text-normalizer
+```
+
+### 第二步：配置 Python 版本
+
+```bash
+uv python pin 3.12
+```
+
+生成 `.python-version`：
+
+```
+3.12
+```
+
+### 第三步：编写项目代码
+
+最终项目结构：
+
+```
+text-normalizer/
+    src/
+        text_normalizer/
+            __init__.py
+            core.py
+            cli.py
+    tests/
+        __init__.py
+        test_core.py
+    .github/
+        workflows/
+            ci.yml
+    pyproject.toml
+    uv.lock
+    README.md
+    LICENSE
+    .gitignore
+```
+
+```python
+# src/text_normalizer/core.py
+
+import re
+import unicodedata
+from typing import Optional
+
+
+def normalize_text(
+    text: str,
+    lowercase: bool = True,
+    remove_accents: bool = False,
+    collapse_whitespace: bool = True,
+    strip: bool = True,
+) -> str:
+    result = text
+
+    if strip:
+        result = result.strip()
+
+    if lowercase:
+        result = result.lower()
+
+    if remove_accents:
+        result = unicodedata.normalize("NFD", result)
+        result = "".join(
+            char for char in result
+            if unicodedata.category(char) != "Mn"
+        )
+
+    if collapse_whitespace:
+        result = re.sub(r"\s+", " ", result)
+
+    return result
+
+
+def slugify(text: str, separator: str = "-") -> str:
+    text = normalize_text(text, remove_accents=True)
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[-\s]+", separator, text)
+    return text.strip(separator)
+
+
+def truncate(
+    text: str,
+    max_length: int = 100,
+    suffix: str = "...",
+    word_boundary: bool = False,
+) -> str:
+    if len(text) <= max_length:
+        return text
+
+    truncated = text[: max_length - len(suffix)]
+
+    if word_boundary:
+        last_space = truncated.rfind(" ")
+        if last_space > 0:
+            truncated = truncated[:last_space]
+
+    return truncated + suffix
+
+
+def count_words(text: str) -> int:
+    return len(text.split())
+
+
+def extract_keywords(text: str, min_length: int = 3) -> list[str]:
+    words = normalize_text(text).split()
+    return list({w for w in words if len(w) >= min_length and w.isalpha()})
+```
+
+```python
+# src/text_normalizer/cli.py
+
+from text_normalizer.core import normalize_text, slugify, truncate
+
+
+def main() -> None:
+    sample = "  Hello,  World!  This is a Test...  "
+    print(f"Original:    '{sample}'")
+    print(f"Normalized:  '{normalize_text(sample)}'")
+    print(f"Slug:        '{slugify(sample)}'")
+    print(f"Truncated:   '{truncate(sample, max_length=20)}'")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+```python
+# src/text_normalizer/__init__.py
+
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("text-normalizer")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
+
+from text_normalizer.core import (
+    normalize_text,
+    slugify,
+    truncate,
+    count_words,
+    extract_keywords,
+)
+
+__all__ = [
+    "normalize_text",
+    "slugify",
+    "truncate",
+    "count_words",
+    "extract_keywords",
+    "__version__",
+]
+```
+
+```python
+# tests/test_core.py
+
+from text_normalizer import normalize_text, slugify, truncate, count_words
+
+
+def test_normalize_basic() -> None:
+    assert normalize_text("  Hello  World  ") == "hello world"
+
+
+def test_normalize_no_lowercase() -> None:
+    assert normalize_text("Hello World", lowercase=False) == "Hello World"
+
+
+def test_normalize_remove_accents() -> None:
+    assert normalize_text("cafe\u0301", remove_accents=True) == "cafe"
+
+
+def test_slugify() -> None:
+    assert slugify("Hello, World!") == "hello-world"
+
+
+def test_slugify_custom_separator() -> None:
+    assert slugify("Hello, World!", separator="_") == "hello_world"
+
+
+def test_truncate_short() -> None:
+    assert truncate("Hi", max_length=10) == "Hi"
+
+
+def test_truncate_long() -> None:
+    result = truncate("A very long string that should be cut", max_length=20)
+    assert len(result) == 20
+    assert result.endswith("...")
+
+
+def test_truncate_word_boundary() -> None:
+    result = truncate(
+        "Hello world this is a test",
+        max_length=15,
+        word_boundary=True,
+    )
+    assert not result.rstrip(".").endswith(" ")
+
+
+def test_count_words() -> None:
+    assert count_words("hello world foo") == 3
+    assert count_words("") == 0
+    assert count_words("single") == 1
+```
+
+### 第四步：配置 pyproject.toml
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "text-normalizer"
+version = "0.1.0"
+description = "A text normalization and processing library"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Alice", email = "alice@example.com" },
+]
+keywords = ["text", "normalize", "slugify"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Text Processing",
+]
+dependencies = []
+
+[project.optional-dependencies]
+cli = ["rich>=13.0.0"]
+
+[project.scripts]
+text-normalizer = "text_normalizer.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/alice/text-normalizer"
+Repository = "https://github.com/alice/text-normalizer"
+Issues = "https://github.com/alice/text-normalizer/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/text_normalizer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+```
+
+### 第五步：安装依赖并开发
+
+```bash
+# 添加开发依赖（会自动更新 pyproject.toml 和 uv.lock）
+uv add --dev pytest pytest-cov ruff mypy
+
+# 同步环境
+uv sync
+
+# 运行测试
+uv run pytest
+
+# 代码检查
+uv run ruff check src/
+uv run ruff format src/
+
+# 类型检查
+uv run mypy src/
+```
+
+### 第六步：构建和本地验证
+
+```bash
+# 构建
+uv build
+
+# 检查
+uv run twine check dist/*
+
+# 在临时环境中测试安装
+uv venv /tmp/test-env
+uv pip install --python /tmp/test-env/bin/python dist/text_normalizer-0.1.0-py3-none-any.whl
+/tmp/test-env/bin/python -c "from text_normalizer import normalize_text; print(normalize_text('  Hello  '))"
+```
+
+### 第七步：发布到 TestPyPI
+
+```bash
+uv publish --index testpypi
+```
+
+需要先配置 TestPyPI 的凭据。可以在 `~/.pypirc` 中设置：
+
+```ini
+[distutils]
+index-servers =
+    testpypi
+
+[testpypi]
+repository = https://test.pypi.org/legacy/
+username = __token__
+password = <your-testpypi-token>
+```
+
+### 第八步：CI/CD 配置
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run linting
+        run: uv run ruff check src/
+
+      - name: Run type checking
+        run: uv run mypy src/
+
+      - name: Run tests
+        run: uv run pytest --cov=text_normalizer
+```
+
+### 第九步：.gitignore
+
+```gitignore
+.venv/
+__pycache__/
+*.pyc
+dist/
+*.egg-info/
+.uv/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+```
+
+---
+
+## 十、总结与下一步
+
+### 核心要点
+
+1. **理解 import 机制** — `sys.path` 决定了 Python 能找到什么，虚拟环境通过修改它实现隔离
+2. **虚拟环境是必须的** — 不是可选的最佳实践，而是 Python 开发的基本纪律
+3. **pyproject.toml 是现代标准** — 所有项目元数据和工具配置集中在一个文件
+4. **锁文件保证可复现** — pyproject.toml 声明范围，锁文件锁定精确版本
+5. **uv 是当前最佳选择** — 速度快、功能全、工作流简洁
+
+### 工具对比
+
+| 特性 | pip + venv | Poetry | PDM | uv |
+|---|---|---|---|---|
+| 依赖安装 | 慢 | 中等 | 中等 | 极快 |
+| 虚拟环境 | 需手动 | 自动 | 自动 | 自动 |
+| 锁文件 | 需 pip-tools | poetry.lock | pdm.lock | uv.lock |
+| Python 版本管理 | 需 pyenv | 需 pyenv | 内置 | 内置 |
+| CLI 工具运行 | 需 pipx | 需 pipx | 需 pipx | 内置 |
+| pyproject.toml | 只读取 | 完整支持 | 完整支持 | 完整支持 |
+| 项目初始化 | 无 | poetry new | pdm init | uv init |
+| 依赖分组 | 不支持 | extras | groups | groups + extras |
+
+### 什么时候用什么
+
+- **个人项目 / 新项目** — 直接用 uv，零配置上手
+- **团队项目** — uv + pyproject.toml + uv.lock 提交到 Git
+- **维护旧项目** — 如果已有 Poetry/PDM，不必迁移；如果是 requirements.txt，可以逐步迁移到 uv
+- **CI/CD** — uv sync 确保环境一致，比 pip install -r 快很多
+- **发布包** — pyproject.toml + uv build + uv publish
+
+:::tip
+从 pip 迁移到 uv 不需要一次性全部切换。你可以先用 `uv pip install` 替代 `pip install`，再逐步迁移到 `uv add` / `uv sync` 的工作流。
+:::
+
+### 延伸阅读
+
+- Python 官方打包指南：https://packaging.python.org/
+- PEP 621 规范：https://peps.python.org/pep-0621/
+- uv 官方文档：https://docs.astral.sh/uv/
+- 本站 [Python 系统教程](/posts/python/python-complete-guide) — Python 语法基础
+- 本站 [FastAPI 系统教程](/posts/python/fastapi-complete-guide) — 用 uv 搭建 API 项目
