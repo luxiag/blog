@@ -22,7 +22,7 @@ void main() {
 `;
 
 // Wrap shader compilation errors
-function ShaderPlane({ fragmentShader, vertexShader = DEFAULT_VERTEX_SHADER, onError }: { fragmentShader: string, vertexShader?: string, onError: (err: string) => void }) {
+function ShaderPlane({ fragmentShader, vertexShader = DEFAULT_VERTEX_SHADER }: { fragmentShader: string, vertexShader?: string }) {
   const materialRef = useRef<THREE.ShaderMaterial>(null);
 
   const uniforms = useMemo(
@@ -39,10 +39,6 @@ function ShaderPlane({ fragmentShader, vertexShader = DEFAULT_VERTEX_SHADER, onE
     }
   });
 
-  // Simple error catching for shader compilation isn't straightforward in R3F/Three without parsing logs
-  // But we can try-catch material creation if we were creating it manually.
-  // For now, we rely on WebGL warnings in console, but we could try to validate code before rendering.
-
   return (
     <mesh>
       <planeGeometry args={[2, 2]} />
@@ -51,8 +47,7 @@ function ShaderPlane({ fragmentShader, vertexShader = DEFAULT_VERTEX_SHADER, onE
         vertexShader={vertexShader}
         fragmentShader={fragmentShader}
         uniforms={uniforms}
-        vertexColors={true}
-        key={fragmentShader + vertexShader} // Re-create material on code change
+        key={fragmentShader + vertexShader}
       />
     </mesh>
   );
@@ -112,12 +107,15 @@ interface ShaderPreviewProps {
  */
 export default function ShaderPreview({ code: initialCode, vertexCode, title = "GLSL Preview", editable = true }: ShaderPreviewProps) {
   const [code, setCode] = useState(initialCode);
-  const [activeCode, setActiveCode] = useState(initialCode); // Code actually running
+  const [activeCode, setActiveCode] = useState(initialCode);
   const [error, setError] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
 
-  // Auto-run after delay when typing? Or manual run button?
-  // Let's do manual run or debounce. Manual is safer for shaders to avoid crashing context on typo.
+  useEffect(() => {
+    setCode(initialCode);
+    setActiveCode(initialCode);
+    setError(null);
+  }, [initialCode]);
 
   const handleRun = () => {
     setActiveCode(code);
@@ -196,7 +194,6 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
               <ShaderPlane
                 fragmentShader={activeCode}
                 vertexShader={vertexCode}
-                onError={(err) => setError(err)}
               />
             </DynamicCanvas>
           </ErrorBoundary>

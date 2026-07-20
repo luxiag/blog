@@ -7,7 +7,7 @@ tags: ['linux', 'server', 'cloud', 'ssh', 'security', 'devops']
 
 # 云服务器入门：从购买、连接到安全加固
 
-在前两篇文章中，我们已经熟悉了 Linux 的[文件系统与基础命令](/blog/posts/linux/linux-fundamentals)，也掌握了[管道、文本处理与进程管理](/blog/posts/linux/linux-advanced-commands)等进阶技巧。但这些操作大多是在本地或虚拟机里练习的。
+在前两篇文章中，我们已经熟悉了 Linux 的[文件系统与基础命令](/posts/linux/linux-fundamentals)，也掌握了[管道、文本处理与进程管理](/posts/linux/linux-advanced-commands)等进阶技巧。但这些操作大多是在本地或虚拟机里练习的。
 
 真正的考验是：**当你拥有一台远在千里之外、只能通过网络访问的云服务器时，你该如何安全地登录它、管理它？**
 
@@ -185,7 +185,7 @@ chmod 600 ~/.ssh/authorized_keys
 ```
 
 :::warning 权限很关键
-SSH 出于安全考虑，对权限要求很严格：`~/.ssh` 必须是 `700`，`authorized_keys` 必须是 `600`。权限不对会导致密钥登录失败（且不报明显错误）。还记得[第一篇](/blog/posts/linux/linux-fundamentals)讲的 `chmod` 吗？这里就是它的实战用武之地。
+SSH 出于安全考虑，对权限要求很严格：`~/.ssh` 必须是 `700`，`authorized_keys` 必须是 `600`。权限不对会导致密钥登录失败（且不报明显错误）。还记得[第一篇](/posts/linux/linux-fundamentals)讲的 `chmod` 吗？这里就是它的实战用武之地。
 :::
 
 ### 3.4 第三步：验证密钥登录

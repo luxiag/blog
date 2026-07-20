@@ -45,7 +45,7 @@ graph BT
 ## 二、 第一层：算术与函数（基石）
 
 这是最底层的工具。你不需要精通数学分析，但以下内容必须像呼吸一样自然。
-**详细讲解见 [函数即图形：图形学数学的第一层基石](/blog/posts/math/functions-as-graphics)**。
+**详细讲解见 [函数即图形：图形学数学的第一层基石](/posts/math/functions-as-graphics)**。
 
 | 知识点 | 优先级 | 说明 |
 |--------|--------|------|
@@ -70,7 +70,7 @@ graph BT
 
 | 知识点 | 优先级 | 说明 | 已有文章 |
 |--------|--------|------|----------|
-| 向量与点的区别 | ★★★★★ | 位置 vs 位移 | [向量圣经](/blog/posts/math/vector-bible) |
+| 向量与点的区别 | ★★★★★ | 位置 vs 位移 | [向量圣经](/posts/math/vector-bible) |
 | 加减法 | ★★★★★ | 位移合成、方向计算 | 同上 |
 | 数乘 | ★★★★★ | 缩放、反向 | 同上 |
 | 长度（length / magnitude） | ★★★★★ | 距离、归一化前提 | 同上 |
@@ -80,7 +80,7 @@ graph BT
 | 反射向量（reflect） | ★★★★☆ | 光照反射、弹球 | 同上 |
 | 折射向量（refract） | ★★★☆☆ | 透明材质、水面 | 同上 |
 | 向量的分量访问（swizzle） | ★★★★☆ | `v.xz`、`v.yyy` 等 GLSL 特性 | — |
-| 齐次坐标（4D 向量） | ★★★★★ | `vec4(x,y,z,w)`，平移变换的关键 | [矩阵革命](/blog/posts/math/matrix-in-webgl) |
+| 齐次坐标（4D 向量） | ★★★★★ | `vec4(x,y,z,w)`，平移变换的关键 | [矩阵革命](/posts/math/matrix-in-webgl) |
 
 :::tip 快速判断你的向量水平
 如果你能解释"为什么法线要用 `normalize(cross(edge1, edge2))` 计算"，你的向量知识已经够用了。
@@ -94,7 +94,7 @@ graph BT
 
 | 知识点 | 优先级 | 说明 | 已有文章 |
 |--------|--------|------|----------|
-| 矩阵乘法规则 | ★★★★★ | 行列对应，不可交换 | [矩阵革命](/blog/posts/math/matrix-in-webgl) |
+| 矩阵乘法规则 | ★★★★★ | 行列对应，不可交换 | [矩阵革命](/posts/math/matrix-in-webgl) |
 | 缩放矩阵 | ★★★★★ | 对角线元素 | 同上 |
 | 旋转矩阵（2D/3D） | ★★★★★ | 绕各轴旋转的公式 | 同上 |
 | 平移矩阵（仿射变换） | ★★★★★ | 齐次坐标的妙用 | 同上 |
@@ -134,17 +134,17 @@ graph BT
 
 | 知识点 | 优先级 | 说明 | 已有文章 |
 |--------|--------|------|----------|
-| 局部空间 → 世界空间 | ★★★★★ | Model Matrix | [坐标系与变换](/blog/posts/math/coordinate-systems-and-transformations) |
-| 世界空间 → 观察空间 | ★★★★★ | View Matrix | [相机与投影](/blog/posts/math/camera-and-projection) |
+| 局部空间 → 世界空间 | ★★★★★ | Model Matrix | [坐标系与变换流水线](/posts/math/coordinate-systems-and-transformations) |
+| 世界空间 → 观察空间 | ★★★★★ | View Matrix | 同上 |
 | 观察空间 → 裁剪空间 | ★★★★★ | Projection Matrix | 同上 |
 | 裁剪空间 → NDC | ★★★★★ | 透视除法（w 除法） | 同上 |
-| NDC → 屏幕空间 | ★★★★★ | Viewport 变换 | — |
-| 法线变换（逆转置矩阵） | ★★★★☆ | 非均匀缩放时法线会变形 | — |
+| NDC → 屏幕空间 | ★★★★★ | Viewport 变换 | 同上 |
+| 法线变换（逆转置矩阵） | ★★★★☆ | 非均匀缩放时法线会变形 | 同上 |
 | 左手系 vs 右手系 | ★★★★★ | OpenGL vs DirectX，影响面朝向 | 同上 |
-| 行主序 vs 列主序 | ★★★★☆ | 内存布局差异，调试矩阵的关键 | — |
+| 行主序 vs 列主序 | ★★★★☆ | 内存布局差异，调试矩阵的关键 | 同上 |
 
 :::important 变换流水线是图形学的"任督二脉"
-如果你不能一口气说出一个顶点从模型空间到屏幕像素的完整变换路径，你需要重读 [坐标系与变换](/blog/posts/math/coordinate-systems-and-transformations) 和 [相机与投影](/blog/posts/math/camera-and-projection) 这两篇文章。这是 3D 开发最核心的知识。
+如果你不能一口气说出一个顶点从模型空间到屏幕像素的完整变换路径，你需要重读 [坐标系与变换](/posts/math/coordinate-systems-and-transformations) 和 [相机与投影](/posts/math/camera-and-projection) 这两篇文章。这是 3D 开发最核心的知识。
 :::
 
 ---
@@ -155,7 +155,7 @@ graph BT
 
 | 知识点 | 优先级 | 说明 | 已有文章 |
 |--------|--------|------|----------|
-| 欧拉角（Pitch/Yaw/Roll） | ★★★★★ | 最直观，但有万向节死锁 | [旋转的奥义](/blog/posts/math/3d-rotation) |
+| 欧拉角（Pitch/Yaw/Roll） | ★★★★★ | 最直观，但有万向节死锁 | [旋转的奥义](/posts/math/3d-rotation) |
 | 万向节死锁（Gimbal Lock） | ★★★★★ | 必须理解的问题 | 同上 |
 | 轴角表示（Axis-Angle） | ★★★★☆ | 绕任意轴旋转 | 同上 |
 | 四元数（Quaternion） | ★★★★★ | 无死锁、平滑插值 | 同上 |
@@ -174,7 +174,7 @@ graph BT
 
 | 知识点 | 优先级 | 说明 | 已有文章 |
 |--------|--------|------|----------|
-| 透视投影矩阵推导 | ★★★★★ | 视锥体 → NDC | [相机与投影](/blog/posts/math/camera-and-projection) |
+| 透视投影矩阵推导 | ★★★★★ | 视锥体 → NDC | [相机与投影](/posts/math/camera-and-projection) |
 | 正交投影矩阵推导 | ★★★★☆ | 2D 游戏、UI 渲染、阴影贴图 | 同上 |
 | 视锥体（Frustum）定义 | ★★★★★ | fov / aspect / near / far | 同上 |
 | LookAt 矩阵构建 | ★★★★★ | eye / target / up | 同上 |
@@ -187,7 +187,7 @@ graph BT
 
 | 知识点 | 优先级 | 说明 | 已有文章 |
 |--------|--------|------|----------|
-| 平面的点法式定义 | ★★★★★ | 法线 + 点 | [平面与空间几何](/blog/posts/math/plane-geometry) |
+| 平面的点法式定义 | ★★★★★ | 法线 + 点 | [平面与空间几何](/posts/math/plane-geometry) |
 | 点到平面的有向距离 | ★★★★★ | SDF、视锥体剔除 | 同上 |
 | 射线与平面的交点 | ★★★★★ | 鼠标拾取、碰撞检测 | — |
 | 射线与三角形相交（Möller–Trumbore） | ★★★★☆ | 光线追踪、拾取 | — |
@@ -201,7 +201,7 @@ graph BT
 
 | 知识点 | 优先级 | 说明 | 已有文章 |
 |--------|--------|------|----------|
-| Lambert 漫反射 | ★★★★★ | $N \cdot L$ | [光照模型](/blog/posts/math/lighting-math) |
+| Lambert 漫反射 | ★★★★★ | $N \cdot L$ | [光照模型](/posts/math/lighting-math) |
 | Phong / Blinn-Phong 高光 | ★★★★★ | 半角向量、反射向量 | 同上 |
 | 环境光 | ★★★★☆ | 最简近似 | 同上 |
 | 菲涅尔效应 | ★★★★☆ | 边缘反射增强 | 同上 |
@@ -368,15 +368,15 @@ graph BT
 
 | 层级 | 已有文章 |
 |------|----------|
-| 算术与函数 | [函数即图形：图形学数学的第一层基石](/blog/posts/math/functions-as-graphics) |
-| 向量 | [向量圣经：图形学数学的第一块基石](/blog/posts/math/vector-bible) |
-| 矩阵 | [矩阵革命：为什么图形学离不开矩阵？](/blog/posts/math/matrix-in-webgl) |
-| 坐标系与变换 | [坐标系与变换：构建 3D 世界的时空法则](/blog/posts/math/coordinate-systems-and-transformations) |
-| 旋转 | [旋转的奥义：从欧拉角到四元数](/blog/posts/math/3d-rotation) |
-| 投影与相机 | [把世界装进盒子：相机与投影矩阵的数学推导](/blog/posts/math/camera-and-projection) |
-| 平面与空间几何 | [上帝的切纸刀：平面与空间几何完全指南](/blog/posts/math/plane-geometry) |
-| 光照 | [追光者：光照模型的数学原理](/blog/posts/math/lighting-math) |
-| Shader 数学入门 | [重拾数学：写给前端的 GLSL 数学补习班](/blog/posts/math/math-for-shader-programming) |
+| 算术与函数 | [函数即图形：图形学数学的第一层基石](/posts/math/functions-as-graphics) |
+| 向量 | [向量圣经：图形学数学的第一块基石](/posts/math/vector-bible) |
+| 矩阵 | [矩阵革命：为什么图形学离不开矩阵？](/posts/math/matrix-in-webgl) |
+| 坐标系与变换 | [坐标系与变换：构建 3D 世界的时空法则](/posts/math/coordinate-systems-and-transformations) |
+| 旋转 | [旋转的奥义：从欧拉角到四元数](/posts/math/3d-rotation) |
+| 投影与相机 | [把世界装进盒子：相机与投影矩阵的数学推导](/posts/math/camera-and-projection) |
+| 平面与空间几何 | [上帝的切纸刀：平面与空间几何完全指南](/posts/math/plane-geometry) |
+| 光照 | [追光者：光照模型的数学原理](/posts/math/lighting-math) |
+| Shader 数学入门 | [重拾数学：写给前端的 GLSL 数学补习班](/posts/math/math-for-shader-programming) |
 
 **建议学习顺序**：先读"Shader 数学补习班"建立信心 → 再按层级从下往上依次学习 → 遇到具体问题时回查对应文章。
 

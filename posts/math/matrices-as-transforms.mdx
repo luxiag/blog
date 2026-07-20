@@ -1,0 +1,492 @@
+---
+title: '矩阵即变换：图形学数学的第三层基石'
+date: '2026-07-17'
+description: '矩阵不是数字表格，而是空间的变换器——缩放、旋转、平移，全都是矩阵乘法。本文从"矩阵对一个点做了什么"出发，带你理解每种变换矩阵的构造、复合变换的顺序陷阱、逆矩阵与法线变换的原理，让你不再对着 gl_Position 发呆。'
+tags: ['Math', 'Matrix', 'Graphics', 'GLSL']
+---
+
+# 矩阵即变换：图形学数学的第三层基石
+
+前两层我们学会了：函数处理数字，向量处理箭头。现在问题来了——**怎么让箭头动起来？**
+
+把一个物体缩放 2 倍、旋转 30°、平移到 (3, 0, 0)，你需要一个工具同时处理这三件事。这个工具就是**矩阵**。
+
+矩阵不是数字表格。矩阵是**空间的变换器**——它把一个空间揉捏成另一个形状，所有在这个空间里的点都被一起揉捏。当你理解了"矩阵 = 对空间做的事"，这一层就通了。
+
+---
+
+## 零、 什么是矩阵？为什么它能改变空间？
+
+如果你第一次接触矩阵，它看起来就是一堆排成方阵的数字：
+
+$$ M = \begin{bmatrix} a & c \\ b & d \end{bmatrix} $$
+
+为什么这堆数字能让空间变形？答案藏在**矩阵乘向量**这个运算里。
+
+### 1. 矩阵是一个"机器"
+
+把矩阵想象成一台机器：输入一个向量，输出另一个向量。
+
+$$ \begin{bmatrix} a & c \\ b & d \end{bmatrix} \begin{bmatrix} x \\ y \end{bmatrix} = \begin{bmatrix} ax + cy \\ bx + dy \end{bmatrix} $$
+
+展开看看：
+
+$$ \begin{bmatrix} ax + cy \\ bx + dy \end{bmatrix} = x \begin{bmatrix} a \\ b \end{bmatrix} + y \begin{bmatrix} c \\ d \end{bmatrix} $$
+
+**结果 = $x$ 倍的第一列 + $y$ 倍的第二列。**
+
+矩阵乘向量，本质上就是用输入向量的分量 $(x, y)$ 去对矩阵的各列做**加权混合**。
+
+### 2. 为什么这能改变空间？
+
+2D 空间的"骨架"就是两个基向量：$\hat{x} = (1, 0)$ 和 $\hat{y} = (0, 1)$。空间中**每一个点**都是这两个基向量的线性组合：$(x, y) = x \cdot \hat{x} + y \cdot \hat{y}$。
+
+**单位矩阵** $I = \begin{bmatrix}1&0\\0&1\end{bmatrix}$ 什么也不改——第一列就是原始 $\hat{x}$，第二列就是原始 $\hat{y}$。
+
+但如果我们把第一列换成 $(2, 0)$，第二列换成 $(0, 3)$：
+
+$$ \begin{bmatrix}2&0\\0&3\end{bmatrix} \begin{bmatrix}x\\y\end{bmatrix} = x\begin{bmatrix}2\\0\end{bmatrix} + y\begin{bmatrix}0\\3\end{bmatrix} $$
+
+$\hat{x}$ 被拉到了 $(2, 0)$（x 方向 2 倍），$\hat{y}$ 被拉到了 $(0, 3)$（y 方向 3 倍）。**骨架变了，整个空间就跟着变了。**
+
+<ShaderPreview title="矩阵 = 移动基向量，空间跟着变形" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 4.0 - 2.0;
+    
+    vec3 color = vec3(0.05, 0.05, 0.08);
+    
+    for (int i = -4; i <= 4; i++) {
+        float val = float(i);
+        float lineV = smoothstep(0.03, 0.01, abs(uv.x - val));
+        float lineH = smoothstep(0.03, 0.01, abs(uv.y - val));
+        color = mix(color, vec3(0.12, 0.12, 0.18), max(lineV, lineH) * 0.4);
+    }
+    
+    float axOrig = smoothstep(0.04, 0.01, length(uv - vec2(1.0, 0.0)));
+    float ayOrig = smoothstep(0.04, 0.01, length(uv - vec2(0.0, 1.0)));
+    
+    float lineXo = smoothstep(0.02, 0.005, abs(uv.y)) * step(0.0, uv.x) * step(uv.x, 1.0);
+    float lineYo = smoothstep(0.02, 0.005, abs(uv.x)) * step(0.0, uv.y) * step(uv.y, 1.0);
+    color = mix(color, vec3(0.4, 0.15, 0.15), lineXo);
+    color = mix(color, vec3(0.15, 0.15, 0.4), lineYo);
+    color = mix(color, vec3(0.6, 0.2, 0.2), axOrig);
+    color = mix(color, vec3(0.2, 0.2, 0.6), ayOrig);
+    
+    float angle = uTime * 0.5;
+    float sx = 1.5 + 0.5 * sin(uTime * 0.7);
+    float sy = 1.0 + 0.3 * cos(uTime * 0.9);
+    vec2 newI = vec2(cos(angle) * sx, sin(angle) * sx);
+    vec2 newJ = vec2(-sin(angle) * sy, cos(angle) * sy);
+    
+    float axNew = smoothstep(0.04, 0.01, length(uv - newI));
+    float ayNew = smoothstep(0.04, 0.01, length(uv - newJ));
+    
+    float lineXn = smoothstep(0.015, 0.004, length(uv - clamp(dot(uv, normalize(newI)), 0.0, length(newI)) * normalize(newI)));
+    float lineYn = smoothstep(0.015, 0.004, length(uv - clamp(dot(uv, normalize(newJ)), 0.0, length(newJ)) * normalize(newJ)));
+    
+    color = mix(color, vec3(0.9, 0.3, 0.3), lineXn);
+    color = mix(color, vec3(0.3, 0.5, 0.9), lineYn);
+    color = mix(color, vec3(1.0, 0.3, 0.3), axNew);
+    color = mix(color, vec3(0.3, 0.5, 1.0), ayNew);
+    
+    for (int i = -3; i <= 3; i++) {
+        for (int j = -3; j <= 3; j++) {
+            vec2 pt = float(i) * newI + float(j) * newJ;
+            float d = smoothstep(0.03, 0.01, length(uv - pt));
+            vec3 dotColor = vec3(0.3, 0.6, 0.4);
+            color = mix(color, dotColor, d * 0.5);
+        }
+    }
+    
+    float dotO = smoothstep(0.05, 0.02, length(uv));
+    color = mix(color, vec3(1.0), dotO);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+**红色箭头**是变换后的 $\hat{x}$，**蓝色箭头**是变换后的 $\hat{y}$。看到它们怎么动了吗？网格点跟着它们一起变形——**矩阵就是移动骨架，空间跟着走。**
+
+### 3. 为什么用矩阵而不是直接写变换函数？
+
+你完全可以写一个 `scale(x, y)` 函数和一个 `rotate(angle)` 函数。那为什么还要用矩阵？
+
+因为**矩阵可以叠加**。
+
+把 10 个变换写成函数，你需要对每个顶点执行 10 次函数调用。但把 10 个变换矩阵乘在一起，你只需要算一次 $M = M_{10} \cdot M_9 \cdots M_1$，然后对每个顶点只做一次 $M \cdot v$。
+
+GPU 极度擅长矩阵乘向量——这是它的硬件本职。一个 4×4 矩阵乘一个 `vec4`，GPU 只需要一个时钟周期。这就是为什么图形学里一切变换都用矩阵。
+
+---
+
+## 一、 核心直觉：矩阵对点做了什么
+
+当你写 `M * v`（矩阵乘向量），发生的事情极其简单：
+
+> **矩阵的每一列，就是变换后的基向量。**
+
+2D 空间中，原始的基向量是 $\hat{x} = (1,0)$ 和 $\hat{y} = (0,1)$。矩阵的变换就是把这两个基向量搬到了新的位置——整个空间跟着它们一起变形。
+
+$$ \begin{bmatrix} a & c \\ b & d \end{bmatrix} \begin{bmatrix} x \\ y \end{bmatrix} = x \begin{bmatrix} a \\ b \end{bmatrix} + y \begin{bmatrix} c \\ d \end{bmatrix} $$
+
+- 第一列 $(a, b)$：原来的 $\hat{x}$ 变成了什么
+- 第二列 $(c, d)$：原来的 $\hat{y}$ 变成了什么
+- 结果 = $x$ 倍的新 $\hat{x}$ + $y$ 倍的新 $\hat{y}$
+
+:::tip 一句话记住
+**矩阵的列 = 新基向量的位置。** 看到 $\begin{bmatrix}2&0\\0&3\end{bmatrix}$，立刻知道：$\hat{x}$ 被拉到 $(2,0)$（x 方向 2 倍），$\hat{y}$ 被拉到 $(0,3)$（y 方向 3 倍）。
+:::
+
+---
+
+## 二、 基本变换矩阵
+
+### 1. 缩放矩阵（Scale）
+
+$$ S = \begin{bmatrix} s_x & 0 & 0 \\ 0 & s_y & 0 \\ 0 & 0 & s_z \end{bmatrix} $$
+
+对角线元素就是各轴的缩放系数。$s > 1$ 放大，$0 < s < 1$ 缩小，$s < 0$ 镜像翻转。
+
+```glsl
+mat4 scaleMat = mat4(
+    sx,  0.0, 0.0, 0.0,
+    0.0, sy,  0.0, 0.0,
+    0.0, 0.0, sz,  0.0,
+    0.0, 0.0, 0.0, 1.0
+);
+```
+
+**注意**：缩放是相对于原点的。如果物体不在原点，它会**同时远离原点**——这就是为什么 3D 建模中总是先移到原点再缩放。
+
+<ShaderPreview title="缩放矩阵：相对原点放大" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    float s = 1.0 + 0.5 * sin(uTime);
+    
+    float boxOrig = 1.0;
+    boxOrig *= smoothstep(0.5 + 0.01, 0.5, abs(uv.x));
+    boxOrig *= smoothstep(0.5 + 0.01, 0.5, abs(uv.y));
+    
+    vec2 scaled = uv / s;
+    float boxScaled = 1.0;
+    boxScaled *= smoothstep(0.5 + 0.01, 0.5, abs(scaled.x));
+    boxScaled *= smoothstep(0.5 + 0.01, 0.5, abs(scaled.y));
+    
+    float dotO = 1.0 - step(0.03, length(uv));
+    
+    vec3 color = vec3(0.05, 0.05, 0.08);
+    color = mix(color, vec3(0.3, 0.3, 0.3), boxOrig * 0.3);
+    color = mix(color, vec3(0.2, 0.8, 0.3), boxScaled * 0.5);
+    color = mix(color, vec3(1.0), dotO);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+### 2. 旋转矩阵（Rotation）
+
+**2D 旋转**（必须背下来）：
+
+$$ R(\theta) = \begin{bmatrix} \cos\theta & -\sin\theta \\ \sin\theta & \cos\theta \end{bmatrix} $$
+
+**3D 旋转**：分别绕三个轴旋转
+
+绕 Z 轴：
+
+$$ R_z = \begin{bmatrix} \cos\theta & -\sin\theta & 0 \\ \sin\theta & \cos\theta & 0 \\ 0 & 0 & 1 \end{bmatrix} $$
+
+绕 Y 轴：
+
+$$ R_y = \begin{bmatrix} \cos\theta & 0 & \sin\theta \\ 0 & 1 & 0 \\ -\sin\theta & 0 & \cos\theta \end{bmatrix} $$
+
+绕 X 轴：
+
+$$ R_x = \begin{bmatrix} 1 & 0 & 0 \\ 0 & \cos\theta & -\sin\theta \\ 0 & \sin\theta & \cos\theta \end{bmatrix} $$
+
+<ShaderPreview title="旋转矩阵：绕原点转圈" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+mat2 rotate2d(float a) {
+    return mat2(cos(a), -sin(a), sin(a), cos(a));
+}
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    float angle = uTime * 0.6;
+    
+    vec2 rotated = rotate2d(angle) * uv;
+    
+    float boxOrig = 1.0;
+    boxOrig *= smoothstep(0.3 + 0.01, 0.3, abs(uv.x));
+    boxOrig *= smoothstep(0.3 + 0.01, 0.3, abs(uv.y));
+    
+    float boxRot = 1.0;
+    boxRot *= smoothstep(0.3 + 0.01, 0.3, abs(rotated.x));
+    boxRot *= smoothstep(0.3 + 0.01, 0.3, abs(rotated.y));
+    
+    float dotO = 1.0 - step(0.03, length(uv));
+    float circle = smoothstep(0.005, 0.002, abs(length(uv) - 0.3 * sqrt(2.0)));
+    
+    vec3 color = vec3(0.05, 0.05, 0.08);
+    color = mix(color, vec3(0.25), boxOrig * 0.25);
+    color = mix(color, vec3(0.9, 0.7, 0.2), boxRot * 0.5);
+    color = mix(color, vec3(1.0), dotO);
+    color = mix(color, vec3(0.4), circle * 0.2);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+### 3. 平移矩阵（Translation）
+
+3×3 矩阵做不了平移——这是它引入齐次坐标的唯一原因。在 4×4 矩阵中：
+
+$$ T = \begin{bmatrix} 1 & 0 & 0 & t_x \\ 0 & 1 & 0 & t_y \\ 0 & 0 & 1 & t_z \\ 0 & 0 & 0 & 1 \end{bmatrix} $$
+
+验证：$T \cdot \begin{bmatrix}x\\y\\z\\1\end{bmatrix} = \begin{bmatrix}x+t_x\\y+t_y\\z+t_z\\1\end{bmatrix}$
+
+平移藏在**第四列**。这就是为什么 `vec4(position, 1.0)` 的 `w=1` 如此关键——`w=0` 时平移列被忽略，方向向量不受平移影响。
+
+```glsl
+mat4 translateMat = mat4(
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    tx,  ty,  tz,  1.0
+);
+```
+
+:::important GLSL 的列主序陷阱
+GLSL 中 `mat4(a,b,c,d, e,f,g,h, ...)` 按列填充。上面写法中，`tx,ty,tz` 出现在最后一行，它们就是矩阵的第四列前三行。这和数学书上的写法（行主序）是转置关系，但结果一致——因为 GLSL 中 `mat * vec` 的语义与数学相同。
+:::
+
+---
+
+## 三、 复合变换与乘法顺序
+
+**这是矩阵这一层最大的坑。**
+
+矩阵乘法**不满足交换律**：$A \cdot B \neq B \cdot A$。
+
+"先缩放 S → 再旋转 R → 再平移 T"，写法是：
+
+$$ M = T \cdot R \cdot S $$
+
+**从右往左读**：最右边的 S 先作用，然后 R，最后 T。
+
+因为 $M \cdot v = T \cdot R \cdot S \cdot v = T \cdot (R \cdot (S \cdot v))$，从内向外执行。
+
+<ShaderPreview title="乘法顺序：先转再移 vs 先移再转" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+mat2 rotate2d(float a) {
+    return mat2(cos(a), -sin(a), sin(a), cos(a));
+}
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    vec2 uv2 = vUv * 2.0 - 1.0;
+    
+    float angle = 0.5;
+    vec2 translate = vec2(0.5, 0.0);
+    
+    vec2 p1 = uv;
+    p1 -= vec2(-0.5, 0.0);
+    p1 = rotate2d(angle) * p1 + translate;
+    
+    vec2 p2 = uv2;
+    p2 -= vec2(0.5, 0.0);
+    p2 = rotate2d(angle) * (p2 + translate);
+    
+    float box1 = smoothstep(0.15 + 0.01, 0.15, abs(p1.x)) * smoothstep(0.15 + 0.01, 0.15, abs(p1.y));
+    float box2 = smoothstep(0.15 + 0.01, 0.15, abs(p2.x)) * smoothstep(0.15 + 0.01, 0.15, abs(p2.y));
+    
+    float boxOrigL = smoothstep(0.15 + 0.01, 0.15, abs(uv.x + 0.5)) * smoothstep(0.15 + 0.01, 0.15, abs(uv.y));
+    float boxOrigR = smoothstep(0.15 + 0.01, 0.15, abs(uv.x - 0.5)) * smoothstep(0.15 + 0.01, 0.15, abs(uv.y));
+    
+    vec3 color = vec3(0.05, 0.05, 0.08);
+    color = mix(color, vec3(0.2), boxOrigL * 0.2);
+    color = mix(color, vec3(0.2), boxOrigR * 0.2);
+    color = mix(color, vec3(0.2, 0.8, 0.4), box1 * 0.6);
+    color = mix(color, vec3(0.9, 0.5, 0.2), box2 * 0.6);
+    
+    color = mix(color, vec3(0.3), smoothstep(0.005, 0.001, abs(uv.x)) * 0.5);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+**两种顺序的区别**：
+
+| 顺序 | 写法 | 效果 |
+|------|------|------|
+| 先缩放再旋转再平移 | $T \cdot R \cdot S$ | **正确**：在原点缩放旋转，然后搬走 |
+| 先平移再旋转再缩放 | $S \cdot R \cdot T$ | **错误**：搬走后绕原点转——物体绕原点公转了 |
+
+**规律**：**缩放和旋转总是相对于原点的。** 所以要先在原点做完缩放旋转，最后再平移到目标位置。这就是 **SRT 顺序**：Scale → Rotate → Translate，写成矩阵就是 $T \cdot R \cdot S$。
+
+### MVP 矩阵的顺序
+
+```glsl
+gl_Position = Projection * View * Model * vec4(position, 1.0);
+```
+
+从右往左读：
+1. **Model**：模型空间 → 世界空间
+2. **View**：世界空间 → 观察空间
+3. **Projection**：观察空间 → 裁剪空间
+
+---
+
+## 四、 逆矩阵：变换的撤销
+
+如果你用矩阵 $M$ 把点从 A 变到了 B，那 $M^{-1}$ 就能把它从 B 变回 A。
+
+$$ M^{-1} \cdot M = I $$
+
+**逆矩阵的用途**：
+
+| 场景 | 说明 |
+|------|------|
+| 从世界坐标反推局部坐标 | `localPos = inverse(modelMatrix) * worldPos` |
+| 光源的 View 矩阵 | 阴影映射中，用光源视角渲染深度图 |
+| 射线拾取 | 从屏幕坐标反推世界坐标射线 |
+| 碰撞检测 | 把世界空间的碰撞体变到局部空间做精确检测 |
+
+**什么矩阵有逆？**
+
+- 行列式 $\neq 0$ 的方阵有逆
+- 缩放矩阵的逆：各系数取倒数
+- 旋转矩阵的逆：角度取负 $R(-\theta)$
+- 平移矩阵的逆：平移量取反
+- 复合矩阵的逆：$(AB)^{-1} = B^{-1}A^{-1}$——**注意顺序反转**
+
+:::warning 逆矩阵的计算成本
+4×4 矩阵求逆在 CPU 上不是免费操作。如果每帧都要算，考虑缓存结果。GPU 端（Shader 内）尽量避免 `inverse()`，能预计算的都在 CPU 算好传 uniform。
+:::
+
+---
+
+## 五、 转置矩阵与法线变换
+
+转置矩阵 $M^T$ 是把矩阵的行列互换。
+
+### 1. 正交矩阵的特殊性质
+
+旋转矩阵是**正交矩阵**：$R^T = R^{-1}$。
+
+这意味着：旋转矩阵的逆就是它的转置。转置只需要行列互换，几乎零开销——这就是为什么 3D 引擎喜欢用旋转矩阵而不是欧拉角。
+
+### 2. 法线变换为什么用逆转置
+
+当你用模型矩阵 $M$ 变换顶点位置时，法线向量**不能**直接用 $M$ 变换。必须用**逆转置**：
+
+$$ \vec{n}' = (M^{-1})^T \cdot \vec{n} $$
+
+为什么？因为如果有非均匀缩放（$s_x \neq s_y$），直接用 $M$ 变换法线会让它不再垂直于表面。
+
+<ShaderPreview title="法线变换：直接变换 vs 逆转置" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    float sx = 2.0;
+    float sy = 1.0;
+    
+    vec2 origNormal = normalize(vec2(-1.0, 1.0));
+    
+    vec2 wrongNormal = normalize(vec2(sx * origNormal.x, sy * origNormal.y));
+    vec2 correctNormal = normalize(vec2(origNormal.x / sx, origNormal.y / sy));
+    
+    vec2 surfDir = normalize(vec2(sx, sy));
+    
+    float line = smoothstep(0.008, 0.002, length(uv - dot(uv, surfDir) * surfDir));
+    
+    vec2 wrongEnd = wrongNormal * 0.6;
+    float wrongLine = smoothstep(0.008, 0.002, length(uv - clamp(dot(uv, normalize(wrongEnd)), 0.0, 0.6) * normalize(wrongEnd)));
+    
+    vec2 correctEnd = correctNormal * 0.6;
+    float correctLine = smoothstep(0.008, 0.002, length(uv - clamp(dot(uv, normalize(correctEnd)), 0.0, 0.6) * normalize(correctEnd)));
+    
+    vec3 color = vec3(0.05, 0.05, 0.08);
+    color = mix(color, vec3(0.5), line * 0.5);
+    color = mix(color, vec3(0.9, 0.3, 0.3), wrongLine);
+    color = mix(color, vec3(0.2, 0.85, 0.3), correctLine);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+**简化情况**：
+- 只有均匀缩放和旋转 → 直接用 $M$ 变换法线再归一化即可
+- 只有旋转 → 直接用 $M$
+
+```glsl
+vec3 worldNormal = normalize(mat3(modelMatrix) * localNormal);
+vec3 worldNormal = normalize(transpose(inverse(mat3(modelMatrix))) * localNormal);
+```
+
+---
+
+## 六、 行列式：变换的"体积因子"
+
+行列式 $\det(M)$ 告诉你变换对空间做了什么"体积操作"：
+
+| 行列式值 | 含义 |
+|----------|------|
+| **> 0** | 空间被正常缩放，没有翻转 |
+| **< 0** | 空间被镜像翻转了（右手系变左手系） |
+| **= 0** | 空间被压扁了（不可逆，信息丢失） |
+
+2D 行列式：
+
+$$ \det\begin{bmatrix} a & c \\ b & d \end{bmatrix} = ad - bc $$
+
+**行列式 = 变换后单位正方形的面积（2D）或单位立方体的体积（3D）**。
+
+:::tip 实用场景
+- **背面剔除**：如果模型矩阵的行列式 < 0，三角形的绕序会反转
+- **判断可逆**：$\det(M) = 0$ 的矩阵没有逆
+- **SDF 变换中的距离修正**：用行列式估算变换对距离的缩放比例
+:::
+
+---
+
+## 七、 矩阵速查表
+
+| 变换 | 矩阵形式 | 关键位置 | 行列式 |
+|------|----------|----------|--------|
+| 缩放 | 对角线 $s_x, s_y, s_z$ | 对角线 | $s_x \cdot s_y \cdot s_z$ |
+| 旋转 | $\cos/\sin$ 组合 | 绕哪个轴，那行那列不动 | 1 |
+| 平移 | 第四列前三行 | $(t_x, t_y, t_z)$ 在第四列 | 1 |
+| 复合 SRT | $T \cdot R \cdot S$ | 从右往左读 | 三个行列式相乘 |
+| 逆矩阵 | $(AB)^{-1} = B^{-1}A^{-1}$ | 顺序反转 | $\det(M)^{-1}$ |
+| 转置 | 行列互换 | 正交矩阵的转置 = 逆 | 不变 |
+| 逆转置 | 法线变换 | 非均匀缩放时必须用 | — |
+
+> **自检**：你能解释为什么 `T * R * S` 和 `S * R * T` 结果不同吗？法线变换为什么不能直接用模型矩阵？$\det = -1$ 意味着什么？如果犹豫了，回头再看对应章节。
+
+---
+
+## 小结
+
+矩阵是图形学的**动词**——它让向量动起来。关键只有四件事：
+
+1. **矩阵的列 = 变换后的基向量**：看到矩阵就知道它对空间做了什么
+2. **乘法顺序**：从右往左读，缩放旋转总是在原点做，平移放最后
+3. **逆矩阵**：撤销变换、从世界反推局部、法线变换用逆转置
+4. **行列式**：体积因子，判断翻转和可逆
+
+当你看到 `mat4` 就知道它是一组变换指令，看到 `M * v` 就知道"对 v 做了 M 所描述的事"，这一层就算通关了。下一层，我们要理解旋转和角度——三角函数把直线世界和圆周世界连接起来。

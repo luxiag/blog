@@ -7,7 +7,7 @@ tags: ['linux', 'server', 'nginx', 'mysql', 'redis', 'nodejs', 'devops']
 
 # 云服务器环境搭建：运行时、数据库与 Nginx
 
-在上一篇《[云服务器入门](/blog/posts/linux/cloud-server-getting-started)》中，我们拿到了一台干净、安全的服务器，并完成了密钥登录、用户管理和防火墙加固。但此时它还是一张"白纸"——只有操作系统，没有任何能运行你项目的环境。
+在上一篇《[云服务器入门](/posts/linux/cloud-server-getting-started)》中，我们拿到了一台干净、安全的服务器，并完成了密钥登录、用户管理和防火墙加固。但此时它还是一张"白纸"——只有操作系统，没有任何能运行你项目的环境。
 
 这篇文章的目标，就是把这张白纸变成一个**完整的生产环境**。我们会按"一个 Web 请求从外到内的路径"来组织内容，这样你能清楚每个组件在系统里扮演什么角色：
 
@@ -283,7 +283,7 @@ sudo systemctl reload nginx
 - `reload`：平滑重载配置，**不中断**正在处理的请求，日常改配置用这个。
 - `restart`：完全停止再启动，会**短暂中断**服务，一般只在大改动或服务异常时用。
 
-这正是上一篇《[进阶之路](/blog/posts/linux/linux-advanced-commands)》里讲的 **SIGHUP 信号重载配置**在实际中的体现——`reload` 本质就是给 Nginx 主进程发了重载信号。
+这正是上一篇《[进阶之路](/posts/linux/linux-advanced-commands)》里讲的 **SIGHUP 信号重载配置**在实际中的体现——`reload` 本质就是给 Nginx 主进程发了重载信号。
 :::
 
 ### 4.4 用 Nginx 直接托管静态网站
@@ -430,4 +430,4 @@ sudo journalctl -u myapp --since today
 - **Nginx**：作为流量入口，理解并配置**反向代理**，托管静态资源，再用 **Certbot** 一键上 HTTPS。
 - **systemd**：把 Nginx、数据库乃至**你自己的应用**都管理成开机自启、崩溃自愈的可靠服务，并用 `journalctl` 查日志。
 
-至此，环境万事俱备。下一篇《[项目部署实战](/blog/posts/linux/project-deployment-in-practice)》，我们将把这些组件真正用起来——把一份代码从本地仓库一步步搬上服务器、构建、运行、对外提供服务，并介绍用 **Docker** 和 **CI/CD** 实现更现代、更自动化的部署方式。
+至此，环境万事俱备。下一篇《[项目部署实战](/posts/linux/project-deployment-in-practice)》，我们将把这些组件真正用起来——把一份代码从本地仓库一步步搬上服务器、构建、运行、对外提供服务，并介绍用 **Docker** 和 **CI/CD** 实现更现代、更自动化的部署方式。
