@@ -343,12 +343,6 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
 
       // 内部链接：修正 /posts/category/slug → /posts/slug（slug 是路由的唯一标识）
       let resolvedHref = href || '/';
-      const postMatch = resolvedHref.match(/^\/posts\/(.+)$/);
-      if (postMatch) {
-        const segments = postMatch[1].split('/');
-        const slug = segments[segments.length - 1];
-        resolvedHref = `/posts/${slug}`;
-      }
 
       // 内部链接：使用 Next.js 的 Link 组件，自动处理 basePath
       return (

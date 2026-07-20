@@ -8,7 +8,7 @@ interface BlogCardProps {
 
 export default function BlogCard({ post }: BlogCardProps) {
   return (
-    <Link href={`/blog/${post.slug}`} className="block transition-transform hover:scale-[1.02]">
+    <Link href={`/posts/${post.slug}`} className="block transition-transform hover:scale-[1.02]">
       <div className="card overflow-hidden h-full border border-neutral-200 rounded-xl">
         {post.coverImage && (
           <div className="relative h-48 w-full border-b border-neutral-200">

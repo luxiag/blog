@@ -37,11 +37,13 @@ function getPostFiles(dir: string, category?: string): PostFile[] {
     const fullPath = path.join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      const subFiles = getPostFiles(fullPath, entry.name);
+      const subCategory = category ? `${category}/${entry.name}` : entry.name;
+      const subFiles = getPostFiles(fullPath, subCategory);
       files.push(...subFiles);
     } else if (entry.isFile() && (entry.name.endsWith('.md') || entry.name.endsWith('.mdx'))) {
+      const fileSlug = entry.name.replace(/\.mdx?$/, '');
       files.push({
-        slug: entry.name.replace(/\.mdx?$/, ''),
+        slug: category ? `${category}/${fileSlug}` : fileSlug,
         filePath: fullPath,
         category,
       });
@@ -55,7 +57,7 @@ export function getAllPostSlugs() {
   const postFiles = getPostFiles(postsDirectory);
   return postFiles.map((file) => ({
     params: {
-      slug: file.slug,
+      slug: file.slug.includes('/') ? file.slug.split('/') : [file.slug],
     },
   }));
 }

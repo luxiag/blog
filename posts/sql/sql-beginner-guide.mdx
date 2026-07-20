@@ -11,10 +11,10 @@ tags: ['SQL', 'Database', 'Tutorial', 'Backend']
 这是一条循序渐进的学习路线，建议按顺序阅读：
 
 1. **Part 1 · 入门指南（本文）** —— 建立 SQL 心智模型，掌握数据类型、建表、写入、查询、聚合、函数、连接、子查询、事务、索引的基础
-2. [Part 2 · 实战练习（一）：基础巩固](/blog/sql/sql-exercises) —— 10 道在线可运行题，巩固单表与双表基础
-3. [Part 3 · 实战练习（二）：进阶应用](/blog/sql/sql-practice-lab) —— 21 道电商数据集题，覆盖 CTE、窗口函数与报表
-4. [Part 4 · 进阶：执行计划、索引原理与查询优化](/blog/sql/sql-advanced-performance) —— 从「会写」到「写得快」的方法论（数据库中立）
-5. [Part 5 · PostgreSQL 深度实战](/blog/sql/postgresql-guide) —— 把进阶知识落到一个具体的、功能最完善的数据库上
+2. [Part 2 · 实战练习（一）：基础巩固](/posts/sql/sql-exercises) —— 10 道在线可运行题，巩固单表与双表基础
+3. [Part 3 · 实战练习（二）：进阶应用](/posts/sql/sql-practice-lab) —— 21 道电商数据集题，覆盖 CTE、窗口函数与报表
+4. [Part 4 · 进阶：执行计划、索引原理与查询优化](/posts/sql/sql-advanced-performance) —— 从「会写」到「写得快」的方法论（数据库中立）
+5. [Part 5 · PostgreSQL 深度实战](/posts/postgresql/postgresql-guide) —— 把进阶知识落到一个具体的、功能最完善的数据库上
 
 :::
 
@@ -1100,6 +1100,133 @@ INSERT INTO orders VALUES (101, 1, 'PAID'), (102, 1, 'PAID'), (103, 2, 'PENDING'
 
 很多场景下 CTE 主要提升可读性；不同数据库对 CTE 的优化策略不同。
 
+### 12.1 递归 CTE：处理树形和层级数据
+
+普通 CTE 只执行一次，但**递归 CTE** 可以引用自身，反复执行直到满足终止条件。它专门用来处理**层级/树形结构**——组织架构、评论楼中楼、物料清单、省市区三级联动等。
+
+**核心语法**：
+
+```sql
+WITH RECURSIVE cte名称 AS (
+  -- 1) 锚定部分：初始查询（非递归，只执行一次）
+  SELECT ...
+  UNION ALL
+  -- 2) 递归部分：引用自身的查询（反复执行，直到没有新行产生）
+  SELECT ... FROM cte名称 WHERE ...
+)
+SELECT * FROM cte名称;
+```
+
+递归 CTE 的执行过程：
+
+1. 执行锚定查询，得到初始行集
+2. 用上一步的结果执行递归查询，得到新行
+3. 把新行追加到结果集，再用新行执行递归查询
+4. 重复步骤 2~3，直到递归查询不再产生新行
+5. 返回所有步骤累积的最终结果
+
+**示例 1：员工层级——查出某员工及其所有下属**
+
+假设 `employees` 表有 `id, name, manager_id`（`manager_id` 指向上级的 `id`，顶级上司的 `manager_id` 为 `NULL`）：
+
+```sql
+WITH RECURSIVE emp_chain AS (
+  -- 锚定：从 CEO 开始
+  SELECT id, name, manager_id, 1 AS level
+  FROM employees
+  WHERE id = 1  -- CEO 的 id
+
+  UNION ALL
+
+  -- 递归：找当前层每个人的下属
+  SELECT e.id, e.name, e.manager_id, ec.level + 1
+  FROM employees e
+  JOIN emp_chain ec ON e.manager_id = ec.id
+)
+SELECT id, name, level
+FROM emp_chain
+ORDER BY level, id;
+```
+
+结果示例：
+
+| id | name | level |
+|----|------|-------|
+| 1  | CEO  | 1     |
+| 2  | VP Engineering | 2 |
+| 3  | VP Sales | 2    |
+| 5  | Alice | 3     |
+| 6  | Bob   | 3     |
+
+`level` 列是递归过程中累加的，让你知道每个人在第几层。
+
+**示例 2：评论楼中楼——查出某条评论及其所有回复**
+
+```sql
+WITH RECURSIVE comment_tree AS (
+  -- 锚定：根评论
+  SELECT id, parent_id, content, 0 AS depth
+  FROM comments
+  WHERE id = 1001
+
+  UNION ALL
+
+  -- 递归：找当前层评论的所有回复
+  SELECT c.id, c.parent_id, c.content, ct.depth + 1
+  FROM comments c
+  JOIN comment_tree ct ON c.parent_id = ct.id
+)
+SELECT id, content, depth
+FROM comment_tree
+ORDER BY depth, id;
+```
+
+**示例 3：生成序列——1 到 100 的数字**
+
+递归 CTE 不一定要查表，也可以用来生成数据：
+
+```sql
+WITH RECURSIVE nums AS (
+  SELECT 1 AS n
+  UNION ALL
+  SELECT n + 1 FROM nums WHERE n < 100
+)
+SELECT n FROM nums;
+```
+
+:::warning 递归 CTE 的安全限制
+如果递归逻辑写错（比如终止条件永远不满足），理论上会无限循环。数据库都有保护机制：
+
+- PostgreSQL：默认递归上限 100 次（`max_recursion` 参数）
+- MySQL 8.0：默认上限 1000 次（`cte_max_recursion_depth` 参数）
+- SQL Server：默认上限 100 次（`MAXRECURSION` 提示）
+
+如果确实需要更深的递归，需要显式调大参数。但更多时候，递归超限说明你的数据或逻辑有问题。
+:::
+
+:::tip MySQL 的语法细节
+MySQL 8.0+ 才支持递归 CTE，且必须写 `WITH RECURSIVE`。PostgreSQL 和 SQL Server 也要求 `WITH RECURSIVE`（SQL Server 用 `OPTION (MAXRECURSION n)` 控制深度）。SQLite 3.8.3+ 支持。
+:::
+
+export const recursiveCteInitSql = `
+CREATE TABLE employees (id INT, name TEXT, manager_id INT);
+INSERT INTO employees VALUES
+  (1, 'CEO', NULL),
+  (2, 'VP Engineering', 1),
+  (3, 'VP Sales', 1),
+  (4, 'Carol', 2),
+  (5, 'Alice', 2),
+  (6, 'Bob', 3);
+`;
+
+<SqlSimulator
+  initialSql={recursiveCteInitSql}
+  defaultQuery="SELECT * FROM employees;"
+  answerSql="WITH RECURSIVE emp_chain AS (SELECT id, name, manager_id, 1 AS level FROM employees WHERE id = 1 UNION ALL SELECT e.id, e.name, e.manager_id, ec.level + 1 FROM employees e JOIN emp_chain ec ON e.manager_id = ec.id) SELECT id, name, level FROM emp_chain ORDER BY level, id;"
+  title="练习：递归 CTE 查询员工层级"
+  description="使用 WITH RECURSIVE 查出 CEO 及其所有下属，level 表示层级深度"
+/>
+
 ---
 
 ## 13. 窗口函数：统计但不"折叠"行
@@ -1708,8 +1835,8 @@ LIMIT 10;
 
 读懂语法只是第一步，真正的内化来自**动手写**和**理解背后的原理**。本系列接下来的路线：
 
-- 想立刻巩固基础？去 [Part 2 · 实战练习（一）：基础巩固](/blog/sql/sql-exercises)，10 道题全部在浏览器里可运行、可对答案。
-- 想挑战更接近真实业务的题？去 [Part 3 · 实战练习（二）：进阶应用](/blog/sql/sql-practice-lab)，用一套电商数据集把 JOIN、子查询、CTE、窗口函数、报表都练一遍。
-- 已经能写出正确查询，想让它**跑得快**？去 [Part 4 · 进阶：执行计划、索引原理与查询优化](/blog/sql/sql-advanced-performance)，这一篇会把"为什么慢、怎么变快"讲透。
+- 想立刻巩固基础？去 [Part 2 · 实战练习（一）：基础巩固](/posts/sql/sql-exercises)，10 道题全部在浏览器里可运行、可对答案。
+- 想挑战更接近真实业务的题？去 [Part 3 · 实战练习（二）：进阶应用](/posts/sql/sql-practice-lab)，用一套电商数据集把 JOIN、子查询、CTE、窗口函数、报表都练一遍。
+- 已经能写出正确查询，想让它**跑得快**？去 [Part 4 · 进阶：执行计划、索引原理与查询优化](/posts/sql/sql-advanced-performance)，这一篇会把"为什么慢、怎么变快"讲透。
 
 > 学习建议：不要一口气读完所有内容。先把本文的概念过一遍，立刻去 Part 2/3 动手，遇到"为什么这么写"的疑问，再回到对应章节或进入 Part 4。

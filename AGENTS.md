@@ -42,6 +42,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 具体的 MDX 特殊语法（告示块、折叠块、可运行代码块、Mermaid、数学公式、图片、内置组件等）参考 [docs/mdx-syntax.md](./docs/mdx-syntax.md)。
 
+### 4. 文章内部链接不要加 `/blog` 前缀
+
+`basePath: '/blog'` 已在 `next.config.ts` 中配置，Next.js 会自动添加。文章中的内部链接只写 `/posts/...`，不要写 `/blog/posts/...`。
+
 ## 详细文档
 
 - [架构与内容管道](./docs/architecture.md) —— Commands、整体架构、`.md`/`.mdx` 到页面的完整链路

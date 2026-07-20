@@ -10,19 +10,15 @@ import PageTitle from '@/components/PageTitle';
 import { ChevronLeft } from 'lucide-react';
 
 export async function generateStaticParams() {
-  try {
-    const slugs = getAllPostSlugs();
-    return slugs.map((item) => ({
-      slug: item.params.slug,
-    }));
-  } catch (error) {
-    logger.error('Error generating static params:', error);
-    return [];
-  }
+  const slugs = getAllPostSlugs();
+  return slugs.map((item) => ({
+    slug: item.params.slug,
+  }));
 }
 
-async function getPost(slug: string) {
+async function getPost(slugParts: string[]) {
   try {
+    const slug = slugParts.join('/');
     const post = await getPostData(slug);
     return post;
   } catch (error) {
@@ -30,13 +26,27 @@ async function getPost(slug: string) {
   }
 }
 
-export default async function BlogPost({ params }: { params: Promise<{ slug: string }> }) {
+export async function generateMetadata({ params }: { params: Promise<{ slug: string[] }> }) {
   const resolvedParams = await params;
-  const slug = resolvedParams?.slug;
+  const slugParts = resolvedParams?.slug;
+  if (!slugParts || slugParts.length === 0) return {};
 
-  if (!slug) notFound();
+  const post = await getPost(slugParts);
+  if (!post) return {};
 
-  const post = await getPost(slug);
+  return {
+    title: post.title,
+    description: post.excerpt,
+  };
+}
+
+export default async function BlogPost({ params }: { params: Promise<{ slug: string[] }> }) {
+  const resolvedParams = await params;
+  const slugParts = resolvedParams?.slug;
+
+  if (!slugParts || slugParts.length === 0) notFound();
+
+  const post = await getPost(slugParts);
   if (!post) notFound();
 
   const toc = extractToc(post.rawContent || post.content);

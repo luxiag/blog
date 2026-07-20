@@ -8,14 +8,14 @@ tags: ['SQL', 'Exercises', 'Interactive', 'SQLite']
 # SQL 系统进阶 · Part 3：实战练习（二）进阶应用
 
 :::info 本文是「SQL 从入门到专家」系列的第三篇
-1. [Part 1 · 入门指南](/blog/sql/sql-beginner-guide) —— 建立 SQL 心智模型
-2. [Part 2 · 实战练习（一）：基础巩固](/blog/sql/sql-exercises) —— 10 道题巩固单表与双表基础
+1. [Part 1 · 入门指南](/posts/sql/sql-beginner-guide) —— 建立 SQL 心智模型
+2. [Part 2 · 实战练习（一）：基础巩固](/posts/sql/sql-exercises) —— 10 道题巩固单表与双表基础
 3. **Part 3 · 实战练习（二）：进阶应用（本文）** —— 21 道电商数据集题
-4. [Part 4 · 进阶：执行计划、索引原理与查询优化](/blog/sql/sql-advanced-performance)
-5. [Part 5 · PostgreSQL 深度实战](/blog/sql/postgresql-guide)
+4. [Part 4 · 进阶：执行计划、索引原理与查询优化](/posts/sql/sql-advanced-performance)
+5. [Part 5 · PostgreSQL 深度实战](/posts/postgresql/postgresql-guide)
 :::
 
-完成 [Part 2 的 10 道基础题](/blog/sql/sql-exercises) 后，你已经能稳定写出单表查询和简单 JOIN。这篇的目标更进一步：用一套“小而全”的电商数据，把你在工作中最常写的 SQL 场景——多表连接、反连接、CTE、窗口函数、报表——从易到难练一遍。
+完成 [Part 2 的 10 道基础题](/posts/sql/sql-exercises) 后，你已经能稳定写出单表查询和简单 JOIN。这篇的目标更进一步：用一套“小而全”的电商数据，把你在工作中最常写的 SQL 场景——多表连接、反连接、CTE、窗口函数、报表——从易到难练一遍。
 
 你不需要安装任何数据库：下面这个 SQL 模拟器会在浏览器里创建 SQLite 数据库并执行你的 SQL。
 
@@ -483,7 +483,7 @@ ORDER BY success_payment_amount DESC, cu.city;`}
 
 到这里，你已经走完了「会写正确 SQL」的全部基础训练。但真实生产中，能跑出正确结果只是及格线——数据量上来后，**同一个结果可能有 10 倍甚至 100 倍的性能差异**。
 
-**下一步：** 进入 [Part 4 · 进阶：执行计划、索引原理与查询优化](/blog/sql/sql-advanced-performance)，这一篇会回答你在做上面这些题时可能没意识到的问题：
+**下一步：** 进入 [Part 4 · 进阶：执行计划、索引原理与查询优化](/posts/sql/sql-advanced-performance)，这一篇会回答你在做上面这些题时可能没意识到的问题：
 
 - 为什么有的 JOIN 秒回、有的几分钟还没出结果？
 - 索引到底是什么数据结构，为什么"加了索引也不走索引"？

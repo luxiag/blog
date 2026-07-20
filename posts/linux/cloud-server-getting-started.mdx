@@ -7,7 +7,7 @@ tags: ['linux', 'server', 'cloud', 'ssh', 'security', 'devops']
 
 # 云服务器入门：从购买、连接到安全加固
 
-在前两篇文章中，我们已经熟悉了 Linux 的[文件系统与基础命令](/posts/linux/linux-fundamentals)，也掌握了[管道、文本处理与进程管理](/posts/linux/linux-advanced-commands)等进阶技巧。但这些操作大多是在本地或虚拟机里练习的。
+在前面的文章中，我们已经从零开始掌握了 Linux 的[文件系统、基础命令、权限管理](/posts/linux/linux-fundamentals)，也学会了用[管道、重定向与文本三剑客](/posts/linux/linux-fundamentals)组合命令，还学会了用[Shell 脚本](/posts/linux/shell-scripting)把命令串成可复用的自动化工具。但这些操作大多是在本地或虚拟机里练习的。
 
 真正的考验是：**当你拥有一台远在千里之外、只能通过网络访问的云服务器时，你该如何安全地登录它、管理它？**
 
@@ -216,7 +216,103 @@ ssh myserver
 
 ---
 
-## 4. 用户管理：告别"一直用 root"
+## 4. SSH 进阶：多密钥管理与文件传输
+
+### 4.1 多密钥管理：不同服务器用不同密钥
+
+实际工作中，你会有多个需要 SSH 访问的目标：GitHub、公司 GitLab、服务器 A、服务器 B……最佳实践是为不同场景使用不同密钥，而不是一把钥匙开所有的锁。
+
+在 `~/.ssh/config` 中，可以为不同的 Host 指定不同的密钥：
+
+```text
+Host github.com
+    IdentityFile ~/.ssh/id_ed25519_github
+    User git
+
+Host myserver
+    HostName 123.45.67.89
+    User deploy
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519_server
+
+Host work-gitlab
+    HostName gitlab.company.com
+    IdentityFile ~/.ssh/id_ed25519_work
+    User git
+```
+
+SSH 连接时会根据 Host 自动选择对应的密钥，你无需每次手动指定。
+
+### 4.2 SSH Agent：密钥的"钥匙扣"
+
+如果你给私钥设置了 passphrase（推荐），每次连接都要输入口令，很烦。**SSH Agent** 可以帮你缓存已解锁的私钥，一个终端会话只需输入一次。
+
+```bash
+# 1. 启动 SSH Agent
+eval "$(ssh-agent -s)"
+
+# 2. 添加私钥到 Agent（会要求输入 passphrase，之后就不必再输了）
+ssh-add ~/.ssh/id_ed25519
+ssh-add ~/.ssh/id_ed25519_github
+
+# 3. 查看已缓存的密钥
+ssh-add -l
+
+# 4. 删除所有缓存的密钥（如需重新输入 passphrase）
+ssh-add -D
+```
+
+:::tip Agent Forwarding：从服务器跳到另一台服务器
+有时候你需要从本地 SSH 到服务器 A，再从 A 跳到服务器 B。如果在 A 上也放一份私钥，很不安全。用 **Agent Forwarding** 可以让 A 代理你本地的 SSH Agent：
+
+```bash
+# 登录时加 -A 参数，将本地 Agent 转发给远程服务器
+ssh -A myserver
+
+# 在服务器 A 上，可以直接 SSH 到服务器 B（使用你本地的密钥）
+ssh deploy@server-b-ip
+```
+
+这样私钥始终只留在你本地，不会暴露在中间服务器上。
+:::
+
+### 4.3 文件传输：scp 与 rsync
+
+SSH 不仅能远程执行命令，还能安全地传输文件。
+
+**scp（Secure Copy）** ——简单直接：
+
+```bash
+# 本地 → 远程（把本地文件传到服务器）
+scp local_file.txt deploy@123.45.67.89:~/
+
+# 远程 → 本地（从服务器拉文件到本地）
+scp deploy@123.45.67.89:~/remote_file.txt ./
+
+# 传整个目录（加 -r）
+scp -r ./myproject deploy@123.45.67.89:~/
+```
+
+**rsync** ——增量同步，更高效：
+
+```bash
+# 基础用法（-a 保留权限和时间，-v 显示详情，-z 压缩传输）
+rsync -avz ./myproject/ deploy@123.45.67.89:~/myproject/
+
+# 排除不需要的文件（如 node_modules）
+rsync -avz --exclude 'node_modules' --exclude '.git' ./myproject/ deploy@123.45.67.89:~/myproject/
+```
+
+:::note scp 和 rsync 怎么选？
+- **scp**：适合偶尔传一两个文件，语法简单。
+- **rsync**：适合反复同步项目目录，只传输变化的部分，省时省带宽。日常开发建议用 rsync。
+
+注意 rsync 源路径末尾的 `/` 很关键：`./myproject/` 表示同步目录内容，`./myproject` 表示同步整个目录（包括目录本身）。
+:::
+
+---
+
+## 5. 用户管理：告别"一直用 root"
 
 很多新手登录后一直用 `root` 操作，这是非常危险的习惯。`root` 拥有至高无上的权限，**一条 `rm -rf` 打错路径就能毁掉整个系统**，而且任何被它运行的恶意脚本都能为所欲为。
 
@@ -361,7 +457,173 @@ sudo ufw status verbose
 
 ---
 
-## 7. 一些必备的日常运维习惯
+## 8. SSH 连接排错：连不上怎么办
+
+SSH 连接失败是新手最常遇到的问题。不要慌，按下面的思路一步步排查。
+
+### 8.1 Connection refused（连接被拒绝）
+
+说明请求到达了服务器，但目标端口上没有程序在监听。
+
+```bash
+# 在服务器上检查 SSH 服务是否在运行
+sudo systemctl status ssh
+
+# 检查 22 端口是否在监听
+ss -lnt | grep :22
+```
+
+可能原因：
+- SSH 服务没启动 → `sudo systemctl start ssh`
+- 端口改了但忘了 → 检查 `/etc/ssh/sshd_config` 里的 `Port` 配置
+- SSH 服务崩溃了 → 查日志 `sudo journalctl -u ssh --since "10 min ago"`
+
+### 8.2 Connection timed out（连接超时）
+
+说明请求根本到不了服务器，被网络层拦住了。
+
+排查顺序：
+1. **本地网络**：先 `ping 123.45.67.89` 看能不能通
+2. **云厂商安全组**：登录云控制台，检查安全组是否放行了 22 端口
+3. **服务器 UFW**：SSH 登录后检查 `sudo ufw status`
+4. **ISP 封锁**：极少数情况下，运营商会封海外 IP 的 22 端口，可尝试换端口或用 VPN
+
+### 8.3 Host key verification failed（主机密钥变更）
+
+```text
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+```
+
+这个警告说明服务器的指纹和之前记录的不一致。两种情况：
+
+- **正常情况**：你重装了服务器系统，或云厂商更换了底层宿主机。确认是自己的操作后，删除旧记录：
+
+```bash
+# 删除旧的主机密钥记录
+ssh-keygen -R 123.45.67.89
+
+# 重新连接，会再次询问是否信任新指纹
+ssh deploy@123.45.67.89
+```
+
+- **危险情况**：你什么都没改，突然出现这个警告。可能是**中间人攻击（MITM）**，不要轻易删除旧密钥，先确认服务器安全。
+
+### 8.4 Permission denied（权限拒绝）
+
+```bash
+# 最有用的排查命令：开启详细调试模式
+ssh -vvv deploy@123.45.67.89
+```
+
+`-vvv` 会输出完整的连接过程，重点看这几行：
+- `Offering public key` — 尝试了哪些密钥
+- `Server accepts key` — 密钥是否被接受
+- `Authentications that can continue` — 服务器还支持哪些认证方式
+
+常见原因：
+- 密钥路径不对 → 检查 `~/.ssh/config` 里的 `IdentityFile`
+- 服务器上 `authorized_keys` 权限不对 → 回顾前面的 `chmod 600`
+- 禁用了密码登录但密钥没配好 → 用云控制台的 VNC 登录修复
+
+---
+
+## 9. 服务器基础配置
+
+拿到服务器、SSH 连通之后，在做任何其他事之前，先完成这几项基础配置。它们虽然不起眼，但忽略后会在后续使用中引发各种诡异问题。
+
+### 9.1 设置主机名
+
+主机名影响命令提示符显示、日志中的主机标识、以及内网主机间的互相识别。
+
+```bash
+# 设置主机名（用你自己的名字替换 myserver）
+sudo hostnamectl set-hostname myserver
+
+# 验证
+hostname
+
+# 同时更新 /etc/hosts，把新主机名和 127.0.1.1 关联
+sudo nano /etc/hosts
+# 添加一行：
+# 127.0.1.1 myserver
+```
+
+### 9.2 设置时区
+
+服务器时间不对，会导致 TLS 证书验证失败、cron 定时任务在错误的时间执行、日志时间戳混乱。
+
+```bash
+# 设置时区为中国标准时间
+sudo timedatectl set-timezone Asia/Shanghai
+
+# 验证（确认 Local time 和 Time zone 正确）
+timedatectl
+```
+
+### 9.3 NTP 时间同步
+
+服务器时间必须和全球标准时间保持同步。Ubuntu 默认使用 `systemd-timesyncd`：
+
+```bash
+# 检查同步状态
+timedatectl timesync-status
+
+# 如果没有启用，安装并启动
+sudo apt install systemd-timesyncd -y
+sudo systemctl enable --now systemd-timesyncd
+```
+
+:::tip 为什么时间这么重要？
+HTTPS 证书有严格的生效/过期时间。如果服务器时间差了几个小时，浏览器可能拒绝连接（证书"还没生效"或"已经过期"）。定时任务（cron）也完全依赖系统时间。**时间不准，整个服务器都会出问题。**
+:::
+
+### 9.4 为小内存服务器添加 Swap
+
+2G 内存的服务器很容易触发 OOM（Out of Memory）被系统杀进程，尤其是跑 MySQL 时。添加 swap 可以作为内存的"安全气囊"。
+
+```bash
+# 1. 创建 2G 的 swap 文件
+sudo fallocate -l 2G /swapfile
+
+# 2. 设置权限（只有 root 能读写）
+sudo chmod 600 /swapfile
+
+# 3. 格式化为 swap
+sudo mkswap /swapfile
+
+# 4. 启用
+sudo swapon /swapfile
+
+# 5. 验证（Swap 行应该显示约 2G）
+free -h
+
+# 6. 让重启后也生效（写入 fstab）
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+:::note swappiness：何时使用 swap
+`swappiness` 控制内核使用 swap 的倾向，范围 0-100：
+- 值越高，越积极使用 swap（节省内存，但可能拖慢速度）
+- 值越低，越倾向保留内存中的数据（性能更好，但 OOM 风险更高）
+
+查看当前值：`cat /proc/sys/vm/swappiness`（默认 60）
+
+对于服务器，建议设为 10——尽量用物理内存，只在快 OOM 时才动用 swap：
+
+```bash
+# 临时修改
+sudo sysctl vm.swappiness=10
+
+# 永久修改
+echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
+```
+:::
+
+---
+
+## 10. 一些必备的日常运维习惯
 
 服务器跑起来后，下面这些操作会经常用到：
 
@@ -373,7 +635,7 @@ sudo apt update && sudo apt upgrade -y
 who
 w
 
-# 查看系统资源占用（还记得进阶篇的 top/htop 吗）
+# 查看系统资源占用
 htop      # 没有的话先 sudo apt install htop
 
 # 查看 SSH 登录日志，看看有没有人在爆破
@@ -383,8 +645,8 @@ sudo grep "Failed password" /var/log/auth.log | tail -n 20
 sudo ufw status
 ```
 
-:::tip 进阶：fail2ban
-如果你想进一步防爆破，可以安装 `fail2ban`，它会自动分析日志，对短时间内多次登录失败的 IP 进行临时封禁。一行安装：`sudo apt install fail2ban`，安装后默认就会保护 SSH，开箱即用。
+:::tip 进阶：Fail2ban
+如果你想进一步防爆破，可以安装 `fail2ban`，它会自动分析日志，对短时间内多次登录失败的 IP 进行临时封禁。一行安装：`sudo apt install fail2ban`，安装后默认就会保护 SSH，开箱即用。完整的 Fail2ban 配置与自定义规则，见《[系统运维与安全](/posts/linux/system-ops-and-security)》。
 :::
 
 ---
@@ -395,7 +657,10 @@ sudo ufw status
 
 - **理解云服务器**：它就是一台你能完全控制的远程 Linux 机器，选购抓住 CPU/内存/系统/带宽/地域几个核心参数即可。
 - **SSH 连接**：先用密码登录，再升级为更安全省事的**密钥登录**，并用 `~/.ssh/config` 简化操作。
+- **SSH 进阶**：多密钥管理、SSH Agent 缓存口令、Agent Forwarding 安全跳板、scp 与 rsync 文件传输。
 - **用户体系**：创建普通用户 + `sudo` 提权，**告别全程 root**。
 - **安全加固**：禁用 root 登录、关闭密码登录、配置 **UFW 防火墙**，别忘了**云厂商安全组**这层。
+- **连接排错**：用 `ssh -vvv` 定位问题，按"网络→防火墙→服务→权限"的顺序排查。
+- **基础配置**：主机名、时区与 NTP、swap 安全气囊——看似琐碎，但不做会出大问题。
 
-现在你有了一台干净、安全、可控的服务器。下一篇，我们将在这台服务器上**搭建真正的运行环境**——包括 Node.js/Python 运行时、数据库（MySQL/Redis）以及 Web 服务器 Nginx，为部署项目打好地基。
+现在你有了一台干净、安全、可控的服务器。下一篇《[网络排查与磁盘管理](/posts/linux/networking-and-disk)》，我们将为服务器打通"血管"（网络排查工具链）和整理好"仓库"（磁盘分区与挂载），确保请求能到达、数据有地方存。
