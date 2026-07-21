@@ -1,5 +1,5 @@
 ---
-title: IOC和DI
+title: 'IoC 与 DI：控制反转和依赖注入原理'
 date: 2025-01-30
 ---
 

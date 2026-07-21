@@ -1,5 +1,5 @@
 ---
-title: 依赖注入
+title: 'ASP.NET Core 依赖注入：使用方式、生命周期与最佳实践'
 subtitle: .NET Core 依赖注入完全指南
 date: 2023-03-15 16:25:33
 ---

@@ -1,0 +1,346 @@
+---
+title: 'C# 集合与异常处理：数组、List、Dictionary 与 try/catch'
+date: '2026-07-21'
+excerpt: '掌握 C# 常用集合类型和异常处理：数组、List、Dictionary、HashSet、foreach、TryParse、try/catch/finally 与自定义异常。'
+tags: ['dotnet', 'csharp', 'collections', 'exception', 'beginner']
+---
+
+# C# 集合与异常处理：数组、List、Dictionary 与 try/catch
+
+真实业务很少只处理一个值。订单列表、用户集合、商品字典、权限集合，这些都需要集合类型。同时，真实程序也一定会遇到错误：输入不合法、文件不存在、数据库连接失败、外部接口超时。
+
+这篇文章补齐 C# 入门阶段两个非常实用的能力：集合与异常处理。
+
+:::tip C# 语言系列阅读顺序
+本文建议在 [C# 基础语法](/posts/dotnet/csharp-basic-syntax) 和 [C# 面向对象基础](/posts/dotnet/csharp-object-oriented-basics) 后阅读。后续可以继续学习 [泛型](/posts/dotnet/csharp-generics)、[委托、事件与 Lambda](/posts/dotnet/csharp-delegate-event-lambda)、[LINQ](/posts/dotnet/csharp-linq) 和 [异步编程](/posts/dotnet/csharp-async-await)。
+:::
+
+## 数组
+
+数组长度固定，适合元素数量明确的场景。
+
+```csharp
+string[] names = new string[3];
+names[0] = "Alice";
+names[1] = "Bob";
+names[2] = "Cindy";
+
+foreach (string name in names)
+{
+    Console.WriteLine(name);
+}
+```
+
+也可以直接初始化：
+
+```csharp
+int[] scores = { 90, 85, 100 };
+
+Console.WriteLine(scores[0]);
+Console.WriteLine(scores.Length);
+```
+
+数组索引从 `0` 开始。访问不存在的索引会抛出 `IndexOutOfRangeException`。
+
+## List
+
+`List<T>` 是最常用的动态集合，长度可以变化。
+
+```csharp
+var products = new List<string>();
+
+products.Add("键盘");
+products.Add("鼠标");
+products.Add("显示器");
+
+products.Remove("鼠标");
+
+foreach (string product in products)
+{
+    Console.WriteLine(product);
+}
+```
+
+`List<T>` 里的 `T` 是泛型类型参数，表示列表元素的类型。后面的泛型文章会系统解释这个机制。
+
+## Dictionary
+
+`Dictionary<TKey, TValue>` 表示键值对集合，适合按 Key 快速查找值。
+
+```csharp
+var stock = new Dictionary<string, int>();
+
+stock["keyboard"] = 10;
+stock["mouse"] = 20;
+
+Console.WriteLine(stock["keyboard"]);
+```
+
+直接用不存在的 Key 会抛异常。更安全的方式是 `TryGetValue`。
+
+```csharp
+if (stock.TryGetValue("screen", out int quantity))
+{
+    Console.WriteLine($"库存：{quantity}");
+}
+else
+{
+    Console.WriteLine("没有找到库存信息");
+}
+```
+
+## HashSet
+
+`HashSet<T>` 用来保存不重复的元素。
+
+```csharp
+var roles = new HashSet<string>();
+
+roles.Add("admin");
+roles.Add("editor");
+roles.Add("admin");
+
+Console.WriteLine(roles.Count); // 2
+Console.WriteLine(roles.Contains("admin"));
+```
+
+权限、标签、去重结果等场景常用 `HashSet<T>`。
+
+## 遍历集合
+
+最常用的是 `foreach`。
+
+```csharp
+var orders = new List<decimal> { 99m, 199m, 299m };
+
+decimal total = 0m;
+
+foreach (decimal amount in orders)
+{
+    total += amount;
+}
+
+Console.WriteLine($"总金额：{total}");
+```
+
+如果需要索引，可以用 `for`。
+
+```csharp
+for (int i = 0; i < orders.Count; i++)
+{
+    Console.WriteLine($"第 {i + 1} 个订单：{orders[i]}");
+}
+```
+
+## 集合与对象结合
+
+业务中集合通常保存对象，而不是简单字符串或数字。
+
+```csharp
+public class Product
+{
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+}
+
+var products = new List<Product>
+{
+    new Product { Name = "键盘", Price = 199m },
+    new Product { Name = "鼠标", Price = 99m },
+    new Product { Name = "显示器", Price = 1299m }
+};
+
+foreach (Product product in products)
+{
+    if (product.Price >= 200m)
+    {
+        Console.WriteLine(product.Name);
+    }
+}
+```
+
+这段代码后续可以用 LINQ 写得更简洁。
+
+## 什么是异常
+
+异常表示程序运行时发生了无法按正常流程继续处理的问题。
+
+```csharp
+int[] numbers = { 1, 2, 3 };
+
+// 下面这行会抛出 IndexOutOfRangeException
+Console.WriteLine(numbers[10]);
+```
+
+常见异常：
+
+| 异常类型 | 场景 |
+|---|---|
+| `ArgumentException` | 参数不合法 |
+| `InvalidOperationException` | 当前状态不允许执行操作 |
+| `NullReferenceException` | 访问了 null 对象的成员 |
+| `FormatException` | 字符串格式转换失败 |
+| `KeyNotFoundException` | Dictionary 中 Key 不存在 |
+
+## try/catch
+
+用 `try/catch` 捕获并处理异常。
+
+```csharp
+try
+{
+    Console.Write("请输入年龄：");
+    string? input = Console.ReadLine();
+    int age = int.Parse(input!);
+
+    Console.WriteLine($"年龄：{age}");
+}
+catch (FormatException)
+{
+    Console.WriteLine("输入的年龄格式不正确");
+}
+```
+
+不要用一个空 `catch` 把异常吞掉，否则问题会变得更难排查。
+
+## TryParse 优先于异常控制流程
+
+对于用户输入转换，优先使用 `TryParse`，不要把异常当正常流程。
+
+```csharp
+Console.Write("请输入年龄：");
+string? input = Console.ReadLine();
+
+if (int.TryParse(input, out int age))
+{
+    Console.WriteLine($"年龄：{age}");
+}
+else
+{
+    Console.WriteLine("年龄必须是数字");
+}
+```
+
+`TryParse` 返回 `bool`，转换成功时通过 `out` 参数拿到结果。
+
+## finally
+
+`finally` 无论是否发生异常都会执行，常用于释放资源。
+
+```csharp
+try
+{
+    Console.WriteLine("开始处理文件");
+    throw new InvalidOperationException("模拟处理失败");
+}
+catch (InvalidOperationException ex)
+{
+    Console.WriteLine($"处理失败：{ex.Message}");
+}
+finally
+{
+    Console.WriteLine("清理资源");
+}
+```
+
+现代 C# 更常用 `using` 或 `await using` 管理资源，但理解 `finally` 仍然很重要。
+
+## throw 主动抛出异常
+
+当方法参数不符合要求时，可以主动抛出异常。
+
+```csharp
+decimal CalculateDiscount(decimal amount)
+{
+    if (amount < 0)
+    {
+        throw new ArgumentException("订单金额不能小于 0", nameof(amount));
+    }
+
+    return amount >= 500m ? 50m : 0m;
+}
+```
+
+异常应该表达“程序无法按当前输入或状态继续正常执行”。普通业务分支不要全部用异常表示。
+
+## 自定义异常
+
+业务系统里可以定义自己的异常类型，让错误含义更明确。
+
+```csharp
+public class InsufficientStockException : Exception
+{
+    public InsufficientStockException(string productName)
+        : base($"商品 {productName} 库存不足")
+    {
+        ProductName = productName;
+    }
+
+    public string ProductName { get; }
+}
+
+void DeductStock(string productName, int stock, int quantity)
+{
+    if (quantity > stock)
+    {
+        throw new InsufficientStockException(productName);
+    }
+
+    Console.WriteLine("扣减库存成功");
+}
+```
+
+简单项目不一定需要很多自定义异常。只有当调用方需要根据异常类型做不同处理时，自定义异常才更有价值。
+
+## 一个完整小练习
+
+下面实现一个商品库存查询和下单校验。
+
+```csharp
+var stocks = new Dictionary<string, int>
+{
+    ["keyboard"] = 10,
+    ["mouse"] = 5
+};
+
+Console.Write("请输入商品编码：");
+string? productCode = Console.ReadLine();
+
+Console.Write("请输入购买数量：");
+string? quantityText = Console.ReadLine();
+
+if (string.IsNullOrWhiteSpace(productCode))
+{
+    Console.WriteLine("商品编码不能为空");
+    return;
+}
+
+if (!int.TryParse(quantityText, out int quantity) || quantity <= 0)
+{
+    Console.WriteLine("购买数量不合法");
+    return;
+}
+
+if (!stocks.TryGetValue(productCode, out int stock))
+{
+    Console.WriteLine("商品不存在");
+    return;
+}
+
+if (quantity > stock)
+{
+    Console.WriteLine($"库存不足，当前库存：{stock}");
+    return;
+}
+
+stocks[productCode] = stock - quantity;
+Console.WriteLine($"下单成功，剩余库存：{stocks[productCode]}");
+```
+
+这个例子串起了 `Dictionary`、输入校验、`TryParse`、`TryGetValue` 和业务分支处理。
+
+## 总结
+
+集合让程序能处理一组数据，异常处理让程序在错误发生时有清晰的应对方式。
+
+掌握数组、`List<T>`、`Dictionary<TKey, TValue>`、`HashSet<T>` 和 `try/catch` 后，再学习泛型和 LINQ，会更容易理解它们为什么存在。

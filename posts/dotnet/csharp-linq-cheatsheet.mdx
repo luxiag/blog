@@ -1,0 +1,198 @@
+---
+title: 'C# LINQ 操作符速查：按场景选择正确方法'
+date: 2026-07-21
+excerpt: '按筛选、转换、排序、分组、连接、集合、分页、聚合、元素获取等场景快速查找常用 LINQ 操作符。'
+tags: ['dotnet', 'csharp', 'linq', 'cheatsheet']
+---
+
+# C# LINQ 操作符速查：按场景选择正确方法
+
+这篇是 [C# LINQ 主线指南](/posts/dotnet/csharp-linq) 的速查补充。主线文章讲心智模型和边界，这篇只解决一个问题：**当前场景应该用哪个 LINQ 方法。**
+
+## 筛选
+
+| 方法 | 用途 |
+|---|---|
+| `Where` | 按条件筛选元素 |
+| `OfType<T>` | 筛选指定类型元素 |
+
+```csharp
+var available = products.Where(p => p.IsAvailable);
+
+var strings = values.OfType<string>();
+```
+
+## 转换
+
+| 方法 | 用途 |
+|---|---|
+| `Select` | 一对一转换 |
+| `SelectMany` | 一对多展开 |
+
+```csharp
+var names = products.Select(p => p.Name);
+
+var orderNumbers = customers.SelectMany(c => c.OrderNumbers);
+```
+
+## 排序
+
+| 方法 | 用途 |
+|---|---|
+| `OrderBy` | 升序排序 |
+| `OrderByDescending` | 降序排序 |
+| `ThenBy` | 二级升序排序 |
+| `ThenByDescending` | 二级降序排序 |
+
+```csharp
+var sorted = products
+    .OrderBy(p => p.Category)
+    .ThenByDescending(p => p.Price);
+```
+
+## 分组
+
+| 方法 | 用途 |
+|---|---|
+| `GroupBy` | 按 Key 分组 |
+| `ToLookup` | 创建可重复 Key 的查找结构 |
+
+```csharp
+var groups = orders.GroupBy(o => o.CustomerId);
+
+var lookup = orders.ToLookup(o => o.CustomerId);
+```
+
+## 连接
+
+| 方法 | 用途 |
+|---|---|
+| `Join` | 内连接 |
+| `GroupJoin` | 分组连接，常用于左连接基础 |
+
+```csharp
+var rows = orders.Join(
+    customers,
+    order => order.CustomerId,
+    customer => customer.Id,
+    (order, customer) => new { order.Id, customer.Name });
+```
+
+## 集合操作
+
+| 方法 | 用途 |
+|---|---|
+| `Distinct` | 去重 |
+| `Union` | 并集 |
+| `Intersect` | 交集 |
+| `Except` | 差集 |
+| `Concat` | 拼接两个序列，不去重 |
+
+```csharp
+var distinct = numbers.Distinct();
+var all = first.Concat(second);
+var union = first.Union(second);
+```
+
+## 分页和截取
+
+| 方法 | 用途 |
+|---|---|
+| `Skip` | 跳过指定数量 |
+| `Take` | 获取指定数量 |
+| `SkipWhile` | 条件成立时持续跳过 |
+| `TakeWhile` | 条件成立时持续获取 |
+| `Chunk` | 分块 |
+
+```csharp
+var pageItems = source
+    .Skip((page - 1) * pageSize)
+    .Take(pageSize);
+
+var chunks = source.Chunk(100);
+```
+
+## 元素获取
+
+| 方法 | 用途 |
+|---|---|
+| `First` | 获取第一个，不存在则抛异常 |
+| `FirstOrDefault` | 获取第一个，不存在返回默认值 |
+| `Single` | 必须有且只有一个 |
+| `SingleOrDefault` | 最多一个，不存在返回默认值 |
+| `Last` | 获取最后一个 |
+| `ElementAt` | 按索引获取 |
+
+```csharp
+var first = products.FirstOrDefault(p => p.IsAvailable);
+
+var only = users.Single(u => u.Id == userId);
+```
+
+## 判断
+
+| 方法 | 用途 |
+|---|---|
+| `Any` | 是否存在任意元素 |
+| `All` | 是否所有元素都满足条件 |
+| `Contains` | 是否包含指定元素 |
+| `SequenceEqual` | 两个序列是否按顺序相等 |
+
+```csharp
+bool hasAvailable = products.Any(p => p.IsAvailable);
+
+bool allPaid = orders.All(o => o.Status == "Paid");
+```
+
+## 聚合
+
+| 方法 | 用途 |
+|---|---|
+| `Count` / `LongCount` | 数量 |
+| `Sum` | 求和 |
+| `Average` | 平均值 |
+| `Max` / `Min` | 最大值 / 最小值 |
+| `Aggregate` | 自定义聚合 |
+
+```csharp
+decimal total = orders.Sum(o => o.Amount);
+
+string text = names.Aggregate((left, right) => left + ", " + right);
+```
+
+## 转换为集合
+
+| 方法 | 用途 |
+|---|---|
+| `ToList` | 转为 `List<T>` |
+| `ToArray` | 转为数组 |
+| `ToDictionary` | 转为字典 |
+| `ToHashSet` | 转为集合并去重 |
+
+```csharp
+var list = query.ToList();
+
+var dictionary = products.ToDictionary(p => p.Id, p => p.Name);
+```
+
+## 生成序列
+
+| 方法 | 用途 |
+|---|---|
+| `Enumerable.Range` | 生成连续整数 |
+| `Enumerable.Repeat` | 重复某个值 |
+| `Enumerable.Empty<T>` | 创建空序列 |
+
+```csharp
+var numbers = Enumerable.Range(1, 10);
+
+var placeholders = Enumerable.Repeat("N/A", 3);
+```
+
+## 选择建议
+
+- 只判断是否存在：用 `Any`，不要用 `Count() > 0`。
+- 只取第一个且允许没有：用 `FirstOrDefault`。
+- 业务上要求唯一：用 `Single`，让数据异常尽早暴露。
+- 要重复使用查询结果：考虑 `ToList` 缓存。
+- 查询数据库时：先筛选、排序、分页、投影，最后再 `ToListAsync`。

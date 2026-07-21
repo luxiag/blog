@@ -1,0 +1,372 @@
+---
+title: 'C# 面向对象基础：类、对象、封装、继承与接口'
+date: '2026-07-21'
+excerpt: '从类和对象开始，理解 C# 面向对象编程中的属性、字段、构造函数、封装、继承、多态、抽象类和接口。'
+tags: ['dotnet', 'csharp', 'oop', 'class', 'interface']
+---
+
+# C# 面向对象基础：类、对象、封装、继承与接口
+
+C# 是一门以面向对象为核心的语言。ASP.NET Core 中的 Controller、Service、Options、DbContext、Entity，本质上都是类和对象的组合。
+
+如果基础语法解决的是“代码怎么执行”，面向对象解决的就是“业务概念怎么建模”。
+
+:::tip C# 语言系列阅读顺序
+本文建议在 [C# 基础语法](/posts/dotnet/csharp-basic-syntax) 之后阅读。后续可以继续看 [集合与异常处理](/posts/dotnet/csharp-collections-exceptions)、[泛型](/posts/dotnet/csharp-generics)、[委托、事件与 Lambda](/posts/dotnet/csharp-delegate-event-lambda) 和 [LINQ](/posts/dotnet/csharp-linq)。
+:::
+
+## 类和对象
+
+类是模板，对象是根据模板创建出来的实例。
+
+```csharp
+public class Product
+{
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+}
+
+var product = new Product();
+product.Name = "键盘";
+product.Price = 199m;
+
+Console.WriteLine($"商品：{product.Name}，价格：{product.Price}");
+```
+
+`Product` 描述商品应该有哪些数据，`product` 是一个具体商品对象。
+
+## 字段和属性
+
+字段是类内部保存数据的变量，属性是对外暴露数据的入口。
+
+```csharp
+public class Product
+{
+    private decimal _price;
+
+    public string Name { get; set; } = string.Empty;
+
+    public decimal Price
+    {
+        get => _price;
+        set
+        {
+            if (value < 0)
+            {
+                throw new ArgumentException("价格不能小于 0");
+            }
+
+            _price = value;
+        }
+    }
+}
+```
+
+常见写法是自动属性：
+
+```csharp
+public string Name { get; set; } = string.Empty;
+```
+
+如果设置属性时需要校验或附加逻辑，再改成完整属性。
+
+## 构造函数
+
+构造函数用于创建对象时初始化必要数据。
+
+```csharp
+public class Order
+{
+    public Order(string orderNo, decimal amount)
+    {
+        OrderNo = orderNo;
+        Amount = amount;
+        CreatedAt = DateTime.Now;
+    }
+
+    public string OrderNo { get; }
+    public decimal Amount { get; }
+    public DateTime CreatedAt { get; }
+}
+
+var order = new Order("NO-001", 299m);
+Console.WriteLine($"订单：{order.OrderNo}，金额：{order.Amount}");
+```
+
+如果对象必须有订单号和金额，就应该通过构造函数强制传入，而不是允许创建一个空对象后再慢慢补。
+
+## 封装
+
+封装是把内部状态和规则放在对象内部，对外只暴露必要操作。
+
+```csharp
+public class BankAccount
+{
+    public BankAccount(string owner)
+    {
+        Owner = owner;
+    }
+
+    public string Owner { get; }
+    public decimal Balance { get; private set; }
+
+    public void Deposit(decimal amount)
+    {
+        if (amount <= 0)
+        {
+            throw new ArgumentException("存款金额必须大于 0");
+        }
+
+        Balance += amount;
+    }
+
+    public bool Withdraw(decimal amount)
+    {
+        if (amount <= 0 || amount > Balance)
+        {
+            return false;
+        }
+
+        Balance -= amount;
+        return true;
+    }
+}
+```
+
+`Balance` 的 `set` 是 `private`，外部不能随意修改余额，只能通过 `Deposit` 和 `Withdraw` 走业务规则。
+
+## 访问修饰符
+
+常用访问修饰符：
+
+| 修饰符 | 说明 |
+|---|---|
+| `public` | 任何地方都能访问 |
+| `private` | 只能在当前类内部访问 |
+| `protected` | 当前类和子类可以访问 |
+| `internal` | 当前程序集内部可以访问 |
+
+```csharp
+public class User
+{
+    private string _passwordHash = string.Empty;
+
+    public string UserName { get; set; } = string.Empty;
+
+    public void SetPassword(string password)
+    {
+        _passwordHash = $"hash:{password}";
+    }
+}
+```
+
+默认原则：能 `private` 就不要 `public`，只暴露外部真正需要使用的成员。
+
+## 继承
+
+继承表示“是一种”的关系。
+
+```csharp
+public class User
+{
+    public string Name { get; set; } = string.Empty;
+
+    public void Login()
+    {
+        Console.WriteLine($"{Name} 登录系统");
+    }
+}
+
+public class AdminUser : User
+{
+    public void DeleteUser(string userName)
+    {
+        Console.WriteLine($"删除用户：{userName}");
+    }
+}
+
+var admin = new AdminUser { Name = "管理员" };
+admin.Login();
+admin.DeleteUser("test");
+```
+
+继承可以复用父类能力，但不要为了复用几行代码就滥用继承。很多时候组合比继承更清晰。
+
+## virtual、override 和多态
+
+多态允许用父类变量指向子类对象，并在运行时执行子类自己的实现。
+
+```csharp
+public abstract class Payment
+{
+    public abstract void Pay(decimal amount);
+}
+
+public class WeChatPayment : Payment
+{
+    public override void Pay(decimal amount)
+    {
+        Console.WriteLine($"微信支付：{amount}");
+    }
+}
+
+public class AliPayPayment : Payment
+{
+    public override void Pay(decimal amount)
+    {
+        Console.WriteLine($"支付宝支付：{amount}");
+    }
+}
+
+Payment payment = new WeChatPayment();
+payment.Pay(100m);
+```
+
+`abstract` 表示抽象成员必须由子类实现。
+
+## 接口
+
+接口定义能力，不关心具体实现。
+
+```csharp
+public interface IMessageSender
+{
+    void Send(string message);
+}
+
+public class EmailSender : IMessageSender
+{
+    public void Send(string message)
+    {
+        Console.WriteLine($"发送邮件：{message}");
+    }
+}
+
+public class SmsSender : IMessageSender
+{
+    public void Send(string message)
+    {
+        Console.WriteLine($"发送短信：{message}");
+    }
+}
+
+public class NotificationService
+{
+    private readonly IMessageSender _sender;
+
+    public NotificationService(IMessageSender sender)
+    {
+        _sender = sender;
+    }
+
+    public void Notify(string message)
+    {
+        _sender.Send(message);
+    }
+}
+```
+
+接口是依赖注入和可测试代码的基础。业务服务依赖接口，而不是依赖具体实现，可以降低耦合。
+
+## 抽象类和接口怎么选
+
+抽象类适合表达“共同基础和部分默认实现”，接口适合表达“一种能力或契约”。
+
+```csharp
+public abstract class Entity
+{
+    public long Id { get; protected set; }
+    public DateTime CreatedAt { get; protected set; } = DateTime.Now;
+}
+
+public interface ISoftDelete
+{
+    bool IsDeleted { get; }
+    void Delete();
+}
+```
+
+一个类只能继承一个基类，但可以实现多个接口。
+
+## static 静态成员
+
+`static` 成员属于类型本身，不属于某个对象。
+
+```csharp
+public static class MoneyCalculator
+{
+    public static decimal CalculateDiscount(decimal amount)
+    {
+        return amount >= 500m ? 50m : 0m;
+    }
+}
+
+decimal discount = MoneyCalculator.CalculateDiscount(600m);
+Console.WriteLine(discount);
+```
+
+静态工具类适合纯计算、无状态逻辑。如果逻辑需要配置、日志、数据库或外部服务，通常应该用普通类并交给依赖注入管理。
+
+## 一个完整小练习
+
+下面用面向对象方式实现一个简单购物车。
+
+```csharp
+public class CartItem
+{
+    public CartItem(string name, decimal price, int quantity)
+    {
+        Name = name;
+        Price = price;
+        Quantity = quantity;
+    }
+
+    public string Name { get; }
+    public decimal Price { get; }
+    public int Quantity { get; }
+    public decimal Subtotal => Price * Quantity;
+}
+
+public class ShoppingCart
+{
+    private readonly List<CartItem> _items = new();
+
+    public IReadOnlyList<CartItem> Items => _items;
+
+    public void AddItem(string name, decimal price, int quantity)
+    {
+        if (price <= 0 || quantity <= 0)
+        {
+            throw new ArgumentException("价格和数量必须大于 0");
+        }
+
+        _items.Add(new CartItem(name, price, quantity));
+    }
+
+    public decimal GetTotal()
+    {
+        decimal total = 0m;
+
+        foreach (CartItem item in _items)
+        {
+            total += item.Subtotal;
+        }
+
+        return total;
+    }
+}
+
+var cart = new ShoppingCart();
+cart.AddItem("键盘", 199m, 1);
+cart.AddItem("鼠标", 99m, 2);
+
+Console.WriteLine($"购物车总金额：{cart.GetTotal()}");
+```
+
+这个例子把商品项、购物车状态和金额计算都封装到了对应对象里。
+
+## 总结
+
+面向对象的重点不是背类、继承、接口这些名词，而是学会把业务概念放到合适的类型里，让数据和行为靠近。
+
+后续学习依赖注入、EF Core 实体、领域模型、服务接口时，都会反复用到这些基础。

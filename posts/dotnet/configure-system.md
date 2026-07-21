@@ -1,5 +1,5 @@
 ---
-title: 配置系统Configuration
+title: 'ASP.NET Core Configuration：配置系统完整指南'
 date: 2022-10-07
 ---
 

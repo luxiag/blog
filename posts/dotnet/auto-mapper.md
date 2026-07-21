@@ -1,5 +1,5 @@
 ---
-title: AutoMapper
+title: 'AutoMapper：对象映射配置与最佳实践'
 subtitle: .NET对象映射的最佳实践
 date: 2023-03-15 16:25:33
 ---

@@ -1,5 +1,5 @@
 ---
-title: ModernWMS学习笔记
+title: 'ModernWMS 项目学习笔记：.NET 后端结构与实践'
 date: 2025-04-25
 ---
 

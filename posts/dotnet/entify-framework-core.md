@@ -1,5 +1,5 @@
 ---
-title: Entity Framework Core
+title: 'Entity Framework Core：基础使用与实体映射'
 date: 2024-08-05
 ---
 

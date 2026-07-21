@@ -1,5 +1,5 @@
 ---
-title: 身份认证 Authentication
+title: 'ASP.NET Core Authentication：Cookie 与 JWT 认证机制'
 date: 2025-04-20
 ---
 

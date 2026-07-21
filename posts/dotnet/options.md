@@ -1,5 +1,5 @@
 ---
-title: 选项 Options
+title: 'ASP.NET Core Options：强类型配置与热更新机制'
 date: 2025-04-18
 --- 
 

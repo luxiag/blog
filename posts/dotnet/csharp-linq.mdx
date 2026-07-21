@@ -1,0 +1,475 @@
+---
+title: 'C# LINQ：声明式数据查询完全指南'
+date: 2025-01-26
+description: 系统理解 C# LINQ 查询语言，包括查询语法、方法语法、延迟执行、常见操作符、IEnumerable 与 IQueryable 的边界。
+excerpt: '从为什么需要 LINQ 出发，理解查询语法、方法语法、延迟执行、常用操作符、IEnumerable 与 IQueryable 的边界和实践建议。'
+category: dotnet
+tags:
+  - C#
+  - LINQ
+  - .NET
+  - 查询
+  - 集合操作
+---
+
+# C# LINQ：声明式数据查询完全指南
+
+LINQ（Language Integrated Query）是 C# 中最常用、也最容易被低估的语言能力之一。它让你用统一的方式处理集合、数组、数据库查询结果、XML、自定义序列等数据源。
+
+如果只把 LINQ 当成 `Where`、`Select`、`OrderBy` 这些方法名来背，很快就会遇到问题：为什么查询有时候不执行？为什么遍历两次结果不一样？为什么同样的写法在 `List<T>` 和 EF Core 上性能差异很大？
+
+这篇文章重新按主线来讲 LINQ：先建立心智模型，再讲语法形式、执行机制、常用操作、数据库边界和实践建议。
+
+:::tip C# 语言系列阅读顺序
+LINQ 建立在集合、泛型、扩展方法、委托、Lambda 和迭代器之上。建议先读 [C# 语言核心知识路线](/posts/dotnet/csharp-language-roadmap)、[集合与异常处理](/posts/dotnet/csharp-collections-exceptions)、[类型系统](/posts/dotnet/csharp-type-system)、[C# 泛型](/posts/dotnet/csharp-generics)、[扩展方法与迭代器](/posts/dotnet/csharp-extension-methods-iterators)、[委托、事件与 Lambda](/posts/dotnet/csharp-delegate-event-lambda)，再阅读本文。后续可以继续阅读 [表达式树](/posts/dotnet/csharp-expression-tree) 和 [异步编程](/posts/dotnet/csharp-async-await)。
+:::
+
+## 本文定位
+
+本文是 LINQ 主线指南，不再把所有操作符都堆在一起。你可以这样搭配阅读：
+
+- 想快速查操作符：看 [C# LINQ 操作符速查](/posts/dotnet/csharp-linq-cheatsheet)。
+- 想理解链式调用和延迟执行基础：看 [C# 扩展方法与迭代器](/posts/dotnet/csharp-extension-methods-iterators)。
+- 想理解 EF Core 如何把 Lambda 转成 SQL：看 [C# 表达式树 Expression Tree](/posts/dotnet/csharp-expression-tree)。
+- 想深入数据库查询性能：结合 [Entity Framework Core：基础使用与实体映射](/posts/dotnet/entify-framework-core)。
+
+## 为什么需要 LINQ
+
+没有 LINQ 时，筛选、转换、排序通常要手写循环。
+
+```csharp
+var products = new List<Product>
+{
+    new("键盘", 199m, true),
+    new("鼠标", 99m, true),
+    new("显示器", 1299m, false),
+    new("耳机", 299m, true)
+};
+
+var names = new List<string>();
+
+foreach (Product product in products)
+{
+    if (product.IsAvailable && product.Price >= 100m)
+    {
+        names.Add(product.Name);
+    }
+}
+
+names.Sort();
+
+foreach (string name in names)
+{
+    Console.WriteLine(name);
+}
+
+public record Product(string Name, decimal Price, bool IsAvailable);
+```
+
+LINQ 把“怎么遍历”隐藏起来，让代码重点表达“我要什么数据”。
+
+```csharp
+var names = products
+    .Where(product => product.IsAvailable)
+    .Where(product => product.Price >= 100m)
+    .OrderBy(product => product.Name)
+    .Select(product => product.Name)
+    .ToList();
+```
+
+这就是 LINQ 的核心价值：**用声明式方式描述数据处理流程**。
+
+## LINQ 的心智模型
+
+LINQ 查询通常由三部分组成：
+
+- 数据源：从哪里查，例如 `products`
+- 查询过程：怎么筛选、转换、排序、分组
+- 执行点：什么时候真正得到结果，例如 `foreach`、`ToList()`、`Count()`
+
+```csharp
+IEnumerable<Product> query = products
+    .Where(product => product.IsAvailable)
+    .OrderBy(product => product.Price)
+    .Select(product => product);
+
+// 到 foreach 才真正枚举 query
+foreach (Product product in query)
+{
+    Console.WriteLine(product.Name);
+}
+```
+
+理解“查询定义”和“查询执行”的区别，是学好 LINQ 的关键。
+
+## 方法语法与查询语法
+
+LINQ 有两种写法：方法语法和查询语法。
+
+方法语法使用扩展方法和 Lambda，是日常开发中最常用的形式。
+
+```csharp
+var result = products
+    .Where(product => product.Price >= 100m)
+    .OrderByDescending(product => product.Price)
+    .Select(product => new
+    {
+        product.Name,
+        product.Price
+    })
+    .ToList();
+```
+
+查询语法更接近 SQL，适合复杂的 `join`、多数据源查询。
+
+```csharp
+var result = from product in products
+             where product.Price >= 100m
+             orderby product.Price descending
+             select new
+             {
+                 product.Name,
+                 product.Price
+             };
+```
+
+两者本质上是等价的。查询语法最终会被编译器转换成方法调用。实际项目里，简单查询优先用方法语法；复杂连接查询可以考虑查询语法。
+
+## 延迟执行
+
+大多数 LINQ 操作不会立刻执行，而是返回一个“以后可以执行的查询”。
+
+```csharp
+var numbers = new List<int> { 1, 2, 3, 4, 5 };
+
+var query = numbers.Where(number =>
+{
+    Console.WriteLine($"判断 {number}");
+    return number > 2;
+});
+
+Console.WriteLine("查询已经定义，但还没执行");
+
+foreach (int number in query)
+{
+    Console.WriteLine($"结果 {number}");
+}
+```
+
+`Where` 这行只是定义查询，真正判断发生在 `foreach` 枚举时。
+
+会触发执行的常见方式：
+
+- `foreach`
+- `ToList()`
+- `ToArray()`
+- `Count()`
+- `Any()`
+- `First()` / `FirstOrDefault()`
+- `Single()` / `SingleOrDefault()`
+- `Sum()` / `Average()` / `Max()` / `Min()`
+
+## 多次枚举的问题
+
+延迟执行意味着每次枚举都可能重新执行查询。
+
+```csharp
+var query = products.Where(product =>
+{
+    Console.WriteLine($"筛选 {product.Name}");
+    return product.Price >= 100m;
+});
+
+Console.WriteLine(query.Count());
+Console.WriteLine(query.Count());
+```
+
+上面会筛选两次。如果结果后续要重复使用，可以先物化。
+
+```csharp
+List<Product> cachedProducts = products
+    .Where(product => product.Price >= 100m)
+    .ToList();
+
+Console.WriteLine(cachedProducts.Count);
+Console.WriteLine(cachedProducts.Count);
+```
+
+不要无脑 `ToList()`。如果只遍历一次，保持延迟执行通常更省内存；如果要重复使用结果，物化更合适。
+
+## IEnumerable 与 IQueryable
+
+LINQ 最容易踩坑的地方，是把 `IEnumerable<T>` 和 `IQueryable<T>` 混为一谈。
+
+| 接口 | 常见数据源 | 查询逻辑 | 执行位置 |
+|---|---|---|---|
+| `IEnumerable<T>` | 数组、`List<T>`、内存集合 | 委托和迭代器 | 当前 .NET 进程 |
+| `IQueryable<T>` | EF Core、远程查询提供程序 | 表达式树 | 查询提供程序决定，常见是数据库 |
+
+内存查询：
+
+```csharp
+IEnumerable<Product> query = products
+    .Where(product => product.Price >= 100m)
+    .Select(product => product);
+```
+
+数据库查询：
+
+```csharp
+IQueryable<Product> query = dbContext.Products
+    .Where(product => product.Price >= 100m)
+    .Select(product => product);
+```
+
+看起来写法一样，但后者会被 EF Core 分析并尽量翻译成 SQL。不是所有 C# 方法都能翻译成 SQL，所以数据库查询要特别注意边界。
+
+## 常用操作：筛选、转换、排序
+
+筛选用 `Where`。
+
+```csharp
+var availableProducts = products
+    .Where(product => product.IsAvailable)
+    .ToList();
+```
+
+转换用 `Select`。
+
+```csharp
+var productDtos = products
+    .Select(product => new ProductDto(product.Name, product.Price))
+    .ToList();
+
+public record ProductDto(string Name, decimal Price);
+```
+
+排序用 `OrderBy`、`OrderByDescending`、`ThenBy`。
+
+```csharp
+var sortedProducts = products
+    .OrderBy(product => product.Price)
+    .ThenBy(product => product.Name)
+    .ToList();
+```
+
+## 常用操作：分组与聚合
+
+分组用 `GroupBy`。
+
+```csharp
+var orders = new List<Order>
+{
+    new("Alice", 100m),
+    new("Bob", 200m),
+    new("Alice", 300m)
+};
+
+var orderGroups = orders
+    .GroupBy(order => order.CustomerName)
+    .Select(group => new
+    {
+        CustomerName = group.Key,
+        Count = group.Count(),
+        TotalAmount = group.Sum(order => order.Amount)
+    })
+    .ToList();
+
+public record Order(string CustomerName, decimal Amount);
+```
+
+聚合常用 `Count`、`Sum`、`Average`、`Max`、`Min`。
+
+```csharp
+int count = orders.Count();
+decimal total = orders.Sum(order => order.Amount);
+decimal average = orders.Average(order => order.Amount);
+```
+
+## 常用操作：分页与取元素
+
+分页用 `Skip` 和 `Take`。
+
+```csharp
+int page = 2;
+int pageSize = 10;
+
+var pageItems = products
+    .OrderBy(product => product.Name)
+    .Skip((page - 1) * pageSize)
+    .Take(pageSize)
+    .ToList();
+```
+
+取元素常用这些方法：
+
+```csharp
+Product? first = products.FirstOrDefault();
+Product? expensive = products.FirstOrDefault(product => product.Price >= 1000m);
+Product single = products.Single(product => product.Name == "键盘");
+bool exists = products.Any(product => product.IsAvailable);
+```
+
+使用建议：
+
+- 可能没有结果时，用 `FirstOrDefault`。
+- 业务上必须有且只能有一个结果时，用 `Single`。
+- 只判断是否存在时，用 `Any`，不要先 `Count() > 0`。
+
+## SelectMany：展开嵌套集合
+
+`SelectMany` 用来把“集合中的集合”展开成一个序列。
+
+```csharp
+var customers = new List<Customer>
+{
+    new("Alice", new List<string> { "A001", "A002" }),
+    new("Bob", new List<string> { "B001" })
+};
+
+var orderNumbers = customers
+    .SelectMany(customer => customer.OrderNumbers)
+    .ToList();
+
+Console.WriteLine(string.Join(", ", orderNumbers));
+
+public record Customer(string Name, List<string> OrderNumbers);
+```
+
+如果你发现自己写了两层循环只是为了把内部集合拿出来，通常可以考虑 `SelectMany`。
+
+## Join：关联两个数据源
+
+内存集合可以用 `Join` 关联。
+
+```csharp
+var orderRows = orders.Join(
+    customers,
+    order => order.CustomerName,
+    customer => customer.Name,
+    (order, customer) => new
+    {
+        customer.Name,
+        order.Amount
+    });
+```
+
+在 EF Core 中，很多关联查询更推荐通过导航属性表达，而不是手写 `Join`。内存集合中 `Join` 很有用；数据库查询中要结合模型关系和生成 SQL 判断。
+
+## LINQ 与 EF Core 的边界
+
+EF Core 查询中，尽量让筛选、排序、分页、投影发生在数据库端。
+
+推荐：
+
+```csharp
+var users = await dbContext.Users
+    .Where(user => user.IsActive)
+    .OrderBy(user => user.UserName)
+    .Select(user => new UserDto(user.Id, user.UserName))
+    .ToListAsync();
+```
+
+不推荐过早切到内存：
+
+```csharp
+var users = dbContext.Users
+    .AsEnumerable()
+    .Where(user => user.IsActive)
+    .ToList();
+```
+
+`AsEnumerable()` 会把后续操作切换到客户端执行。除非你明确知道这么做的原因，否则不要在数据库查询中提前使用它。
+
+只读查询建议使用 `AsNoTracking`。
+
+```csharp
+var users = await dbContext.Users
+    .AsNoTracking()
+    .Where(user => user.IsActive)
+    .ToListAsync();
+```
+
+## 一个完整示例：订单报表
+
+下面用 LINQ 生成一个简单客户订单报表。
+
+```csharp
+var orders = new List<Order>
+{
+    new("Alice", "Paid", 100m),
+    new("Alice", "Paid", 200m),
+    new("Bob", "Canceled", 300m),
+    new("Bob", "Paid", 150m),
+    new("Cindy", "Paid", 500m)
+};
+
+var report = orders
+    .Where(order => order.Status == "Paid")
+    .GroupBy(order => order.CustomerName)
+    .Select(group => new CustomerReport(
+        CustomerName: group.Key,
+        OrderCount: group.Count(),
+        TotalAmount: group.Sum(order => order.Amount),
+        AverageAmount: group.Average(order => order.Amount)))
+    .OrderByDescending(row => row.TotalAmount)
+    .ToList();
+
+foreach (CustomerReport row in report)
+{
+    Console.WriteLine($"{row.CustomerName}: {row.OrderCount} 单，总额 {row.TotalAmount}，均价 {row.AverageAmount}");
+}
+
+public record Order(string CustomerName, string Status, decimal Amount);
+
+public record CustomerReport(
+    string CustomerName,
+    int OrderCount,
+    decimal TotalAmount,
+    decimal AverageAmount);
+```
+
+这段代码体现了 LINQ 最常见的业务价值：筛选有效数据、按业务维度分组、聚合指标、转换成报表模型。
+
+## 常见误区
+
+### 误区一：所有地方都先 ToList
+
+`ToList()` 会立即执行并把结果放进内存。需要重复使用结果时它很有用，但如果只是继续拼接查询，过早 `ToList()` 可能浪费内存，也可能让数据库查询退化成内存处理。
+
+### 误区二：把 IEnumerable 和 IQueryable 当成一回事
+
+内存查询和数据库查询的执行位置不同。`IQueryable<T>` 的表达式要能被查询提供程序翻译，不是任意 C# 方法都能放进去。
+
+### 误区三：用 Count 判断是否存在
+
+只判断存在性时，用 `Any()`。
+
+```csharp
+if (products.Any(product => product.IsAvailable))
+{
+    Console.WriteLine("存在可售商品");
+}
+```
+
+### 误区四：查询链过长但没有命名中间结果
+
+LINQ 可以写得很长，但不代表应该写得很长。复杂查询可以拆成几个有业务含义的变量。
+
+```csharp
+var paidOrders = orders.Where(order => order.Status == "Paid");
+
+var report = paidOrders
+    .GroupBy(order => order.CustomerName)
+    .Select(group => new
+    {
+        CustomerName = group.Key,
+        TotalAmount = group.Sum(order => order.Amount)
+    });
+```
+
+## 总结
+
+LINQ 的核心不是操作符数量，而是三个能力：声明式表达数据处理、延迟执行、统一查询模型。
+
+日常开发中先掌握 `Where`、`Select`、`OrderBy`、`GroupBy`、`Any`、`FirstOrDefault`、`Skip`、`Take`、`Join`、`SelectMany` 就足够覆盖大部分场景。真正需要深入时，再分别学习扩展方法与迭代器、表达式树、EF Core 查询优化。

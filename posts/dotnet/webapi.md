@@ -1,5 +1,5 @@
 ---
-title: 'ASP.NET Core WebAPI 完全指南'
+title: 'ASP.NET Core Web API：RESTful 接口开发完全指南'
 date: '2024-12-05'
 description: '深入了解 ASP.NET Core WebAPI 的核心概念、路由系统、参数绑定和最佳实践'
 categories: ['dotnet', 'webapi']

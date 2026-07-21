@@ -1,0 +1,200 @@
+---
+title: 'C# 可空引用类型：null 安全与项目实践'
+date: '2026-07-21'
+excerpt: '深入理解 C# 可空引用类型：string 与 string?、?.、??、!、ThrowIfNull、DTO/实体建模和老项目迁移策略。'
+tags: ['dotnet', 'csharp', 'nullable', 'null-safety']
+---
+
+# C# 可空引用类型：null 安全与项目实践
+
+`NullReferenceException` 是 C# 项目里最常见的运行时错误之一。可空引用类型从 C# 8 开始引入，目标是把一部分空引用问题提前到编译期发现。
+
+:::tip C# 语言系列阅读顺序
+本文建议在 [基础语法](/posts/dotnet/csharp-basic-syntax)、[面向对象基础](/posts/dotnet/csharp-object-oriented-basics) 和 [类型系统](/posts/dotnet/csharp-type-system) 之后阅读。它也可以作为 [C# 现代语法](/posts/dotnet/csharp-modern-syntax) 中可空引用类型章节的深入补充。
+:::
+
+## 开启可空引用类型
+
+在项目文件中启用：
+
+```xml
+<PropertyGroup>
+  <Nullable>enable</Nullable>
+</PropertyGroup>
+```
+
+也可以在单个文件中启用：
+
+```csharp
+#nullable enable
+```
+
+启用后，`string` 表示不应该为 `null`，`string?` 表示可以为 `null`。
+
+```csharp
+#nullable enable
+
+string name = "Alice";
+string? email = null;
+
+Console.WriteLine(name.Length);
+Console.WriteLine(email?.Length ?? 0);
+```
+
+## 可空引用类型不是运行时机制
+
+可空引用类型主要是编译器静态分析。运行时仍然允许引用为 `null`。
+
+```csharp
+string name = GetNameFromExternalSystem();
+
+Console.WriteLine(name.Length);
+
+static string GetNameFromExternalSystem()
+{
+    return null!; // 模拟外部系统返回了 null
+}
+```
+
+所以它不是绝对防御，而是帮助你在编译期更早发现风险。
+
+## ?. 空条件访问
+
+`?.` 在左侧为 `null` 时不会继续访问成员，而是返回 `null`。
+
+```csharp
+User? user = null;
+
+string? email = user?.Email;
+
+Console.WriteLine(email ?? "没有邮箱");
+
+public class User
+{
+    public string? Email { get; set; }
+}
+```
+
+## ?? 空合并运算符
+
+`??` 用于提供默认值。
+
+```csharp
+string? input = Console.ReadLine();
+string name = input ?? "Guest";
+
+Console.WriteLine(name);
+```
+
+`??=` 用于当变量为 `null` 时赋值。
+
+```csharp
+List<string>? names = null;
+names ??= new List<string>();
+names.Add("Alice");
+```
+
+## ! 空包容运算符
+
+`!` 告诉编译器：“我确认这里不是 null”。它只影响编译器警告，不会改变运行时行为。
+
+```csharp
+string? input = Console.ReadLine();
+
+// 如果 input 实际为 null，运行时仍然可能抛异常
+Console.WriteLine(input!.Length);
+```
+
+不要把 `!` 当作解决空值问题的万能工具。它适合用在编译器无法推断、但你通过其他机制已经保证非空的场景。
+
+## ArgumentNullException.ThrowIfNull
+
+公共方法入口处可以明确校验参数。
+
+```csharp
+public class UserService
+{
+    public void Create(User user)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+
+        Console.WriteLine(user.Name);
+    }
+}
+
+public class User
+{
+    public required string Name { get; init; }
+}
+```
+
+`ThrowIfNull` 校验之后，编译器也能知道变量后续不为 `null`。
+
+## DTO 中的可空建模
+
+请求模型中，字段是否可空应该表达真实业务规则。
+
+```csharp
+public class CreateUserRequest
+{
+    public string UserName { get; set; } = string.Empty;
+    public string? DisplayName { get; set; }
+    public string? Email { get; set; }
+}
+```
+
+这里 `UserName` 必填，`DisplayName` 和 `Email` 可选。不要为了消除警告把所有属性都写成 `string?`，那会让模型失去约束意义。
+
+## 实体中的可空建模
+
+实体属性要和数据库约束保持一致。
+
+```csharp
+public class Order
+{
+    public long Id { get; set; }
+    public string OrderNo { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public DateTime? PaidAt { get; set; }
+    public string? Remark { get; set; }
+}
+```
+
+`OrderNo` 必填，`PaidAt` 在未支付前为空，`Remark` 可选。
+
+## 集合不要返回 null
+
+集合类型通常建议返回空集合，而不是 `null`。
+
+```csharp
+public IReadOnlyList<string> GetRoles(User? user)
+{
+    if (user is null)
+    {
+        return Array.Empty<string>();
+    }
+
+    return user.Roles;
+}
+
+public class User
+{
+    public List<string> Roles { get; set; } = new();
+}
+```
+
+这样调用方可以直接遍历，不需要每次判空。
+
+## 老项目迁移策略
+
+老项目一次性开启 `<Nullable>enable</Nullable>` 可能产生大量警告。更现实的做法：
+
+- 新文件先启用 `#nullable enable`
+- 新增代码遵守可空规则
+- DTO、Options、核心领域模型优先迁移
+- 对外部系统返回值保持防御式校验
+- 不要用批量添加 `!` 的方式消除警告
+
+## 总结
+
+可空引用类型的目标不是让 `null` 消失，而是让“这里可能为空”变成类型签名的一部分。它能让调用方更早知道风险，也能让模型表达更准确。

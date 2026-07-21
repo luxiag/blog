@@ -1,0 +1,364 @@
+---
+title: 'C# 现代语法：record、模式匹配与简洁建模'
+date: '2026-07-21'
+excerpt: '梳理 C# 9 到 C# 12 中常用的现代语法：record、init、模式匹配、可空引用类型、集合表达式和主构造函数。'
+tags: ['dotnet', 'csharp', 'record', 'pattern-matching', 'nullable']
+---
+
+# C# 现代语法：record、模式匹配与简洁建模
+
+:::tip C# 语言系列阅读顺序
+本文属于 C# 语言核心系列的收尾篇。建议先读 [C# 语言核心知识路线](/posts/dotnet/csharp-language-roadmap)、[基础语法](/posts/dotnet/csharp-basic-syntax)、[面向对象基础](/posts/dotnet/csharp-object-oriented-basics)、[集合与异常处理](/posts/dotnet/csharp-collections-exceptions)、[C# 泛型](/posts/dotnet/csharp-generics)、[委托、事件与 Lambda](/posts/dotnet/csharp-delegate-event-lambda)、[LINQ](/posts/dotnet/csharp-linq)、[异步编程](/posts/dotnet/csharp-async-await) 和 [反射与 Attribute](/posts/dotnet/csharp-reflection-attribute)。
+:::
+
+C# 近几个版本加入了很多提升表达力的语法。它们不是为了“炫技”，而是为了让模型更清晰、代码更少、更不容易写错。
+
+这篇文章选取后端开发中最常用的一组现代语法：`record`、`init`、模式匹配、可空引用类型、集合表达式和主构造函数。
+
+:::info 版本说明
+本文重点覆盖 C# 9 到 C# 12 的常用特性。不同项目能否使用这些语法，取决于 SDK 版本和项目的 `LangVersion` 配置。
+:::
+
+## init：初始化后不可再修改
+
+`init` 访问器从 C# 9 开始可用。它允许属性在对象初始化阶段赋值，初始化完成后不能再修改。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        var user = new User
+        {
+            Id = 1,
+            Name = "Alice"
+        };
+
+        // user.Name = "Bob"; // 编译错误：init 属性只能在初始化阶段赋值
+
+        Console.WriteLine(user.Name);
+    }
+}
+
+public class User
+{
+    public int Id { get; init; }
+    public string Name { get; init; } = string.Empty;
+}
+```
+
+`init` 很适合 DTO、配置对象、值对象等创建后不希望随意变化的类型。
+
+## record：按值相等的模型
+
+`record` 从 C# 9 开始可用。它默认更适合表达“数据模型”，并提供基于值的相等比较。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        var p1 = new Product("键盘", 199m);
+        var p2 = new Product("键盘", 199m);
+
+        Console.WriteLine(p1 == p2); // True
+        Console.WriteLine(p1);
+    }
+}
+
+public record Product(string Name, decimal Price);
+```
+
+如果用普通 `class`，`==` 默认比较引用是否相同。`record` 更关注值是否相同。
+
+## with 表达式
+
+`record` 常配合 `with` 创建一个修改了部分属性的新对象。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        var original = new Order("NO-001", "Pending", 100m);
+        var paid = original with { Status = "Paid" };
+
+        Console.WriteLine(original);
+        Console.WriteLine(paid);
+    }
+}
+
+public record Order(string OrderNo, string Status, decimal Amount);
+```
+
+`with` 不会修改原对象，而是创建新对象。这对不可变建模很有帮助。
+
+## record class 与 record struct
+
+`record` 默认是引用类型，也就是 `record class`。C# 10 引入了 `record struct`，用于值类型记录。
+
+```csharp
+public record class CustomerDto(int Id, string Name);
+
+public readonly record struct Money(decimal Amount, string Currency);
+```
+
+一般后端 DTO 用 `record class` 更多；小而稳定、强调值语义的类型可以考虑 `readonly record struct`，例如金额、坐标等。
+
+## 模式匹配基础
+
+模式匹配让条件判断更表达业务含义。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        Console.WriteLine(GetDiscountLevel(1200m));
+        Console.WriteLine(GetDiscountLevel(300m));
+    }
+
+    static string GetDiscountLevel(decimal amount)
+    {
+        return amount switch
+        {
+            >= 1000m => "VIP",
+            >= 500m => "Gold",
+            > 0m => "Normal",
+            _ => "Invalid"
+        };
+    }
+}
+```
+
+`switch` 表达式比传统 `switch` 语句更适合返回一个计算结果。
+
+## 属性模式
+
+属性模式可以直接判断对象内部属性。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        var order = new Order("NO-001", 1200m, true);
+        Console.WriteLine(GetShippingFee(order));
+    }
+
+    static decimal GetShippingFee(Order order)
+    {
+        return order switch
+        {
+            { IsVip: true } => 0m,
+            { Amount: >= 500m } => 0m,
+            _ => 20m
+        };
+    }
+}
+
+public record Order(string OrderNo, decimal Amount, bool IsVip);
+```
+
+这种写法适合把规则集中表达出来，避免多层 `if` 嵌套。
+
+## 列表模式
+
+列表模式从 C# 11 开始可用，可以匹配数组或列表结构。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        Console.WriteLine(Describe(new[] { "admin", "settings" }));
+        Console.WriteLine(Describe(new[] { "products", "123" }));
+    }
+
+    static string Describe(string[] segments)
+    {
+        return segments switch
+        {
+            ["admin", ..] => "后台路径",
+            ["products", var id] => $"商品详情：{id}",
+            [] => "首页",
+            _ => "其他路径"
+        };
+    }
+}
+```
+
+它不只适合路由，也适合解析命令参数、规则匹配等场景。
+
+## 可空引用类型
+
+可空引用类型从 C# 8 开始可用。开启后，`string` 表示理论上不应该为 `null`，`string?` 表示可以为 `null`。
+
+```csharp
+#nullable enable
+
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        User user = new("Alice", null);
+        Console.WriteLine(user.Email?.ToLowerInvariant() ?? "没有邮箱");
+    }
+}
+
+public record User(string Name, string? Email);
+```
+
+可空引用类型不是运行时保护机制，而是编译期静态分析。它能帮助你更早发现潜在的空引用问题。
+
+## required 成员
+
+`required` 从 C# 11 开始可用，用于要求对象初始化时必须给某些成员赋值。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        var user = new User
+        {
+            Name = "Alice",
+            Email = "alice@example.com"
+        };
+
+        Console.WriteLine(user.Name);
+    }
+}
+
+public class User
+{
+    public required string Name { get; init; }
+    public required string Email { get; init; }
+}
+```
+
+`required` 很适合配置对象、请求模型和必须完整初始化的领域对象。
+
+## 集合表达式
+
+集合表达式从 C# 12 开始可用，可以更简洁地创建数组、列表等集合。
+
+```csharp
+using System;
+using System.Collections.Generic;
+
+public class Program
+{
+    public static void Main()
+    {
+        int[] numbers = [1, 2, 3];
+        List<string> names = ["Alice", "Bob", "Cindy"];
+
+        Console.WriteLine(string.Join(", ", numbers));
+        Console.WriteLine(string.Join(", ", names));
+    }
+}
+```
+
+它也支持展开已有集合。
+
+```csharp
+int[] first = [1, 2];
+int[] second = [3, 4];
+int[] all = [.. first, .. second, 5];
+```
+
+如果你的项目还不是 C# 12，可以继续使用传统写法：`new[] { 1, 2, 3 }` 或 `new List<int> { 1, 2, 3 }`。
+
+## 主构造函数
+
+主构造函数从 C# 12 开始扩展到普通类和结构体。它可以减少构造函数样板代码。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        var service = new OrderService(new ConsoleLogger());
+        service.Create("NO-001");
+    }
+}
+
+public class OrderService(ILogger logger)
+{
+    public void Create(string orderNo)
+    {
+        logger.Log($"创建订单：{orderNo}");
+    }
+}
+
+public interface ILogger
+{
+    void Log(string message);
+}
+
+public class ConsoleLogger : ILogger
+{
+    public void Log(string message) => Console.WriteLine(message);
+}
+```
+
+在 ASP.NET Core 服务类中，主构造函数可以让依赖注入代码更短。但如果构造逻辑复杂，传统构造函数仍然更清晰。
+
+## global using 和文件范围命名空间
+
+C# 10 引入了 `global using` 和文件范围命名空间，主要用于减少样板代码。
+
+```csharp
+// GlobalUsings.cs
+global using System;
+global using System.Collections.Generic;
+global using System.Threading.Tasks;
+```
+
+```csharp
+namespace MyApp.Services;
+
+public class ProductService
+{
+    public Task<List<string>> GetNamesAsync()
+    {
+        return Task.FromResult(new List<string> { "Keyboard", "Mouse" });
+    }
+}
+```
+
+文件范围命名空间让整个文件属于同一个命名空间，少一层缩进。
+
+## 什么时候不要追新语法
+
+现代语法能提升表达力，但不要为了新而新。
+
+- 团队项目的 SDK 和 `LangVersion` 不支持时，不要强行使用
+- 业务规则复杂时，过度模式匹配可能比普通 `if` 更难读
+- `record` 适合数据和值语义，不适合所有实体对象
+- 主构造函数适合简单依赖注入，复杂初始化逻辑仍建议使用传统构造函数
+
+## 总结
+
+现代 C# 的核心趋势是：更少样板代码、更清晰的数据建模、更强的空值分析和更表达业务规则的条件判断。
+
+如果你刚开始升级写法，建议按这个顺序掌握：先用可空引用类型减少空引用问题，再用 `record` 和 `init` 建模 DTO，最后逐步把复杂条件改成清晰的模式匹配。
