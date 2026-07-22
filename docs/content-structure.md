@@ -22,9 +22,11 @@ tags: ['tag1', 'tag2']
 coverImage: '/posts/react/images/cover.png'   # 可选
 author:
   name: '作者名'                               # 可选
+nextPost: 'category/slug'                      # 可选
 ---
 ```
 
 - `date` 支持字符串和 Date 对象，最终统一转为 `YYYY-MM-DD`
 - `excerpt` 显示在文章列表卡片中
 - `coverImage` 路径需要带 `/blog` basePath（构建后访问路径为 `/blog/posts/...`）
+- `nextPost` 指向同系列下一篇文章的 slug（格式 `<category>/<slug>`），文章底部会渲染"下一篇"按钮。不需要加 `/posts/` 前缀，也无需加 `/blog` basePath
