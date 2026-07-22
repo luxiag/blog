@@ -1,0 +1,162 @@
+---
+title: 'ASP.NET Core Authentication：Cookie、JWT 与认证流程'
+date: '2026-07-21'
+excerpt: '理解 ASP.NET Core Authentication 认证体系：认证方案、ClaimsPrincipal、Cookie、JWT Bearer、登录态、Token 和中间件顺序。'
+tags: ['dotnet', 'aspnetcore', 'authentication', 'jwt', 'cookie']
+---
+
+# ASP.NET Core Authentication：Cookie、JWT 与认证流程
+
+认证解决的问题是：**当前请求是谁发起的。**
+
+ASP.NET Core 的认证系统会根据 Cookie、JWT Bearer Token 等凭据还原用户身份，并把结果放到 `HttpContext.User` 中。
+
+:::tip 阶段二阅读顺序
+建议先读 [异常处理](/posts/dotnet/aspnet-core-exception-handling)，再阅读本文。认证解决“你是谁”，后续 [Authorization](/posts/dotnet/aspnet-core-authorization) 解决“你能做什么”。
+:::
+
+## Authentication 和 Authorization 的区别
+
+| 概念 | 解决问题 | 示例 |
+|---|---|---|
+| Authentication | 你是谁 | 解析 Cookie / JWT 得到用户身份 |
+| Authorization | 你能做什么 | 判断是否有 `orders.manage` 权限 |
+
+未认证通常返回 `401 Unauthorized`，已认证但无权限通常返回 `403 Forbidden`。
+
+## ClaimsPrincipal
+
+认证成功后，ASP.NET Core 会构建 `ClaimsPrincipal`。
+
+```csharp
+[HttpGet("me")]
+public IActionResult Me()
+{
+    string? userId = User.FindFirst("sub")?.Value;
+    string? name = User.Identity?.Name;
+
+    return Ok(new { userId, name });
+}
+```
+
+`User` 来自 `ControllerBase.User`，本质是 `HttpContext.User`。
+
+## 认证中间件顺序
+
+认证和授权中间件顺序不能反。
+
+```csharp
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
+```
+
+`UseAuthentication()` 负责识别用户，`UseAuthorization()` 负责检查权限。
+
+## Cookie 认证
+
+Cookie 认证适合传统 Web、后台管理系统、服务端渲染页面。
+
+注册：
+
+```csharp
+builder.Services
+    .AddAuthentication("AppCookie")
+    .AddCookie("AppCookie", options =>
+    {
+        options.LoginPath = "/login";
+        options.AccessDeniedPath = "/forbidden";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    });
+```
+
+登录时签发 Cookie：
+
+```csharp
+var claims = new List<Claim>
+{
+    new(ClaimTypes.NameIdentifier, "1"),
+    new(ClaimTypes.Name, "alice")
+};
+
+var identity = new ClaimsIdentity(claims, "AppCookie");
+var principal = new ClaimsPrincipal(identity);
+
+await HttpContext.SignInAsync("AppCookie", principal);
+```
+
+需要命名空间：
+
+```csharp
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication;
+```
+
+## JWT Bearer 认证
+
+JWT Bearer 适合前后端分离、移动端、开放 API。
+
+安装包：
+
+```bash
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
+```
+
+注册：
+
+```csharp
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.Authority = "https://identity.example.com";
+        options.Audience = "product-api";
+    });
+```
+
+如果是自己签发 Token，需要配置签名密钥、Issuer、Audience 等校验参数。
+
+客户端请求：
+
+```http
+GET /api/orders
+Authorization: Bearer <access_token>
+```
+
+## 使用 Authorize
+
+```csharp
+[Authorize]
+[HttpGet("profile")]
+public IActionResult Profile()
+{
+    return Ok(User.Identity?.Name);
+}
+```
+
+如果没有有效身份，请求会返回 401。
+
+## JWT 使用注意事项
+
+- JWT Payload 默认只是 Base64Url 编码，不是加密，不要放敏感信息。
+- Access Token 应该设置较短过期时间。
+- Refresh Token 要安全保存，并支持撤销。
+- 必须验证签名、过期时间、Issuer、Audience。
+- 前端存储 Token 要考虑 XSS 风险。
+
+## 什么时候用 Cookie，什么时候用 JWT
+
+| 场景 | 建议 |
+|---|---|
+| 服务端页面、后台管理 | Cookie |
+| SPA 前后端分离 | JWT 或 BFF + Cookie |
+| 移动端 API | JWT |
+| 第三方统一登录 | OpenID Connect |
+
+不要因为 JWT 流行就所有系统都用 JWT。浏览器场景下 Cookie 配合服务端会话或 BFF 往往更安全可控。
+
+## 总结
+
+Authentication 的核心是根据请求凭据还原用户身份，并设置 `HttpContext.User`。Cookie 和 JWT 是两种常见认证方案，选择时要根据客户端类型、安全边界和部署模式决定。

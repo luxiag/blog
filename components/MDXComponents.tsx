@@ -14,7 +14,6 @@ import dynamic from 'next/dynamic';
 import Lightbox, { useLightbox } from './Lightbox';
 import type { MediaItem } from './Lightbox';
 import CodeBlock from './CodeBlock';
-import 'highlight.js/styles/github.css';
 import '../styles/code-highlight.css';
 import 'katex/dist/katex.min.css';
 import { slugify } from '@/lib/slugify';

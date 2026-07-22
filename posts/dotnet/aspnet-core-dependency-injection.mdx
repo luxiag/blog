@@ -1,0 +1,204 @@
+---
+title: 'ASP.NET Core Dependency Injection：服务注册与生命周期'
+date: '2026-07-21'
+excerpt: '系统理解 ASP.NET Core 内置依赖注入：服务注册、构造函数注入、Singleton、Scoped、Transient、生命周期陷阱和 IServiceProvider 使用边界。'
+tags: ['dotnet', 'aspnetcore', 'dependency-injection', 'di']
+---
+
+# ASP.NET Core Dependency Injection：服务注册与生命周期
+
+ASP.NET Core 内置依赖注入容器。Controller、Options、Logging、DbContext、HttpClientFactory 等框架能力都依赖 DI 协作。
+
+依赖注入解决的问题是：**对象不自己创建依赖，而是声明自己需要什么，由容器负责提供。**
+
+:::tip 阶段二阅读顺序
+建议先读 [Configuration](/posts/dotnet/aspnet-core-configuration) 和 [Options](/posts/dotnet/aspnet-core-options)，再阅读本文。后续继续学习 [Logging](/posts/dotnet/aspnet-core-logging) 和 [异常处理](/posts/dotnet/aspnet-core-exception-handling)。
+:::
+
+## 注册服务
+
+服务在 `Program.cs` 中注册：
+
+```csharp
+builder.Services.AddScoped<IProductService, ProductService>();
+```
+
+定义接口和实现：
+
+```csharp
+public interface IProductService
+{
+    List<ProductDto> GetAll();
+}
+
+public class ProductService : IProductService
+{
+    public List<ProductDto> GetAll()
+    {
+        return new List<ProductDto>
+        {
+            new(1, "Keyboard", 199m)
+        };
+    }
+}
+
+public record ProductDto(int Id, string Name, decimal Price);
+```
+
+注入使用：
+
+```csharp
+[ApiController]
+[Route("api/products")]
+public class ProductsController : ControllerBase
+{
+    private readonly IProductService _productService;
+
+    public ProductsController(IProductService productService)
+    {
+        _productService = productService;
+    }
+
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        return Ok(_productService.GetAll());
+    }
+}
+```
+
+## 三种生命周期
+
+| 生命周期 | 创建时机 | 适合场景 |
+|---|---|---|
+| Singleton | 应用全局一个实例 | 无状态工具、配置、单例客户端 |
+| Scoped | 每个请求一个实例 | 业务服务、DbContext |
+| Transient | 每次请求服务都创建新实例 | 轻量无状态对象 |
+
+注册方式：
+
+```csharp
+builder.Services.AddSingleton<ISystemClock, SystemClock>();
+builder.Services.AddScoped<IProductService, ProductService>();
+builder.Services.AddTransient<IFormatter, JsonFormatter>();
+```
+
+## Scoped 是 Web API 中最常用的生命周期
+
+一个 HTTP 请求内共享同一个 Scoped 实例，不同请求之间实例不同。
+
+EF Core 的 `DbContext` 默认就是 Scoped。
+
+```csharp
+builder.Services.AddDbContext<AppDbContext>();
+builder.Services.AddScoped<IOrderService, OrderService>();
+```
+
+这适合把一次请求中的数据库操作放在同一个上下文中。
+
+## 生命周期陷阱
+
+### Singleton 不要依赖 Scoped
+
+错误示例：
+
+```csharp
+public class ReportCache
+{
+    public ReportCache(AppDbContext dbContext)
+    {
+    }
+}
+
+builder.Services.AddSingleton<ReportCache>();
+```
+
+`ReportCache` 是 Singleton，`AppDbContext` 是 Scoped，这会造成生命周期不匹配。
+
+正确做法：
+
+- 把服务改成 Scoped
+- 或在 Singleton 中使用 `IServiceScopeFactory` 创建作用域
+- 或重新设计职责，不让单例持有请求级资源
+
+## 构造函数注入优先
+
+推荐构造函数注入：
+
+```csharp
+public class OrderService
+{
+    private readonly ILogger<OrderService> _logger;
+    private readonly IProductService _productService;
+
+    public OrderService(
+        ILogger<OrderService> logger,
+        IProductService productService)
+    {
+        _logger = logger;
+        _productService = productService;
+    }
+}
+```
+
+构造函数注入能明确表达依赖关系，也方便测试。
+
+## IServiceProvider 使用边界
+
+不建议在业务代码里到处注入 `IServiceProvider` 再手动取服务。
+
+```csharp
+// 不推荐
+public class OrderService
+{
+    private readonly IServiceProvider _serviceProvider;
+
+    public OrderService(IServiceProvider serviceProvider)
+    {
+        _serviceProvider = serviceProvider;
+    }
+
+    public void Create()
+    {
+        var logger = _serviceProvider.GetRequiredService<ILogger<OrderService>>();
+    }
+}
+```
+
+推荐直接声明依赖：
+
+```csharp
+public OrderService(ILogger<OrderService> logger)
+{
+}
+```
+
+`IServiceProvider` 适合框架扩展、工厂、动态解析少数场景，不适合普通业务流程。
+
+## 在后台服务中使用 Scoped 服务
+
+`BackgroundService` 是 Singleton。如果需要使用 Scoped 服务，要创建 Scope。
+
+```csharp
+public class OrderWorker : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    public OrderWorker(IServiceScopeFactory scopeFactory)
+    {
+        _scopeFactory = scopeFactory;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IProductService>();
+
+        await Task.CompletedTask;
+    }
+}
+```
+
+## 总结
+
+ASP.NET Core DI 的核心是服务注册、构造函数注入和生命周期管理。Web API 中最常用的是 Scoped，Singleton 要避免持有请求级资源，普通业务代码不要滥用 `IServiceProvider`。

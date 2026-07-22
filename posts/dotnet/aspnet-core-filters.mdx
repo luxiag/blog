@@ -1,0 +1,181 @@
+---
+title: 'ASP.NET Core Filters：过滤器管道与横切逻辑'
+date: '2026-07-21'
+excerpt: '理解 ASP.NET Core MVC Filters：Authorization、Resource、Action、Exception、Result Filter 的执行顺序、适用场景和 Middleware 区别。'
+tags: ['dotnet', 'aspnetcore', 'filters', 'mvc']
+---
+
+# ASP.NET Core Filters：过滤器管道与横切逻辑
+
+Filter 是 ASP.NET Core MVC / Controller 层的扩展点。它比 Middleware 更靠近 Controller Action，适合处理 Action 前后的横切逻辑。
+
+:::tip 阶段二阅读顺序
+建议先读 [Middleware 请求管道](/posts/dotnet/aspnet-core-middleware)、[异常处理](/posts/dotnet/aspnet-core-exception-handling)、[Authorization](/posts/dotnet/aspnet-core-authorization)，再阅读本文。
+:::
+
+## Filter 类型
+
+| Filter | 执行位置 | 常见用途 |
+|---|---|---|
+| Authorization Filter | 最早执行 | 授权判断 |
+| Resource Filter | 模型绑定前后 | 缓存、短路、资源准备 |
+| Action Filter | Action 前后 | 参数检查、操作日志、耗时统计 |
+| Exception Filter | Action 或 Result 异常 | MVC 内异常处理 |
+| Result Filter | Result 执行前后 | 响应包装、结果日志 |
+
+执行大致顺序：
+
+```text
+Authorization Filter
+ -> Resource Filter
+ -> Model Binding
+ -> Action Filter
+ -> Action
+ -> Result Filter
+ -> Response
+```
+
+## Action Filter
+
+Action Filter 是最常见的 Filter。
+
+```csharp
+public class RequestLogActionFilter : IActionFilter
+{
+    private readonly ILogger<RequestLogActionFilter> _logger;
+
+    public RequestLogActionFilter(ILogger<RequestLogActionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public void OnActionExecuting(ActionExecutingContext context)
+    {
+        _logger.LogInformation("Executing action {ActionName}",
+            context.ActionDescriptor.DisplayName);
+    }
+
+    public void OnActionExecuted(ActionExecutedContext context)
+    {
+        _logger.LogInformation("Executed action {ActionName}",
+            context.ActionDescriptor.DisplayName);
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddScoped<RequestLogActionFilter>();
+```
+
+使用：
+
+```csharp
+[ServiceFilter(typeof(RequestLogActionFilter))]
+[HttpGet]
+public IActionResult Get()
+{
+    return Ok();
+}
+```
+
+## 全局 Filter
+
+```csharp
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<RequestLogActionFilter>();
+});
+```
+
+全局 Filter 会作用于所有 Controller Action。
+
+## Async Filter
+
+异步场景使用 `IAsyncActionFilter`。
+
+```csharp
+public class TimingActionFilter : IAsyncActionFilter
+{
+    private readonly ILogger<TimingActionFilter> _logger;
+
+    public TimingActionFilter(ILogger<TimingActionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task OnActionExecutionAsync(
+        ActionExecutingContext context,
+        ActionExecutionDelegate next)
+    {
+        var start = DateTimeOffset.UtcNow;
+
+        ActionExecutedContext executedContext = await next();
+
+        var elapsed = DateTimeOffset.UtcNow - start;
+        _logger.LogInformation("Action completed in {Elapsed}ms", elapsed.TotalMilliseconds);
+    }
+}
+```
+
+异步 Filter 中，`await next()` 表示继续执行 Action。
+
+## Exception Filter
+
+Exception Filter 只能捕获 MVC Action 或 Result 执行阶段的异常，不能捕获 Middleware 中发生的异常。
+
+```csharp
+public class ApiExceptionFilter : IExceptionFilter
+{
+    private readonly ILogger<ApiExceptionFilter> _logger;
+
+    public ApiExceptionFilter(ILogger<ApiExceptionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public void OnException(ExceptionContext context)
+    {
+        _logger.LogError(context.Exception, "Action exception");
+
+        context.Result = new ObjectResult(new ProblemDetails
+        {
+            Title = "Action failed",
+            Status = StatusCodes.Status500InternalServerError
+        })
+        {
+            StatusCode = StatusCodes.Status500InternalServerError
+        };
+
+        context.ExceptionHandled = true;
+    }
+}
+```
+
+全局异常处理更推荐 Middleware；Exception Filter 适合 MVC 层特定异常转换。
+
+## Middleware 和 Filter 怎么选
+
+| 场景 | 推荐 |
+|---|---|
+| 全局异常处理 | Middleware |
+| 请求日志、TraceId、租户识别 | Middleware |
+| Action 参数检查 | Filter |
+| Action 耗时统计 | Filter 或 Middleware |
+| 认证授权 | 框架 Authentication / Authorization Middleware + Policy |
+| Controller 返回结果包装 | Result Filter |
+
+原则：越靠近 HTTP 管道的能力用 Middleware，越靠近 MVC Action 的能力用 Filter。
+
+## 使用建议
+
+- 不要把业务逻辑放进 Filter。
+- Filter 适合横切逻辑，不适合替代 Service。
+- 全局异常优先用 Middleware。
+- 需要 DI 的 Filter 用 `ServiceFilter` 或注册全局 Filter。
+- 同步和异步接口不要混用，异步逻辑用 Async Filter。
+
+## 总结
+
+Filter 是 Controller 层的扩展点，适合处理 Action 前后的横切逻辑。它和 Middleware 都能扩展请求处理流程，但作用层级不同：Middleware 面向整个 HTTP 管道，Filter 面向 MVC / Controller 执行过程。

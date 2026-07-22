@@ -1,0 +1,223 @@
+---
+title: 'ASP.NET Core Web API：Controller、Action 与结果返回'
+date: '2026-07-21'
+excerpt: '掌握 ASP.NET Core Web API Controller 开发：ControllerBase、Action、ActionResult、状态码、DTO、RESTful CRUD 和统一返回建议。'
+tags: ['dotnet', 'aspnetcore', 'webapi', 'controller']
+nextPost: 'dotnet/aspnet-core-model-binding-validation'
+---
+
+# ASP.NET Core Web API：Controller、Action 与结果返回
+
+Controller 是 ASP.NET Core Web API 最常见的组织方式。它把一组相关接口放在一个类中，每个 Action 处理一个具体请求。
+
+阶段一先用 Controller 写标准 Web API，因为它适合中大型项目，也能清晰展示路由、参数绑定、模型验证和结果返回。
+
+:::tip 阶段一阅读顺序
+建议先读 [Routing 与 Endpoint](/posts/dotnet/aspnet-core-routing-endpoint)，再阅读本文。后续继续看 [参数绑定与模型验证](/posts/dotnet/aspnet-core-model-binding-validation) 和 [Minimal API](/posts/dotnet/aspnet-core-minimal-api)。
+:::
+
+## 创建 Controller
+
+Controller 通常放在 `Controllers` 目录下。
+
+```csharp
+using Microsoft.AspNetCore.Mvc;
+
+[ApiController]
+[Route("api/products")]
+public class ProductsController : ControllerBase
+{
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        return Ok(new[] { "Keyboard", "Mouse" });
+    }
+}
+```
+
+关键点：
+
+- `[ApiController]` 启用 Web API 约定，例如自动模型验证。
+- `[Route("api/products")]` 定义控制器路由前缀。
+- `ControllerBase` 提供 `Ok`、`NotFound`、`BadRequest` 等辅助方法。
+
+## ControllerBase 与 Controller
+
+| 类型 | 用途 |
+|---|---|
+| `ControllerBase` | Web API，不需要 View |
+| `Controller` | MVC 页面，支持 View |
+
+纯 Web API 项目使用 `ControllerBase` 即可。
+
+## Action 返回类型
+
+常见返回类型：
+
+| 返回类型 | 场景 |
+|---|---|
+| `IActionResult` | 灵活返回不同状态码 |
+| `ActionResult<T>` | 返回具体数据，同时支持状态码 |
+| `T` | 简单返回数据，不推荐复杂场景 |
+
+推荐使用 `ActionResult<T>`：
+
+```csharp
+[HttpGet("{id:int}")]
+public ActionResult<ProductDto> GetById(int id)
+{
+    ProductDto? product = FindProduct(id);
+
+    if (product is null)
+    {
+        return NotFound();
+    }
+
+    return Ok(product);
+}
+```
+
+## 常用结果方法
+
+| 方法 | 状态码 | 场景 |
+|---|---|---|
+| `Ok(value)` | 200 | 查询成功 |
+| `CreatedAtAction(...)` | 201 | 创建成功 |
+| `NoContent()` | 204 | 成功但无响应体 |
+| `BadRequest(...)` | 400 | 请求错误 |
+| `Unauthorized()` | 401 | 未认证 |
+| `Forbid()` | 403 | 无权限 |
+| `NotFound()` | 404 | 资源不存在 |
+| `Conflict(...)` | 409 | 状态冲突 |
+
+## 用 DTO 表达请求和响应
+
+不要直接把数据库实体暴露给 API。建议使用 DTO。
+
+```csharp
+public record ProductDto(int Id, string Name, decimal Price);
+
+public class CreateProductRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+}
+```
+
+DTO 的好处：
+
+- API 契约更稳定
+- 避免暴露内部字段
+- 请求和响应可以分别建模
+- 便于模型验证
+
+## 完整 CRUD 示例
+
+下面用内存集合实现一个阶段一练习用的商品 API。
+
+```csharp
+using Microsoft.AspNetCore.Mvc;
+
+[ApiController]
+[Route("api/products")]
+public class ProductsController : ControllerBase
+{
+    private static readonly List<ProductDto> Products = new()
+    {
+        new ProductDto(1, "Keyboard", 199m),
+        new ProductDto(2, "Mouse", 99m)
+    };
+
+    [HttpGet]
+    public ActionResult<List<ProductDto>> GetAll()
+    {
+        return Ok(Products);
+    }
+
+    [HttpGet("{id:int}")]
+    public ActionResult<ProductDto> GetById(int id)
+    {
+        ProductDto? product = Products.FirstOrDefault(item => item.Id == id);
+
+        if (product is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(product);
+    }
+
+    [HttpPost]
+    public ActionResult<ProductDto> Create(CreateProductRequest request)
+    {
+        int id = Products.Count == 0 ? 1 : Products.Max(item => item.Id) + 1;
+        var product = new ProductDto(id, request.Name, request.Price);
+
+        Products.Add(product);
+
+        return CreatedAtAction(nameof(GetById), new { id = product.Id }, product);
+    }
+
+    [HttpPut("{id:int}")]
+    public IActionResult Update(int id, UpdateProductRequest request)
+    {
+        int index = Products.FindIndex(item => item.Id == id);
+
+        if (index < 0)
+        {
+            return NotFound();
+        }
+
+        Products[index] = new ProductDto(id, request.Name, request.Price);
+
+        return NoContent();
+    }
+
+    [HttpDelete("{id:int}")]
+    public IActionResult Delete(int id)
+    {
+        ProductDto? product = Products.FirstOrDefault(item => item.Id == id);
+
+        if (product is null)
+        {
+            return NotFound();
+        }
+
+        Products.Remove(product);
+
+        return NoContent();
+    }
+}
+
+public record ProductDto(int Id, string Name, decimal Price);
+
+public class CreateProductRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+}
+
+public class UpdateProductRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+}
+```
+
+这个例子暂时用静态集合保存数据，只为了练习 Web API 主链路。生产项目应使用数据库和服务层。
+
+## Controller 不应该承担太多职责
+
+阶段一为了示例简单，把逻辑写在 Controller 中。真实项目里，Controller 应该尽量薄：
+
+- 接收请求
+- 调用应用服务
+- 返回 HTTP 结果
+
+业务规则、数据库访问、外部服务调用应该放到 Service / Repository / Application 层。
+
+## 总结
+
+Controller 是 ASP.NET Core Web API 的常规入口。掌握 `ControllerBase`、`ActionResult<T>`、状态码和 DTO 后，就可以写出清晰的 RESTful API。
+
+下一步需要重点学习参数绑定和模型验证，让 API 能正确接收和校验客户端输入。

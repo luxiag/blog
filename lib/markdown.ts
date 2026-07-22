@@ -200,7 +200,8 @@ export async function getPostData(slug: string): Promise<Post> {
       author: frontMatter.author,
       tags: ensureCategoryInTags(frontMatter.tags || [], postFile.category),
       readingTime: calculateReadingTime(content),
-      hidden: frontMatter.hidden === true
+      hidden: frontMatter.hidden === true,
+      nextPost: frontMatter.nextPost ? resolveNextPost(frontMatter.nextPost) : undefined,
     };
 
     // 缓存结果
@@ -223,6 +224,27 @@ function ensureCategoryInTags(tags: string[], category?: string): string[] {
   }
 
   return [...tags, category];
+}
+
+function resolveNextPost(nextPostSlug: string): { slug: string; title: string } | undefined {
+  const postFiles = getPostFiles(postsDirectory);
+  const targetFile = postFiles.find((f) => f.slug === nextPostSlug);
+  if (!targetFile) {
+    logger.warn(`nextPost slug "${nextPostSlug}" not found`);
+    return undefined;
+  }
+
+  try {
+    const fileContents = fs.readFileSync(targetFile.filePath, 'utf8');
+    const { data } = matter(fileContents);
+    const frontMatter = data as PostFrontMatter;
+    return {
+      slug: nextPostSlug,
+      title: frontMatter.title || nextPostSlug,
+    };
+  } catch {
+    return { slug: nextPostSlug, title: nextPostSlug };
+  }
 }
 
 export async function getAllPosts(): Promise<Post[]> {

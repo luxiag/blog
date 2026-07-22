@@ -1,0 +1,189 @@
+---
+title: 'ASP.NET Core Minimal API：轻量接口开发实践'
+date: '2026-07-21'
+excerpt: '学习 ASP.NET Core Minimal API 的核心用法：MapGet、MapPost、参数绑定、TypedResults、Route Group、Endpoint Filter 和适用场景。'
+tags: ['dotnet', 'aspnetcore', 'minimal-api', 'webapi']
+---
+
+# ASP.NET Core Minimal API：轻量接口开发实践
+
+Minimal API 是 ASP.NET Core 提供的轻量 API 开发方式。它不需要 Controller 类，直接在 `Program.cs` 或扩展方法中注册 Endpoint。
+
+它不是 Controller 的完全替代品，而是适合小服务、网关、BFF、内部 API、快速原型的一种更轻量选择。
+
+:::tip 阶段一阅读顺序
+建议先读 [Routing 与 Endpoint](/posts/dotnet/aspnet-core-routing-endpoint)、[Web API Controller](/posts/dotnet/aspnet-core-webapi-controller) 和 [参数绑定与模型验证](/posts/dotnet/aspnet-core-model-binding-validation)，再阅读本文。
+:::
+
+## 最小示例
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+var app = builder.Build();
+
+app.MapGet("/api/hello", () => "Hello Minimal API");
+
+app.Run();
+```
+
+访问：
+
+```text
+GET /api/hello
+```
+
+返回字符串。
+
+## MapGet、MapPost、MapPut、MapDelete
+
+```csharp
+var products = new List<ProductDto>
+{
+    new(1, "Keyboard", 199m),
+    new(2, "Mouse", 99m)
+};
+
+app.MapGet("/api/products", () => Results.Ok(products));
+
+app.MapGet("/api/products/{id:int}", (int id) =>
+{
+    ProductDto? product = products.FirstOrDefault(item => item.Id == id);
+    return product is null ? Results.NotFound() : Results.Ok(product);
+});
+
+app.MapPost("/api/products", (CreateProductRequest request) =>
+{
+    int id = products.Max(item => item.Id) + 1;
+    var product = new ProductDto(id, request.Name, request.Price);
+    products.Add(product);
+
+    return Results.Created($"/api/products/{id}", product);
+});
+
+public record ProductDto(int Id, string Name, decimal Price);
+public record CreateProductRequest(string Name, decimal Price);
+```
+
+## 参数绑定
+
+Minimal API 也支持从 Route、Query、Body、Header、Services 绑定参数。
+
+```csharp
+app.MapGet("/api/products/{id:int}", (
+    int id,
+    [FromQuery] string? keyword,
+    [FromHeader(Name = "X-Trace-Id")] string? traceId) =>
+{
+    return Results.Ok(new { id, keyword, traceId });
+});
+```
+
+需要命名空间：
+
+```csharp
+using Microsoft.AspNetCore.Mvc;
+```
+
+复杂类型在 `POST`、`PUT` 中通常从 Body 绑定。
+
+## TypedResults
+
+`TypedResults` 返回更具体的结果类型，有利于 OpenAPI 元数据和类型推断。
+
+```csharp
+app.MapGet("/api/products/{id:int}", (int id) =>
+{
+    ProductDto? product = products.FirstOrDefault(item => item.Id == id);
+
+    return product is null
+        ? TypedResults.NotFound()
+        : TypedResults.Ok(product);
+});
+```
+
+简单项目用 `Results` 也可以。需要更强类型信息时，优先考虑 `TypedResults`。
+
+## Route Group
+
+Route Group 用于组织一组相关 Endpoint。
+
+```csharp
+var productGroup = app.MapGroup("/api/products")
+    .WithTags("Products");
+
+productGroup.MapGet("/", () => TypedResults.Ok(products));
+
+productGroup.MapGet("/{id:int}", (int id) =>
+{
+    ProductDto? product = products.FirstOrDefault(item => item.Id == id);
+    return product is null ? TypedResults.NotFound() : TypedResults.Ok(product);
+});
+```
+
+后续你可以给 Group 统一加授权、过滤器、OpenAPI 配置。
+
+## 从 DI 注入服务
+
+Minimal API Handler 可以直接声明服务参数。
+
+```csharp
+app.MapGet("/api/time", (TimeProvider timeProvider) =>
+{
+    return TypedResults.Ok(timeProvider.GetUtcNow());
+});
+```
+
+自定义服务：
+
+```csharp
+builder.Services.AddScoped<IProductService, ProductService>();
+
+app.MapGet("/api/products", async (IProductService service) =>
+{
+    var products = await service.GetAllAsync();
+    return TypedResults.Ok(products);
+});
+```
+
+## Endpoint Filter
+
+Endpoint Filter 类似 Minimal API 的轻量过滤器。
+
+```csharp
+app.MapPost("/api/products", (CreateProductRequest request) =>
+{
+    return TypedResults.Ok(request);
+})
+.AddEndpointFilter(async (context, next) =>
+{
+    var request = context.GetArgument<CreateProductRequest>(0);
+
+    if (string.IsNullOrWhiteSpace(request.Name))
+    {
+        return TypedResults.BadRequest("Name is required");
+    }
+
+    return await next(context);
+});
+```
+
+复杂验证建议使用专门验证库或保持 Controller + 模型验证方式。
+
+## Minimal API 和 Controller 怎么选
+
+| 场景 | 建议 |
+|---|---|
+| 企业后台、中大型 API | Controller |
+| 小型服务、内部接口 | Minimal API |
+| BFF / 网关 | Minimal API |
+| 复杂模型验证和过滤器 | Controller |
+| 快速原型 | Minimal API |
+
+团队项目中可以混用，但要有明确约定，不要同一类业务一半 Controller、一半 Minimal API。
+
+## 总结
+
+Minimal API 的价值是轻量、直接、低样板代码。它和 Controller 共用 ASP.NET Core 的路由、参数绑定、依赖注入和 Endpoint 体系。
+
+阶段一建议先掌握 Controller，再学习 Minimal API。这样你能清楚知道两者的共同基础和适用边界。

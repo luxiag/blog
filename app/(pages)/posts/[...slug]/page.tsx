@@ -7,7 +7,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { logger } from '@/lib/logger';
 import PageTitle from '@/components/PageTitle';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 export async function generateStaticParams() {
   const slugs = getAllPostSlugs();
@@ -123,7 +123,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
         </article>
 
         {/* Footer Nav */}
-        <nav className="mt-8">
+        <nav className="mt-8 flex items-center justify-between">
           <Link
             href="/posts"
             className="inline-flex items-center gap-2 px-4 py-2 border border-[oklch(0.145_0_0)] rounded text-xs font-mono uppercase tracking-widest hover:bg-[#f5f5f5] transition-colors"
@@ -131,6 +131,16 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
             <ChevronLeft className="w-4 h-4" />
             Back to Archive
           </Link>
+
+          {post.nextPost && (
+            <Link
+              href={`/posts/${post.nextPost.slug}`}
+              className="inline-flex items-center gap-2 px-4 py-2 border border-[oklch(0.145_0_0)] rounded text-xs font-mono uppercase tracking-widest hover:bg-[#f5f5f5] transition-colors"
+            >
+              {post.nextPost.title}
+              <ChevronRight className="w-4 h-4" />
+            </Link>
+          )}
         </nav>
       </div>
     </div>

@@ -1,0 +1,198 @@
+---
+title: 'ASP.NET Core 异常处理：ExceptionHandler、ProblemDetails 与统一响应'
+date: '2026-07-21'
+excerpt: '系统理解 ASP.NET Core 异常处理：全局异常中间件、UseExceptionHandler、ProblemDetails、业务异常、状态码映射和统一错误响应。'
+tags: ['dotnet', 'aspnetcore', 'exception-handling', 'problemdetails']
+---
+
+# ASP.NET Core 异常处理：ExceptionHandler、ProblemDetails 与统一响应
+
+异常处理不是在每个 Controller 里写一堆 `try/catch`。ASP.NET Core 项目应该用统一机制处理未捕获异常，把错误转换成稳定、可诊断、不会泄露敏感信息的 HTTP 响应。
+
+:::tip 阶段二阅读顺序
+建议先读 [Logging](/posts/dotnet/aspnet-core-logging)，再阅读本文。后续继续学习 [Authentication](/posts/dotnet/aspnet-core-authentication)、[Authorization](/posts/dotnet/aspnet-core-authorization) 和 [Filters](/posts/dotnet/aspnet-core-filters)。
+:::
+
+## 为什么要统一异常处理
+
+不推荐这样写：
+
+```csharp
+[HttpPost]
+public IActionResult Create(CreateProductRequest request)
+{
+    try
+    {
+        // business logic
+        return Ok();
+    }
+    catch (Exception ex)
+    {
+        return StatusCode(500, ex.Message);
+    }
+}
+```
+
+问题：
+
+- 每个 Action 重复代码。
+- 容易漏记日志。
+- 可能把异常细节暴露给用户。
+- 错误响应格式不统一。
+
+更推荐：业务代码正常抛异常，统一异常处理中间件负责日志和响应。
+
+## UseExceptionHandler
+
+生产环境建议使用 `UseExceptionHandler`。
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddProblemDetails();
+
+var app = builder.Build();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler();
+}
+
+app.MapControllers();
+
+app.Run();
+```
+
+`AddProblemDetails()` 会注册标准错误响应支持。ASP.NET Core 会把异常转换成符合 RFC 7807 / RFC 9457 风格的 `ProblemDetails` 响应。
+
+## ProblemDetails 是什么
+
+`ProblemDetails` 是标准化错误响应结构，常见字段包括：
+
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.6.1",
+  "title": "An error occurred while processing your request.",
+  "status": 500,
+  "traceId": "00-..."
+}
+```
+
+它的价值是统一错误格式，让前端和客户端可以稳定处理错误。
+
+## 自定义异常处理中间件
+
+如果你需要更强控制，可以写自定义中间件。
+
+```csharp
+public class GlobalExceptionMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly ILogger<GlobalExceptionMiddleware> _logger;
+
+    public GlobalExceptionMiddleware(
+        RequestDelegate next,
+        ILogger<GlobalExceptionMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        try
+        {
+            await _next(context);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled exception. TraceId: {TraceId}", context.TraceIdentifier);
+
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            context.Response.ContentType = "application/problem+json";
+
+            await context.Response.WriteAsJsonAsync(new ProblemDetails
+            {
+                Title = "Server error",
+                Status = StatusCodes.Status500InternalServerError,
+                Detail = "An unexpected error occurred.",
+                Instance = context.Request.Path
+            });
+        }
+    }
+}
+```
+
+注册时尽量靠前：
+
+```csharp
+app.UseMiddleware<GlobalExceptionMiddleware>();
+```
+
+## 业务异常与状态码映射
+
+不是所有异常都应该返回 500。业务异常应该映射为更准确的状态码。
+
+```csharp
+public class NotFoundException : Exception
+{
+    public NotFoundException(string message) : base(message)
+    {
+    }
+}
+
+public class ConflictException : Exception
+{
+    public ConflictException(string message) : base(message)
+    {
+    }
+}
+```
+
+处理中间件中映射：
+
+```csharp
+int statusCode = ex switch
+{
+    NotFoundException => StatusCodes.Status404NotFound,
+    ConflictException => StatusCodes.Status409Conflict,
+    ArgumentException => StatusCodes.Status400BadRequest,
+    _ => StatusCodes.Status500InternalServerError
+};
+```
+
+## 什么时候捕获异常
+
+适合捕获异常的场景：
+
+- 统一边界层：全局异常中间件
+- 需要补充上下文日志后继续抛出
+- 调用外部系统，需要转换异常类型
+- 后台任务中防止循环退出
+
+不适合捕获异常的场景：
+
+- 捕获后什么都不做
+- 每个 Controller 都重复 catch
+- 用异常控制正常业务分支
+
+## 开发环境与生产环境
+
+开发环境可以使用详细异常页：
+
+```csharp
+if (app.Environment.IsDevelopment())
+{
+    app.UseDeveloperExceptionPage();
+}
+else
+{
+    app.UseExceptionHandler();
+}
+```
+
+生产环境不要把堆栈、数据库连接、文件路径等细节返回给客户端。
+
+## 总结
+
+ASP.NET Core 异常处理的目标是：集中处理、统一响应、保留日志、隐藏敏感细节。普通业务代码不要到处写 `try/catch`，让全局异常处理负责最后的 HTTP 错误转换。

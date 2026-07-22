@@ -1,0 +1,254 @@
+---
+title: 'ASP.NET Core 启动模型：Program.cs、Builder 与 WebApplication'
+date: '2026-07-21'
+excerpt: '理解 ASP.NET Core 应用从 Program.cs 启动的全过程：Builder、Services、Configuration、Environment、Middleware、Endpoint 和 app.Run。'
+tags: ['dotnet', 'aspnetcore', 'program.cs', 'startup', 'webapplication']
+nextPost: 'dotnet/aspnet-core-middleware'
+---
+
+# ASP.NET Core 启动模型：Program.cs、Builder 与 WebApplication
+
+ASP.NET Core 应用通常从 `Program.cs` 启动。这个文件虽然不长，但它决定了应用有哪些服务、请求经过哪些中间件、哪些 URL 可以被访问。
+
+如果你能看懂 `Program.cs`，就能看懂 ASP.NET Core 项目的骨架。
+
+:::tip 阶段一阅读顺序
+建议先读 [HTTP 与 RESTful API 基础](/posts/dotnet/aspnet-core-http-rest-basics)，再阅读本文。后续继续看 [Middleware 请求管道](/posts/dotnet/aspnet-core-middleware)、[Routing 与 Endpoint](/posts/dotnet/aspnet-core-routing-endpoint) 和 [Controller](/posts/dotnet/aspnet-core-webapi-controller)。
+:::
+
+## 最小 Web API 项目
+
+创建项目：
+
+```bash
+dotnet new webapi -n ProductApi
+cd ProductApi
+dotnet run
+```
+
+一个典型的 `Program.cs`：
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.Run();
+```
+
+这段代码可以拆成三部分：创建构建器、注册服务、配置请求管道并启动。
+
+## WebApplicationBuilder
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+```
+
+`builder` 负责应用构建阶段的工作，常用属性包括：
+
+| 属性 | 作用 |
+|---|---|
+| `builder.Services` | 注册依赖注入服务 |
+| `builder.Configuration` | 读取配置 |
+| `builder.Environment` | 获取当前环境 |
+| `builder.Logging` | 配置日志 |
+| `builder.WebHost` | 配置 Web Host |
+
+示例：
+
+```csharp
+var connectionString = builder.Configuration.GetConnectionString("Default");
+
+if (builder.Environment.IsDevelopment())
+{
+    Console.WriteLine("当前是开发环境");
+}
+```
+
+## Services：注册服务
+
+`builder.Services` 是依赖注入容器的服务注册入口。
+
+```csharp
+builder.Services.AddControllers();
+builder.Services.AddScoped<IProductService, ProductService>();
+```
+
+常见服务注册：
+
+```csharp
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.AddMemoryCache();
+```
+
+服务必须在 `builder.Build()` 之前注册。`Build()` 之后服务容器基本就构建完成了。
+
+## Configuration：读取配置
+
+ASP.NET Core 默认会读取多种配置来源：
+
+- `appsettings.json`
+- `appsettings.{Environment}.json`
+- User Secrets（开发环境）
+- 环境变量
+- 命令行参数
+
+示例配置：
+
+```json
+{
+  "App": {
+    "Name": "Product API"
+  },
+  "ConnectionStrings": {
+    "Default": "Server=.;Database=ProductDb;Trusted_Connection=True;TrustServerCertificate=True"
+  }
+}
+```
+
+读取配置：
+
+```csharp
+string? appName = builder.Configuration["App:Name"];
+string? connectionString = builder.Configuration.GetConnectionString("Default");
+```
+
+阶段一只需要知道配置从 `builder.Configuration` 读取即可。强类型 Options 会在后续阶段单独讲。
+
+## Environment：区分环境
+
+ASP.NET Core 用环境名区分开发、测试、生产。
+
+常见环境：
+
+- `Development`
+- `Staging`
+- `Production`
+
+```csharp
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+```
+
+生产环境不要直接暴露开发调试页面或详细异常信息。
+
+## Build：构建应用
+
+```csharp
+var app = builder.Build();
+```
+
+`Build()` 会根据前面注册的服务和配置创建 `WebApplication`。从这里开始，代码重点从“注册服务”切换到“配置请求处理管道”。
+
+## app.Use：注册中间件
+
+```csharp
+app.UseHttpsRedirection();
+app.UseAuthorization();
+```
+
+`Use...` 通常是在请求管道中添加中间件。请求会按注册顺序依次经过这些中间件。
+
+中间件顺序非常重要。例如认证必须在授权之前：
+
+```csharp
+app.UseAuthentication();
+app.UseAuthorization();
+```
+
+阶段一先重点理解：`Use...` 是处理每个请求都会经过的管道环节。
+
+## app.Map：注册 Endpoint
+
+```csharp
+app.MapControllers();
+```
+
+`Map...` 通常用于注册 Endpoint，也就是最终能处理请求的目标。
+
+常见写法：
+
+```csharp
+app.MapControllers();
+
+app.MapGet("/ping", () => "pong");
+
+app.MapPost("/products", (CreateProductRequest request) => Results.Ok(request));
+```
+
+`Use...` 偏管道处理，`Map...` 偏终点映射。
+
+## app.Run：启动应用
+
+```csharp
+app.Run();
+```
+
+`Run()` 会启动 Web 应用并开始监听 HTTP 请求。一般放在 `Program.cs` 最后。
+
+## 一个完整示例
+
+下面是一个最小可运行的 API：
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+
+app.MapGet("/api/hello", () => new
+{
+    Message = "Hello ASP.NET Core",
+    Time = DateTimeOffset.Now
+});
+
+app.MapControllers();
+
+app.Run();
+```
+
+访问：
+
+```text
+GET /api/hello
+```
+
+会返回 JSON。
+
+## 总结
+
+ASP.NET Core 启动模型可以记成一句话：**先用 `builder` 注册服务和读取配置，再用 `app` 配置中间件和 Endpoint，最后 `Run()` 启动应用。**
+
+后续学习 Middleware、Routing、Controller、参数绑定，都会围绕这个启动模型展开。

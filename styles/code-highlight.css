@@ -115,6 +115,10 @@
   color: var(--hljs-title);
 }
 
+.hljs-function {
+  color: var(--hljs-function);
+}
+
 .hljs-type,
 .hljs-class .hljs-title {
   color: var(--hljs-type);
@@ -137,8 +141,32 @@
 }
 
 .hljs-built_in,
-.hljs-builtin-name {
+.hljs-builtin-name,
+.hljs-code,
+.hljs-formula,
+.hljs-char {
   color: var(--hljs-built-in);
+}
+
+.hljs-params {
+  color: var(--hljs-params);
+}
+
+.hljs-property {
+  color: var(--hljs-property);
+}
+
+.hljs-operator {
+  color: var(--hljs-operator);
+}
+
+.hljs-punctuation {
+  color: var(--hljs-fg);
+}
+
+.hljs-template-tag,
+.hljs-template-variable {
+  color: var(--hljs-keyword);
 }
 
 .hljs-meta {

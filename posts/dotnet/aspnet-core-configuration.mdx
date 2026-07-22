@@ -1,0 +1,190 @@
+---
+title: 'ASP.NET Core Configuration：配置系统与环境变量'
+date: '2026-07-21'
+excerpt: '理解 ASP.NET Core 配置系统：appsettings.json、环境配置、环境变量、命令行参数、配置优先级、User Secrets 和生产配置建议。'
+tags: ['dotnet', 'aspnetcore', 'configuration', 'appsettings']
+---
+
+# ASP.NET Core Configuration：配置系统与环境变量
+
+配置系统解决的问题是：**应用在不同环境下如何读取不同配置，而不是把数据库连接、第三方地址、开关参数写死在代码里。**
+
+ASP.NET Core 的配置系统是分层的。它会从多个来源读取配置，并按优先级覆盖。
+
+:::tip 阶段二阅读顺序
+本文属于 ASP.NET Core 应用基础设施阶段。建议先掌握 [阶段一入门主线](/posts/dotnet/aspnet-core-roadmap)，再按顺序学习 Configuration -> [Options](/posts/dotnet/aspnet-core-options) -> [Dependency Injection](/posts/dotnet/aspnet-core-dependency-injection) -> [Logging](/posts/dotnet/aspnet-core-logging)。
+:::
+
+## 默认配置来源
+
+`WebApplication.CreateBuilder(args)` 会默认加载常见配置来源：
+
+- `appsettings.json`
+- `appsettings.{Environment}.json`
+- User Secrets（开发环境，项目启用后）
+- 环境变量
+- 命令行参数
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+string? appName = builder.Configuration["App:Name"];
+string? connectionString = builder.Configuration.GetConnectionString("Default");
+```
+
+## appsettings.json
+
+配置通常从 `appsettings.json` 开始。
+
+```json
+{
+  "App": {
+    "Name": "Product API",
+    "PageSize": 20
+  },
+  "ConnectionStrings": {
+    "Default": "Server=.;Database=ProductDb;Trusted_Connection=True;TrustServerCertificate=True"
+  }
+}
+```
+
+读取嵌套配置用冒号：
+
+```csharp
+string? name = builder.Configuration["App:Name"];
+int pageSize = builder.Configuration.GetValue<int>("App:PageSize");
+```
+
+连接字符串有专门方法：
+
+```csharp
+string? connectionString = builder.Configuration.GetConnectionString("Default");
+```
+
+## 环境配置
+
+不同环境可以使用不同配置文件：
+
+```text
+appsettings.json
+appsettings.Development.json
+appsettings.Production.json
+```
+
+如果当前环境是 `Development`，后加载的 `appsettings.Development.json` 会覆盖 `appsettings.json` 中同名配置。
+
+环境名由 `ASPNETCORE_ENVIRONMENT` 或 `DOTNET_ENVIRONMENT` 决定。
+
+```csharp
+if (builder.Environment.IsDevelopment())
+{
+    Console.WriteLine("Development environment");
+}
+```
+
+## 配置优先级
+
+后加载的配置源优先级更高。默认情况下，环境变量和命令行参数可以覆盖 JSON 文件配置。
+
+例如 JSON 中：
+
+```json
+{
+  "App": {
+    "Name": "Product API"
+  }
+}
+```
+
+环境变量可以覆盖：
+
+```text
+App__Name=Product API From Env
+```
+
+在环境变量中，层级分隔通常使用双下划线 `__`。
+
+## 命令行参数
+
+运行应用时可以传入参数：
+
+```bash
+dotnet run --App:Name="Product API From Command"
+```
+
+读取方式不变：
+
+```csharp
+string? name = builder.Configuration["App:Name"];
+```
+
+命令行参数适合临时覆盖配置，不适合保存敏感信息。
+
+## User Secrets
+
+开发环境不要把密码、连接字符串、Token 提交到 Git。可以使用 User Secrets。
+
+初始化：
+
+```bash
+dotnet user-secrets init
+```
+
+设置配置：
+
+```bash
+dotnet user-secrets set "ConnectionStrings:Default" "Server=.;Database=ProductDb;Trusted_Connection=True;TrustServerCertificate=True"
+```
+
+代码读取方式仍然一样：
+
+```csharp
+string? connectionString = builder.Configuration.GetConnectionString("Default");
+```
+
+User Secrets 只适合本地开发，不是生产密钥管理方案。
+
+## 自定义配置节
+
+可以读取整个配置节：
+
+```json
+{
+  "Smtp": {
+    "Host": "smtp.example.com",
+    "Port": 587,
+    "UserName": "noreply@example.com"
+  }
+}
+```
+
+```csharp
+IConfigurationSection smtpSection = builder.Configuration.GetSection("Smtp");
+
+string? host = smtpSection["Host"];
+int port = smtpSection.GetValue<int>("Port");
+```
+
+如果配置会被多个服务使用，建议不要到处注入 `IConfiguration`，而是使用强类型 Options。
+
+## 生产配置建议
+
+生产环境配置建议：
+
+- 不把敏感信息写进仓库。
+- 用环境变量、密钥管理服务或部署平台注入配置。
+- `appsettings.Production.json` 不保存真实密码。
+- 启动时验证关键配置是否存在。
+- 日志中不要打印完整连接字符串和密钥。
+
+容器环境中常用环境变量覆盖：
+
+```yaml
+environment:
+  ASPNETCORE_ENVIRONMENT: Production
+  ConnectionStrings__Default: Server=db;Database=ProductDb;User Id=app;Password=***
+```
+
+## 总结
+
+ASP.NET Core 配置系统的核心是多来源、分层覆盖和统一读取。阶段二先理解配置来源和优先级，再学习 Options，把字符串配置绑定成强类型对象。

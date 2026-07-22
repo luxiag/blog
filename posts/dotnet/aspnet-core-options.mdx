@@ -1,0 +1,222 @@
+---
+title: 'ASP.NET Core Options：强类型配置、验证与热更新'
+date: '2026-07-21'
+excerpt: '掌握 ASP.NET Core Options 模式：Configure、Bind、IOptions、IOptionsSnapshot、IOptionsMonitor、配置验证和热更新场景。'
+tags: ['dotnet', 'aspnetcore', 'options', 'configuration']
+---
+
+# ASP.NET Core Options：强类型配置、验证与热更新
+
+直接使用 `IConfiguration["Smtp:Host"]` 虽然简单，但字符串 Key 分散在代码里，不利于维护，也缺少类型检查。Options 模式把配置绑定到强类型对象，让配置使用更安全、更清晰。
+
+:::tip 阶段二阅读顺序
+建议先读 [Configuration 配置系统](/posts/dotnet/aspnet-core-configuration)，再阅读本文。后续继续学习 [Dependency Injection](/posts/dotnet/aspnet-core-dependency-injection) 和 [Logging](/posts/dotnet/aspnet-core-logging)。
+:::
+
+## 定义配置对象
+
+配置文件：
+
+```json
+{
+  "Smtp": {
+    "Host": "smtp.example.com",
+    "Port": 587,
+    "EnableSsl": true
+  }
+}
+```
+
+配置类：
+
+```csharp
+public class SmtpOptions
+{
+    public const string SectionName = "Smtp";
+
+    public string Host { get; set; } = string.Empty;
+    public int Port { get; set; }
+    public bool EnableSsl { get; set; }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.Configure<SmtpOptions>(
+    builder.Configuration.GetSection(SmtpOptions.SectionName));
+```
+
+使用：
+
+```csharp
+public class EmailService
+{
+    private readonly SmtpOptions _options;
+
+    public EmailService(IOptions<SmtpOptions> options)
+    {
+        _options = options.Value;
+    }
+}
+```
+
+需要命名空间：
+
+```csharp
+using Microsoft.Extensions.Options;
+```
+
+## IOptions、IOptionsSnapshot、IOptionsMonitor
+
+| 类型 | 生命周期特点 | 适用场景 |
+|---|---|---|
+| `IOptions<T>` | 单例读取，应用启动后基本固定 | 普通配置 |
+| `IOptionsSnapshot<T>` | Scoped，每个请求重新获取 | Web 请求中希望读取新配置 |
+| `IOptionsMonitor<T>` | Singleton，支持监听变化 | 后台服务、长期运行服务 |
+
+`IOptions<T>`：
+
+```csharp
+public class ProductService
+{
+    private readonly SmtpOptions _options;
+
+    public ProductService(IOptions<SmtpOptions> options)
+    {
+        _options = options.Value;
+    }
+}
+```
+
+`IOptionsSnapshot<T>`：
+
+```csharp
+public class ProductsController : ControllerBase
+{
+    private readonly SmtpOptions _options;
+
+    public ProductsController(IOptionsSnapshot<SmtpOptions> options)
+    {
+        _options = options.Value;
+    }
+}
+```
+
+`IOptionsMonitor<T>`：
+
+```csharp
+public class EmailWorker
+{
+    private readonly IOptionsMonitor<SmtpOptions> _monitor;
+
+    public EmailWorker(IOptionsMonitor<SmtpOptions> monitor)
+    {
+        _monitor = monitor;
+    }
+
+    public void Send()
+    {
+        SmtpOptions current = _monitor.CurrentValue;
+    }
+}
+```
+
+## 配置验证
+
+配置错误应该在启动时尽早暴露，而不是等到用户请求时才出错。
+
+```csharp
+using System.ComponentModel.DataAnnotations;
+
+public class SmtpOptions
+{
+    public const string SectionName = "Smtp";
+
+    [Required]
+    public string Host { get; set; } = string.Empty;
+
+    [Range(1, 65535)]
+    public int Port { get; set; }
+
+    public bool EnableSsl { get; set; }
+}
+```
+
+注册验证：
+
+```csharp
+builder.Services
+    .AddOptions<SmtpOptions>()
+    .Bind(builder.Configuration.GetSection(SmtpOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+```
+
+`ValidateOnStart()` 会在应用启动时验证配置。
+
+## 自定义验证
+
+```csharp
+builder.Services
+    .AddOptions<SmtpOptions>()
+    .Bind(builder.Configuration.GetSection(SmtpOptions.SectionName))
+    .Validate(options => options.EnableSsl || options.Port != 465,
+        "Port 465 requires SSL.")
+    .ValidateOnStart();
+```
+
+复杂验证可以实现 `IValidateOptions<T>`。
+
+## 命名 Options
+
+如果同一个配置类型有多套配置，可以使用命名 Options。
+
+```json
+{
+  "Email": {
+    "Primary": {
+      "Host": "smtp1.example.com",
+      "Port": 587
+    },
+    "Backup": {
+      "Host": "smtp2.example.com",
+      "Port": 587
+    }
+  }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.Configure<SmtpOptions>("Primary",
+    builder.Configuration.GetSection("Email:Primary"));
+
+builder.Services.Configure<SmtpOptions>("Backup",
+    builder.Configuration.GetSection("Email:Backup"));
+```
+
+使用：
+
+```csharp
+public class EmailService
+{
+    private readonly SmtpOptions _primary;
+
+    public EmailService(IOptionsSnapshot<SmtpOptions> options)
+    {
+        _primary = options.Get("Primary");
+    }
+}
+```
+
+## 什么时候不要用 Options
+
+Options 适合配置，不适合业务状态。
+
+不要把用户输入、订单状态、运行时缓存数据塞进 Options。Options 应该来自配置源，描述应用运行参数。
+
+## 总结
+
+Options 模式的价值是强类型、集中管理、可验证和可热更新。普通配置使用 `IOptions<T>`，请求内读取新配置使用 `IOptionsSnapshot<T>`，后台服务和监听变化使用 `IOptionsMonitor<T>`。

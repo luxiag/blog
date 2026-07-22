@@ -1,0 +1,195 @@
+---
+title: 'ASP.NET Core Authorization：Role、Claim、Policy 与资源授权'
+date: '2026-07-21'
+excerpt: '掌握 ASP.NET Core Authorization 授权体系：Authorize、Roles、Claims、Policy、Requirement、Handler、资源授权和 401/403 边界。'
+tags: ['dotnet', 'aspnetcore', 'authorization', 'policy', 'claims']
+---
+
+# ASP.NET Core Authorization：Role、Claim、Policy 与资源授权
+
+授权解决的问题是：**当前用户是否允许执行这个操作。**
+
+认证只说明请求是谁发起的，授权才决定这个用户能不能访问某个接口、操作某个资源。
+
+:::tip 阶段二阅读顺序
+建议先读 [Authentication](/posts/dotnet/aspnet-core-authentication)，再阅读本文。后续继续看 [Filters](/posts/dotnet/aspnet-core-filters)。
+:::
+
+## Authorize 基础
+
+```csharp
+[Authorize]
+[HttpGet("orders")]
+public IActionResult GetOrders()
+{
+    return Ok();
+}
+```
+
+`[Authorize]` 表示必须登录后才能访问。
+
+允许匿名访问：
+
+```csharp
+[AllowAnonymous]
+[HttpGet("public")]
+public IActionResult Public()
+{
+    return Ok();
+}
+```
+
+## 401 和 403
+
+| 状态码 | 含义 |
+|---|---|
+| 401 | 未认证，没有有效身份 |
+| 403 | 已认证，但权限不足 |
+
+这两个状态码不要混用。
+
+## Role-based Authorization
+
+基于角色授权：
+
+```csharp
+[Authorize(Roles = "Admin")]
+[HttpDelete("products/{id:int}")]
+public IActionResult Delete(int id)
+{
+    return NoContent();
+}
+```
+
+多个角色：
+
+```csharp
+[Authorize(Roles = "Admin,Manager")]
+```
+
+角色适合简单系统，但复杂权限不要全部塞进角色字符串。
+
+## Claim-based Authorization
+
+Claim 表示用户声明，例如用户 ID、租户 ID、权限码。
+
+```csharp
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("CanManageProducts", policy =>
+    {
+        policy.RequireClaim("permission", "products.manage");
+    });
+});
+```
+
+使用：
+
+```csharp
+[Authorize(Policy = "CanManageProducts")]
+[HttpPost("products")]
+public IActionResult Create()
+{
+    return Ok();
+}
+```
+
+## Policy-based Authorization
+
+Policy 是推荐的授权组织方式。它可以组合角色、Claim、自定义规则。
+
+```csharp
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AdultOnly", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireClaim("age");
+    });
+});
+```
+
+复杂逻辑可以使用 Requirement 和 Handler。
+
+```csharp
+public class MinimumAgeRequirement : IAuthorizationRequirement
+{
+    public MinimumAgeRequirement(int age)
+    {
+        Age = age;
+    }
+
+    public int Age { get; }
+}
+
+public class MinimumAgeHandler : AuthorizationHandler<MinimumAgeRequirement>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        MinimumAgeRequirement requirement)
+    {
+        string? value = context.User.FindFirst("age")?.Value;
+
+        if (int.TryParse(value, out int age) && age >= requirement.Age)
+        {
+            context.Succeed(requirement);
+        }
+
+        return Task.CompletedTask;
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddSingleton<IAuthorizationHandler, MinimumAgeHandler>();
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AdultOnly", policy =>
+    {
+        policy.Requirements.Add(new MinimumAgeRequirement(18));
+    });
+});
+```
+
+## 资源授权
+
+有些权限要结合具体资源判断，例如“只能修改自己的订单”。
+
+```csharp
+[HttpPut("orders/{id:int}")]
+public async Task<IActionResult> UpdateOrder(
+    int id,
+    [FromServices] IAuthorizationService authorizationService)
+{
+    Order order = await GetOrderAsync(id);
+
+    AuthorizationResult result = await authorizationService.AuthorizeAsync(
+        User,
+        order,
+        "CanEditOrder");
+
+    if (!result.Succeeded)
+    {
+        return Forbid();
+    }
+
+    return NoContent();
+}
+```
+
+资源授权适合所有权判断、多租户隔离、复杂业务权限。
+
+## 授权设计建议
+
+- 简单后台可以从 Role 起步。
+- 复杂系统建议用 Permission Claim + Policy。
+- 多租户系统必须把 TenantId 纳入授权判断。
+- 不要只在前端隐藏按钮，后端必须校验权限。
+- Controller 中不要到处写字符串判断，尽量收敛到 Policy。
+
+## 总结
+
+Authorization 是 ASP.NET Core 安全体系的核心。简单场景用 `[Authorize]` 和 Roles，复杂场景使用 Policy、Requirement、Handler 和资源授权。

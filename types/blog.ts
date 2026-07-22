@@ -17,6 +17,10 @@ export interface Post {
   tags?: string[];
   hidden?:boolean;
   readingTime?: string;
+  nextPost?: {
+    slug: string;
+    title: string;
+  };
 }
 
 // 博客文章的 frontmatter 类型定义
@@ -32,4 +36,5 @@ export interface PostFrontMatter {
   };
   tags?: string[];
   hidden?:boolean;
+  nextPost?: string;
 }
