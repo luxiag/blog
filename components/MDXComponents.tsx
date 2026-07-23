@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import Link from 'next/link';
 import remarkGfm from 'remark-gfm';
@@ -17,6 +17,14 @@ import CodeBlock from './CodeBlock';
 import '../styles/code-highlight.css';
 import 'katex/dist/katex.min.css';
 import { slugify } from '@/lib/slugify';
+import { ChevronRight, HelpCircle } from 'lucide-react';
+import CodeTabs from './CodeTabs';
+import CodeAnnotation from './CodeAnnotation';
+import Steps from './Steps';
+import FileTree from './FileTree';
+import DiffCompare from './DiffCompare';
+import Glossary from './Glossary';
+import ProgressIndicator from './ProgressIndicator';
 
 // 用于追踪已使用的 heading ID，确保唯一性
 // 使用 Map 来跟踪每个 baseId 出现的次数，与 extractToc 保持一致
@@ -48,33 +56,126 @@ const FunctionPlotter = dynamic(() => import('./FunctionPlotter'), { ssr: false 
 
 
 const detailsArrowStyles = `
-  .details-wrapper > summary:before {
-    content: "";
-    border-width: 4px;
-    border-style: solid;
-    border-color: transparent transparent transparent currentColor;
-    transition: transform 0.2s;
-    transform-origin: 4px 50%;
-    position: absolute;
-    top: 50%;
-    left: 8px;
-    transform: translateY(-50%) rotate(0);
-  }
-  .details-wrapper[open] > summary:before {
-    transform: translateY(-50%) rotate(90deg);
-  }
-  .details-wrapper > summary {
-    position: relative;
-    padding-left: 24px;
+  .details-enhanced > summary {
     list-style: none;
   }
-  .details-wrapper > summary::-webkit-details-marker {
-    display: none;
+  .details-enhanced > summary::-webkit-details-marker { display: none; }
+  .details-enhanced > summary::marker { display: none; }
+
+  .details-body-wrapper {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+                opacity 0.3s ease;
+    opacity: 0;
   }
-  .details-wrapper > summary::marker {
-    display: none;
+  .details-enhanced[open] .details-body-wrapper {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  .details-enhanced[open] .details-summary {
+    border-bottom: 1px solid color-mix(in srgb, var(--color-neutral-200) 60%, transparent);
+  }
+  @media (prefers-color-scheme: dark) {
+    .details-enhanced[open] .details-summary {
+      border-bottom: 1px solid color-mix(in srgb, var(--color-neutral-700) 40%, transparent);
+    }
+  }
+  .details-body-inner {
+    overflow: hidden;
+  }
+
+  .details-tooltip {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    padding: 5px 10px;
+    background: oklch(0.22 0.01 260);
+    color: #fff;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    border-radius: 6px;
+    white-space: nowrap;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    z-index: 30;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  }
+  .details-tooltip::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    right: 12px;
+    border: 5px solid transparent;
+    border-top-color: oklch(0.22 0.01 260);
+  }
+  .details-hint-trigger:hover .details-tooltip {
+    opacity: 1;
+  }
+  @media (prefers-color-scheme: dark) {
+    .details-tooltip {
+      background: oklch(0.35 0.01 260);
+    }
+    .details-tooltip::after {
+      border-top-color: oklch(0.35 0.01 260);
+    }
+  }
+  .glossary-term:hover .glossary-tooltip {
+    opacity: 1;
   }
 `;
+
+function DetailsEnhanced({ title, hint, children }: { title: React.ReactNode; hint?: string; children: React.ReactNode }) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const [isOpen, setIsOpen] = useState(false);
+
+  const handleToggle = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const next = !isOpen;
+    setIsOpen(next);
+    if (detailsRef.current) {
+      if (next) {
+        detailsRef.current.setAttribute('open', '');
+      } else {
+        detailsRef.current.removeAttribute('open');
+      }
+    }
+  }, [isOpen]);
+
+  return (
+    <details
+      ref={detailsRef}
+      className={`details-enhanced border border-neutral-200/80 dark:border-neutral-700/60 my-6 rounded-xl bg-gradient-to-br from-neutral-50/50 to-white dark:from-neutral-800/30 dark:to-neutral-900/50`}
+    >
+      <summary
+        className="details-summary px-5 py-3.5 cursor-pointer font-sans font-medium text-[0.9375rem] text-neutral-700 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors flex items-center gap-2.5 w-full rounded-t-xl"
+        onClick={handleToggle}
+      >
+        <ChevronRight
+          className={`w-4 h-4 text-neutral-400 dark:text-neutral-500 transition-transform duration-300 shrink-0 ${isOpen ? 'rotate-90' : ''}`}
+        />
+        <span>{title}</span>
+        {hint && (
+          <span className="details-hint-trigger relative ml-auto shrink-0">
+            <HelpCircle className="w-3.5 h-3.5 text-neutral-300 dark:text-neutral-600 hover:text-neutral-500 dark:hover:text-neutral-400 transition-colors" />
+            <span className="details-tooltip">{hint}</span>
+          </span>
+        )}
+      </summary>
+          <div data-details-body className="details-body-wrapper overflow-hidden rounded-b-xl">
+            <div className="details-body-inner">
+              <div className="px-5 py-4 font-sans text-[1.0625rem] leading-[1.75] text-neutral-800 dark:text-neutral-300 [&_pre]:my-0">
+                {children}
+              </div>
+            </div>
+          </div>
+    </details>
+  );
+}
 
 interface MDXContentProps {
   content: string;
@@ -177,7 +278,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       // </h1>
       null
     ),
-    h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
+    h2: Object.assign(({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => {
       const id = slugify(extractText(children));
       return (
         <h2
@@ -188,8 +289,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           {children}
         </h2>
       );
-    },
-    h3: ({ children, ...props }: React.ComponentPropsWithoutRef<'h3'>) => {
+    }, { displayName: 'h2' }),
+    h3: Object.assign(({ children, ...props }: React.ComponentPropsWithoutRef<'h3'>) => {
       const id = slugify(extractText(children));
       return (
         <h3
@@ -200,8 +301,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           {children}
         </h3>
       );
-    },
-    h4: ({ children, ...props }: React.ComponentPropsWithoutRef<'h4'>) => {
+    }, { displayName: 'h3' }),
+    h4: Object.assign(({ children, ...props }: React.ComponentPropsWithoutRef<'h4'>) => {
       const id = slugify(extractText(children));
       return (
         <h4
@@ -212,7 +313,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
           {children}
         </h4>
       );
-    },
+    }, { displayName: 'h4' }),
     p: ({ children, ...props }: React.ComponentPropsWithoutRef<'p'>) => (
       <p className="font-sans text-[1.0625rem] text-neutral-800 dark:text-neutral-300 leading-[1.75] mb-5 tracking-[0.01em]" {...props}>
         {children}
@@ -278,18 +379,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       );
     },
     code: ({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'>) => {
-      const match = /language-(\w+)/.exec(className || '');
-      const codeText = String(children).replace(/\n$/, '');
       const isInline = !className;
-
-      const isRunnable = (match && codeText.includes('// 可运行')) ||
-        (match && codeText.includes('// runnable'));
-
-      if (!isInline && match) {
-        if (isRunnable && (match[1] === 'javascript' || match[1] === 'js')) {
-          return <CodeRunner code={codeText} language={match[1]} />;
-        }
-      }
 
       if (isInline) {
         return (
@@ -309,8 +399,14 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       const codeProps = (codeChild?.props || {}) as { className?: string; children?: React.ReactNode };
       const className = codeProps?.className || '';
 
-      // 使用递归函数提取完整代码字符串
       const codeString = extractText(codeProps?.children).trimEnd();
+      const match = /language-(\w+)/.exec(className || '');
+      const isRunnable = (match && codeString.includes('// 可运行')) ||
+        (match && codeString.includes('// runnable'));
+
+      if (isRunnable && match && (match[1] === 'javascript' || match[1] === 'js')) {
+        return <CodeRunner code={codeString} language={match[1]} />;
+      }
 
       return (
         <CodeBlock className={className} codeContent={codeString} {...props}>
@@ -433,86 +529,62 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
         {children}
       </td>
     ),
-    details: ({ children, ...props }: React.ComponentPropsWithoutRef<'details'>) => {
-      const detailsProps = props as { 'data-details-title'?: string; title?: string };
+    details: ({ children, ...props }: React.ComponentPropsWithoutRef<'details'> & { 'data-details-title'?: string; 'data-details-hint'?: string }) => {
+      const detailsProps = props as { 'data-details-title'?: string; title?: string; 'data-details-hint'?: string };
       const titleFromAttr = detailsProps?.['data-details-title'] || detailsProps?.title;
+      const hintFromAttr = detailsProps?.['data-details-hint'];
 
       const getSummaryContent = () => {
-        // 优先使用属性中的标题
         if (titleFromAttr) {
           return titleFromAttr;
         }
-
-        // 检查第一个子元素是否是段落或文本
         if (Array.isArray(children) && children.length > 0) {
           const firstChild = children[0];
-
-          // 如果是 React 元素
           if (React.isValidElement(firstChild)) {
             const element = firstChild as React.ReactElement<{ children?: React.ReactNode }>;
-            // 如果是 p 元素，提取其内容作为标题
             if (typeof firstChild.type === 'string' && firstChild.type === 'p') {
               return element.props.children;
             }
-            // 如果有 children 属性，提取其内容
             if (element.props?.children) {
               return element.props.children;
             }
           }
-
-          // 如果是字符串，直接作为标题
           if (typeof firstChild === 'string') {
             return firstChild;
           }
         }
-
         return 'Details';
       };
 
       const getBodyContent = () => {
-        // 如果有标题属性，跳过第一个元素（summary）
         if (titleFromAttr) {
           if (Array.isArray(children) && children.length > 0) {
             const firstChild = children[0];
-            // 如果第一个元素是 summary 元素，跳过它
             if (React.isValidElement(firstChild) && typeof firstChild.type === 'string' && firstChild.type === 'summary') {
               return children.slice(1);
             }
           }
           return children;
         }
-
-        // 如果没有标题属性，跳过第一个元素（作为标题）
         if (Array.isArray(children) && children.length > 0) {
           const firstChild = children[0];
-
-          // 如果第一个元素是 p 元素，跳过它
           if (React.isValidElement(firstChild) && typeof firstChild.type === 'string' && firstChild.type === 'p') {
             return children.slice(1);
           }
-
-          // 如果第一个元素是字符串，跳过它
           if (typeof firstChild === 'string') {
             return children.slice(1);
           }
         }
-
         return children;
       };
 
       return (
-        <details
-          className="details-wrapper border border-neutral-200/80 dark:border-neutral-700/60 overflow-hidden my-6 rounded-xl bg-gradient-to-br from-neutral-50/50 to-white dark:from-neutral-800/30 dark:to-neutral-900/50"
-          {...props}
+        <DetailsEnhanced
+          title={getSummaryContent()}
+          hint={hintFromAttr}
         >
-          <summary className="px-5 py-3.5 cursor-pointer font-sans font-medium text-[0.9375rem] text-neutral-700 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors list-none flex items-center gap-2.5 w-full border-b border-neutral-200/60 dark:border-neutral-700/40">
-            {/* <span className="text-neutral-400 dark:text-neutral-500 text-xs transition-transform details-[open]:rotate-90">▶</span> */}
-            <span>{getSummaryContent()}</span>
-          </summary>
-          <div className="px-5 py-4 font-sans text-[1.0625rem] leading-[1.75] text-neutral-800 dark:text-neutral-300 [&_pre]:my-0">
-            {getBodyContent()}
-          </div>
-        </details>
+          {getBodyContent()}
+        </DetailsEnhanced>
       );
     },
     summary: ({ children, ...props }: React.ComponentPropsWithoutRef<'summary'>) => {
@@ -525,6 +597,13 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     codependemo: CodePenDemo,
     SqlSimulator,
     FunctionPlotter,
+    CodeTabs,
+    CodeAnnotation,
+    Steps,
+    FileTree,
+    DiffCompare,
+    Glossary,
+    ProgressIndicator,
   }), [resolveImagePath, lightbox]);
 
   if (isMdxCompiled && CompiledMDX) {

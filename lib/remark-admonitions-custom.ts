@@ -279,20 +279,27 @@ function plugin(config: AdmonitionConfig = {}) {
       let replacementNodes: any[];
 
       if (admonitionType === 'details') {
-        // ── details: emit <details> with data-details-title (component renders <summary>) ──
+        const titleParts = displayTitle.split('|');
+        const detailsTitle = titleParts[0].trim();
+        const detailsHint = titleParts.length > 1 ? titleParts.slice(1).join('|').trim() : '';
         if (format === 'html') {
+          const hintAttr = detailsHint ? ` data-details-hint="${escapeHtml(detailsHint)}"` : '';
           replacementNodes = [
-            { type: 'html', value: `<details data-details-title="${escapeHtml(displayTitle)}">` },
+            { type: 'html', value: `<details data-details-title="${escapeHtml(detailsTitle)}"${hintAttr}>` },
             ...contentNodes,
             { type: 'html', value: '</details>' },
           ];
         } else {
+          const attrs: any[] = [
+            { type: 'mdxJsxAttribute', name: 'data-details-title', value: detailsTitle },
+          ];
+          if (detailsHint) {
+            attrs.push({ type: 'mdxJsxAttribute', name: 'data-details-hint', value: detailsHint });
+          }
           const detailsNode = {
             type: 'mdxJsxFlowElement',
             name: 'details',
-            attributes: [
-              { type: 'mdxJsxAttribute', name: 'data-details-title', value: displayTitle },
-            ],
+            attributes: attrs,
             children: [...contentNodes],
           };
           replacementNodes = [detailsNode];

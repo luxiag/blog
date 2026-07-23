@@ -6,6 +6,10 @@ import * as THREE from 'three';
 import { RefreshCw, Play, Pause } from 'lucide-react';
 import { Editor } from 'react-live';
 import dynamic from 'next/dynamic';
+import { createLowlight } from 'lowlight';
+import glsl from 'highlight.js/lib/languages/glsl';
+
+const lowlight = createLowlight({ glsl });
 
 // Dynamically import the Canvas component to avoid SSR issues
 const DynamicCanvas = dynamic(() => import('@react-three/fiber').then(mod => ({ default: mod.Canvas })), {
@@ -72,7 +76,7 @@ const cssVariableTheme = {
 };
 export function ShaderEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <div className="w-full h-[300px] overflow-hidden  relative">
+    <div className="w-full h-[300px] overflow-hidden relative">
       <Editor
         code={value}
         onChange={onChange}
@@ -88,6 +92,24 @@ export function ShaderEditor({ value, onChange }: { value: string; onChange: (v:
       />
     </div>
   );
+}
+
+function highlightGlsl(code: string): string {
+  try {
+    const result = lowlight.highlight('glsl', code);
+    const nodeToHtml = (node: any): string => {
+      if (node.type === 'text') return node.value;
+      if (node.type === 'element') {
+        const cls = node.properties?.className?.join(' ') || '';
+        const children = node.children.map((c: any) => nodeToHtml(c)).join('');
+        return cls ? `<span class="${cls}">${children}</span>` : children;
+      }
+      return '';
+    };
+    return result.children.map((n: any) => nodeToHtml(n)).join('');
+  } catch {
+    return code;
+  }
 }
 
 
@@ -140,7 +162,7 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
         <div className="flex gap-2">
           <button
             onClick={handleReset}
-            className="p-1.5 rounded hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-500 transition-colors"
+            className="p-1.5 rounded hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-600 dark:text-neutral-300 transition-colors"
             title="Reset Code"
           >
             <RefreshCw size={14} />
@@ -166,8 +188,8 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
 
             />
           ) : (
-            <pre className="w-full h-full min-h-[300px] p-4 m-0 overflow-x-auto bg-neutral-50 dark:bg-neutral-900 font-mono text-sm text-neutral-800 dark:text-neutral-200">
-              <code>{code}</code>
+            <pre className="w-full h-full min-h-[300px] p-4 m-0 overflow-x-auto font-mono text-sm hljs" style={{ background: 'var(--hljs-bg)', color: 'var(--hljs-fg)' }}>
+              <code dangerouslySetInnerHTML={{ __html: highlightGlsl(code) }} />
             </pre>
           )}
 

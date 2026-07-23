@@ -1,16 +1,43 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createLowlight } from 'lowlight';
+import javascript from 'highlight.js/lib/languages/javascript';
+import typescript from 'highlight.js/lib/languages/typescript';
 
-interface CodeRunnerProps {
-  code: string;
-  language?: string;
-}
+const lowlight = createLowlight({
+  javascript, typescript,
+  js: javascript, ts: typescript,
+});
 
-export default function CodeRunner({ code, language = 'javascript' }: CodeRunnerProps) {
+export default function CodeRunner({ code, language = 'javascript' }: { code: string; language?: string }) {
   const [output, setOutput] = useState<string>('');
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string>('');
+  const [highlightedCode, setHighlightedCode] = useState('');
+
+  useEffect(() => {
+    try {
+      const lang = language === 'js' ? 'javascript' : language;
+      const registered = lowlight.registered(lang);
+      const result = registered
+        ? lowlight.highlight(lang, code)
+        : lowlight.highlight('javascript', code);
+
+      const nodeToHtml = (node: any): string => {
+        if (node.type === 'text') return node.value;
+        if (node.type === 'element') {
+          const cls = node.properties?.className?.join(' ') || '';
+          const children = node.children.map((c: any) => nodeToHtml(c)).join('');
+          return cls ? `<span class="${cls}">${children}</span>` : children;
+        }
+        return '';
+      };
+      setHighlightedCode(result.children.map((n: any) => nodeToHtml(n)).join(''));
+    } catch {
+      setHighlightedCode(code);
+    }
+  }, [code, language]);
 
   const runCode = async () => {
     setIsRunning(true);
@@ -42,36 +69,40 @@ export default function CodeRunner({ code, language = 'javascript' }: CodeRunner
   };
 
   return (
-    <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 overflow-hidden">
-      <div className="flex justify-between items-center px-4 py-3 bg-neutral-100 dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
-        <span className="font-mono text-sm font-semibold text-neutral-700 dark:text-neutral-300">
-          {language === 'javascript' ? 'JavaScript' : language} 代码
+    <div className="my-4 rounded-lg border border-neutral-200 dark:border-neutral-700 overflow-hidden bg-white dark:bg-neutral-900">
+      <div className="flex justify-between items-center px-4 py-2.5 bg-neutral-50 dark:bg-neutral-800/80 border-b border-neutral-200 dark:border-neutral-700">
+        <span className="font-mono text-xs font-medium text-neutral-500 dark:text-neutral-400">
+          {language === 'javascript' || language === 'js' ? 'JavaScript' : language}
         </span>
         <button
           onClick={runCode}
           disabled={isRunning}
-          className={`px-3 py-1 text-sm font-mono font-medium rounded transition-colors cursor-pointer ${
+          className={`px-3 py-1 text-xs font-mono font-medium rounded-md transition-colors cursor-pointer ${
             isRunning
-              ? 'bg-neutral-300 dark:bg-neutral-600 text-neutral-500 dark:text-neutral-400 cursor-not-allowed'
-              : 'bg-orange-600 text-white hover:bg-orange-700'
+              ? 'bg-neutral-200 dark:bg-neutral-700 text-neutral-400 dark:text-neutral-500 cursor-not-allowed'
+              : 'bg-[#ea580c] text-white hover:bg-[#c2410c]'
           }`}
         >
-          {isRunning ? '运行中...' : '运行代码'}
+          {isRunning ? '运行中...' : '运行'}
         </button>
       </div>
-      <pre className="p-4 m-0 overflow-x-auto bg-white dark:bg-neutral-900 font-mono text-sm leading-6 text-neutral-800 dark:text-neutral-200">
-        <code>{code}</code>
-      </pre>
+      <div className="max-h-[320px] overflow-auto">
+        <pre className="p-4 m-0 overflow-x-auto font-mono text-sm leading-6 text-neutral-800 dark:text-neutral-200">
+          <code dangerouslySetInnerHTML={{ __html: highlightedCode || code }} />
+        </pre>
+      </div>
       {(output || error) && (
-        <div className="border-t border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800">
-          <div className="px-4 py-2 bg-neutral-100 dark:bg-neutral-700 border-b border-neutral-200 dark:border-neutral-600">
-            <span className="font-mono text-sm font-semibold text-neutral-700 dark:text-neutral-300">
-              输出结果
+        <div className="border-t border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/60">
+          <div className="px-4 py-1.5 border-b border-neutral-100 dark:border-neutral-700/50">
+            <span className="font-mono text-xs font-medium text-neutral-400 dark:text-neutral-500">
+              输出
             </span>
           </div>
-          <pre className="p-4 m-0 whitespace-pre-wrap overflow-x-auto font-mono text-sm text-red-600 dark:text-red-400">
-            {error || output}
-          </pre>
+          <div className="max-h-[200px] overflow-auto">
+            <pre className="p-4 m-0 whitespace-pre-wrap font-mono text-sm leading-6 text-red-600 dark:text-red-400">
+              {error || output}
+            </pre>
+          </div>
         </div>
       )}
     </div>

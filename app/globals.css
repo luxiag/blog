@@ -107,6 +107,22 @@
   text-decoration-color: var(--color-orange-800);
 }
 
+.no-prose-pre-border pre {
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+  background: transparent !important;
+}
+
+.steps-content pre {
+  border: 1px solid oklch(0.9 0 0) !important;
+  border-radius: 0.5rem !important;
+  background: var(--hljs-bg, oklch(0.97 0 0)) !important;
+  margin: 0 !important;
+  padding: 1rem !important;
+}
+
 
 body {
   background: var(--background);

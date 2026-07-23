@@ -32,10 +32,7 @@ export default function InteractiveComponent({ html, script }: InteractiveCompon
 
       const executeScript = new Function(
         ...Object.keys(sandbox),
-        `
-        const { useState, useRef, useEffect, logger, document } = arguments;
-        ${script}
-        `
+        script
       );
 
       executeScript(...Object.values(sandbox));

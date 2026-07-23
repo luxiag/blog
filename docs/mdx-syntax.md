@@ -56,7 +56,25 @@
 :::
 ```
 
-两者都渲染为 `<details>` 原生元素，通过 `MDXComponents.tsx` 中的 `details` 映射添加样式。
+两者都渲染为 `<details>` 原生元素，通过 `MDXComponents.tsx` 中的 `DetailsEnhanced` 组件添加增强样式。
+
+#### Hover 提示（Hint）
+
+在标题后加 `|` 分隔符，可以为折叠块添加 hover 提示文本，鼠标悬停在标题右侧的 ❓ 图标上会显示弹窗：
+
+```md
+::: details 深入理解闭包 | 鼠标悬停查看简介
+闭包是指函数可以访问其词法作用域中的变量……
+:::
+```
+
+#### 增强效果
+
+`DetailsEnhanced` 组件提供以下增强展示：
+
+- **图标指示器**：标题前显示 `▶`（ChevronRight），展开时旋转 90°，收起时恢复
+- **Hover 弹窗提示**：带 `| hint` 语法的折叠块，标题右侧显示 ❓ 图标，hover 出现深色弹窗
+- **展开/收起动画**：基于 CSS Grid `grid-template-rows` 的平滑高度过渡动画
 
 ### 3. 可运行代码块
 
@@ -131,7 +149,143 @@ return `/blog/posts/${category}/images/${imageName}`;
 
 {/* SQL 模拟器（内置数据集） */}
 <SqlSimulator />
+
+{/* 函数绘图器 */}
+<FunctionPlotter expression="sin(x)" domain={[-6,6]} />
 ```
+
+### 8. 代码组切换（CodeTabs）
+
+同一概念的多语言/多框架代码展示，用 Tab 切换而非纵向堆叠：
+
+```mdx
+<CodeTabs items={["npm", "yarn", "pnpm"]}>
+  ```bash
+  npm install foo
+  ```
+  ---
+  ```bash
+  yarn add foo
+  ```
+  ---
+  ```bash
+  pnpm add foo
+  ```
+</CodeTabs>
+```
+
+每个 Tab 内容用 `---` 分隔，`items` 数组定义 Tab 标签名。每个 Tab 内的代码块使用标准 Markdown 代码语法。
+
+### 9. 代码行注解（CodeAnnotation）
+
+代码块中指定行 hover 时，右侧浮出解释面板。适合逐行讲解关键代码：
+
+```mdx
+<CodeAnnotation
+  language="javascript"
+  lines={[
+    { code: 'const cache = new Map();', note: 'Map 比 Object 更适合做缓存，因为键可以是任意类型' },
+    { code: '' },
+    { code: 'function memoize(fn) {' },
+    { code: '  return (...args) => {', note: '用 rest 参数收集，支持任意参数个数' },
+    { code: '    const key = JSON.stringify(args);' },
+    { code: '    if (cache.has(key)) return cache.get(key);', note: '缓存命中直接返回，避免重复计算' },
+    { code: '    const result = fn(...args);' },
+    { code: '    cache.set(key, result);' },
+    { code: '    return result;' },
+    { code: '  };' },
+    { code: '}' },
+  ]}
+/>
+```
+
+`lines` 数组中每个对象：`code` 是代码文本，`note` 是 hover 注解（可选，无 note 的行不可交互）。
+
+### 10. 步骤指示器（Steps）
+
+多步骤教程用编号圆圈 + 竖线串联，比纯数字列表更有视觉引导力：
+
+```mdx
+<Steps>
+### 安装依赖
+npm install foo
+
+### 配置环境变量
+创建 `.env` 文件……
+
+### 启动开发服务器
+npm run dev
+</Steps>
+```
+
+组件自动检测子元素中的 `h2~h6` 标题作为步骤标题，并自动编号。非标题内容归属到上一个步骤。
+
+### 11. 文件树（FileTree）
+
+展示项目目录结构，文件夹可点击展开/收起，文件 hover 显示注释：
+
+```mdx
+<FileTree tree={[
+  { name: "src", type: "folder", comment: "源代码", children: [
+    { name: "index.ts", type: "file", comment: "入口文件" },
+    { name: "utils", type: "folder", children: [
+      { name: "helpers.ts", type: "file" },
+    ]},
+  ]},
+  { name: "package.json", type: "file", comment: "项目配置" },
+]} />
+```
+
+`tree` 是 `FileTreeItem[]` 类型的 JSON 数组，每项有 `name`、`type`（`file`|`folder`）、可选 `children`（文件夹）和 `comment`（hover 注释）。
+
+### 12. 代码对比（DiffCompare）
+
+以 GitHub 风格 diff 视图展示代码变更，支持增/删/上下文行：
+
+```mdx
+<DiffCompare
+  language="typescript"
+  title="重构前 → 重构后"
+  diff={[
+    { type: "context", content: "function getUser(id: string) {", oldLineNum: 1, newLineNum: 1 },
+    { type: "remove", content: "  return fetch('/api/user/' + id);", oldLineNum: 2 },
+    { type: "add", content: "  return fetch(`/api/user/${id}`);", newLineNum: 2 },
+    { type: "context", content: "}", oldLineNum: 3, newLineNum: 3 },
+  ]}
+/>
+```
+
+`diff` 数组每项：`type` 为 `add`/`remove`/`context`，`content` 为代码文本，`oldLineNum`/`newLineNum` 为行号。
+
+### 13. 术语提示（Glossary）
+
+行内术语下划虚线，hover 弹出释义卡片。适合系列文章中反复出现的技术术语：
+
+```mdx
+<Glossary term="AOT 编译：Ahead-of-Time，在程序运行前将代码编译为机器码，与 JIT 相对">
+  AOT
+</Glossary>
+编译可以提升启动速度。
+```
+
+`term` 是 hover 时弹出的完整释义，`children` 是行内显示的文本（可省略，默认显示 `term` 的前几个字）。
+
+### 14. 系列进度条（ProgressIndicator）
+
+系列文章顶部显示"第 N/M 篇"进度条，已读文章可点击跳转：
+
+```mdx
+<ProgressIndicator
+  current="dotnet/csharp-collections-exceptions"
+  items={[
+    { slug: "dotnet/csharp-language-roadmap", title: "C# 语言路线图" },
+    { slug: "dotnet/csharp-basic-syntax", title: "基础语法" },
+    { slug: "dotnet/csharp-collections-exceptions", title: "集合与异常" },
+  ]}
+/>
+```
+
+`current` 是当前文章 slug，`items` 是系列文章列表。当前篇高亮，已过篇可点击。
 
 ---
 

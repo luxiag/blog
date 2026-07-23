@@ -2,6 +2,29 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { SQL_DATASETS, type SqlDatasetId } from '@/lib/sqlDatasets';
+import Editor from 'react-simple-code-editor';
+import { createLowlight } from 'lowlight';
+import sql from 'highlight.js/lib/languages/sql';
+
+const lowlight = createLowlight({ sql });
+
+function highlightSql(code: string): string {
+  try {
+    const result = lowlight.highlight('sql', code);
+    const nodeToHtml = (node: any): string => {
+      if (node.type === 'text') return node.value;
+      if (node.type === 'element') {
+        const cls = node.properties?.className?.join(' ') || '';
+        const children = node.children.map((c: any) => nodeToHtml(c)).join('');
+        return cls ? `<span class="${cls}">${children}</span>` : children;
+      }
+      return '';
+    };
+    return result.children.map((n: any) => nodeToHtml(n)).join('');
+  } catch {
+    return code;
+  }
+}
 
 type SqlJsExecResult = { columns: string[]; values: any[][] };
 
@@ -221,6 +244,7 @@ export default function SqlSimulator({
   }, [activeResult]);
 
   return (
+    <>
     <div className="my-6 border border-neutral-200 dark:border-neutral-700 rounded-lg overflow-hidden bg-white dark:bg-neutral-900 shadow-sm">
       <div className="bg-neutral-50 dark:bg-neutral-800 px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 flex justify-between items-center">
         <h3 className="font-semibold text-neutral-700 dark:text-neutral-200 text-sm flex items-center gap-2">
@@ -267,14 +291,27 @@ export default function SqlSimulator({
         )}
 
         <div className="relative">
-          <textarea
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            disabled={!isInitialized}
-            className="w-full h-32 p-3 font-mono text-sm bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-md focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-none text-neutral-800 dark:text-neutral-200 resize-y disabled:opacity-50"
-            placeholder={isInitialized ? "输入 SQL 语句..." : "数据库加载中..."}
-            aria-label="SQL query"
-          />
+          <div
+            className="w-full min-h-[128px] max-h-[256px] p-3 font-mono text-sm bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-md text-neutral-800 dark:text-neutral-200 resize-y overflow-auto"
+            style={{ tabSize: 2 }}
+          >
+            <Editor
+              value={query}
+              onValueChange={(val) => setQuery(val)}
+              highlight={highlightSql}
+              disabled={!isInitialized}
+              padding={0}
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.875rem',
+                lineHeight: '1.5',
+                backgroundColor: 'transparent',
+                minHeight: '96px',
+              }}
+              textareaClassName="sql-editor-textarea"
+              placeholder={isInitialized ? "输入 SQL 语句..." : "数据库加载中..."}
+            />
+          </div>
           <button
             onClick={runQuery}
             disabled={!isInitialized}
@@ -391,5 +428,25 @@ export default function SqlSimulator({
         </div>
       </div>
     </div>
+    <style>{`
+      .sql-editor-textarea {
+        outline: none !important;
+        resize: none !important;
+        caret-color: #ea580c;
+      }
+      .sql-editor-textarea:focus {
+        outline: none !important;
+        box-shadow: none !important;
+        border: none !important;
+      }
+      .sql-editor-textarea:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .sql-editor-textarea::placeholder {
+        color: oklch(0.65 0 0);
+      }
+    `}</style>
+    </>
   );
 }

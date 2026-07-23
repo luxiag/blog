@@ -1,141 +1,126 @@
 
 # 交互式组件使用指南
 
-本指南介绍如何在博客文章中使用交互式组件，类似于 VuePress 或 VitePress 的功能。
+本指南介绍博客中可直接在 `.mdx` 文件里使用的交互式组件，均已在 `MDXComponents.tsx` 中注册，无需 import。
 
-## 基本语法
+写作展示类组件（CodeTabs、Steps、FileTree 等）的用法见 [MDX 特殊语法](./mdx-syntax.md)。
 
-使用特殊的注释标记来包裹交互式组件内容：
+---
 
-```markdown
-<!-- interactive-component-start -->
-<div id="my-component">
-  <!-- 你的 HTML 内容 -->
-</div>
+## InteractiveComponent — HTML + Script 沙箱
 
-<script>
-// 你的 JavaScript 代码
-</script>
-<!-- interactive-component-end -->
+嵌入自定义 HTML 结构和 JavaScript 交互逻辑：
+
+```mdx
+<InteractiveComponent
+  html={`
+    <div style="text-align:center; padding:16px;">
+      <div id="counter-display" style="font-size:2rem; font-weight:bold;">0</div>
+      <button id="inc-btn">+</button>
+      <button id="dec-btn">−</button>
+    </div>
+  `}
+  script={`
+    var count = 0;
+    var display = document.getElementById('counter-display');
+    function render() { display.textContent = count; }
+    document.getElementById('inc-btn').addEventListener('click', function() { count++; render(); });
+    document.getElementById('dec-btn').addEventListener('click', function() { count--; render(); });
+  `}
+/>
 ```
 
-## 组件结构
+**可用 API**：脚本中可直接使用 `React`、`useState`、`useRef`、`useEffect`、`useMemo`、`useCallback`、`logger`，以及受限的 `document`（仅限组件内部查询）。
 
-每个交互式组件包含两部分：
+## CodePenDemo — 实时 JSX 编辑器
 
-1. **HTML 部分**：定义组件的结构和样式
-2. **脚本部分**：包含组件的交互逻辑，使用 React Hooks
+CodePen 风格的代码编辑 + 实时预览，代码必须定义一个 React 函数组件，组件会自动调用 `render()` 渲染：
 
-## 示例
-
-### 简单点击交互
-
-```markdown
-<!-- interactive-component-start -->
-<div id="click-demo">
-  <button id="my-button">点击我</button>
-  <p id="message">还没有点击</p>
-</div>
-
-<script>
-const { useState, useEffect } = React;
-
-const [clicked, setClicked] = useState(false);
-
-useEffect(() => {
-  const button = document.getElementById('my-button');
-  const message = document.getElementById('message');
-
-  if (button && message) {
-    button.addEventListener('click', () => {
-      setClicked(true);
-      message.textContent = '按钮被点击了！';
-    });
-  }
-}, []);
-</script>
-<!-- interactive-component-end -->
+```mdx
+<CodePenDemo title="交互式计数器" height="240px" code={`function Demo() {
+  const [count, setCount] = useState(0);
+  return (
+    <div style={{ textAlign: "center", padding: "20px" }}>
+      <div style={{ fontSize: "2rem", fontWeight: "bold" }}>{count}</div>
+      <button onClick={() => setCount(c => c - 1)}>-</button>
+      <button onClick={() => setCount(c => c + 1)}>+</button>
+    </div>
+  );
+}`} />
 ```
 
-### 计数器
+**Props**：`code`（JSX 代码）、`title`、`height`。代码中可直接使用 `useState` 等 React Hooks，底层由 `react-live` 驱动。
 
-```markdown
-<!-- interactive-component-start -->
-<div id="counter-demo">
-  <h3>计数器</h3>
-  <button id="decrement">-</button>
-  <span id="count">0</span>
-  <button id="increment">+</button>
-</div>
+## SqlSimulator — SQL 练习环境
 
-<script>
-const { useState, useEffect } = React;
+内置 SQL.js 数据库，支持建表、插入、查询，带代码高亮：
 
-const [count, setCount] = useState(0);
-
-useEffect(() => {
-  const decrement = document.getElementById('decrement');
-  const increment = document.getElementById('increment');
-  const countDisplay = document.getElementById('count');
-
-  if (decrement && increment && countDisplay) {
-    decrement.addEventListener('click', () => {
-      setCount(prev => prev - 1);
-    });
-
-    increment.addEventListener('click', () => {
-      setCount(prev => prev + 1);
-    });
-
-    countDisplay.textContent = count;
-  }
-}, [count]);
-
-useEffect(() => {
-  const countDisplay = document.getElementById('count');
-  if (countDisplay) {
-    countDisplay.textContent = count;
-  }
-}, [count]);
-</script>
-<!-- interactive-component-end -->
+```mdx
+<SqlSimulator
+  title="SQL 查询练习"
+  description="尝试查询年龄大于 25 的用户"
+  initialSql={`
+CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER);
+INSERT INTO users VALUES (1, 'Alice', 28);
+INSERT INTO users VALUES (2, 'Bob', 22);
+  `}
+  defaultQuery="SELECT * FROM users WHERE age > 25"
+  answerSql="SELECT name, age FROM users WHERE age > 25"
+/>
 ```
 
-## 可用的 React Hooks
+**Props**：`initialSql`（建表/插入语句）、`defaultQuery`（默认查询）、`answerSql`（参考答案）、`title`、`description`、`dataset`（内置数据集 ID）。
 
-在脚本部分，你可以使用以下 React Hooks：
+## FunctionPlotter — 函数绘图器
 
-- `useState`：管理组件状态
-- `useEffect`：处理副作用和生命周期
-- `useRef`：获取 DOM 元素引用
+交互式数学函数可视化，支持拖拽平移、滚轮缩放：
 
-## 安全沙箱
+```mdx
+<FunctionPlotter
+  expressions={[
+    { expr: 'sin(x)', color: '#ea580c' },
+    { expr: 'cos(x)', color: '#6bcb77' },
+  ]}
+  xMin={-6} xMax={6} yMin={-3} yMax={3}
+  height={320}
+/>
+```
 
-交互式组件运行在受限的沙箱环境中，只能访问：
+**Props**：`expressions`（`{ expr, color }[]`）、`xMin/xMax/yMin/yMax`（视口范围）、`height`、`editable`（是否可编辑表达式）、`showTime`（动画时间变量 `t`）、`paramExpr`（参数表达式）。
 
-- React Hooks
-- 安全的 DOM API（通过沙箱提供的 document 对象）
-- 日志工具（logger）
+内置函数：`sin`、`cos`、`tan`、`sqrt`、`abs`、`exp`、`log`、`pow`、`floor`、`ceil`、`round`、`clamp`、`mix`、`smoothstep`、`fract`、`mod` 等。
 
-## 注意事项
+## ShaderPreview — GLSL 着色器预览
 
-1. 确保每个交互式组件有唯一的 ID
-2. 使用 `useEffect` 来处理 DOM 操作和事件监听
-3. 避免直接修改 DOM，优先使用 React 的状态管理
-4. 组件之间无法直接通信，每个组件都是独立的
+实时 WebGL 着色器渲染 + 代码编辑，支持暂停/重置：
 
-## 最佳实践
+```mdx
+<ShaderPreview
+  title="渐变波浪"
+  code={`
+precision mediump float;
+uniform float uTime;
+varying vec2 vUv;
+void main() {
+  vec2 uv = vUv * 2.0 - 1.0;
+  float wave = sin(uv.x * 3.0 + uTime * 2.0) * 0.3;
+  float d = length(vec2(uv.x, uv.y - wave));
+  float glow = 0.02 / d;
+  vec3 col = vec3(0.91, 0.35, 0.05);
+  gl_FragColor = vec4(col * glow, 1.0);
+}
+  `}
+/>
+```
 
-1. 保持组件简单和专注
-2. 使用语义化的 HTML 标签
-3. 添加适当的错误处理
-4. 为复杂的交互提供说明文字
+**Props**：`code`（fragment shader 代码）、`vertexCode`（可选顶点着色器）、`title`、`editable`（默认 `true`，设为 `false` 只读展示）。内置 `uTime` uniform 动画。
+
+---
 
 ## 故障排除
 
-如果组件不工作：
-
-1. 检查控制台是否有错误信息
-2. 确保所有 ID 都是唯一的
-3. 验证脚本语法是否正确
-4. 检查是否正确使用了 React Hooks
+1. **组件不渲染**：检查浏览器控制台是否有报错
+2. **CodePenDemo 报 "must call render"**：确保代码定义了一个函数组件（组件名任意），系统会自动追加 `render(<组件名 />)`
+3. **InteractiveComponent 报 "already declared"**：脚本中不要重复声明沙箱已注入的变量（`useState`、`document` 等）
+4. **ShaderPreview 黑屏**：检查 GLSL 代码语法，`uTime` 为内置 uniform，`vUv` 需在 vertex shader 中定义
+5. **SqlSimulator 加载失败**：确保 `public/sql/` 目录下有 `sql-wasm.js` 和 `sql-wasm.wasm`

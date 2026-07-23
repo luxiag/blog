@@ -182,21 +182,29 @@ export default function CodePenDemo({ children, code, title = "Live Demo", heigh
     return "";
   }, [children, code]);
 
+  const processedCode = React.useMemo(() => {
+    let code = codeString.trim();
+    code = code.replace(/import\s+.*?from\s+['"].*?['"];?/g, '');
+    if (!code.match(/render\s*\(/)) {
+      const match = code.match(/function\s+(\w+)\s*\(/);
+      if (match) {
+        code += `\n\nrender(<${match[1]} />)`;
+      }
+    }
+    return code;
+  }, [codeString]);
+
   return (
     <div
       className="my-8 rounded-xl overflow-hidden border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-sm flex flex-col"
       style={{ height }}
     >
       <LiveProvider
-        code={codeString}
+        code={processedCode}
         scope={scope}
         theme={codeHighlightTheme as any}
         language="jsx"
         noInline={true}
-        transformCode={(code) => {
-          // Remove imports as they are not supported in react-live
-          return code.replace(/import\s+.*?from\s+['"].*?['"];?/g, '');
-        }}
       >
         {/* Header / Tabs */}
         <div className="flex items-center border-b border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800">

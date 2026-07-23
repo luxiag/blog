@@ -48,6 +48,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 详细文档
 
+更改对应的组件内容后，对应的文档也需要同步进行更新
+
 - [架构与内容管道](./docs/architecture.md) —— Commands、整体架构、`.md`/`.mdx` 到页面的完整链路
 - [文章目录与 frontmatter](./docs/content-structure.md) —— `posts/` 目录规范与元数据写法
 - [MDX 特殊语法与 CodeBlock](./docs/mdx-syntax.md) —— 告示块、折叠块、可运行代码、Mermaid、数学公式、图片等
