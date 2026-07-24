@@ -1,7 +1,7 @@
 ---
 title: 'ASP.NET Core Logging：ILogger、结构化日志与日志配置'
 date: '2026-07-21'
-excerpt: '掌握 ASP.NET Core 日志系统：ILogger、日志级别、结构化日志、日志分类、配置过滤、请求日志、敏感信息和生产建议。'
+excerpt: '掌握 ASP.NET Core 日志系统：ILogger、日志级别、结构化日志、Log Scopes 请求级关联、Category 分类过滤机制、配置过滤、请求日志、敏感信息和生产建议。'
 tags: ['dotnet', 'aspnetcore', 'logging', 'ilogger']
 nextPost: 'dotnet/aspnet-core-exception-handling'
 ---
@@ -34,6 +34,63 @@ public class ProductService
 ```
 
 `ILogger<T>` 中的 `T` 是日志分类，通常使用当前类类型。
+
+### Category 的内部机制
+
+`ILogger<T>` 在创建时，会取 `typeof(T).FullName` 作为 Category 字符串。例如：
+
+- `ILogger<ProductService>` → Category = `"MyApp.Services.ProductService"`
+- `ILogger<OrdersController>` → Category = `"MyApp.Controllers.OrdersController"`
+- `ILoggerFactory.CreateLogger("RequestLog")` → Category = `"RequestLog"`
+
+每条日志在输出时都携带这个 Category，日志系统用它做过滤。配置中的 key 就是按 Category 前缀匹配的：
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "MyApp.Services": "Debug",
+      "MyApp.Services.ProductService": "Trace",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  }
+}
+```
+
+匹配规则：
+
+- 配置 key 是 Category 的前缀匹配。`"MyApp.Services"` 匹配所有以 `MyApp.Services` 开头的 Category，包括 `MyApp.Services.ProductService`、`MyApp.Services.OrderService` 等。
+- 更长的 key 优先级更高。`MyApp.Services.ProductService: Trace` 比 `MyApp.Services: Debug` 更具体，所以 `ProductService` 的最低级别是 `Trace`。
+- `Default` 是兜底规则，当没有任何前缀匹配时使用。
+
+这意味着你可以精确控制某个类或某个命名空间的日志级别，而不影响其他类：
+
+```csharp
+// 只打开 EF Core 的 SQL 日志，不影响其他 Microsoft 前缀的日志
+// "Microsoft.EntityFrameworkCore.Database.Command": "Information"
+```
+
+在 DI 中，`ILogger<T>` 会自动注入对应 Category 的 logger。如果你不需要按类分类，也可以直接注入 `ILoggerFactory` 手动创建：
+
+```csharp
+public class BulkImportService
+{
+    private readonly ILogger _logger;
+
+    public BulkImportService(ILoggerFactory loggerFactory)
+    {
+        _logger = loggerFactory.CreateLogger("BulkImport");
+    }
+
+    public void Import()
+    {
+        _logger.LogInformation("Starting bulk import");
+    }
+}
+```
+
+手动创建的 Category 不依赖类名，适合跨类别的日志分组。
 
 ## 日志级别
 
@@ -68,6 +125,134 @@ _logger.LogInformation($"Order {orderId} paid by user {userId}");
 ```
 
 结构化日志能让日志系统把 `OrderId`、`UserId` 当成字段索引，方便查询和聚合。
+
+## Log Scopes（BeginScope）
+
+结构化日志解决了单条日志的字段索引问题，但一个请求往往会产生多条日志——中间件记录入口、业务层记录操作、数据层记录 SQL——这些日志之间如何关联？
+
+Log Scope 就是为了解决这个问题。`BeginScope` 在一段代码范围内附加一组属性，这个范围内所有日志都会自动携带这些属性：
+
+```csharp
+public class OrderService
+{
+    private readonly ILogger<OrderService> _logger;
+
+    public OrderService(ILogger<OrderService> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task ProcessOrderAsync(int orderId, int userId)
+    {
+        using var scope = _logger.BeginScope("Order {OrderId} User {UserId}", orderId, userId);
+
+        _logger.LogInformation("Processing started");
+
+        await ValidateOrderAsync(orderId);
+
+        _logger.LogInformation("Payment processing");
+
+        await ChargePaymentAsync(orderId);
+
+        _logger.LogInformation("Processing completed");
+    }
+
+    private async Task ValidateOrderAsync(int orderId)
+    {
+        _logger.LogDebug("Validating order {OrderId}", orderId);
+        await Task.CompletedTask;
+    }
+
+    private async Task ChargePaymentAsync(int orderId)
+    {
+        _logger.LogDebug("Charging payment for order {OrderId}", orderId);
+        await Task.CompletedTask;
+    }
+}
+```
+
+`using var scope` 确保作用域在方法结束时自动释放。在这个 `using` 块内，所有通过 `_logger` 写出的日志都会附带 `OrderId` 和 `UserId`。
+
+在 Console 输出中，Scope 的效果不明显。但在 Serilog、Seq、Elasticsearch 等结构化日志后端中，Scope 内的属性会作为字段附加到每条日志记录上，这样你可以用一条查询找出某个订单的所有日志：
+
+```
+OrderId = 1234
+```
+
+### 请求级 Scope 中间件
+
+在 ASP.NET Core 应用中，最典型的 Scope 用法是在中间件中为整个请求创建 Scope，附加 RequestId、TraceId、UserId 等属性。这样请求链路上的所有日志都自动关联：
+
+```csharp
+app.Use(async (context, next) =>
+{
+    var logger = context.RequestServices
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("RequestScope");
+
+    using var scope = logger.BeginScope(
+        "RequestId {RequestId} TraceId {TraceId} Path {Path}",
+        context.TraceIdentifier,
+        context.TraceIdentifier,
+        context.Request.Path);
+
+    await next();
+});
+```
+
+这段中间件应该尽早注册（在 `app.UseRouting()` 之前），这样后续所有中间件和业务代码的日志都在 Scope 范围内。
+
+如果用户已认证，可以把 UserId 也加入 Scope：
+
+```csharp
+app.Use(async (context, next) =>
+{
+    var userId = context.User?.FindFirst("sub")?.Value ?? "anonymous";
+
+    var logger = context.RequestServices
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("RequestScope");
+
+    using var scope = logger.BeginScope(
+        "RequestId {RequestId} UserId {UserId} Path {Path}",
+        context.TraceIdentifier,
+        userId,
+        context.Request.Path);
+
+    await next();
+});
+```
+
+### Scope 嵌套
+
+Scope 支持嵌套，内层 Scope 的属性会和外层合并。如果内外层有同名属性，内层覆盖外层：
+
+```csharp
+using var requestScope = _logger.BeginScope("RequestId {RequestId}", requestId);
+_logger.LogInformation("Request started");
+
+using var dbScope = _logger.BeginScope("ConnectionId {ConnectionId}", connectionId);
+_logger.LogInformation("Executing query"); // 同时携带 RequestId 和 ConnectionId
+```
+
+### Serilog 的 LogContext
+
+Serilog 的 `LogContext` 是 `BeginScope` 的增强版。通过 `Enrich.FromLogContext()` 配置后，`LogContext.PushProperty` 添加的属性会自动附加到日志：
+
+```csharp
+using Serilog.Context;
+
+app.Use(async (context, next) =>
+{
+    using (LogContext.PushProperty("RequestId", context.TraceIdentifier))
+    using (LogContext.PushProperty("UserId", context.User?.FindFirst("sub")?.Value ?? "anonymous"))
+    {
+        await next();
+    }
+});
+```
+
+`LogContext.PushProperty` 相比 `BeginScope` 的优势是可以逐个推送属性，不用拼模板字符串，属性名和值更清晰。
 
 ## 日志配置
 

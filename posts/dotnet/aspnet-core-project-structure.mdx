@@ -3,6 +3,7 @@ title: 'ASP.NET Core 项目结构：分层架构、Clean Architecture 与模块�
 date: '2026-07-21'
 excerpt: '系统梳理 ASP.NET Core 项目结构设计：单项目、分层架构、Clean Architecture、模块化目录、依赖方向、项目引用和演进边界。'
 tags: ['dotnet', 'aspnetcore', 'architecture', 'clean-architecture']
+nextPost: 'dotnet/aspnet-core-ddd-basics'
 ---
 
 # ASP.NET Core 项目结构：分层架构、Clean Architecture 与模块化
@@ -113,6 +114,43 @@ Product.Api
 - Api 只是交付方式之一。
 - 内层通过接口表达需求，外层提供实现。
 
+### 为什么依赖方向重要
+
+"内层不依赖外层"不是抽象的教条，它直接决定了三件具体的事：
+
+**可测试性**。Domain 和 Application 不引用 EF Core、不引用 ASP.NET Core，所以可以在测试中用内存实现替换数据库和 HTTP 上下文。不需要启动 Web 服务器，不需要真实数据库连接，单元测试跑在毫秒级：
+
+```csharp
+[Fact]
+public async Task CreateProduct_ValidInput_ReturnsCreatedProduct()
+{
+    var repository = new InMemoryProductRepository();
+    var handler = new CreateProductHandler(repository);
+
+    var result = await handler.Handle(
+        new CreateProductCommand("Widget", 9.99m), CancellationToken.None);
+
+    Assert.Equal("Widget", result.Name);
+}
+```
+
+如果业务逻辑直接写在 Controller 里、直接调用 `DbContext`，测试就不得不拉起整个 Host 或者用大量 mock 弥合框架依赖，测试会变慢、变脆。
+
+**可替换性**。Infrastructure 是一个"插件"：今天用 SQL Server，明天可以换成 PostgreSQL 或 MongoDB，只需要换一个 Infrastructure 项目，Domain 和 Application 一行不改。同样，Api 只是交付方式之一——同样的 Application 层可以接 gRPC、CLI、消息消费器，不需要重写业务逻辑：
+
+```text
+Product.Application  →  不变
+    ├── Product.Api (HTTP)
+    ├── Product.Grpc (gRPC)
+    └── Product.Worker (消息消费)
+```
+
+**独立演进**。各层可以独立发布。Infrastructure 升级 EF Core 版本、更换缓存实现，只要接口契约不变，Application 和 Domain 不需要重新编译和测试。多人团队可以按层分工，减少代码冲突。
+
+:::tip 判断依赖方向是否正确
+一个简单的判断方法：删除 Infrastructure 项目的引用，如果 Domain 和 Application 能编译通过，说明依赖方向是对的。如果编译失败，说明内层在反向依赖外层。
+:::
+
 ## 项目引用示例
 
 ```text
@@ -154,6 +192,78 @@ public class EfProductRepository : IProductRepository
 }
 ```
 
+### Api → Infrastructure 的边界问题
+
+`Api` 引用 `Infrastructure`，唯一目的是在 `Program.cs` 中注册具体实现：
+
+```csharp
+builder.Services.AddScoped<IProductRepository, EfProductRepository>();
+```
+
+这意味着 Api 必须同时知道接口（来自 Application）和实现类（来自 Infrastructure），导致 Api 和 Infrastructure 耦合。如果 Infrastructure 项目里加了新的 Handler，Api 也需要改代码注册它。
+
+更好的做法是让 Infrastructure 自己注册自己的服务，Api 只需要调用一个扩展方法，不需要知道任何具体类型：
+
+```csharp
+builder.Services.AddApplication();
+builder.Services.AddInfrastructure(builder.Configuration);
+```
+
+`AddInfrastructure` 内部完成所有注册：
+
+```csharp
+public static class DependencyInjection
+{
+    public static IServiceCollection AddInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddDbContext<AppDbContext>(options =>
+            options.UseSqlServer(configuration.GetConnectionString("Default")));
+
+        services.AddScoped<IProductRepository, EfProductRepository>();
+        services.AddScoped<IOrderRepository, EfOrderRepository>();
+
+        return services;
+    }
+}
+```
+
+但扩展方法只能注册已知类型——如果用 MediatR 的程序集扫描来注册 Handler，Infrastructure 就需要一种方式告诉扫描器"扫描我这个程序集"。这时可以用 **IAssemblyMarker 模式**：
+
+```csharp
+namespace Product.Infrastructure;
+
+internal interface IInfrastructureAssemblyMarker { }
+```
+
+```csharp
+public static class DependencyInjection
+{
+    public static IServiceCollection AddInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var assembly = typeof(IInfrastructureAssemblyMarker).Assembly;
+
+        services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(assembly));
+
+        services.AddDbContext<AppDbContext>(options =>
+            options.UseSqlServer(configuration.GetConnectionString("Default")));
+
+        services.AddScoped<IProductRepository, EfProductRepository>();
+
+        return services;
+    }
+}
+```
+
+`IInfrastructureAssemblyMarker` 是一个空接口，仅用于获取 `Infrastructure` 程序集的引用。这样 `AddInfrastructure` 不需要硬编码任何 Handler 类型，新增 Handler 后自动被发现。
+
+:::note Api 仍然需要引用 Infrastructure
+即使用了扩展方法和 IAssemblyMarker，Api 仍然引用 Infrastructure——这是组合根（Composition Root）的职责。区别在于 Api 不再需要逐个知道具体实现类，只需要调用一次 `AddInfrastructure()`。如果想让 Api 完全不引用 Infrastructure，需要使用运行时程序集加载，但这会增加复杂度，通常不值得。
+:::
+
 ## 模块化目录
 
 如果业务很多，也可以按功能模块组织 Application 层。
@@ -173,6 +283,81 @@ Product.Application/
 这种方式比按技术类型堆目录更贴近业务。
 
 不推荐所有 DTO 都放一个巨大 `DTOs` 目录、所有 Service 都放一个巨大 `Services` 目录。项目变大后，按业务功能聚合更容易维护。
+
+### 模块独立注册
+
+当模块增多后，如果所有 Handler 和 Service 都堆在同一个 `DependencyInjection` 类里，这个类会膨胀成几百行。更好的做法是让每个模块提供自己的注册方法：
+
+```text
+Product.Application/
+├── Products/
+│   ├── CreateProduct/
+│   │   ├── CreateProductCommand.cs
+│   │   └── CreateProductHandler.cs
+│   └── GetProductList/
+│       ├── GetProductListQuery.cs
+│       └── GetProductListHandler.cs
+├── Orders/
+│   ├── CreateOrder/
+│   └── CancelOrder/
+└── Common/
+```
+
+每个模块一个标记接口和注册扩展：
+
+```csharp
+namespace Product.Application.Products;
+
+internal interface IProductsModuleAssemblyMarker { }
+```
+
+```csharp
+namespace Product.Application.Products;
+
+public static class ProductsModuleExtensions
+{
+    public static IServiceCollection AddProductsModule(this IServiceCollection services)
+    {
+        services.AddMediatR(cfg =>
+            cfg.RegisterServicesFromAssembly(typeof(IProductsModuleAssemblyMarker).Assembly));
+        return services;
+    }
+}
+```
+
+```csharp
+namespace Product.Application.Orders;
+
+internal interface IOrdersModuleAssemblyMarker { }
+```
+
+```csharp
+namespace Product.Application.Orders;
+
+public static class OrdersModuleExtensions
+{
+    public static IServiceCollection AddOrdersModule(this IServiceCollection services)
+    {
+        services.AddMediatR(cfg =>
+            cfg.RegisterServicesFromAssembly(typeof(IOrdersModuleAssemblyMarker).Assembly));
+        return services;
+    }
+}
+```
+
+`Program.cs` 中按模块注册：
+
+```csharp
+builder.Services.AddProductsModule();
+builder.Services.AddOrdersModule();
+builder.Services.AddInfrastructure(builder.Configuration);
+```
+
+每个模块的注册逻辑独立维护，新增模块只需要加一行注册调用，不会修改已有模块的代码。
+
+:::warning 程序集扫描的粒度
+如果 Products 和 Orders 在同一个项目（同一个程序集）里，MediatR 的 `RegisterServicesFromAssembly` 会扫描到所有 Handler，无法只注册 Products 的 Handler 而跳过 Orders 的。此时需要拆成独立项目，或者使用 `RegisterServicesFromAssemblies` 配合手动过滤。在同一个项目内，更实际的做法是只做一次全量扫描，模块标记接口主要用于未来拆项目的准备。
+:::
 
 ## Program.cs 中注册模块
 
@@ -217,6 +402,79 @@ public static class DependencyInjection
 }
 ```
 
+## 从单项目演进到多项目
+
+很多团队的问题不是"不知道 Clean Architecture"，而是"已经有了一个大单项目，怎么拆"。以下是一个可操作的重构路径，每一步都是安全的小改动。
+
+### 第一步：在单项目内按目录分层
+
+先不拆项目，只按职责整理目录。把 `Controllers` 里的业务逻辑提取到 `Services`，把 `Services` 里的数据访问逻辑提取到 `Repositories`：
+
+```text
+ProductApi/
+├── Controllers/
+│   └── ProductsController.cs
+├── DTOs/
+├── Entities/
+├── Services/
+│   ├── IProductService.cs
+│   └── ProductService.cs
+├── Repositories/
+│   ├── IProductRepository.cs
+│   └── ProductRepository.cs
+├── Data/
+│   └── AppDbContext.cs
+└── Program.cs
+```
+
+这一步的目标是让 Controller 只调用 Service，Service 只通过 Repository 访问数据。接口和实现在同一项目，但职责已经分离。
+
+### 第二步：接口上移，实现下移
+
+把接口和实现分到不同的命名空间，模拟未来的项目引用关系：
+
+```text
+ProductApi/
+├── Domain/           ← 实体、领域接口
+│   ├── Entities/
+│   └── Interfaces/
+├── Application/      ← 用例、DTO、应用接口
+│   ├── Interfaces/
+│   └── DTOs/
+├── Infrastructure/   ← EF Core、Repository 实现
+│   └── Repositories/
+├── Web/              ← Controller、Program.cs
+└── ...
+```
+
+此时检查依赖方向：`Domain` 命名空间不应该 `using` 任何 `Infrastructure` 命名空间，`Application` 不应该 `using` `Infrastructure`。违反的地方需要修复。
+
+### 第三步：拆成独立项目
+
+确认命名空间间依赖方向正确后，拆成独立 `.csproj`：
+
+1. 创建 `Product.Domain` 项目，把 `Domain/` 下的文件移过去。
+2. 创建 `Product.Application` 项目，引用 `Domain`，把 `Application/` 下的文件移过去。
+3. 创建 `Product.Infrastructure` 项目，引用 `Application`（和 `Domain`），把 `Infrastructure/` 下的文件移过去。
+4. `Product.Api` 引用 `Application` 和 `Infrastructure`。
+
+每拆一步，编译一次。如果编译失败，说明之前的依赖方向没调对，先修依赖再继续。
+
+### 第四步：各项目提供 DependencyInjection 扩展方法
+
+把 `Program.cs` 中的服务注册按项目迁移到各自的 `DependencyInjection` 类中：
+
+```csharp
+builder.Services.AddApplication();
+builder.Services.AddInfrastructure(builder.Configuration);
+```
+
+至此，项目结构已经完成从单项目到 Clean Architecture 的演进。
+
+:::tip 每一步都要可编译可运行
+不要试图一次完成所有重构。每一步完成后，运行测试确保功能不受影响，然后提交一个 commit。如果某一步出问题，回退到上一个 commit 即可。
+:::
+
 ## 不要过度架构
 
 不是所有项目都需要四层架构、DDD、CQRS、MediatR。
@@ -236,6 +494,79 @@ public static class DependencyInjection
 - 外部依赖多
 - 需要长期演进
 
+## Vertical Slice：另一种思路
+
+Clean Architecture 按技术职责分层（Domain、Application、Infrastructure），但分层架构有一个代价：一个简单的"创建产品"功能，代码分散在四五个项目中。对于 CRUD 为主的业务，这种分散反而增加了认知负担。
+
+Vertical Slice（纵向切片）按功能而不是按层组织代码，每个功能是一个独立的切片：
+
+```text
+src/
+├── Products/
+│   ├── Create/
+│   │   ├── CreateProductEndpoint.cs
+│   │   ├── CreateProductRequest.cs
+│   │   ├── CreateProductResponse.cs
+│   │   ├── CreateProductValidator.cs
+│   │   └── CreateProductHandler.cs
+│   ├── Get/
+│   │   ├── GetProductEndpoint.cs
+│   │   └── GetProductQuery.cs
+│   └── Update/
+│       └── ...
+├── Orders/
+│   ├── Create/
+│   └── Cancel/
+└── Shared/
+    └── Database.cs
+```
+
+每个切片包含从 HTTP 入口到数据访问的完整链路，不跨项目拆分。通常搭配 [Carter](https://github.com/CarterCommunity/Carter) 或 [FastEndpoints](https://fast-endpoints.com/) 等框架实现：
+
+```csharp
+public class CreateProductEndpoint : Endpoint<CreateProductRequest, CreateProductResponse>
+{
+    private readonly AppDbContext _db;
+
+    public CreateProductEndpoint(AppDbContext db)
+    {
+        _db = db;
+    }
+
+    public override void Configure()
+    {
+        Post("/api/products");
+        AllowAnonymous();
+    }
+
+    public override async Task HandleAsync(
+        CreateProductRequest req, CancellationToken ct)
+    {
+        var product = new Product { Name = req.Name, Price = req.Price };
+
+        _db.Products.Add(product);
+        await _db.SaveChangesAsync(ct);
+
+        await SendAsync(new CreateProductResponse { Id = product.Id }, 201, ct);
+    }
+}
+```
+
+### 两种方案对比
+
+| 维度 | Clean Architecture | Vertical Slice |
+|---|---|---|
+| 组织方式 | 按技术层 | 按功能切片 |
+| 代码分散度 | 一个功能跨多个项目 | 一个功能集中在一个目录 |
+| 替换基础设施 | 只改 Infrastructure 项目 | 每个切片各自改 |
+| 适合场景 | 业务规则复杂、核心域稳定 | CRUD 为主、功能独立 |
+| 学习曲线 | 需要理解依赖方向和 DI 编排 | 更直观，接近"一个功能一个文件夹" |
+| 共享代码 | 通过 Domain/Application 层自然共享 | 通过 Shared 目录，需自行约束 |
+
+:::note 不要混用
+两种方案可以共存于同一系统的不同子域——核心域用 Clean Architecture 保护业务规则，周边 CRUD 模块用 Vertical Slice 保持简单。但同一个模块内不要混用，否则代码组织会混乱。
+:::
+
 ## 总结
 
-ASP.NET Core 项目结构设计要围绕职责和依赖方向，而不是盲目套模板。小项目可以单项目分目录，大项目可以拆 Api、Application、Domain、Infrastructure。关键是让业务逻辑不被 Web 框架、数据库和第三方服务绑死。
+ASP.NET Core 项目结构设计要围绕职责和依赖方向，而不是盲目套模板。小项目可以单项目分目录，大项目可以拆 Api、Application、Domain、Infrastructure。关键是让业务逻辑不被 Web 框架、数据库和第三方服务绑死。依赖方向正确的核心收益是可测试、可替换、可独立演进。如果项目以 CRUD 为主，Vertical Slice 是更轻量的替代方案。从单项目到多层架构可以逐步演进，每一步保持可编译可运行。

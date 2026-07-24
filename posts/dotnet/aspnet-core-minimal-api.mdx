@@ -88,6 +88,77 @@ using Microsoft.AspNetCore.Mvc;
 
 复杂类型在 `POST`、`PUT` 中通常从 Body 绑定。
 
+### 特殊参数类型
+
+Minimal API 可以在 Handler 中直接声明以下类型，框架会自动注入，不需要任何 Attribute：
+
+| 类型 | 来源 |
+|---|---|
+| `HttpContext` | 当前请求上下文 |
+| `HttpRequest` | `HttpContext.Request` |
+| `HttpResponse` | `HttpContext.Response` |
+| `CancellationToken` | 请求的取消令牌 |
+| `ClaimsPrincipal` | 当前认证用户（`HttpContext.User`） |
+
+这些类型是 Minimal API 的核心绑定能力——你不需要显式从 `HttpContext` 里取它们，声明即用：
+
+```csharp
+app.MapGet("/api/me", (ClaimsPrincipal user) =>
+{
+    var name = user.Identity?.Name ?? "anonymous";
+    var roles = user.Claims
+        .Where(c => c.Type == ClaimTypes.Role)
+        .Select(c => c.Value);
+
+    return TypedResults.Ok(new { name, roles });
+});
+
+app.MapPost("/api/upload", async (HttpRequest request, CancellationToken ct) =>
+{
+    if (!request.HasFormContentType)
+    {
+        return TypedResults.BadRequest("Expected form data");
+    }
+
+    var form = await request.ReadFormAsync(ct);
+    var file = form.Files.FirstOrDefault();
+
+    if (file is null)
+    {
+        return TypedResults.BadRequest("No file uploaded");
+    }
+
+    return TypedResults.Ok(new { file.FileName, file.Length });
+});
+```
+
+`CancellationToken` 尤其重要——当客户端断开连接时它会触发取消，你可以在异步操作中传递它以避免无用工作：
+
+```csharp
+app.MapGet("/api/slow-query", async (CancellationToken ct) =>
+{
+    var result = await dbContext.Products
+        .Where(p => p.IsActive)
+        .ToListAsync(ct);
+
+    return TypedResults.Ok(result);
+});
+```
+
+普通参数和特殊类型可以混用，框架按类型识别，按名称匹配 Route / Query：
+
+```csharp
+app.MapPut("/api/products/{id:int}", async (
+    int id,
+    UpdateProductRequest request,
+    IProductService service,
+    CancellationToken ct) =>
+{
+    var product = await service.UpdateAsync(id, request, ct);
+    return product is null ? TypedResults.NotFound() : TypedResults.Ok(product);
+});
+```
+
 ## TypedResults
 
 `TypedResults` 返回更具体的结果类型，有利于 OpenAPI 元数据和类型推断。
@@ -123,6 +194,106 @@ productGroup.MapGet("/{id:int}", (int id) =>
 ```
 
 后续你可以给 Group 统一加授权、过滤器、OpenAPI 配置。
+
+## 大型项目组织方式
+
+当 Endpoint 超过十几个，把所有 Handler 堆在 `Program.cs` 会导致文件臃肿、难以维护。推荐的拆分方式是按业务模块提取到静态类中，再用扩展方法注册。
+
+### 扩展方法抽取
+
+每个业务模块一个静态类，把属于同一组的 Endpoint 封装在一个 `Map` 扩展方法里：
+
+```csharp
+public static class ProductEndpoints
+{
+    public static RouteGroupBuilder MapProductEndpoints(this WebApplication app)
+    {
+        var group = app.MapGroup("/api/products")
+            .WithTags("Products");
+
+        group.MapGet("/", GetAll);
+        group.MapGet("/{id:int}", GetById);
+        group.MapPost("/", Create);
+
+        return group;
+    }
+
+    private static IResult GetAll(IProductService service)
+    {
+        var products = service.GetAll();
+        return TypedResults.Ok(products);
+    }
+
+    private static IResult GetById(int id, IProductService service)
+    {
+        var product = service.GetById(id);
+        return product is null ? TypedResults.NotFound() : TypedResults.Ok(product);
+    }
+
+    private static IResult Create(
+        CreateProductRequest request,
+        IProductService service)
+    {
+        var product = service.Create(request);
+        return TypedResults.Created($"/api/products/{product.Id}", product);
+    }
+}
+```
+
+`Program.cs` 只剩一行注册：
+
+```csharp
+var app = builder.Build();
+
+app.MapProductEndpoints();
+
+app.Run();
+```
+
+### 多模块共存
+
+项目中可以有多组类似的 Endpoint 类：
+
+```csharp
+public static class OrderEndpoints
+{
+    public static RouteGroupBuilder MapOrderEndpoints(this WebApplication app)
+    {
+        var group = app.MapGroup("/api/orders")
+            .WithTags("Orders");
+
+        group.MapGet("/", GetAllOrders);
+        group.MapGet("/{id:int}", GetOrderById);
+        group.MapPost("/", CreateOrder);
+
+        return group;
+    }
+
+    private static IResult GetAllOrders(IOrderService service) =>
+        TypedResults.Ok(service.GetAll());
+
+    private static IResult GetOrderById(int id, IOrderService service)
+    {
+        var order = service.GetById(id);
+        return order is null ? TypedResults.NotFound() : TypedResults.Ok(order);
+    }
+
+    private static IResult CreateOrder(
+        CreateOrderRequest request,
+        IOrderService service)
+    {
+        var order = service.Create(request);
+        return TypedResults.Created($"/api/orders/{order.Id}", order);
+    }
+}
+```
+
+```csharp
+app.MapProductEndpoints();
+app.MapOrderEndpoints();
+```
+
+这种组织方式的优势：`Program.cs` 只做组合，每个模块自包含，Filter 和授权可以在各自的 `Map` 方法内加。
 
 ## 从 DI 注入服务
 
@@ -170,6 +341,169 @@ app.MapPost("/api/products", (CreateProductRequest request) =>
 ```
 
 复杂验证建议使用专门验证库或保持 Controller + 模型验证方式。
+
+### 多 Filter 顺序与短路机制
+
+一个 Endpoint 可以注册多个 Filter，它们按注册顺序依次执行，形成管道：
+
+```csharp
+app.MapPost("/api/products", (CreateProductRequest request) =>
+{
+    return TypedResults.Ok(request);
+})
+.AddEndpointFilter(async (context, next) =>
+{
+    Console.WriteLine("Filter 1 - before");
+    var result = await next(context);
+    Console.WriteLine("Filter 1 - after");
+    return result;
+})
+.AddEndpointFilter(async (context, next) =>
+{
+    Console.WriteLine("Filter 2 - before");
+    var result = await next(context);
+    Console.WriteLine("Filter 2 - after");
+    return result;
+});
+```
+
+请求到达时的输出顺序：
+
+```text
+Filter 1 - before
+Filter 2 - before
+  (Handler 执行)
+Filter 2 - after
+Filter 1 - after
+```
+
+先注册的 Filter 包裹在外层，`next(context)` 调用下一个 Filter 或最终 Handler。不调用 `next(context)` 就是短路——后续 Filter 和 Handler 都不会执行：
+
+```csharp
+app.MapPost("/api/products", (CreateProductRequest request) =>
+{
+    return TypedResults.Ok(request);
+})
+.AddEndpointFilter(async (context, next) =>
+{
+    var request = context.GetArgument<CreateProductRequest>(0);
+
+    if (string.IsNullOrWhiteSpace(request.Name))
+    {
+        return TypedResults.BadRequest("Name is required");
+    }
+
+    return await next(context);
+})
+.AddEndpointFilter(async (context, next) =>
+{
+    var request = context.GetArgument<CreateProductRequest>(0);
+
+    if (request.Price <= 0)
+    {
+        return TypedResults.BadRequest("Price must be positive");
+    }
+
+    return await next(context);
+});
+```
+
+如果 `Name` 为空，第一个 Filter 直接返回 `BadRequest`，第二个 Filter 和 Handler 都不执行。
+
+多个 Filter 可以按职责分离：认证检查、输入验证、日志记录各自独立。在 Route Group 级别加 Filter 可以统一生效：
+
+```csharp
+var group = app.MapGroup("/api/products")
+    .AddEndpointFilter(async (context, next) =>
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var result = await next(context);
+        stopwatch.Stop();
+
+        Console.WriteLine(
+            $"{context.HttpContext.Request.Path} - {stopwatch.ElapsedMilliseconds}ms");
+
+        return result;
+    });
+```
+
+## Minimal API 的具体局限
+
+Minimal API 轻量，但也意味着缺少 Controller 的一些自动能力。以下是关键差异：
+
+### 无 `[ApiController]` 自动验证
+
+Controller 加上 `[ApiController]` 后，模型验证失败会自动返回 400 和详细错误信息。Minimal API 没有这个机制，必须手动检查或用 Filter 自行实现：
+
+```csharp
+app.MapPost("/api/products", (CreateProductRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Name))
+    {
+        return TypedResults.BadRequest(new
+        {
+            Errors = new[] { "Name is required" }
+        });
+    }
+
+    if (request.Price <= 0)
+    {
+        return TypedResults.BadRequest(new
+        {
+            Errors = new[] { "Price must be positive" }
+        });
+    }
+
+    return TypedResults.Ok(request);
+});
+```
+
+### 无 `ModelState`
+
+Controller 里可以直接读 `ModelState.IsValid` 和 `ModelState.Errors`。Minimal API 没有 `ModelState`，需要自己处理验证逻辑或借助第三方验证库（如 FluentValidation）：
+
+```csharp
+builder.Services.AddScoped<IValidator<CreateProductRequest>, CreateProductRequestValidator>();
+
+app.MapPost("/api/products", async (
+    CreateProductRequest request,
+    IValidator<CreateProductRequest> validator) =>
+{
+    var validationResult = await validator.ValidateAsync(request);
+
+    if (!validationResult.IsValid)
+    {
+        return TypedResults.BadRequest(new
+        {
+            Errors = validationResult.Errors.Select(e => e.ErrorMessage)
+        });
+    }
+
+    return TypedResults.Ok(request);
+});
+```
+
+### Filter 机制不同
+
+Controller 使用 `IActionFilter`、`IExceptionFilter`、`IResultFilter` 等多种 Filter，按 MVC 管道阶段分类。Minimal API 只有 `IEndpointFilter`，它更简单，只围绕 Endpoint Handler 的调用前后执行。
+
+| 能力 | Controller | Minimal API |
+|---|---|---|
+| Action Filter | `IActionFilter` | 不支持 |
+| Exception Filter | `IExceptionFilter` | 不支持 |
+| Result Filter | `IResultFilter` | 不支持 |
+| Endpoint Filter | 不适用 | `IEndpointFilter` |
+| 全局 Filter | `MvcOptions.Filters` | 不支持全局 |
+| 短路返回 | `context.Result = ...` | `return result;` 不调用 `next` |
+
+异常处理需要用中间件或 `app.Map()` 包装，不能像 Controller 那样用 `[ExceptionHandler]` 或 `IExceptionFilter`。
+
+### 其他差异
+
+- **无 `[Produces]` 自动推断**：Controller 配合 `[ApiController]` 会自动推断响应类型，Minimal API 需要手动 `.Produces<T>()` 或依赖 `TypedResults` 的返回类型推断
+- **无 `[Authorize]` Attribute**：Minimal API 用 `.RequireAuthorization()` 扩展方法替代
+- **无 `[EnableCors]`**：用 `.RequireCors()` 或全局 CORS 中间件
+- **无 `[Consumes]`**：用 `.Accepts<T>()` 指定请求体类型
 
 ## Minimal API 和 Controller 怎么选
 

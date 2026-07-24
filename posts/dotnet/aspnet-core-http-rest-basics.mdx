@@ -170,7 +170,45 @@ Web API 认证中，Cookie 和 JWT 是两种常见方案。Cookie 由浏览器�
 
 CORS（Cross-Origin Resource Sharing）是浏览器和服务器协商跨域访问的机制。
 
-预检请求：浏览器先发 `OPTIONS` 请求询问服务器是否允许跨域：
+### 同源策略判定规则
+
+浏览器判定两个 URL 是否同源，比较三个部分：**协议**、**域名**、**端口**。三者完全一致才算同源。
+
+| URL A | URL B | 是否同源 | 原因 |
+|---|---|---|---|
+| `https://example.com/api` | `https://example.com/users` | 同源 | 协议、域名、端口一致 |
+| `https://example.com` | `http://example.com` | 不同源 | 协议不同 |
+| `https://example.com` | `https://api.example.com` | 不同源 | 域名不同 |
+| `https://example.com` | `https://example.com:8080` | 不同源 | 端口不同（默认 443 vs 8080） |
+
+不同源的请求默认会被浏览器拦截（响应被丢弃，请求根本到不了 JS），不是服务端拒绝。
+
+### 简单请求与预检请求
+
+浏览器对跨域请求分两种处理方式：
+
+**简单请求**满足以下所有条件：
+
+- Method 是 `GET`、`HEAD`、`POST` 之一
+- Content-Type 只能是 `application/x-www-form-urlencoded`、`multipart/form-data`、`text/plain`
+- 不携带自定义 Header（如 `Authorization`、`X-Custom-Header`）
+
+简单请求直接发送，浏览器在响应中检查 `Access-Control-Allow-Origin`：
+
+```http
+GET /api/products HTTP/1.1
+Origin: https://app.example.com
+```
+
+```http
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: https://app.example.com
+Content-Type: application/json
+```
+
+如果响应缺少 `Access-Control-Allow-Origin` 或值不匹配，浏览器会丢弃响应。
+
+**预检请求**（Preflight）：不满足简单请求条件时，浏览器先发 `OPTIONS` 请求询问服务器是否允许跨域：
 
 ```http
 OPTIONS /api/products HTTP/1.1
@@ -236,6 +274,56 @@ if (!app.Environment.IsDevelopment())
 ```
 
 ## RESTful API 的核心思想
+
+### REST 的核心约束
+
+REST（Representational State Transfer）定义了一组架构约束：
+
+| 约束 | 含义 |
+|---|---|
+| **客户端-服务端分离** | 前端和后端独立演进，通过统一接口通信 |
+| **无状态** | 每个请求必须包含所有必要信息，服务端不保存客户端上下文 |
+| **统一接口** | 用相同的语义操作不同资源：GET 查询、POST 创建、PUT 更新、DELETE 删除 |
+| **分层系统** | 客户端不知道它连的是终端服务器还是中间代理 |
+| **按需代码**（可选） | 服务端可以返回可执行代码（如 JavaScript） |
+
+其中**无状态**和**统一接口**对 API 设计影响最大：
+
+- **无状态**意味着请求不能依赖之前的请求状态。JWT 放在每次请求的 Header 里，而不是靠服务端 Session 记住客户端，就是无状态设计的体现。
+- **统一接口**意味着用 HTTP Method 表达操作语义，用 URL 标识资源，而不是在 URL 里写动词。
+
+### REST 与 RPC 风格对比
+
+| 风格 | 设计思路 | 示例 |
+|---|---|---|
+| **RPC** | 围绕动作设计，URL 是方法名 | `POST /api/createProduct`、`POST /api/getProductById` |
+| **REST** | 围绕资源设计，Method 是动作 | `POST /api/products`、`GET /api/products/1` |
+
+RPC 风格的问题：
+
+```text
+POST /api/createProduct
+POST /api/updateProduct
+POST /api/deleteProduct
+POST /api/getProductById
+POST /api/searchProducts
+```
+
+所有操作都是 POST，丢失了 HTTP Method 的语义。客户端只能从 URL 路径判断意图，缓存、幂等性等 HTTP 特性无法利用。
+
+REST 风格对同一资源的所有操作：
+
+```text
+POST   /api/products       → 创建
+GET    /api/products        → 列表
+GET    /api/products/1      → 详情
+PUT    /api/products/1      → 更新
+DELETE /api/products/1      → 删除
+```
+
+Method 本身就表达了意图，URL 只标识资源。GET 请求天然可缓存，PUT 和 DELETE 天然幂等，这些是 RPC 风格无法获得的。
+
+并非所有场景都适合 REST。执行远程命令、触发复杂业务流程（如 `POST /api/orders/1/cancel`）时，RPC 风格的 URL 更清晰。实际项目中 REST 和 RPC 混合使用是常见做法。
 
 RESTful API 的重点不是“URL 好看”，而是围绕资源设计接口。
 
@@ -313,4 +401,4 @@ DELETE /api/products/{id}
 
 ## 总结
 
-ASP.NET Core Web API 的所有高级能力，最终都会落到 HTTP 请求和响应上。先掌握 Method、URL、Header、Body、Status Code 和 RESTful 资源设计，再学习 Controller、参数绑定、认证授权和异常处理，会更清晰。
+ASP.NET Core Web API 的所有高级能力，最终都会落到 HTTP 请求和响应上。先掌握 Method、URL、Header、Body、Status Code、REST 核心约束与 RPC 对比、同源策略与 CORS 机制，再学习 Controller、参数绑定、认证授权和异常处理，会更清晰。

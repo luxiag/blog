@@ -371,7 +371,41 @@ export function getSeriesPosts(category: string): SeriesPost[] {
   return ordered;
 }
 
+function getSeriesPrefix(slug: string): string {
+  const idx = slug.indexOf('-');
+  return idx > 0 ? slug.substring(0, idx) : slug;
+}
+
 function orderSeriesPosts(posts: SeriesPost[]): SeriesPost[] {
+  if (posts.length <= 1) return posts;
+
+  const groups = new Map<string, SeriesPost[]>();
+  posts.forEach((p) => {
+    const prefix = getSeriesPrefix(p.slug);
+    if (!groups.has(prefix)) groups.set(prefix, []);
+    groups.get(prefix)!.push(p);
+  });
+
+  const chainOrdered = new Map<string, SeriesPost[]>();
+  groups.forEach((groupPosts, prefix) => {
+    chainOrdered.set(prefix, orderChain(groupPosts));
+  });
+
+  const sortedPrefixes = [...chainOrdered.keys()].sort((a, b) => {
+    const minDateA = chainOrdered.get(a)!.reduce((min, p) => p.date < min ? p.date : min, chainOrdered.get(a)![0].date);
+    const minDateB = chainOrdered.get(b)!.reduce((min, p) => p.date < min ? p.date : min, chainOrdered.get(b)![0].date);
+    return minDateA.localeCompare(minDateB);
+  });
+
+  const result: SeriesPost[] = [];
+  sortedPrefixes.forEach((prefix) => {
+    result.push(...chainOrdered.get(prefix)!);
+  });
+
+  return result;
+}
+
+function orderChain(posts: SeriesPost[]): SeriesPost[] {
   if (posts.length <= 1) return posts;
 
   const bySlug = new Map<string, SeriesPost>();
@@ -384,19 +418,21 @@ function orderSeriesPosts(posts: SeriesPost[]): SeriesPost[] {
   });
 
   const pointedTo = new Set(byNext.values());
-  let head = posts.find((p) => !pointedTo.has(p.slug));
-  if (!head) head = posts[0];
+  const heads = posts.filter((p) => !pointedTo.has(p.slug));
+  if (heads.length === 0) heads.push(posts[0]);
 
   const ordered: SeriesPost[] = [];
   const visited = new Set<string>();
-  let current: SeriesPost | undefined = head;
 
-  while (current && !visited.has(current.slug)) {
-    ordered.push(current);
-    visited.add(current.slug);
-    const nextSlug = byNext.get(current.slug);
-    current = nextSlug ? bySlug.get(nextSlug) : undefined;
-  }
+  heads.forEach((head) => {
+    let current: SeriesPost | undefined = head;
+    while (current && !visited.has(current.slug)) {
+      ordered.push(current);
+      visited.add(current.slug);
+      const nextSlug = byNext.get(current.slug);
+      current = nextSlug ? bySlug.get(nextSlug) : undefined;
+    }
+  });
 
   posts.forEach((p) => {
     if (!visited.has(p.slug)) {

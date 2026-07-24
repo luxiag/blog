@@ -20,6 +20,50 @@ nextPost: 'dotnet/aspnet-core-background-service'
 
 `IHttpClientFactory` 负责管理底层 Handler 生命周期，让你以更安全的方式创建客户端。
 
+### 问题一：Socket 耗尽
+
+每次 `new HttpClient()` 底层会创建一个新的 `HttpMessageHandler`。`HttpClient.Dispose()` 不会立即释放底层 Socket——TCP 连接进入 `TIME_WAIT` 状态，操作系统要等待 2MSL（通常 2-4 分钟）才真正回收：
+
+```csharp
+for (int i = 0; i < 200; i++)
+{
+    using var client = new HttpClient();
+    await client.GetAsync("https://api.example.com/data");
+}
+```
+
+这段代码看似正确（用了 `using`），但短时间内会耗尽可用端口。典型报错：
+
+```text
+SocketException: Only one usage of each socket address (protocol/network address/port) is normally permitted
+```
+
+根本原因：每个 `HttpClient` 对应独立的 `HttpMessageHandler`，`Dispose` 后 TCP 连接不会立即关闭，而是进入 `TIME_WAIT` 状态占用端口。短时间内大量创建就会耗尽临时端口（通常范围 32768-61000，约 28000 个，而每个 `TIME_WAIT` 占一个）。
+
+### 问题二：DNS 更新导致请求失败
+
+反过来，如果只创建一个 `HttpClient` 长期复用：
+
+```csharp
+private static readonly HttpClient _client = new HttpClient();
+```
+
+`HttpMessageHandler` 内部会缓存 DNS 解析结果。当目标服务 IP 变更（如云服务重新部署、蓝绿切换、DNS 负载均衡更新），缓存的 DNS 记录不会刷新，所有请求都打到旧 IP：
+
+```text
+HttpRequestException: Connection refused (old-ip-address:443)
+```
+
+这个问题在 Kubernetes 环境尤其常见：Pod 重建后 IP 变化，但 `HttpClient` 仍连接旧地址。
+
+### IHttpClientFactory 的解决方案
+
+`IHttpClientFactory` 维护一个 `HttpMessageHandler` 池，默认每 2 分钟回收 Handler（`ActiveHandlerTrackingPeriod`）。这样：
+
+- Handler 被池化复用，不会频繁创建导致 Socket 耗尽
+- 定期回收确保 DNS 记录能刷新
+- `HttpClient` 本身是轻量对象，可以频繁创建
+
 ## Named Client
 
 注册：
@@ -158,6 +202,45 @@ builder.Services.AddHttpClient<IWeatherClient, WeatherClient>(client =>
 | Retry | 重试短暂故障 |
 | Circuit Breaker | 熔断，失败率过高时停止请求 |
 | Attempt Timeout | 单次请求超时 |
+
+### 管道执行流程
+
+请求经过管道的完整流程：
+
+```text
+请求进入
+  │
+  ▼
+┌─────────────────────────┐
+│ Total Request Timeout   │  ← 整个请求（含重试）的最大时间，默认 30s
+│  超时则直接失败，不重试   │
+└──────────┬──────────────┘
+           ▼
+┌─────────────────────────┐
+│ Retry                   │  ← 遇到短暂故障时重试，默认最多 3 次
+│  指数退避 + 随机抖动     │     每次重试回到 Attempt Timeout 入口
+└──────────┬──────────────┘
+           ▼
+┌─────────────────────────┐
+│ Circuit Breaker         │  ← 如果处于 Open 状态，直接拒绝，不发起请求
+│  Closed → 正常通过       │     如果处于 Half-Open，放行一次试探
+│  Open → 直接失败         │
+└──────────┬──────────────┘
+           ▼
+┌─────────────────────────┐
+│ Attempt Timeout         │  ← 单次 HTTP 请求的超时，默认 10s
+│  超时则触发 Retry 重试   │
+└──────────┬──────────────┘
+           ▼
+     实际 HTTP 请求
+```
+
+关键理解：
+
+- **Total Request Timeout 包裹整个流程**：3 次重试的总时间不能超过此值
+- **Attempt Timeout 是单次请求超时**：超时后回到 Retry 层决定是否重试
+- **Circuit Breaker 在 Retry 和实际请求之间**：熔断开启时直接返回错误，不再尝试
+- **执行顺序是外到内**：Total Timeout → Retry → Circuit Breaker → Attempt Timeout → 实际请求
 
 ### 自定义重试配置
 

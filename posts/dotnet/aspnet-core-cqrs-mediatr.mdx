@@ -3,6 +3,7 @@ title: 'ASP.NET Core CQRS 与 MediatR：命令查询分离实践'
 date: '2026-07-21'
 excerpt: '理解 ASP.NET Core 中 CQRS 与 MediatR 的实践方式：Command、Query、Handler、Pipeline Behavior、验证、日志和使用边界。'
 tags: ['dotnet', 'aspnetcore', 'cqrs', 'mediatr']
+nextPost: 'dotnet/aspnet-core-outbox-pattern'
 ---
 
 # ASP.NET Core CQRS 与 MediatR：命令查询分离实践
@@ -84,19 +85,40 @@ public class CreateProductCommandHandler : IRequestHandler<CreateProductCommand,
 }
 ```
 
-Controller：
+## IRequest vs IRequest\<TResult\>
+
+上面的 `CreateProductCommand` 返回了 `ProductDto`，所以实现了 `IRequest<ProductDto>`。但很多命令不需要返回业务数据——删除、归档、发送通知等，只需表达"执行成功"。
+
+无返回值的 Command 使用 `IRequest`（等价于 `IRequest<Unit>`），Handler 返回 `Unit`：
 
 ```csharp
-[HttpPost]
-public async Task<ActionResult<ProductDto>> Create(
-    CreateProductCommand command,
-    ISender sender,
-    CancellationToken cancellationToken)
+public record DeleteProductCommand(int Id) : IRequest;
+```
+
+```csharp
+public class DeleteProductCommandHandler : IRequestHandler<DeleteProductCommand>
 {
-    ProductDto product = await sender.Send(command, cancellationToken);
-    return CreatedAtAction(nameof(GetById), new { id = product.Id }, product);
+    private readonly AppDbContext _dbContext;
+
+    public DeleteProductCommandHandler(AppDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+
+    public async Task Handle(
+        DeleteProductCommand request,
+        CancellationToken cancellationToken)
+    {
+        var product = await _dbContext.Products.FindAsync([request.Id], cancellationToken)
+            ?? throw new NotFoundException("Product not found.");
+
+        _dbContext.Products.Remove(product);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+    }
 }
 ```
+
+选择原则：如果调用方需要新建资源的 ID 或完整 DTO 来做后续跳转，用 `IRequest<T>`；否则用 `IRequest`，避免返回无意义的数据。
 
 ## Query 示例
 
@@ -140,6 +162,103 @@ public class GetProductListQueryHandler : IRequestHandler<GetProductListQuery, L
 }
 ```
 
+## 查询端直接依赖 DbContext 与 DDD 仓储原则
+
+上面的 Handler 都直接注入了 `AppDbContext`，而 [DDD 入门](/posts/dotnet/aspnet-core-ddd-basics) 中强调命令端应通过仓储接口操作聚合根。这里需要区分两侧：
+
+**命令端（写）**：建议走仓储。聚合根有不变式约束，仓储接口可以封装加载、持久化的完整生命周期，保证业务规则不被绕过。
+
+```csharp
+public class CreateProductCommandHandler : IRequestHandler<CreateProductCommand, ProductDto>
+{
+    private readonly IProductRepository _repository;
+
+    public CreateProductCommandHandler(IProductRepository repository)
+    {
+        _repository = repository;
+    }
+
+    public async Task<ProductDto> Handle(
+        CreateProductCommand request,
+        CancellationToken cancellationToken)
+    {
+        var product = new Product(request.Name, request.Price, request.Stock);
+        await _repository.AddAsync(product, cancellationToken);
+        await _repository.SaveChangesAsync(cancellationToken);
+        return new ProductDto(product.Id, product.Name, product.Price, product.Stock);
+    }
+}
+```
+
+**查询端（读）**：可以直接用 DbContext。查询只做读取，不修改聚合状态，不涉及不变式保护。直接用 `AsNoTracking` + `Select` 投影 DTO，性能更好、代码更简单，也避免了为每种查询场景定义仓储方法。
+
+```csharp
+public class GetProductListQueryHandler : IRequestHandler<GetProductListQuery, List<ProductDto>>
+{
+    private readonly AppDbContext _dbContext;
+
+    public GetProductListQueryHandler(AppDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+}
+```
+
+简单项目也可以在命令端直接用 DbContext——在聚合不变式简单、团队小的情况下，过度抽象的代价可能比直接依赖更高。关键是团队理解取舍后做出一致选择。
+
+## 完整 Controller
+
+把上面的 Command 和 Query 组合成一个完整的 Controller：
+
+```csharp
+[ApiController]
+[Route("api/[controller]")]
+public class ProductsController : ControllerBase
+{
+    [HttpGet]
+    public async Task<ActionResult<List<ProductDto>>> GetList(
+        [FromQuery] string? keyword,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        ISender sender,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(
+            new GetProductListQuery(keyword, page, pageSize), cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpGet("{id:int}")]
+    public async Task<ActionResult<ProductDto>> GetById(
+        int id, ISender sender, CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(
+            new GetProductByIdQuery(id), cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpPost]
+    public async Task<ActionResult<ProductDto>> Create(
+        CreateProductCommand command,
+        ISender sender,
+        CancellationToken cancellationToken)
+    {
+        ProductDto product = await sender.Send(command, cancellationToken);
+        return CreatedAtAction(nameof(GetById), new { id = product.Id }, product);
+    }
+
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(
+        int id, ISender sender, CancellationToken cancellationToken)
+    {
+        await sender.Send(new DeleteProductCommand(id), cancellationToken);
+        return NoContent();
+    }
+}
+```
+
+Controller 的职责只是接收 HTTP 请求、构造 Command/Query、调用 `sender.Send`、返回 HTTP 响应。所有业务逻辑在 Handler 中处理，验证在 Pipeline 中统一拦截。
+
 ## Pipeline Behavior
 
 MediatR 的 Pipeline Behavior 可以统一处理验证、日志、事务等横切逻辑。
@@ -176,6 +295,81 @@ public class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, 
 ```csharp
 builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
 ```
+
+### ValidationBehavior + FluentValidation
+
+验证是 Pipeline 最常用的场景。通过 `ValidationBehavior`，所有请求在进入 Handler 前自动校验，无需在每个 Handler 中重复验证逻辑。
+
+安装 FluentValidation：
+
+```bash
+dotnet add package FluentValidation
+dotnet add package FluentValidation.DependencyInjectionExtensions
+```
+
+定义验证器：
+
+```csharp
+public class CreateProductCommandValidator : AbstractValidator<CreateProductCommand>
+{
+    public CreateProductCommandValidator()
+    {
+        RuleFor(x => x.Name).NotEmpty().MaximumLength(200);
+        RuleFor(x => x.Price).GreaterThan(0);
+        RuleFor(x => x.Stock).GreaterThanOrEqualTo(0);
+    }
+}
+```
+
+ValidationBehavior：
+
+```csharp
+public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : notnull
+{
+    private readonly IEnumerable<IValidator<TRequest>> _validators;
+
+    public ValidationBehavior(IEnumerable<IValidator<TRequest>> validators)
+    {
+        _validators = validators;
+    }
+
+    public async Task<TResponse> Handle(
+        TRequest request,
+        RequestHandlerDelegate<TResponse> next,
+        CancellationToken cancellationToken)
+    {
+        if (!_validators.Any())
+        {
+            return await next();
+        }
+
+        var context = new ValidationContext<TRequest>(request);
+
+        var failures = _validators
+            .Select(v => v.Validate(context))
+            .SelectMany(r => r.Errors)
+            .Where(f => f is not null)
+            .ToList();
+
+        if (failures.Count != 0)
+        {
+            throw new ValidationException(failures);
+        }
+
+        return await next();
+    }
+}
+```
+
+注册验证器和 Behavior：
+
+```csharp
+builder.Services.AddValidatorsFromAssembly(typeof(CreateProductCommandValidator).Assembly);
+builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
+```
+
+执行流程变为：请求 → LoggingBehavior → ValidationBehavior → Handler。验证失败时抛出 `ValidationException`，由全局异常中间件统一返回 400 响应，Handler 中的业务逻辑完全干净。
 
 ## 使用边界
 

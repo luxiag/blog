@@ -3,6 +3,7 @@ title: 'ASP.NET Core 安全基础：CORS、CSRF、限流与安全响应头'
 date: '2026-07-24'
 excerpt: '掌握 ASP.NET Core 生产安全基础：HTTPS 与 HSTS、CORS 配置、CSRF 防护、XSS 防护、SQL 注入防护、Rate Limiting、安全响应头、敏感配置管理和密码哈希。'
 tags: ['dotnet', 'aspnetcore', 'security', 'cors', 'rate-limiting']
+nextPost: 'dotnet/aspnet-core-deployment'
 ---
 
 # ASP.NET Core 安全基础：CORS、CSRF、限流与安全响应头
@@ -74,24 +75,86 @@ builder.Services.AddAntiforgery();
 app.UseAntiforgery();
 ```
 
-表单页面中生成 Token：
+### 表单场景（Razor Pages / MVC）
+
+表单页面中，`@Html.AntiForgeryToken()` 或 `<form asp-antiforgery="true">` 会自动生成隐藏字段和 Cookie：
+
+```html
+<form method="post" action="/api/order">
+    @Html.AntiForgeryToken()
+    <button type="submit">Submit</button>
+</form>
+```
+
+服务端用 `[ValidateAntiForgeryToken]` 验证：
 
 ```csharp
-[HttpGet("form")]
-public IActionResult Form()
+[HttpPost]
+[ValidateAntiForgeryToken]
+public IActionResult CreateOrder(OrderRequest request)
 {
-    return View();
+    return Ok();
 }
 ```
 
-API 场景中，可以在 Header 中传递 Token：
+### API 场景（SPA / 前后端分离）
+
+API 不用表单提交，Token 需要通过 Cookie + Header 双重验证。完整流程：
+
+1. 服务端配置 Header 名称，并提供获取 Token 的接口：
 
 ```csharp
 builder.Services.AddAntiforgery(options =>
 {
     options.HeaderName = "X-XSRF-TOKEN";
+    options.Cookie.Name = "XSRF-TOKEN";
+    options.Cookie.HttpOnly = false;
+    options.Cookie.SameSite = SameSiteMode.Strict;
 });
 ```
+
+`Cookie.HttpOnly = false` 是关键：前端 JS 需要读取这个 Cookie 值放入请求 Header。
+
+2. 提供接口让前端获取 Token：
+
+```csharp
+app.MapGet("/api/antiforgery-token", (IAntiforgery antiforgery, HttpContext context) =>
+{
+    AntiforgeryTokenSet tokens = antiforgery.GetAndStoreTokens(context);
+    return Results.Ok(new { requestToken = tokens.RequestToken });
+});
+```
+
+此接口调用后，响应会自动设置 `XSRF-TOKEN` Cookie。
+
+3. 前端发送请求时从 Cookie 读取 Token 放入 Header：
+
+```javascript
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+  return match ? match[2] : null;
+}
+
+fetch('/api/order', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-XSRF-TOKEN': getCookie('XSRF-TOKEN'),
+  },
+  body: JSON.stringify({ productId: 1 }),
+});
+```
+
+4. 服务端自动验证 `[ValidateAntiForgeryToken]` 或全局 filter：
+
+```csharp
+builder.Services.AddControllersWithViews(options =>
+{
+    options.Filters.Add<AutoValidateAntiforgeryTokenAttribute>();
+});
+```
+
+`AutoValidateAntiforgeryTokenAttribute` 只对不安全方法（POST/PUT/DELETE/PATCH）验证，GET/HEAD/OPTIONS 不验证。
 
 JWT Bearer 认证天然防 CSRF，因为 Token 不会由浏览器自动携带。
 
@@ -113,6 +176,44 @@ app.Use(async (context, next) =>
     await next();
 });
 ```
+
+CSP 各指令含义：
+
+| 指令 | 值 | 含义 |
+|---|---|---|
+| `default-src` | `'self'` | 所有资源类型的默认策略：只允许同源 |
+| `script-src` | `'self'` | JavaScript 只允许同源加载，禁止内联脚本和 eval |
+| `style-src` | `'self' 'unsafe-inline'` | CSS 只允许同源，`unsafe-inline` 允许内联样式（部分框架需要） |
+| `img-src` | `'self' data:` | 图片允许同源和 data URI |
+| `connect-src` | `'self'` | AJAX / WebSocket 只允许连接同源 |
+| `font-src` | `'self'` | 字体只允许同源 |
+| `frame-src` | `'none'` | 不允许任何 iframe 嵌入 |
+| `object-src` | `'none'` | 不允许 Flash / Java 插件 |
+| `base-uri` | `'self'` | 限制 `<base>` 标签的 URL，防止劫持相对路径 |
+
+更严格的生产配置示例：
+
+```csharp
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append("Content-Security-Policy",
+        "default-src 'self'; " +
+        "script-src 'self'; " +
+        "style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data: https:; " +
+        "font-src 'self'; " +
+        "connect-src 'self' https://api.example.com; " +
+        "frame-src 'none'; " +
+        "object-src 'none'; " +
+        "base-uri 'self'; " +
+        "form-action 'self'");
+    await next();
+});
+```
+
+- `form-action 'self'` 限制表单只能提交到同源，防止 XSS 窃取表单数据
+- `connect-src` 需要包含前端实际调用的 API 域名，否则 AJAX 请求会被浏览器拦截
+- CSP 策略建议先用 `Content-Security-Policy-Report-Only` 观察违规报告，确认无误后再正式启用
 
 - JSON API 返回 `Content-Type: application/json`，浏览器不会当作 HTML 执行。
 - 不要把用户输入直接 `Html.Raw()` 输出。
@@ -233,13 +334,13 @@ builder.Services.AddOptions<JwtOptions>()
 ASP.NET Core 内置 Data Protection API，用于加密和解密敏感数据：
 
 ```csharp
-public classSensitiveService
+public class SensitiveService
 {
     private readonly IDataProtector _protector;
 
     public SensitiveService(IDataProtectionProvider provider)
     {
-        _protector = provider.CreateProtector("User.PI");
+        _protector = provider.CreateProtector("User.PII");
     }
 
     public string Protect(string plaintext) => _protector.Protect(plaintext);
@@ -256,6 +357,36 @@ builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo("/shared-keys/"))
     .SetApplicationName("ProductApi");
 ```
+
+### 密钥轮换
+
+Data Protection 自动管理密钥生命周期。默认 90 天生成新密钥，旧密钥仍可解密但不再用于加密。可在配置中调整：
+
+```csharp
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo("/shared-keys/"))
+    .SetApplicationName("ProductApi")
+    .SetDefaultKeyLifetime(TimeSpan.FromDays(30));
+```
+
+密钥文件存储在指定目录下，文件名包含创建日期。手动删除旧密钥文件会导致对应密文无法解密——**务必保留足够的旧密钥**。
+
+### 多应用共享密钥
+
+多个应用需要共享加解密能力时（如 SSO Cookie、分布式会话），必须满足：
+
+1. 相同的 `ApplicationName`
+2. 相同的密钥存储路径
+3. 相同的密钥保护方式（默认使用机器级 DPAPI，Linux 上需额外配置）
+
+```csharp
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo("/shared-keys/"))
+    .SetApplicationName("SharedAuthApps")
+    .ProtectKeysWithCertificate(new X509Certificate2("/certs/dp-cert.pfx", "cert-password"));
+```
+
+`ProtectKeysWithCertificate` 用证书加密密钥文件，适合跨机器共享场景。在 Linux 上不配置密钥保护时，默认使用文件权限保护。
 
 ## 密码哈希
 

@@ -3,6 +3,7 @@ title: 'ASP.NET Core 性能优化：异步、连接池、压缩、缓存与诊�
 date: '2026-07-21'
 excerpt: '系统梳理 ASP.NET Core 性能优化：异步 I/O、EF Core 查询、HttpClientFactory、响应压缩、缓存、限流、dotnet-counters 和性能排查路径。'
 tags: ['dotnet', 'aspnetcore', 'performance', 'diagnostics']
+nextPost: 'dotnet/aspnet-core-project-structure'
 ---
 
 # ASP.NET Core 性能优化：异步、连接池、压缩、缓存与诊断工具
@@ -96,17 +97,132 @@ builder.Services.AddHttpClient<IWeatherClient, WeatherClient>(client =>
 
 不要缓存强一致性要求很高的数据。缓存必须设计 Key、过期时间和失效策略。
 
-## 响应压缩
-
-启用响应压缩：
+### IMemoryCache 基础用法
 
 ```csharp
-builder.Services.AddResponseCompression();
+builder.Services.AddMemoryCache();
+
+public class ProductService
+{
+    private readonly IMemoryCache _cache;
+    private readonly AppDbContext _dbContext;
+
+    public ProductService(IMemoryCache cache, AppDbContext dbContext)
+    {
+        _cache = cache;
+        _dbContext = dbContext;
+    }
+
+    public async Task<ProductDto?> GetProductAsync(int id, CancellationToken cancellationToken)
+    {
+        string cacheKey = $"product:{id}";
+
+        return await _cache.GetOrCreateAsync(cacheKey, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10);
+            entry.SlidingExpiration = TimeSpan.FromMinutes(2);
+
+            return await _dbContext.Products
+                .AsNoTracking()
+                .Where(p => p.Id == id)
+                .Select(p => new ProductDto(p.Id, p.Name, p.Price))
+                .FirstOrDefaultAsync(cancellationToken);
+        });
+    }
+}
+```
+
+`GetOrCreateAsync` 是原子操作：缓存命中时直接返回，未命中时执行工厂方法并写入缓存。
+
+### 缓存 Key 设计
+
+Key 必须唯一且包含所有影响结果的参数：
+
+```csharp
+string cacheKey = $"products:category={categoryId}:page={page}:size={pageSize}";
+```
+
+不要用模糊 Key（如 `"products"`），否则不同查询条件会返回错误缓存数据。
+
+### 缓存失效策略
+
+| 策略 | 配置 | 适用场景 |
+|---|---|---|
+| 绝对过期 | `AbsoluteExpirationRelativeToNow` | 数据有明确时效，到期自动失效 |
+| 滑动过期 | `SlidingExpiration` | 数据持续被访问时延长有效期 |
+| 主动清除 | `Remove()` | 数据变更时立即失效 |
+
+数据更新时主动清除缓存：
+
+```csharp
+public async Task UpdateProductAsync(int id, UpdateProductRequest request, CancellationToken cancellationToken)
+{
+    var product = await _dbContext.Products.FindAsync([id], cancellationToken);
+    if (product is null) return;
+
+    product.Name = request.Name;
+    product.Price = request.Price;
+    await _dbContext.SaveChangesAsync(cancellationToken);
+
+    _cache.Remove($"product:{id}");
+}
+```
+
+分布式缓存和缓存进阶内容详见 [ASP.NET Core 缓存](/posts/dotnet/aspnet-core-caching)。
+
+## 响应压缩
+
+启用响应压缩需要配置压缩提供者、MIME 类型和压缩级别：
+
+```csharp
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.Providers.Add<GzipCompressionProvider>();
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(
+    [
+        "application/json",
+        "application/ld+json",
+        "application/xml",
+        "text/json",
+        "text/xml",
+    ]);
+});
+
+builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
+{
+    options.Level = CompressionLevel.Fastest;
+});
+
+builder.Services.Configure<GzipCompressionProviderOptions>(options =>
+{
+    options.Level = CompressionLevel.Optimal;
+});
 
 app.UseResponseCompression();
 ```
 
-响应压缩适合文本类响应，例如 JSON、HTML、CSS、JS。对小响应或已经压缩的图片、视频收益不大。
+`AddResponseCompression()` 不传任何提供者时，默认只注册 Gzip。且如果客户端不支持对应编码，中间件不会压缩响应。**生产环境必须显式添加 MIME 类型白名单**，否则默认白名单只覆盖 `text/plain`、`text/css` 等少数类型，JSON 响应不会压缩。
+
+### Brotli vs Gzip 选择
+
+| 特性 | Brotli | Gzip |
+|---|---|---|
+| 压缩率 | 更高（约比 Gzip 小 15-25%） | 基准 |
+| 压缩速度 | 较慢 | 较快 |
+| 浏览器支持 | 现代浏览器均支持（IE 不支持） | 所有浏览器 |
+| 适用场景 | 静态资源预压缩、带宽敏感 | 动态响应、兼容性优先 |
+
+推荐做法：同时注册 Brotli 和 Gzip，中间件会根据客户端 `Accept-Encoding` 自动选择。Brotli 优先，不支持时降级 Gzip。
+
+压缩级别选择：
+
+- `CompressionLevel.Fastest`：CPU 开销最小，压缩率一般，适合高 QPS 动态接口
+- `CompressionLevel.Optimal`：压缩率最高，CPU 开销大，适合静态资源预压缩
+- `CompressionLevel.NoCompression`：不压缩，可做条件判断后降级
+
+响应压缩适合文本类响应，例如 JSON、HTML、CSS、JS。对小响应（< 1KB）压缩收益不明显，对已经压缩的图片、视频无收益。
 
 ## 限流保护
 
@@ -141,6 +257,55 @@ dotnet-counters monitor --process-id <pid>
 - ThreadPool Queue Length
 - Exception Count
 
+### 输出示例与指标解读
+
+运行后输出实时刷新的指标面板：
+
+```text
+Press p to pause, r to resume, q to quit.
+    Status: Running
+
+[System.Runtime]
+    CPU Usage (%)                                      12.3
+    Working Set (MB)                                   185.6
+    GC Heap Size (MB)                                   64.2
+    Gen 0 GC Count / 60 sec                             8
+    Gen 1 GC Count / 60 sec                             2
+    Gen 2 GC Count / 60 sec                             0
+    ThreadPool Queue Length                              3
+    ThreadPool Thread Count                             12
+    Exception Count / 60 sec                            0
+
+[Microsoft.AspNetCore.Hosting]
+    Request Count / 1 sec                              42
+    Current Requests                                    5
+    Failed Requests / 1 sec                             0
+```
+
+关键指标判断：
+
+| 指标 | 正常范围 | 异常信号 |
+|---|---|---|
+| CPU Usage | < 70% 随负载线性变化 | 持续 > 80% 可能是 CPU 密集操作或锁争用 |
+| GC Heap Size | 稳定或随请求量波动 | 持续增长不回落，可能内存泄漏 |
+| Gen 2 GC Count | 极少 | 频繁 Gen 2 GC 表示大量长存活对象，暂停时间变长 |
+| ThreadPool Queue Length | 接近 0 | 持续 > 0 表示线程池饥饿，可能有同步阻塞 |
+| Exception Count / sec | 接近 0 | 持续 > 0 说明有异常被频繁抛出和捕获 |
+
+### 自定义计数器监控
+
+只监控特定计数器，减少开销：
+
+```bash
+dotnet-counters monitor --process-id <pid> --counters System.Runtime[cpu-usage,gc-heap-size,threadpool-queue-length]
+```
+
+导出为文件供后续分析：
+
+```bash
+dotnet-counters collect --process-id <pid> --output counters.csv
+```
+
 ## dotnet-trace
 
 采集 Trace：
@@ -150,6 +315,49 @@ dotnet-trace collect --process-id <pid>
 ```
 
 适合进一步分析 CPU、锁等待、运行时事件。
+
+### 输出示例与常见分析场景
+
+采集完成后生成 `.nettrace` 文件，可用 Visual Studio、PerfView 或 `dotnet-trace report` 分析：
+
+```bash
+dotnet-trace report trace.nettrace --top 20
+```
+
+输出示例：
+
+```text
+Top 20 methods by exclusive time:
+
+    18.5% MyApi.Services.OrderService.ProcessOrderAsync()
+    12.3% System.Net.Http.HttpClient.SendAsync()
+     8.7% Microsoft.EntityFrameworkCore.SqlServer.Query.Internal.SqlServerQueryExecutionStrategy.ExecuteAsync()
+     5.2% System.Threading.Monitor.ObjWait()
+     3.1% System.Text.Json.JsonSerializer.DeserializeAsync()
+```
+
+常用采集 Profile：
+
+| Profile | 包含的事件 | 适用场景 |
+|---|---|---|
+| `cpu-sampling` | CPU 采样、线程时间 | CPU 热点分析 |
+| `gc-verbose` | GC 详细事件 | 内存问题、GC 暂停 |
+| `gc-collect` | GC 触发和完成 | 轻量 GC 监控 |
+| `thread-time` | 线程时间、锁等待 | 锁争用、线程池饥饿 |
+
+指定 Profile 采集：
+
+```bash
+dotnet-trace collect --process-id <pid> --profile cpu-sampling --duration 00:01:00
+```
+
+转换为 Chrome Trace 格式可视化：
+
+```bash
+dotnet-trace convert trace.nettrace --format Chromium
+```
+
+生成的 `.json` 文件可直接在 Chrome 浏览器 `chrome://tracing` 中打开查看火焰图。
 
 ## 数据库连接池
 

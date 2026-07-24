@@ -155,6 +155,82 @@ builder.Services.AddAuthorization(options =>
 });
 ```
 
+### 多 Requirement 的 AND/OR 逻辑
+
+一个 Policy 可以包含多个 Requirement，默认行为是 **AND**——所有 Requirement 都必须 Succeed，Policy 才通过：
+
+```csharp
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("SeniorManager", policy =>
+    {
+        policy.RequireClaim("department", "Management");
+        policy.RequireClaim("level", "Senior");
+    });
+});
+```
+
+上面要求用户同时拥有 `department=Management` 和 `level=Senior` 两个 Claim。
+
+如果你需要 **OR** 逻辑——满足任意一个条件即可——做法是为同一个 Requirement 类型注册多个 Handler。框架对同一 Requirement 会调用所有匹配的 Handler，只要任意一个调用 `Succeed`，该 Requirement 就算通过：
+
+```csharp
+public class EntryPermissionRequirement : IAuthorizationRequirement { }
+
+public class RoleEntryHandler : AuthorizationHandler<EntryPermissionRequirement>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        EntryPermissionRequirement requirement)
+    {
+        if (context.User.IsInRole("Admin"))
+        {
+            context.Succeed(requirement);
+        }
+
+        return Task.CompletedTask;
+    }
+}
+
+public class ClaimEntryHandler : AuthorizationHandler<EntryPermissionRequirement>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        EntryPermissionRequirement requirement)
+    {
+        if (context.User.HasClaim("permission", "entry.access"))
+        {
+            context.Succeed(requirement);
+        }
+
+        return Task.CompletedTask;
+    }
+}
+```
+
+注册两个 Handler：
+
+```csharp
+builder.Services.AddSingleton<IAuthorizationHandler, RoleEntryHandler>();
+builder.Services.AddSingleton<IAuthorizationHandler, ClaimEntryHandler>();
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("CanEnter", policy =>
+    {
+        policy.Requirements.Add(new EntryPermissionRequirement());
+    });
+});
+```
+
+现在 `CanEnter` Policy 对 `EntryPermissionRequirement` 的判断逻辑变成了 OR：Admin 角色 **或** 拥有 `entry.access` Claim，任意一个 Handler 成功即可。
+
+:::important 多 Requirement vs 多 Handler
+- 多个 **Requirement**：AND 逻辑，每个 Requirement 独立评估，全部 Succeed 才通过
+- 同一 Requirement 多个 **Handler**：OR 逻辑，任意一个 Handler 调用 Succeed 即通过
+- 如果需要更复杂的组合（如 `(A AND B) OR C`），需要自定义 `IAuthorizationPolicyProvider` 或在 Handler 内组合判断
+:::
+
 ## 资源授权
 
 有些权限要结合具体资源判断，例如“只能修改自己的订单”。
@@ -182,6 +258,202 @@ public async Task<IActionResult> UpdateOrder(
 ```
 
 资源授权适合所有权判断、多租户隔离、复杂业务权限。
+
+### 资源授权 Handler 完整实现
+
+上面 Controller 中使用了 `"CanEditOrder"` Policy 进行资源授权，但还没有定义对应的 Requirement 和 Handler。资源授权的 Handler 需要继承 `AuthorizationHandler<TRequirement, TResource>`，第二个泛型参数就是资源类型：
+
+```csharp
+public class CanEditOrderRequirement : IAuthorizationRequirement { }
+
+public class CanEditOrderHandler : AuthorizationHandler<CanEditOrderRequirement, Order>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        CanEditOrderRequirement requirement,
+        Order resource)
+    {
+        string? userId = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        if (userId is not null && resource.OwnerId == userId)
+        {
+            context.Succeed(requirement);
+        }
+
+        return Task.CompletedTask;
+    }
+}
+```
+
+注册 Handler 和 Policy：
+
+```csharp
+builder.Services.AddScoped<IAuthorizationHandler, CanEditOrderHandler>();
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("CanEditOrder", policy =>
+    {
+        policy.Requirements.Add(new CanEditOrderRequirement());
+    });
+});
+```
+
+:::note Handler 生命周期
+资源授权 Handler 通常用 `AddScoped` 而非 `AddSingleton`，因为 Handler 可能需要注入 `DbContext` 等 Scoped 服务来查询资源。如果 Handler 没有 Scoped 依赖，也可以用 `AddSingleton`。
+:::
+
+Handler 中 `resource` 参数就是 `AuthorizeAsync` 传入的 `Order` 对象。框架会自动将资源传递给 Handler，你不需要手动获取。
+
+多租户场景下，可以同样用资源授权判断资源是否属于当前租户：
+
+```csharp
+public class TenantResourceHandler : AuthorizationHandler<IAuthorizationRequirement, ITenantResource>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        IAuthorizationRequirement requirement,
+        ITenantResource resource)
+    {
+        string? tenantId = context.User.FindFirst("tenant_id")?.Value;
+
+        if (tenantId is not null && resource.TenantId == tenantId)
+        {
+            context.Succeed(requirement);
+        }
+
+        return Task.CompletedTask;
+    }
+}
+```
+
+这样只要资源实现了 `ITenantResource` 接口，就可以统一进行租户隔离校验。
+
+## Claims 从哪来
+
+前面大量使用了 Claim-based 授权，例如 `RequireClaim("permission", "products.manage")`，但这些 Claim 并不是凭空出现的。Claim 来自认证阶段，存放在安全令牌（JWT / Cookie）中，在请求到达时由认证中间件解析并填充到 `HttpContext.User` 中。
+
+以 JWT Bearer 认证为例，当你签发 Token 时写入 Claim：
+
+```csharp
+var claims = new List<Claim>
+{
+    new Claim(ClaimTypes.NameIdentifier, userId),
+    new Claim(ClaimTypes.Name, userName),
+    new Claim("permission", "products.manage"),
+    new Claim("permission", "orders.view"),
+    new Claim("tenant_id", "acme-corp"),
+};
+
+var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret));
+var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+var token = new JwtSecurityToken(
+    issuer: "myapp",
+    audience: "myapp",
+    claims: claims,
+    expires: DateTime.UtcNow.AddHours(2),
+    signingCredentials: creds);
+
+string tokenString = new JwtSecurityTokenHandler().WriteToken(token);
+```
+
+ASP.NET Core 的 JWT Bearer 中间件会自动解析 Token 中的 Claims，填充到 `HttpContext.User.Claims` 中。之后授权系统读取 `User.FindFirst("permission")` 就能拿到对应的值。
+
+:::tip 关联阅读
+认证与 Token 签发的完整流程参见 [Authentication](/posts/dotnet/aspnet-core-authentication)。本文聚焦授权如何消费 Claims，不重复认证部分的细节。
+:::
+
+如果使用 Cookie 认证，Claim 的写入方式类似，在登录时通过 `ClaimsIdentity` 和 `ClaimsPrincipal` 构建：
+
+```csharp
+var claims = new List<Claim>
+{
+    new Claim(ClaimTypes.NameIdentifier, userId),
+    new Claim("permission", "products.manage"),
+};
+
+var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+var principal = new ClaimsPrincipal(identity);
+
+await HttpContext.SignInAsync(
+    CookieAuthenticationDefaults.AuthenticationScheme,
+    principal);
+```
+
+无论 Token 还是 Cookie，核心链路一致：**认证阶段写入 Claim → 中间件解析 → 授权阶段消费 Claim**。
+
+## FallbackPolicy 与全局授权
+
+默认情况下，没有标注 `[Authorize]` 的端点是匿名可访问的。在生产系统中，很容易遗漏给某个接口加授权，造成安全漏洞。
+
+### FallbackPolicy
+
+`FallbackPolicy` 是"兜底策略"：当端点没有显式指定任何 Policy 时，使用 FallbackPolicy。最常见的需求是让所有端点默认需要登录：
+
+```csharp
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
+```
+
+配置之后，所有 Controller / Action 默认需要认证。需要匿名访问的端点显式标注 `[AllowAnonymous]` 即可豁免。
+
+这比逐个加 `[Authorize]` 更安全，因为"默认拒绝，显式放行"是安全系统的基本原则。
+
+### RequireAuthorization 与 Endpoint Routing
+
+除了 Attribute 方式，ASP.NET Core 还支持在 Endpoint Routing 层面配置授权。`RequireAuthorization()` 可以对一组端点批量添加授权要求：
+
+```csharp
+app.MapControllers();
+
+app.MapGet("/api/health", () => Results.Ok());
+
+app.MapGet("/api/admin/stats", () => Results.Ok())
+    .RequireAuthorization("AdminOnly");
+```
+
+对整个 Controller 组批量授权：
+
+```csharp
+var adminGroup = app.MapGroup("/api/admin")
+    .RequireAuthorization(policy =>
+    {
+        policy.RequireRole("Admin");
+    });
+
+adminGroup.MapGet("/users", GetAllUsers);
+adminGroup.MapGet("/stats", GetStats);
+```
+
+`/api/admin` 下的所有端点自动要求 Admin 角色，不需要在每个 Handler 上重复标注。
+
+结合 FallbackPolicy，也可以对整个应用要求认证，同时对特定端点放行：
+
+```csharp
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
+
+app.MapGet("/api/public/info", () => Results.Ok())
+    .AllowAnonymous();
+
+app.MapGet("/api/admin/dashboard", () => Results.Ok())
+    .RequireAuthorization("AdminOnly");
+```
+
+:::important Attribute vs Endpoint Routing
+- `[Authorize]` / `[AllowAnonymous]` 是 MVC Attribute，作用于 Controller / Action
+- `RequireAuthorization()` / `AllowAnonymous()` 是 Endpoint Routing 扩展方法，作用于 `MapGet` / `MapGroup` 等 Minimal API
+- 两者的底层都走同一个授权中间件，效果等价，选择取决于你用 Controller 还是 Minimal API
+:::
 
 ## 授权设计建议
 

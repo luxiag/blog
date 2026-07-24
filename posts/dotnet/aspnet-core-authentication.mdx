@@ -1,9 +1,9 @@
 ---
-title: 'ASP.NET Core Authentication：Cookie、JWT 与认证流程'
-date: '2026-07-21'
-excerpt: '理解 ASP.NET Core Authentication 认证体系：认证方案、ClaimsPrincipal、Cookie、JWT Bearer、登录态、Token 和中间件顺序。'
-tags: ['dotnet', 'aspnetcore', 'authentication', 'jwt', 'cookie']
-nextPost: 'dotnet/aspnet-core-authorization'
+title: "ASP.NET Core Authentication：Cookie、JWT 与认证流程"
+date: "2026-07-21"
+excerpt: "理解 ASP.NET Core Authentication 认证体系：认证方案、ClaimsPrincipal、Cookie、JWT Bearer、登录态、Token 和中间件顺序。"
+tags: ["dotnet", "aspnetcore", "authentication", "jwt", "cookie"]
+nextPost: "dotnet/aspnet-core-authorization"
 ---
 
 # ASP.NET Core Authentication：Cookie、JWT 与认证流程
@@ -18,16 +18,67 @@ ASP.NET Core 的认证系统会根据 Cookie、JWT Bearer Token 等凭据还原�
 
 ## Authentication 和 Authorization 的区别
 
-| 概念 | 解决问题 | 示例 |
-|---|---|---|
-| Authentication | 你是谁 | 解析 Cookie / JWT 得到用户身份 |
-| Authorization | 你能做什么 | 判断是否有 `orders.manage` 权限 |
+| 概念           | 解决问题   | 示例                            |
+| -------------- | ---------- | ------------------------------- |
+| Authentication | 你是谁     | 解析 Cookie / JWT 得到用户身份  |
+| Authorization  | 你能做什么 | 判断是否有 `orders.manage` 权限 |
 
 未认证通常返回 `401 Unauthorized`，已认证但无权限通常返回 `403 Forbidden`。
 
-## ClaimsPrincipal
+## ClaimsPrincipal / ClaimsIdentity / Claim：身份的三层结构
 
-认证成功后，ASP.NET Core 会构建 `ClaimsPrincipal`。
+理解 ASP.NET Core 认证的关键心智模型是三个类的层次关系：
+
+```text
+ClaimsPrincipal          ← 一个用户
+ └── ClaimsIdentity      ← 一种认证方式下的身份
+      └── Claim          ← 一条身份信息（键值对）
+```
+
+一个用户可以同时持有多种身份（比如同一用户既通过 Cookie 登录了后台，又关联了一个外部 OIDC 账号），所以 `ClaimsPrincipal` 包含多个 `ClaimsIdentity`，每个 `ClaimsIdentity` 包含多个 `Claim`。
+
+### Claim：最小的身份单元
+
+`Claim` 就是一个键值对，描述用户的一项属性：
+
+```csharp
+new Claim(ClaimTypes.NameIdentifier, "1");
+new Claim(ClaimTypes.Name, "alice");
+new Claim("permission", "products.manage");
+new Claim(JwtRegisteredClaimNames.Sub, "1");
+```
+
+`ClaimTypes` 是 ASP.NET Core 预定义的 Claim URI 常量（如 `NameIdentifier` 对应 `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier`），JWT 标准则使用 `JwtRegisteredClaimNames`（如 `sub`、`name`）。
+
+### ClaimsIdentity：一种认证方式下的身份
+
+`ClaimsIdentity` 将一组 Claim 打包，并标记它来自哪种认证方案：
+
+```csharp
+var claims = new List<Claim>
+{
+    new(ClaimTypes.NameIdentifier, "1"),
+    new(ClaimTypes.Name, "alice")
+};
+
+var identity = new ClaimsIdentity(claims, "AppCookie");
+```
+
+第二个参数 `"AppCookie"` 是认证类型（Authentication Type），它决定了这个 Identity 属于哪种认证方案。`identity.IsAuthenticated` 正是通过这个值判断的——只要认证类型不为空，就视为已认证。
+
+### ClaimsPrincipal：请求中的用户
+
+`ClaimsPrincipal` 是身份的顶层容器，可以包含多个 `ClaimsIdentity`：
+
+```csharp
+var cookieIdentity = new ClaimsIdentity(claims, "AppCookie");
+var oidcIdentity = new ClaimsIdentity(oidcClaims, "Oidc");
+
+var principal = new ClaimsPrincipal(cookieIdentity);
+principal.AddIdentity(oidcIdentity);
+```
+
+认证中间件把构建好的 `ClaimsPrincipal` 赋给 `HttpContext.User`，控制器中通过 `User` 访问：
 
 ```csharp
 [HttpGet("me")]
@@ -35,12 +86,32 @@ public IActionResult Me()
 {
     string? userId = User.FindFirst("sub")?.Value;
     string? name = User.Identity?.Name;
+    bool isAuthenticated = User.Identity?.IsAuthenticated ?? false;
 
-    return Ok(new { userId, name });
+    return Ok(new { userId, name, isAuthenticated });
 }
 ```
 
-`User` 来自 `ControllerBase.User`，本质是 `HttpContext.User`。
+`User.FindFirst()` 会在所有 Identity 中搜索；`User.Identity` 返回第一个 Identity（通常是主认证方案创建的）。
+
+### 三层结构在 Cookie 登录中的完整流程
+
+回看 Cookie 认证的登录代码，三层结构的作用更清晰：
+
+```csharp
+var claims = new List<Claim>
+{
+    new(ClaimTypes.NameIdentifier, "1"),
+    new(ClaimTypes.Name, "alice")
+};
+
+var identity = new ClaimsIdentity(claims, "AppCookie");
+var principal = new ClaimsPrincipal(identity);
+
+await HttpContext.SignInAsync("AppCookie", principal);
+```
+
+`SignInAsync` 把 `ClaimsPrincipal` 序列化进 Cookie，后续请求中间件反序列化还原出相同的 `ClaimsPrincipal`，赋给 `HttpContext.User`。
 
 ## 认证中间件顺序
 
@@ -137,15 +208,106 @@ using System.Text;
 
 关键校验参数：
 
-| 参数 | 作用 |
-|---|---|
-| `ValidateIssuer` | 验证签发者 |
-| `ValidateAudience` | 验证接收者 |
-| `ValidateLifetime` | 验证过期时间 |
-| `ValidateIssuerSigningKey` | 验证签名密钥 |
-| `IssuerSigningKey` | 签名密钥，必须与签发时一致 |
+| 参数                       | 作用                       |
+| -------------------------- | -------------------------- |
+| `ValidateIssuer`           | 验证签发者                 |
+| `ValidateAudience`         | 验证接收者                 |
+| `ValidateLifetime`         | 验证过期时间               |
+| `ValidateIssuerSigningKey` | 验证签名密钥               |
+| `IssuerSigningKey`         | 签名密钥，必须与签发时一致 |
 
 签名密钥不要写死在代码里，应从配置读取，生产环境使用足够长（至少 256 位）的随机字符串。
+
+### AuthenticationEvents：JWT 认证的事件扩展点
+
+JWT 认证处理管线提供了一组事件，让你在关键节点插入自定义逻辑。`JwtBearerEvents` 中最常用的三个事件：
+
+| 事件                     | 触发时机         | 典型用途                                      |
+| ------------------------ | ---------------- | --------------------------------------------- |
+| `OnTokenValidated`       | Token 校验通过后 | 向 Claims 中注入额外信息、做 Token 黑名单检查 |
+| `OnAuthenticationFailed` | Token 校验失败时 | 记录日志、自定义错误响应                      |
+| `OnChallenge`            | 返回 401 之前    | 自定义 401 响应体，替换默认的空 Body          |
+
+配置方式：
+
+```csharp
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = "product-api",
+            ValidAudience = "product-api",
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!))
+        };
+
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = context =>
+            {
+                string? userId = context.Principal?.FindFirst("sub")?.Value;
+
+                if (userId is not null && IsTokenRevoked(context.SecurityToken as JwtSecurityToken))
+                {
+                    context.Fail("Token has been revoked.");
+                    return Task.CompletedTask;
+                }
+
+                if (userId is not null)
+                {
+                    var extraClaims = new List<Claim>
+                    {
+                        new("tenant_id", ResolveTenantId(userId))
+                    };
+
+                    var identity = new ClaimsIdentity(extraClaims);
+                    context.Principal?.AddIdentity(identity);
+                }
+
+                return Task.CompletedTask;
+            },
+            OnAuthenticationFailed = context =>
+            {
+                if (context.Exception is SecurityTokenExpiredException)
+                {
+                    context.Response.Headers.Append("X-Token-Expired", "true");
+                }
+
+                return Task.CompletedTask;
+            },
+            OnChallenge = context =>
+            {
+                context.HandleResponse();
+
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                context.Response.WriteAsJsonAsync(new
+                {
+                    Error = "Unauthorized",
+                    Message = "Valid authentication token is required."
+                });
+
+                return Task.CompletedTask;
+            }
+        };
+    });
+```
+
+需要命名空间：
+
+```csharp
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using System.IdentityModel.Tokens.Jwt;
+```
+
+`OnTokenValidated` 中 `context.Principal` 就是认证中间件构建的 `ClaimsPrincipal`，你可以在此补充 Claim 或撤销身份。`context.SecurityToken` 是解析后的 JWT 对象，可读取 `jti`（Token ID）做黑名单检查。
+
+`OnChallenge` 中必须调用 `context.HandleResponse()` 才能阻止默认的 401 处理逻辑，然后自定义响应体。否则即使你写了自定义响应，框架仍会写入默认的 `WWW-Authenticate` 头。
 
 ### 签发 Token
 
@@ -285,11 +447,11 @@ Refresh Token 安全要点：
 
 Cookie 安全是 Cookie 认证方案的关键部分：
 
-| SameSite 值 | 行为 | 建议 |
-|---|---|---|
-| `Strict` | 同站请求才发送 Cookie | 最安全，但从外部链接进入时不带 Cookie |
-| `Lax` | GET 等安全导航请求发送 Cookie | 默认值，适合大多数场景 |
-| `None` | 所有请求都发送，必须配合 `Secure` | 前后端分离跨站场景需要 |
+| SameSite 值 | 行为                              | 建议                                  |
+| ----------- | --------------------------------- | ------------------------------------- |
+| `Strict`    | 同站请求才发送 Cookie             | 最安全，但从外部链接进入时不带 Cookie |
+| `Lax`       | GET 等安全导航请求发送 Cookie     | 默认值，适合大多数场景                |
+| `None`      | 所有请求都发送，必须配合 `Secure` | 前后端分离跨站场景需要                |
 
 配置：
 
@@ -345,10 +507,10 @@ builder.Services
 
 OAuth2 与 OIDC 的区别：
 
-| 概念 | 解决什么 | 典型场景 |
-|---|---|---|
-| OAuth2 | 授权：让第三方访问你的资源 | "用微信登录"获取用户信息 |
-| OpenID Connect | 认证：在 OAuth2 之上增加了 `id_token` 标识用户身份 | 统一身份平台、SSO |
+| 概念           | 解决什么                                           | 典型场景                 |
+| -------------- | -------------------------------------------------- | ------------------------ |
+| OAuth2         | 授权：让第三方访问你的资源                         | "用微信登录"获取用户信息 |
+| OpenID Connect | 认证：在 OAuth2 之上增加了 `id_token` 标识用户身份 | 统一身份平台、SSO        |
 
 生产项目通常不需要自己实现 OAuth2 Server，而是接入现成的 Identity Provider（Keycloak、IdentityServer、Auth0、Entra ID）。
 
@@ -415,13 +577,13 @@ API Key 适合内部服务间调用，不适合面向终端用户。
 
 ## 什么时候用哪种认证
 
-| 场景 | 建议 |
-|---|---|
-| 服务端页面、后台管理 | Cookie |
-| SPA 前后端分离 | JWT 或 BFF + Cookie |
-| 移动端 API | JWT |
-| 第三方统一登录 | OpenID Connect |
-| 内部服务间调用 | API Key |
+| 场景                 | 建议                |
+| -------------------- | ------------------- |
+| 服务端页面、后台管理 | Cookie              |
+| SPA 前后端分离       | JWT 或 BFF + Cookie |
+| 移动端 API           | JWT                 |
+| 第三方统一登录       | OpenID Connect      |
+| 内部服务间调用       | API Key             |
 
 不要因为 JWT 流行就所有系统都用 JWT。浏览器场景下 Cookie 配合服务端会话或 BFF 往往更安全可控。
 

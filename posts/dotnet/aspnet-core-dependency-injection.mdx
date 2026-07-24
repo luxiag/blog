@@ -84,6 +84,118 @@ builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddTransient<IFormatter, JsonFormatter>();
 ```
 
+### 验证生命周期行为
+
+表格和注册代码只给出了定义，但直觉需要通过实例验证来建立。下面用一个带唯一标识的服务，在同一个请求中注入两次，观察实例是否相同。
+
+定义接口和实现，用 `Guid` 标识每个实例：
+
+```csharp
+public interface IOperation
+{
+    Guid OperationId { get; }
+}
+
+public interface IOperationSingleton : IOperation { }
+public interface IOperationScoped : IOperation { }
+public interface IOperationTransient : IOperation { }
+
+public class Operation : IOperationSingleton, IOperationScoped, IOperationTransient
+{
+    public Guid OperationId { get; } = Guid.NewGuid();
+}
+```
+
+注册三种生命周期：
+
+```csharp
+builder.Services.AddSingleton<IOperationSingleton, Operation>();
+builder.Services.AddScoped<IOperationScoped, Operation>();
+builder.Services.AddTransient<IOperationTransient, Operation>();
+```
+
+Controller 中注入两次 Scoped 和两次 Transient：
+
+```csharp
+[ApiController]
+[Route("api/operations")]
+public class OperationsController : ControllerBase
+{
+    private readonly IOperationSingleton _singleton;
+    private readonly IOperationScoped _scoped1;
+    private readonly IOperationScoped _scoped2;
+    private readonly IOperationTransient _transient1;
+    private readonly IOperationTransient _transient2;
+
+    public OperationsController(
+        IOperationSingleton singleton,
+        IOperationScoped scoped1,
+        IOperationScoped scoped2,
+        IOperationTransient transient1,
+        IOperationTransient transient2)
+    {
+        _singleton = singleton;
+        _scoped1 = scoped1;
+        _scoped2 = scoped2;
+        _transient1 = transient1;
+        _transient2 = transient2;
+    }
+
+    [HttpGet]
+    public IActionResult Get()
+    {
+        return Ok(new
+        {
+            SingletonId = _singleton.OperationId,
+            Scoped1Id = _scoped1.OperationId,
+            Scoped2Id = _scoped2.OperationId,
+            ScopedSameInstance = _scoped1.OperationId == _scoped2.OperationId,
+            Transient1Id = _transient1.OperationId,
+            Transient2Id = _transient2.OperationId,
+            TransientSameInstance = _transient1.OperationId == _transient2.OperationId
+        });
+    }
+}
+```
+
+第一次请求的返回示例：
+
+```json
+{
+  "SingletonId": "a1b2c3d4-...",
+  "Scoped1Id": "e5f6a7b8-...",
+  "Scoped2Id": "e5f6a7b8-...",
+  "ScopedSameInstance": true,
+  "Transient1Id": "c9d0e1f2-...",
+  "Transient2Id": "f3a4b5c6-...",
+  "TransientSameInstance": false
+}
+```
+
+第二次请求的返回示例：
+
+```json
+{
+  "SingletonId": "a1b2c3d4-...",
+  "Scoped1Id": "d7e8f9a0-...",
+  "Scoped2Id": "d7e8f9a0-...",
+  "ScopedSameInstance": true,
+  "Transient1Id": "b1c2d3e4-...",
+  "Transient2Id": "e5f6a7b8-...",
+  "TransientSameInstance": false
+}
+```
+
+观察结论：
+
+- **Singleton**：两次请求的 `SingletonId` 完全相同——整个应用共享一个实例
+- **Scoped**：同一请求中 `Scoped1Id == Scoped2Id`，不同请求之间 `ScopedId` 不同——请求内共享，跨请求隔离
+- **Transient**：无论同请求还是跨请求，每次注入都是新实例
+
+:::note 为什么用三个不同接口？
+如果用同一个 `IOperation` 注册三次，容器会以后注册的为准（覆盖），无法同时注入三种生命周期的实例。用三个接口继承自 `IOperation`，既能共享 `OperationId` 属性，又能分别注册不同生命周期。
+:::
+
 ## Scoped 是 Web API 中最常用的生命周期
 
 一个 HTTP 请求内共享同一个 Scoped 实例，不同请求之间实例不同。
@@ -96,6 +208,115 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 ```
 
 这适合把一次请求中的数据库操作放在同一个上下文中。
+
+## 工厂注册
+
+前面用的 `AddScoped<ISmtpClient, SmtpClient>()` 要求实现类有一个无参构造函数，容器会自动 `new` 出实例。但很多场景下，实例的构造需要参数或额外逻辑——比如 `SmtpClient` 需要从配置中读取主机和端口，`HttpClient` 需要设置超时时间。
+
+这时候用**工厂注册**：注册时传入一个 `Func<IServiceProvider, TImplementation>` 委托，容器解析时调用这个委托，由你控制实例的创建过程。
+
+```csharp
+public interface IEmailSender
+{
+    Task SendAsync(string to, string subject, string body);
+}
+
+public class SmtpEmailSender : IEmailSender
+{
+    private readonly SmtpClient _client;
+    private readonly string _from;
+
+    public SmtpEmailSender(SmtpClient client, string from)
+    {
+        _client = client;
+        _from = from;
+    }
+
+    public async Task SendAsync(string to, string subject, string body)
+    {
+        var message = new MailMessage(_from, to, subject, body);
+        await _client.SendMailAsync(message);
+    }
+}
+```
+
+工厂注册时，`sp` 参数是当前的 `IServiceProvider`，可以从中解析其他服务：
+
+```csharp
+builder.Services.AddScoped<IEmailSender>(sp =>
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+    var host = config["Smtp:Host"]!;
+    var port = int.Parse(config["Smtp:Port"]!);
+    var from = config["Smtp:From"]!;
+
+    var client = new SmtpClient(host, port);
+    return new SmtpEmailSender(client, from);
+});
+```
+
+:::warning 工厂注册的常见错误
+工厂委托中的 `sp` 只能解析已注册的服务。如果委托内引用了尚未注册的类型，运行时会抛出 `InvalidOperationException`。确保工厂依赖的服务在工厂注册**之前**完成注册。
+:::
+
+工厂注册也可以用 `ActivatorUtilities` 配合，手动传入部分参数、其余由容器提供：
+
+```csharp
+builder.Services.AddScoped<IReportGenerator>(sp =>
+{
+    var template = sp.GetRequiredService<IReportTemplate>();
+    return ActivatorUtilities.CreateInstance<ReportGenerator>(sp, template);
+});
+```
+
+`ActivatorUtilities.CreateInstance` 会把 `template` 作为构造函数参数传入，构造函数中其余参数由 `sp` 自动填充。
+
+## 开放泛型注册
+
+如果你的接口和实现是泛型的，比如 `IRepository<T>` 对应 `Repository<T>`，逐个注册每个具体类型会非常冗余：
+
+```csharp
+builder.Services.AddScoped<IRepository<User>, UserRepository>();
+builder.Services.AddScoped<IRepository<Order>, OrderRepository>();
+builder.Services.AddScoped<IRepository<Product>, ProductRepository>();
+```
+
+开放泛型注册一次搞定所有类型参数组合：
+
+```csharp
+builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
+```
+
+定义接口和实现：
+
+```csharp
+public interface IRepository<T> where T : class
+{
+    T? FindById(int id);
+    void Add(T entity);
+}
+
+public class Repository<T> : IRepository<T> where T : class
+{
+    private readonly AppDbContext _db;
+
+    public Repository(AppDbContext db)
+    {
+        _db = db;
+    }
+
+    public T? FindById(int id) => _db.Set<T>().Find(id);
+    public void Add(T entity) => _db.Set<T>().Add(entity);
+}
+```
+
+注册后，容器会在第一次请求 `IRepository<User>` 时动态构造 `Repository<User>`，不需要逐个注册。
+
+:::note 开放泛型的限制
+- 只支持开放泛型到开放泛型的映射，不能 `typeof(IRepository<>) → typeof(UserRepository)`
+- 如果某个具体类型需要特殊实现，可以对具体类型单独注册，容器优先匹配具体注册
+- 泛型约束必须一致：如果 `IRepository<T>` 有 `where T : class`，`Repository<T>` 也必须有相同约束
+:::
 
 ## 生命周期陷阱
 
@@ -121,6 +342,106 @@ builder.Services.AddSingleton<ReportCache>();
 - 把服务改成 Scoped
 - 或在 Singleton 中使用 `IServiceScopeFactory` 创建作用域
 - 或重新设计职责，不让单例持有请求级资源
+
+## 服务释放与 IDisposable
+
+DI 容器不仅负责创建实例，也负责释放实现了 `IDisposable`（或 `IAsyncDisposable`）的服务。但释放的时机和责任方因生命周期不同而异，理解这一机制可以避免资源泄漏。
+
+### 释放规则
+
+| 生命周期 | 由谁创建 | 由谁释放 | 释放时机 |
+|---|---|---|---|
+| Singleton | 容器（根 `IServiceProvider`） | 根 `IServiceProvider` | 应用关闭时（`Dispose`） |
+| Scoped | 当前 Scope 的 `IServiceProvider` | 创建它的 Scope | Scope 结束时（HTTP 请求结束 / `scope.Dispose()`） |
+| Transient | 容器 | 解析它的那个 Scope（或根容器） | 同 Scoped / 应用关闭 |
+
+核心原则：**谁创建，谁释放。** 容器会跟踪自己创建的所有 `IDisposable` 实例，在自身 `Dispose` 时统一调用它们的 `Dispose` 方法。
+
+### Scoped 服务的释放
+
+在 Web API 中，每个 HTTP 请求会创建一个 Scope，请求结束时框架自动调用 `scope.Dispose()`，所有该 Scope 创建的 Scoped 和 Transient 的 `IDisposable` 实例都会被释放。
+
+```csharp
+public class EmailQueue : IDisposable
+{
+    private readonly Channel<EmailMessage> _channel = Channel.CreateBounded<EmailMessage>(100);
+
+    public void Enqueue(EmailMessage message) => _channel.Writer.TryWrite(message);
+
+    public void Dispose()
+    {
+        _channel.Writer.Complete();
+    }
+}
+```
+
+```csharp
+builder.Services.AddScoped<EmailQueue>();
+```
+
+请求结束 → Scope 释放 → `EmailQueue.Dispose()` 被调用。不需要手动 `Dispose`。
+
+### Singleton 服务的释放
+
+Singleton 由根容器创建，只有应用关闭时根容器 `Dispose` 才会释放。所以 Singleton 持有的资源（数据库连接、文件句柄等）会一直存活到应用关闭。
+
+```csharp
+public class CacheService : IDisposable
+{
+    private readonly Timer _timer;
+
+    public CacheService()
+    {
+        _timer = new Timer(_ => Refresh(), null, TimeSpan.Zero, TimeSpan.FromMinutes(5));
+    }
+
+    private void Refresh() { }
+
+    public void Dispose() => _timer.Dispose();
+}
+```
+
+```csharp
+builder.Services.AddSingleton<CacheService>();
+```
+
+应用关闭时，`CacheService.Dispose()` 会被调用，`Timer` 被正确释放。
+
+### 手动创建 Scope 时的释放责任
+
+前面在 `BackgroundService` 中用 `IServiceScopeFactory.CreateScope()` 创建了 Scope——此时**你**负责释放这个 Scope：
+
+```csharp
+public class OrderWorker : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    public OrderWorker(IServiceScopeFactory scopeFactory)
+    {
+        _scopeFactory = scopeFactory;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            using IServiceScope scope = _scopeFactory.CreateScope();
+            var service = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            await service.ProcessPendingAsync(stoppingToken);
+        }
+    }
+}
+```
+
+`using` 确保每次循环结束时 `scope.Dispose()` 被调用，Scope 内创建的所有 `IDisposable` 服务随之释放。
+
+:::warning 释放顺序
+容器按照**与创建相反的顺序**释放服务。如果 A 依赖 B，A 先创建、B 后创建，那么释放时 A 先 `Dispose`，B 后 `Dispose`。这意味着在 A 的 `Dispose` 中仍然可以安全地使用 B（如果 B 也是容器管理的）。
+:::
+
+:::warning 不要手动 Dispose 容器解析的服务
+如果服务是从容器解析出来的，不要在业务代码中手动调用 `Dispose`。容器会在合适的时机自动释放。手动 `Dispose` 可能导致其他依赖同一实例的服务访问已释放的资源。
+:::
 
 ## 构造函数注入优先
 
@@ -175,6 +496,190 @@ public OrderService(ILogger<OrderService> logger)
 ```
 
 `IServiceProvider` 适合框架扩展、工厂、动态解析少数场景，不适合普通业务流程。
+
+## 同一接口多实现解析策略
+
+实际项目中经常需要同一接口有多个实现——比如多种支付方式、多种消息通道。直接注册多个实现会导致"最后一个覆盖前面的"：
+
+```csharp
+builder.Services.AddScoped<INotification, EmailNotification>();
+builder.Services.AddScoped<INotification, SmsNotification>();
+// 构造函数注入 INotification 只会拿到 SmsNotification
+```
+
+容器对同一接口多次注册的行为是：**最后注册的生效**，前面的被覆盖。
+
+### 方案一：IEnumerable 解析全部实现
+
+注册多个实现后，用 `IEnumerable<T>` 注入所有实例：
+
+```csharp
+public interface INotification
+{
+    string Channel { get; }
+    Task SendAsync(string message);
+}
+
+public class EmailNotification : INotification
+{
+    public string Channel => "Email";
+    public Task SendAsync(string message)
+    {
+        Console.WriteLine($"[Email] {message}");
+        return Task.CompletedTask;
+    }
+}
+
+public class SmsNotification : INotification
+{
+    public string Channel => "Sms";
+    public Task SendAsync(string message)
+    {
+        Console.WriteLine($"[Sms] {message}");
+        return Task.CompletedTask;
+    }
+}
+```
+
+```csharp
+builder.Services.AddScoped<INotification, EmailNotification>();
+builder.Services.AddScoped<INotification, SmsNotification>();
+```
+
+```csharp
+public class NotificationService
+{
+    private readonly IEnumerable<INotification> _notifications;
+
+    public NotificationService(IEnumerable<INotification> notifications)
+    {
+        _notifications = notifications;
+    }
+
+    public async Task SendToAllAsync(string message)
+    {
+        foreach (var n in _notifications)
+        {
+            await n.SendAsync(message);
+        }
+    }
+
+    public INotification GetByChannel(string channel)
+    {
+        return _notifications.First(n => n.Channel == channel);
+    }
+}
+```
+
+### 方案二：工厂模式按条件选择
+
+把选择逻辑封装在工厂中，消费者不需要关心多实现细节：
+
+```csharp
+public interface INotificationFactory
+{
+    INotification Resolve(string channel);
+}
+
+public class NotificationFactory : INotificationFactory
+{
+    private readonly IEnumerable<INotification> _notifications;
+
+    public NotificationFactory(IEnumerable<INotification> notifications)
+    {
+        _notifications = notifications;
+    }
+
+    public INotification Resolve(string channel)
+    {
+        return _notifications.First(n => n.Channel == channel);
+    }
+}
+```
+
+```csharp
+builder.Services.AddScoped<INotification, EmailNotification>();
+builder.Services.AddScoped<INotification, SmsNotification>();
+builder.Services.AddScoped<INotificationFactory, NotificationFactory>();
+```
+
+```csharp
+public class OrderService
+{
+    private readonly INotificationFactory _factory;
+
+    public OrderService(INotificationFactory factory)
+    {
+        _factory = factory;
+    }
+
+    public async Task NotifyAsync(string channel, string message)
+    {
+        var notifier = _factory.Resolve(channel);
+        await notifier.SendAsync(message);
+    }
+}
+```
+
+:::note 两种方案的适用场景
+- `IEnumerable<T>` 适合"全量处理"场景：广播通知、插件加载、管道中间件
+- 工厂模式适合"按条件选择"场景：根据配置或运行时参数选一个实现
+:::
+
+## Keyed Services（.NET 8+）
+
+.NET 8 引入了 **Keyed Services**，为同一个接口的不同实现提供命名标识，让容器能直接按 key 解析，不再需要 `IEnumerable` + 手动筛选。
+
+### 注册与解析
+
+```csharp
+builder.Services.AddKeyedScoped<INotification, EmailNotification>("email");
+builder.Services.AddKeyedScoped<INotification, SmsNotification>("sms");
+```
+
+在构造函数中用 `[FromKeyedServices]` 指定要哪个实现：
+
+```csharp
+public class OrderController : ControllerBase
+{
+    private readonly INotification _emailNotifier;
+
+    public OrderController([FromKeyedServices("email")] INotification emailNotifier)
+    {
+        _emailNotifier = emailNotifier;
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Create()
+    {
+        await _emailNotifier.SendAsync("Order created");
+        return Ok();
+    }
+}
+```
+
+也可以用 `IServiceProvider` 按需解析：
+
+```csharp
+var notifier = serviceProvider.GetRequiredKeyedService<INotification>("sms");
+```
+
+### Keyed Services 与 IEnumerable 共存
+
+Keyed 注册和普通注册可以共存。未指定 key 的 `IEnumerable<INotification>` 包含**所有**注册（含 keyed），`GetRequiredKeyedService` 只返回指定 key 的实例。
+
+```csharp
+builder.Services.AddScoped<INotification, PushNotification>();
+builder.Services.AddKeyedScoped<INotification, EmailNotification>("email");
+builder.Services.AddKeyedScoped<INotification, SmsNotification>("sms");
+
+// IEnumerable<INotification> 包含 PushNotification + EmailNotification + SmsNotification
+// GetRequiredKeyedService<INotification>("email") 只返回 EmailNotification
+```
+
+:::important Keyed Services 的适用版本
+Keyed Services 是 .NET 8 引入的特性。如果项目目标框架低于 .NET 8，只能使用前面的 `IEnumerable` + 工厂方案。
+:::
 
 ## 在后台服务中使用 Scoped 服务
 

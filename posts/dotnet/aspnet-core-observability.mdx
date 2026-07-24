@@ -3,6 +3,7 @@ title: 'ASP.NET Core 可观测性：日志、指标、链路追踪与 OpenTeleme
 date: '2026-07-21'
 excerpt: '构建 ASP.NET Core 可观测性体系：结构化日志、Metrics、Tracing、TraceId、OpenTelemetry、OTLP 导出和生产排障思路。'
 tags: ['dotnet', 'aspnetcore', 'observability', 'opentelemetry', 'metrics', 'tracing']
+nextPost: 'dotnet/aspnet-core-performance'
 ---
 
 # ASP.NET Core 可观测性：日志、指标、链路追踪与 OpenTelemetry
@@ -80,6 +81,64 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 
 数据可以发送到 OpenTelemetry Collector，再转发到 Jaeger、Tempo、Zipkin、云厂商 APM。
 
+### 本地部署 Jaeger 查看链路
+
+开发环境最快捷的方式是用 Docker 启动 Jaeger all-in-one：
+
+```bash
+docker run -d --name jaeger \
+  -p 16686:16686 \
+  -p 4317:4317 \
+  -p 4318:4318 \
+  jaegertracing/jaeger:2.4
+```
+
+- `4317`/`4318`：OTLP gRPC/HTTP 接收端口，ASP.NET Core 直接发送到这里
+- `16686`：Jaeger UI 端口
+
+启动后把 OTLP 端点指向本机：
+
+```text
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+```
+
+浏览器访问 `http://localhost:16686` 即可看到 Jaeger UI。
+
+### Span 结构
+
+一条 Trace 由多个 Span 组成，每个 Span 的核心字段：
+
+| 字段 | 含义 |
+|---|---|
+| TraceId | 整条链路的唯一标识，同一请求的所有 Span 共享 |
+| SpanId | 当前 Span 的唯一标识 |
+| ParentSpanId | 父 Span 的 ID，根 Span 此字段为空 |
+| OperationName | 操作名称，如 `HTTP GET /api/orders` |
+| Duration | 耗时 |
+| Attributes | 键值对标签，如 `http.status_code = 200` |
+| Events | 时间点事件，如异常记录 |
+| Status | 状态：OK / Error / Unset |
+
+一个典型请求的 Span 层级：
+
+```text
+TraceId: abc123
+├── Span: HTTP GET /api/orders          (SpanId: s1, Duration: 120ms)
+│   ├── Span: HTTP GET inventory-svc    (SpanId: s2, ParentSpanId: s1, Duration: 45ms)
+│   └── Span: EF Core Query Orders     (SpanId: s3, ParentSpanId: s1, Duration: 35ms)
+```
+
+在 Jaeger UI 中，你可以：
+
+1. 搜索 Service 名称，筛选最近一段时间的 Trace
+2. 点击某条 Trace，查看瀑布图（Waterfall），每个 Span 按时间轴展开
+3. 点击单个 Span 查看其 Attributes、Events 和 Status
+4. 对比正常和异常 Trace 的耗时差异
+
+:::tip
+Jaeger all-in-one 适合开发测试，生产环境请使用 OpenTelemetry Collector 作为统一接收层，再转发到 Jaeger/Tempo 等持久化后端。
+:::
+
 ## 配置 Metrics
 
 ```csharp
@@ -106,6 +165,16 @@ builder.Services.AddOpenTelemetry()
 
 ## 自定义指标
 
+OpenTelemetry 的 .NET Metrics API 提供三种核心仪器类型：
+
+| 类型 | 用途 | 特点 |
+|---|---|---|
+| Counter | 计数：请求总数、订单数 | 只增不减 |
+| Histogram | 分布：延迟、请求大小 | 记录值落入预定义桶，适合 P50/P95/P99 |
+| Gauge | 当前值：在线用户数、队列深度 | 可增可减，反映瞬时状态 |
+
+### Counter：计数
+
 ```csharp
 public class OrderMetrics
 {
@@ -130,6 +199,96 @@ public class OrderMetrics
 builder.Services.AddSingleton<OrderMetrics>();
 ```
 
+### Histogram：延迟分布
+
+Histogram 将记录的值放入预定义的桶（bucket）中，适合观察延迟分布和计算分位数。
+
+```csharp
+public class RequestMetrics
+{
+    private readonly Histogram<double> _requestDuration;
+
+    public RequestMetrics(IMeterFactory meterFactory)
+    {
+        var meter = meterFactory.Create("ProductApi.Requests");
+        _requestDuration = meter.CreateHistogram<double>(
+            "http.request.duration",
+            unit: "ms",
+            description: "HTTP request duration in milliseconds");
+    }
+
+    public void RecordRequestDuration(double durationMs, string method, int statusCode)
+    {
+        _requestDuration.Record(durationMs,
+            new KeyValuePair<string, object?>("http.method", method),
+            new KeyValuePair<string, object?>("http.status_code", statusCode));
+    }
+}
+```
+
+注册并使用：
+
+```csharp
+builder.Services.AddSingleton<RequestMetrics>();
+
+app.Use(async (context, next) =>
+{
+    var sw = Stopwatch.StartNew();
+    await next(context);
+    sw.Stop();
+    var metrics = context.RequestServices.GetRequiredService<RequestMetrics>();
+    metrics.RecordRequestDuration(sw.Elapsed.TotalMilliseconds,
+        context.Request.Method,
+        context.Response.StatusCode);
+});
+```
+
+在 Prometheus/Grafana 中可以用 `histogram_quantile(0.95, rate(http_request_duration_bucket[5m]))` 查询 P95 延迟。
+
+### Gauge：当前值
+
+Gauge 有两种方式：`ObservableGauge`（回调式，每次采集时自动调用）适合从已有对象读取值；直接 `CreateGauge` 适合主动更新。
+
+```csharp
+public class QueueMetrics : BackgroundService
+{
+    private readonly Meter _meter;
+    private readonly ObservableGauge<int> _queueDepthGauge;
+    private int _currentDepth;
+
+    public QueueMetrics(IMeterFactory meterFactory)
+    {
+        _meter = meterFactory.Create("ProductApi.Queues");
+        _queueDepthGauge = _meter.CreateObservableGauge<int>(
+            "queue.order.depth",
+            observeValue: () => new Measurement<int>(_currentDepth),
+            unit: "{items}",
+            description: "Current order queue depth");
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            _currentDepth = await FetchQueueDepthAsync();
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+        }
+    }
+
+    private Task<int> FetchQueueDepthAsync() => Task.FromResult(0);
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddHostedService<QueueMetrics>();
+```
+
+:::warning
+`ObservableGauge` 的回调在每次指标采集时执行，不要在里面做耗时操作。`CreateGauge` 则需要你主动调用 `Record()` 更新值。
+:::
+
 ## 结构化日志
 
 日志仍然重要。建议：
@@ -152,6 +311,103 @@ _logger.LogInformation($"Order {orderId} created by user {userId}");
 2. 再看链路：慢在哪个下游，数据库还是外部 HTTP。
 3. 最后看日志：具体异常、业务参数、TraceId。
 4. 结合部署记录：是否刚发布、是否配置变更。
+
+### 三者联动：完整排障场景
+
+下面通过一个真实场景演示日志、指标、链路追踪如何通过 TraceId 串联排障。
+
+**场景**：用户反馈下单偶发超时，但没有具体信息。
+
+**第一步：指标发现问题**
+
+Grafana 告警显示 `http_request_duration` 的 P95 延迟从 200ms 飙升到 3s，同时 `orders.created` 计数增长放缓。
+
+**第二步：链路定位瓶颈**
+
+在 Jaeger UI 筛选最近 30 分钟 `duration > 2s` 的 Trace，找到一条耗时 3.2s 的链路：
+
+```text
+TraceId: 4bf92f3577b34da6
+├── HTTP POST /api/orders             3200ms
+│   ├── HTTP POST inventory-svc/check  2800ms   ← 瓶颈
+│   └── EF Core INSERT Orders           150ms
+```
+
+库存服务的 HTTP 调用占了绝大部分时间。
+
+**第三步：日志查看详情**
+
+用 TraceId `4bf92f3577b34da6` 在日志系统中搜索：
+
+```text
+[17:03:21 INF] Processing order ORD-9921. TraceId: 4bf92f3577b34da6
+[17:03:21 INF] Calling inventory service. TraceId: 4bf92f3577b34da6
+[17:03:24 WRN] Inventory service slow response: 2800ms. TraceId: 4bf92f3577b34da6
+[17:03:24 INF] Order ORD-9921 created. TraceId: 4bf92f3577b34da6
+```
+
+日志确认了库存服务响应慢，且不是超时失败，只是慢。
+
+**实现三者联动的代码要点**：让日志自动携带 TraceId，需要将 OpenTelemetry 的 Activity 关联到 Serilog/ILogger：
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing =>
+    {
+        tracing
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddOtlpExporter();
+    })
+    .WithLogging(logging =>
+    {
+        logging.AddOtlpExporter();
+    })
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddAspNetCoreInstrumentation()
+            .AddRuntimeInstrumentation()
+            .AddOtlpExporter();
+    });
+```
+
+```bash
+dotnet add package OpenTelemetry.Instrumentation.AspNetCore
+dotnet add package OpenTelemetry.Instrumentation.Http
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
+dotnet add package OpenTelemetry.Exporter.Console
+```
+
+业务代码中用结构化日志记录 TraceId，OpenTelemetry 自动采集的 Span 也会携带同一个 TraceId，三者通过此 ID 串联：
+
+```csharp
+app.MapPost("/api/orders", async (OrderRequest req, OrderMetrics orderMetrics,
+    RequestMetrics requestMetrics, ILogger<Program> logger, HttpContext ctx) =>
+{
+    var traceId = ctx.TraceIdentifier;
+    logger.LogInformation("Processing order {OrderId}. TraceId: {TraceId}",
+        req.OrderId, traceId);
+
+    var sw = Stopwatch.StartNew();
+    var inventoryResult = await CheckInventoryAsync(req);
+    var inventoryDuration = sw.ElapsedMilliseconds;
+
+    if (inventoryDuration > 2000)
+    {
+        logger.LogWarning("Inventory service slow response: {Duration}ms. TraceId: {TraceId}",
+            inventoryDuration, traceId);
+    }
+
+    orderMetrics.OrderCreated();
+    requestMetrics.RecordRequestDuration(inventoryDuration + 150,
+        "POST", 200);
+
+    return Results.Ok();
+});
+```
+
+这样，当指标告警触发后 → 在 Jaeger 用时间范围筛选慢 Trace → 拿到 TraceId → 到日志系统精确搜索 → 三者完整闭环。
 
 ## Health Checks 与可观测性
 

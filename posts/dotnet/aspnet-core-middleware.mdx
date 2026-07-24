@@ -185,12 +185,47 @@ app.UseAuthorization();
 app.MapControllers();
 ```
 
-注意：
+每条规则背后都有明确的原因：
 
-- 异常处理中间件要尽量靠前，才能捕获后续异常。
-- `UseAuthentication()` 必须在 `UseAuthorization()` 前面。
-- CORS 通常放在路由之后、认证授权之前。
-- `MapControllers()` 是 Endpoint 映射，通常放在管道配置后面。
+**异常处理必须最前面**：异常处理中间件用 try-catch 包裹后续管道。如果它不在最前面，前面注册的中间件抛出的异常就没人捕获。请求到达异常处理中间件之前如果就已经出错了，这个错误就会直接返回原始 500 页面，没有友好的错误格式。
+
+**UseRouting 在认证授权之前**：Endpoint Routing 分两阶段工作——先匹配路由确定 Endpoint，再执行中间件和 Endpoint。认证授权中间件需要读取已匹配 Endpoint 上的元数据（如 `[Authorize]` 特性）才能工作。路由还没匹配，授权中间件就不知道当前请求需要什么权限。
+
+**UseAuthentication 必须在 UseAuthorization 前面**：授权（Authorization）的前提是知道"你是谁"，这正是认证（Authentication）做的事。认证中间件解析 Token / Cookie，把用户身份写入 `HttpContext.User`。授权中间件读取 `HttpContext.User` 来判断权限。顺序反了，授权看到的是未认证用户，所有需要权限的请求都会被拒绝。
+
+**CORS 在认证授权之前**：浏览器在跨域请求时会先发 OPTIONS 预检请求。如果 CORS 中间件在认证之后，预检请求可能被认证拦截（401），浏览器连 CORS 协商都完不成。
+
+**MapControllers 在最后**：`Map...` 注册的是 Endpoint 终点，不是中间件。它应该在所有管道环节配置完成后注册，确保请求到达 Endpoint 之前所有中间件都已就位。
+
+### app.Map 分支 vs app.MapGet 终点
+
+`app.Map` 和 `app.MapGet` 都叫 "Map"，但语义完全不同：
+
+```csharp
+app.Map("/admin", adminApp =>
+{
+    adminApp.Use(async (context, next) =>
+    {
+        Console.WriteLine("Admin branch");
+        await next();
+    });
+
+    adminApp.MapGet("/dashboard", () => "Admin Dashboard");
+});
+```
+
+```csharp
+app.MapGet("/api/hello", () => "Hello");
+```
+
+| 对比 | `app.Map("/path", ...)` | `app.MapGet("/path", ...)` |
+|---|---|---|
+| 作用 | 创建分支管道 | 注册 Endpoint 终点 |
+| 参数 | 路径前缀 + 分支管道配置委托 | 路由模板 + 请求处理委托 |
+| 语义 | "匹配这个路径前缀的请求走这条独立的管道" | "这个路径和 Method 对应这个处理函数" |
+| 是否短路 | 分支内如果不调用后续中间件则短路 | 直接返回响应，是管道终点 |
+
+初学者常混淆这两个方法。记住：`app.Map` 是管道分支，`app.MapGet` / `app.MapPost` 是 Endpoint 注册。
 
 ## Middleware 和 Filter 的区别
 

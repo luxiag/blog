@@ -101,15 +101,46 @@ builder.Services.AddMemoryCache();
 
 服务必须在 `builder.Build()` 之前注册。`Build()` 之后服务容器基本就构建完成了。
 
+## DI 服务生命周期
+
+注册服务时需要选择生命周期，它决定了服务实例的创建和共享范围：
+
+| 生命周期 | 方法 | 行为 |
+|---|---|---|
+| Transient | `AddTransient` | 每次请求都创建新实例 |
+| Scoped | `AddScoped` | 同一个 HTTP 请求内共享同一个实例 |
+| Singleton | `AddSingleton` | 整个应用生命周期内只有一个实例 |
+
+```csharp
+builder.Services.AddTransient<IEmailSender, SmtpEmailSender>();
+builder.Services.AddScoped<IProductService, ProductService>();
+builder.Services.AddSingleton<ICacheService, MemoryCacheService>();
+```
+
+最需要理解的是 Scoped：在一个 HTTP 请求中，无论多少个类依赖了同一个 Scoped 服务，它们拿到的都是同一个实例。这在数据库访问场景中很重要——同一个请求内共享同一个 DbContext 才能保证事务一致性。
+
+常见陷阱：Singleton 服务不能直接依赖 Scoped 服务。因为 Singleton 只创建一次，它持有的 Scoped 实例不会随请求变化，相当于 Singleton 中嵌入了"永不过期"的 Scoped 实例。运行时会抛出异常。
+
+关于 DI 的完整讲解（包括生命周期验证、手动解析、范围服务等）参考 [依赖注入](/posts/dotnet/aspnet-core-dependency-injection)。
+
 ## Configuration：读取配置
 
-ASP.NET Core 默认会读取多种配置来源：
+ASP.NET Core 默认会读取多种配置来源，按优先级从高到低排列：
 
-- `appsettings.json`
-- `appsettings.{Environment}.json`
-- User Secrets（开发环境）
-- 环境变量
-- 命令行参数
+| 优先级 | 配置来源 | 说明 |
+|---|---|---|
+| 1（最高） | 命令行参数 | `--Key Value` 或 `/Key Value` |
+| 2 | 环境变量 | `ASPNETCORE_ENVIRONMENT` 等 |
+| 3 | User Secrets | 仅开发环境，`dotnet user-secrets set` |
+| 4 | `appsettings.{Environment}.json` | 如 `appsettings.Production.json` |
+| 5（最低） | `appsettings.json` | 基础配置 |
+
+优先级高的会覆盖优先级低的同名键。这意味着你在 `appsettings.json` 中设一个默认值，在 `appsettings.Production.json` 中覆盖生产值，再用环境变量做运行时覆盖，无需改代码。
+
+```csharp
+string? appName = builder.Configuration["App:Name"];
+string? connectionString = builder.Configuration.GetConnectionString("Default");
+```
 
 示例配置：
 
@@ -122,13 +153,6 @@ ASP.NET Core 默认会读取多种配置来源：
     "Default": "Server=.;Database=ProductDb;Trusted_Connection=True;TrustServerCertificate=True"
   }
 }
-```
-
-读取配置：
-
-```csharp
-string? appName = builder.Configuration["App:Name"];
-string? connectionString = builder.Configuration.GetConnectionString("Default");
 ```
 
 阶段一只需要知道配置从 `builder.Configuration` 读取即可。强类型 Options 会在后续阶段单独讲。

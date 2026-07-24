@@ -39,16 +39,34 @@ app.MapControllers();
 
 `MapGet` 注册一个 Minimal API Endpoint，`MapControllers` 注册 Controller 中的 Action Endpoint。
 
+## Endpoint Routing 两阶段模型
+
+Endpoint Routing 相对经典路由最核心的架构差异是：它把路由拆成了两个阶段——**匹配阶段**和**执行阶段**。
+
+```text
+匹配阶段：根据 URL 和 Method 确定 Endpoint
+  ↓
+执行阶段：中间件管道继续处理，最终执行 Endpoint
+```
+
+在匹配阶段，路由系统遍历所有已注册的 Endpoint，找到匹配的那一个，把它附加到 `HttpContext` 上。这个阶段不执行任何业务逻辑。
+
+在执行阶段，后续中间件可以读取已匹配的 Endpoint 及其元数据。这就是为什么 `UseAuthorization` 放在 `UseRouting` 后面就能工作——它检查已匹配 Endpoint 上的 `[Authorize]` 特性，而不是盲目地拦截所有请求。
+
+经典路由（ASP.NET Core 2.x 及更早）没有这个分离，路由匹配和请求处理耦合在一起，导致授权中间件无法在路由匹配前获取 Endpoint 信息，必须在路由内部处理权限。两阶段模型让中间件可以在路由匹配后、Endpoint 执行前统一处理横切逻辑。
+
+在最小托管模型中，`UseRouting()` 被隐式调用，你不需要显式写出来。但理解两阶段模型依然重要——它解释了为什么中间件顺序必须遵循特定规则。
+
 ## Endpoint Routing 的基本流程
 
 现代 ASP.NET Core 使用 Endpoint Routing。大致流程：
 
 ```text
 HTTP Request
- -> Middleware Pipeline
- -> Routing 匹配 Endpoint
- -> Authentication / Authorization 等中间件读取 Endpoint 元数据
- -> 执行 Endpoint
+  -> Middleware Pipeline
+  -> [匹配阶段] Routing 匹配 Endpoint
+  -> [执行阶段] Authentication / Authorization 等中间件读取 Endpoint 元数据
+  -> 执行 Endpoint
 ```
 
 在传统写法中你可能会看到：
@@ -111,6 +129,67 @@ GET /api/products/100
 ```
 
 `id` 的值就是 `100`。
+
+### 可选参数、默认值与捕获全部
+
+路由模板支持三种常用语法：
+
+**可选参数** `{id?}`：参数可以不传，不传时 Action 接收默认值。
+
+```csharp
+[HttpGet("{id?}")]
+public IActionResult Get(int? id)
+{
+    if (id is null)
+    {
+        return Ok("List all");
+    }
+
+    return Ok(new { Id = id });
+}
+```
+
+```text
+GET /api/products       -> id = null，返回列表
+GET /api/products/100   -> id = 100，返回单个
+```
+
+**默认值** `{id=1}`：参数不传时使用指定默认值。
+
+```csharp
+[HttpGet("{id:int=1}")]
+public IActionResult GetById(int id)
+{
+    return Ok(new { Id = id });
+}
+```
+
+```text
+GET /api/products       -> id = 1
+GET /api/products/100   -> id = 100
+```
+
+**捕获全部** `{**path}`：匹配剩余所有路径段，值中包含 `/`。常用于代理、文件路径等场景。
+
+```csharp
+[HttpGet("files/{**filePath}")]
+public IActionResult GetFile(string filePath)
+{
+    return Ok(new { Path = filePath });
+}
+```
+
+```text
+GET /api/files/docs/2026/report.pdf   -> filePath = "docs/2026/report.pdf"
+```
+
+三种语法对比：
+
+| 语法 | 示例 | 匹配行为 |
+|---|---|---|
+| `{id?}` | `/api/products/{id?}` | 可选，不传则参数为 null |
+| `{id=1}` | `/api/products/{id:int=1}` | 可选，不传则使用默认值 1 |
+| `{**path}` | `/files/{**filePath}` | 捕获全部剩余路径，包含 `/` |
 
 ## 路由约束
 

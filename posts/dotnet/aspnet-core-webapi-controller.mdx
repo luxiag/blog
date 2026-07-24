@@ -41,6 +41,56 @@ public class ProductsController : ControllerBase
 - `[Route("api/products")]` 定义控制器路由前缀。
 - `ControllerBase` 提供 `Ok`、`NotFound`、`BadRequest` 等辅助方法。
 
+## [ApiController] 约定详解
+
+`[ApiController]` 不只是"自动模型验证"，它启用了多项约定，每一条都在减少你的样板代码：
+
+**自动 400 响应**：模型验证失败时，框架自动返回 HTTP 400，不需要手动检查 `ModelState.IsValid`。
+
+```csharp
+[HttpPost]
+public ActionResult<ProductDto> Create(CreateProductRequest request)
+{
+    // 如果 request 验证失败，这里不会执行，框架已经返回 400
+    return CreatedAtAction(nameof(GetById), new { id = 1 }, request);
+}
+```
+
+没有 `[ApiController]` 时你需要这样写：
+
+```csharp
+[HttpPost]
+public ActionResult<ProductDto> Create(CreateProductRequest request)
+{
+    if (!ModelState.IsValid)
+    {
+        return BadRequest(ModelState);
+    }
+
+    return CreatedAtAction(nameof(GetById), new { id = 1 }, request);
+}
+```
+
+**参数来源推断**：没有 `[ApiController]` 时，复杂类型默认从表单绑定。加上 `[ApiController]` 后，复杂类型默认从请求体（`[FromBody]`）绑定，简单类型从路由/查询字符串绑定，不再需要每个参数都显式标注 `[FromBody]`。
+
+**ProblemDetails 响应格式**：4xx 和 5xx 错误自动使用 RFC 7807 标准格式返回：
+
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc7231#section-6.5.1",
+  "title": "One or more validation errors occurred.",
+  "status": 400,
+  "traceId": "00-abc123-def456-01",
+  "errors": {
+    "Name": ["The Name field is required."]
+  }
+}
+```
+
+这种格式对前端解析更友好，`type` 字段可以链接到错误文档，`errors` 按字段分组。
+
+**必填参数推断**：Action 参数中不可为 null 的类型（如 `int`、`Guid`）会被自动视为必填。请求中缺少这些参数时直接返回 400，而不是传入默认值导致运行时异常。
+
 ## ControllerBase 与 Controller
 
 | 类型 | 用途 |
@@ -215,6 +265,129 @@ public class UpdateProductRequest
 - 返回 HTTP 结果
 
 业务规则、数据库访问、外部服务调用应该放到 Service / Repository / Application 层。
+
+### 薄 Controller 示例
+
+把 CRUD 示例中的逻辑抽取到 Service 层后，Controller 变成：
+
+```csharp
+[ApiController]
+[Route("api/products")]
+public class ProductsController : ControllerBase
+{
+    private readonly IProductService _productService;
+
+    public ProductsController(IProductService productService)
+    {
+        _productService = productService;
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<List<ProductDto>>> GetAll()
+    {
+        var products = await _productService.GetAllAsync();
+        return Ok(products);
+    }
+
+    [HttpGet("{id:int}")]
+    public async Task<ActionResult<ProductDto>> GetById(int id)
+    {
+        var product = await _productService.GetByIdAsync(id);
+
+        if (product is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(product);
+    }
+
+    [HttpPost]
+    public async Task<ActionResult<ProductDto>> Create(CreateProductRequest request)
+    {
+        var product = await _productService.CreateAsync(request);
+
+        return CreatedAtAction(nameof(GetById), new { id = product.Id }, product);
+    }
+
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Update(int id, UpdateProductRequest request)
+    {
+        var success = await _productService.UpdateAsync(id, request);
+
+        if (!success)
+        {
+            return NotFound();
+        }
+
+        return NoContent();
+    }
+
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id)
+    {
+        var success = await _productService.DeleteAsync(id);
+
+        if (!success)
+        {
+            return NotFound();
+        }
+
+        return NoContent();
+    }
+}
+```
+
+Service 层负责业务逻辑和数据访问：
+
+```csharp
+public interface IProductService
+{
+    Task<List<ProductDto>> GetAllAsync();
+    Task<ProductDto?> GetByIdAsync(int id);
+    Task<ProductDto> CreateAsync(CreateProductRequest request);
+    Task<bool> UpdateAsync(int id, UpdateProductRequest request);
+    Task<bool> DeleteAsync(int id);
+}
+
+public class ProductService : IProductService
+{
+    private readonly IProductRepository _repository;
+
+    public ProductService(IProductRepository repository)
+    {
+        _repository = repository;
+    }
+
+    public async Task<List<ProductDto>> GetAllAsync()
+    {
+        return await _repository.GetAllAsync();
+    }
+
+    public async Task<ProductDto?> GetByIdAsync(int id)
+    {
+        return await _repository.GetByIdAsync(id);
+    }
+
+    public async Task<ProductDto> CreateAsync(CreateProductRequest request)
+    {
+        var product = new ProductDto(0, request.Name, request.Price);
+        return await _repository.CreateAsync(product);
+    }
+
+    public async Task<bool> UpdateAsync(int id, UpdateProductRequest request)
+    {
+        return await _repository.UpdateAsync(id, request.Name, request.Price);
+    }
+
+    public async Task<bool> DeleteAsync(int id)
+    {
+        return await _repository.DeleteAsync(id);
+    }
+}
+```
+
+Controller 现在只做三件事：接收请求、调用 Service、返回 HTTP 结果。业务变化改 Service，数据存储改 Repository，Controller 基本不需要动。
 
 ## 总结
 
