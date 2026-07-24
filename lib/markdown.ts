@@ -297,6 +297,13 @@ export interface TocItem {
   level: number;
 }
 
+export interface SeriesPost {
+  slug: string;
+  title: string;
+  date: string;
+  nextPostSlug?: string;
+}
+
 export function extractToc(content: string): TocItem[] {
   const toc: TocItem[] = [];
   const headingRegex = /^(#{2,4})\s+(.+)$/gm;
@@ -329,4 +336,73 @@ export function extractToc(content: string): TocItem[] {
   }
 
   return toc;
+}
+
+export function getSeriesPosts(category: string): SeriesPost[] {
+  const postFiles = getPostFiles(postsDirectory);
+
+  const seriesPosts: SeriesPost[] = postFiles
+    .filter((f) => f.category === category)
+    .map((postFile) => {
+      try {
+        const fileContents = fs.readFileSync(postFile.filePath, 'utf8');
+        const { data } = matter(fileContents);
+        const frontMatter = data as PostFrontMatter;
+
+        if (!frontMatter.title || !frontMatter.date || frontMatter.hidden === true) {
+          return null;
+        }
+
+        return {
+          slug: postFile.slug,
+          title: frontMatter.title,
+          date: typeof frontMatter.date === 'object' && frontMatter.date !== null
+            ? new Date(frontMatter.date as unknown as string).toISOString().split('T')[0]
+            : (frontMatter.date || new Date().toISOString().split('T')[0]),
+          nextPostSlug: frontMatter.nextPost,
+        } as SeriesPost;
+      } catch {
+        return null;
+      }
+    })
+    .filter((p): p is SeriesPost => p !== null);
+
+  const ordered = orderSeriesPosts(seriesPosts);
+  return ordered;
+}
+
+function orderSeriesPosts(posts: SeriesPost[]): SeriesPost[] {
+  if (posts.length <= 1) return posts;
+
+  const bySlug = new Map<string, SeriesPost>();
+  const byNext = new Map<string, string>();
+  posts.forEach((p) => {
+    bySlug.set(p.slug, p);
+    if (p.nextPostSlug) {
+      byNext.set(p.slug, p.nextPostSlug);
+    }
+  });
+
+  const pointedTo = new Set(byNext.values());
+  let head = posts.find((p) => !pointedTo.has(p.slug));
+  if (!head) head = posts[0];
+
+  const ordered: SeriesPost[] = [];
+  const visited = new Set<string>();
+  let current: SeriesPost | undefined = head;
+
+  while (current && !visited.has(current.slug)) {
+    ordered.push(current);
+    visited.add(current.slug);
+    const nextSlug = byNext.get(current.slug);
+    current = nextSlug ? bySlug.get(nextSlug) : undefined;
+  }
+
+  posts.forEach((p) => {
+    if (!visited.has(p.slug)) {
+      ordered.push(p);
+    }
+  });
+
+  return ordered;
 }

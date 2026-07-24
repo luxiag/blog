@@ -1,18 +1,28 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { TocItem } from '@/lib/markdown';
-import { ChevronRight, List, X } from 'lucide-react';
+import { TocItem, SeriesPost } from '@/lib/markdown';
+import { ChevronRight, List, X, BookOpen } from 'lucide-react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 
 interface TableOfContentsProps {
   toc: TocItem[];
+  seriesPosts?: SeriesPost[];
+  currentSlug?: string;
 }
 
-export default function TableOfContents({ toc }: TableOfContentsProps) {
+type TabType = 'toc' | 'series';
+
+export default function TableOfContents({ toc, seriesPosts, currentSlug }: TableOfContentsProps) {
   const [activeId, setActiveId] = useState<string>('');
   const [readIds, setReadIds] = useState<Set<string>>(new Set());
   const [isExpanded, setIsExpanded] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabType>('toc');
+  const pathname = usePathname();
+
+  const showSeries = seriesPosts && seriesPosts.length > 1;
 
   useEffect(() => {
     const checkScreenSize = () => {
@@ -68,7 +78,6 @@ export default function TableOfContents({ toc }: TableOfContentsProps) {
   }, [toc]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     updateReadHeadings();
     window.addEventListener('scroll', updateReadHeadings, { passive: true });
     return () => window.removeEventListener('scroll', updateReadHeadings);
@@ -86,7 +95,7 @@ export default function TableOfContents({ toc }: TableOfContentsProps) {
     }
   };
 
-  if (toc.length === 0) return null;
+  if (toc.length === 0 && !showSeries) return null;
 
   const getHeadingStatus = (item: TocItem) => {
     if (activeId === item.id) {
@@ -112,56 +121,123 @@ export default function TableOfContents({ toc }: TableOfContentsProps) {
             }`}
         >
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs font-medium text-neutral-400 dark:text-neutral-500 uppercase tracking-wider">
-              目录
-            </h3>
+            <div className="flex items-center gap-1">
+              {showSeries ? (
+                <>
+                  <button
+                    onClick={() => setActiveTab('toc')}
+                    className={`px-2 py-1 text-xs font-medium rounded transition-colors ${activeTab === 'toc'
+                      ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400'
+                      : 'text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300'
+                      }`}
+                  >
+                    <List size={14} className="inline mr-1" />
+                    目录
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('series')}
+                    className={`px-2 py-1 text-xs font-medium rounded transition-colors ${activeTab === 'series'
+                      ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400'
+                      : 'text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300'
+                      }`}
+                  >
+                    <BookOpen size={14} className="inline mr-1" />
+                    系列
+                  </button>
+                </>
+              ) : (
+                <h3 className="text-xs font-medium text-neutral-400 dark:text-neutral-500 uppercase tracking-wider">
+                  目录
+                </h3>
+              )}
+            </div>
             <button
               onClick={() => setIsExpanded(false)}
               className="w-6 h-6 flex items-center justify-center text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 rounded transition-colors"
-              title="收起目录"
+              title="收起"
             >
               <X size={14} />
             </button>
           </div>
-          <nav className="space-y-0.5 max-h-[calc(100vh-16rem)] overflow-y-auto pr-2 custom-scrollbar">
-            {toc.map((item) => {
-              const status = getHeadingStatus(item);
-              const isRead = status === 'read';
-              const isActive = status === 'active';
 
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => scrollToHeading(item.id)}
-                  className={`group flex items-center w-full text-left transition-all duration-200 rounded px-2 py-1 ${item.level === 3 ? 'pl-6' : ''
-                    } ${isActive
-                      ? 'bg-orange-50 dark:bg-orange-900/20'
-                      : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
-                    }`}
-                >
-                  <ChevronRight
-                    size={12}
-                    className={`mr-2 flex-shrink-0 transition-colors ${isActive
-                      ? 'text-orange-500'
-                      : isRead
-                        ? 'text-neutral-600 dark:text-neutral-400'
-                        : 'text-neutral-300 dark:text-neutral-600 group-hover:text-neutral-400'
-                      }`}
-                  />
-                  <span
-                    className={`text-sm transition-colors ${isActive
-                      ? 'text-orange-600 dark:text-orange-400 font-medium'
-                      : isRead
-                        ? 'text-neutral-800 dark:text-neutral-200'
-                        : 'text-neutral-400 dark:text-neutral-500 group-hover:text-neutral-600 dark:group-hover:text-neutral-300'
+          {activeTab === 'toc' && (
+            <nav className="space-y-0.5 max-h-[calc(100vh-16rem)] overflow-y-auto pr-2 custom-scrollbar">
+              {toc.map((item) => {
+                const status = getHeadingStatus(item);
+                const isRead = status === 'read';
+                const isActive = status === 'active';
+
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => scrollToHeading(item.id)}
+                    className={`group flex items-center w-full text-left transition-all duration-200 rounded px-2 py-1 ${item.level === 3 ? 'pl-6' : ''
+                      } ${isActive
+                        ? 'bg-orange-50 dark:bg-orange-900/20'
+                        : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
                       }`}
                   >
-                    {item.text}
-                  </span>
-                </button>
-              );
-            })}
-          </nav>
+                    <ChevronRight
+                      size={12}
+                      className={`mr-2 flex-shrink-0 transition-colors ${isActive
+                        ? 'text-orange-500'
+                        : isRead
+                          ? 'text-neutral-600 dark:text-neutral-400'
+                          : 'text-neutral-300 dark:text-neutral-600 group-hover:text-neutral-400'
+                        }`}
+                    />
+                    <span
+                      className={`text-sm transition-colors ${isActive
+                        ? 'text-orange-600 dark:text-orange-400 font-medium'
+                        : isRead
+                          ? 'text-neutral-800 dark:text-neutral-200'
+                          : 'text-neutral-400 dark:text-neutral-500 group-hover:text-neutral-600 dark:group-hover:text-neutral-300'
+                        }`}
+                    >
+                      {item.text}
+                    </span>
+                  </button>
+                );
+              })}
+            </nav>
+          )}
+
+          {activeTab === 'series' && showSeries && (
+            <nav className="space-y-0.5 max-h-[calc(100vh-16rem)] overflow-y-auto pr-2 custom-scrollbar">
+              {seriesPosts.map((post, index) => {
+                const isCurrent = currentSlug === post.slug;
+                const href = `/posts/${post.slug}`;
+
+                return (
+                  <Link
+                    key={post.slug}
+                    href={href}
+                    className={`group flex items-center w-full text-left transition-all duration-200 rounded px-2 py-1.5 ${isCurrent
+                      ? 'bg-orange-50 dark:bg-orange-900/20'
+                      : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                      }`}
+                  >
+                    <span
+                      className={`mr-2 flex-shrink-0 text-xs font-mono w-5 text-right ${isCurrent
+                        ? 'text-orange-500'
+                        : 'text-neutral-300 dark:text-neutral-600 group-hover:text-neutral-400'
+                        }`}
+                    >
+                      {index + 1}
+                    </span>
+                    <span
+                      className={`text-sm transition-colors leading-snug ${isCurrent
+                        ? 'text-orange-600 dark:text-orange-400 font-medium'
+                        : 'text-neutral-600 dark:text-neutral-300 group-hover:text-neutral-800 dark:group-hover:text-neutral-100'
+                        }`}
+                    >
+                      {post.title}
+                    </span>
+                  </Link>
+                );
+              })}
+            </nav>
+          )}
         </div>
       </div>
 
@@ -174,7 +250,7 @@ export default function TableOfContents({ toc }: TableOfContentsProps) {
         <button
           onClick={() => setIsExpanded(true)}
           className="w-10 h-10 mt-2 bg-white dark:bg-neutral-900 text-neutral-600 dark:text-neutral-400 rounded-lg shadow-lg flex items-center justify-center hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-all duration-300 border border-neutral-200 dark:border-neutral-700"
-          title="展开目录"
+          title="展开侧栏"
         >
           <List size={20} />
         </button>
