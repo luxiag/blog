@@ -1,0 +1,260 @@
+---
+title: 'ASP.NET Core 缓存：MemoryCache、DistributedCache 与 Redis'
+date: '2026-07-21'
+excerpt: '掌握 ASP.NET Core 缓存体系：IMemoryCache、IDistributedCache、Redis、缓存 Key、过期策略、缓存穿透、击穿、雪崩和使用边界。'
+tags: ['dotnet', 'aspnetcore', 'cache', 'redis']
+nextPost: 'dotnet/aspnet-core-httpclient-factory'
+---
+
+# ASP.NET Core 缓存：MemoryCache、DistributedCache 与 Redis
+
+缓存用于减少重复计算、降低数据库和外部服务压力。但缓存不是越多越好，真正困难的是 Key 设计、过期策略和一致性边界。
+
+:::tip 阶段三阅读顺序
+建议先掌握 [EF Core 数据访问](/posts/dotnet/aspnet-core-ef-core)，再学习缓存。缓存通常用于数据库查询结果、外部接口结果和热点配置数据。
+:::
+
+## IMemoryCache：单机内存缓存
+
+注册：
+
+```csharp
+builder.Services.AddMemoryCache();
+```
+
+使用：
+
+```csharp
+public class ProductCacheService
+{
+    private readonly IMemoryCache _cache;
+    private readonly AppDbContext _dbContext;
+
+    public ProductCacheService(IMemoryCache cache, AppDbContext dbContext)
+    {
+        _cache = cache;
+        _dbContext = dbContext;
+    }
+
+    public async Task<ProductDto?> GetByIdAsync(int id, CancellationToken cancellationToken)
+    {
+        string key = $"product:{id}";
+
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);
+            entry.SlidingExpiration = TimeSpan.FromMinutes(1);
+
+            return await _dbContext.Products
+                .AsNoTracking()
+                .Where(p => p.Id == id)
+                .Select(p => new ProductDto(p.Id, p.Name, p.Price))
+                .FirstOrDefaultAsync(cancellationToken);
+        });
+    }
+}
+```
+
+`IMemoryCache` 只适合单实例应用或不要求多实例共享的缓存。
+
+## 过期策略
+
+常见过期方式：
+
+| 策略 | 含义 | 场景 |
+|---|---|---|
+| Absolute Expiration | 固定时间后过期 | 商品详情缓存 5 分钟 |
+| Sliding Expiration | 一段时间不用才过期 | 热点配置、字典数据 |
+| 手动删除 | 数据变更时删除 Key | 更新商品后删除缓存 |
+
+更新数据后要考虑删除缓存：
+
+```csharp
+_cache.Remove($"product:{id}");
+```
+
+## IDistributedCache
+
+多实例部署时，单机内存缓存无法共享。可以使用 `IDistributedCache` 抽象。
+
+注册 Redis：
+
+```bash
+dotnet add package Microsoft.Extensions.Caching.StackExchangeRedis
+```
+
+```csharp
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("Redis");
+    options.InstanceName = "ProductApi:";
+});
+```
+
+使用：
+
+```csharp
+public class ProductDistributedCache
+{
+    private readonly IDistributedCache _cache;
+
+    public ProductDistributedCache(IDistributedCache cache)
+    {
+        _cache = cache;
+    }
+
+    public async Task SetAsync(ProductDto product, CancellationToken cancellationToken)
+    {
+        string key = $"product:{product.Id}";
+        string json = JsonSerializer.Serialize(product);
+
+        await _cache.SetStringAsync(key, json, new DistributedCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10)
+        }, cancellationToken);
+    }
+
+    public async Task<ProductDto?> GetAsync(int id, CancellationToken cancellationToken)
+    {
+        string? json = await _cache.GetStringAsync($"product:{id}", cancellationToken);
+
+        return json is null ? null : JsonSerializer.Deserialize<ProductDto>(json);
+    }
+}
+```
+
+## 缓存 Key 设计
+
+建议 Key 具备明确层级和业务含义：
+
+```text
+product:{id}
+product:list:category:{categoryId}:page:{page}:size:{pageSize}
+user:{userId}:permissions
+```
+
+不要使用过短、含义不清或可能冲突的 Key。
+
+## Output Cache
+
+ASP.NET Core 7+ 提供了输出缓存中间件，可以直接缓存 HTTP 响应。
+
+注册：
+
+```csharp
+builder.Services.AddOutputCache(options =>
+{
+    options.AddBasePolicy(builder => builder.Expire(TimeSpan.FromSeconds(30)));
+    options.AddPolicy("Products", builder => builder.Expire(TimeSpan.FromMinutes(5)).Tag("products"));
+});
+
+var app = builder.Build();
+
+app.UseOutputCache();
+```
+
+在 Controller 或 Minimal API 中使用：
+
+```csharp
+[HttpGet]
+[OutputCache(PolicyName = "Products")]
+public IActionResult GetProducts()
+{
+    return Ok();
+}
+```
+
+手动清除缓存：
+
+```csharp
+await outputCacheStore.EvictByTagAsync("products", CancellationToken.None);
+```
+
+Output Cache 缓存的是整个 HTTP 响应，适合不依赖用户身份的公共接口。
+
+## Response Cache
+
+`[ResponseCache]` 通过设置 HTTP 缓存头（`Cache-Control`、`ETag`）让浏览器和代理服务器缓存响应：
+
+```csharp
+[HttpGet]
+[ResponseCache(Duration = 60, VaryByQueryKeys = new[] { "page", "pageSize" })]
+public IActionResult GetProducts(int page = 1, int pageSize = 20)
+{
+    return Ok();
+}
+```
+
+| 特性 | Output Cache | Response Cache |
+|---|---|---|
+| 缓存位置 | 服务端内存 | 浏览器/代理（HTTP 头） |
+| 控制权 | 服务端完全控制 | 客户端可能忽略 |
+| 适用场景 | 服务端缓存计算结果 | 减少网络传输 |
+
+Response Cache 不保证客户端一定使用缓存，它只是设置 HTTP 头。需要确定缓存命中时用 Output Cache。
+
+## 数据一致性
+
+缓存和数据库的数据可能不一致。常见策略：
+
+| 策略 | 做法 | 适用场景 |
+|---|---|---|
+| Cache Aside | 读时填缓存，写时删缓存 | 最常用，通用方案 |
+| Write Through | 写入时同时更新缓存和数据库 | 写少读多 |
+| Write Behind | 先写缓存，异步写数据库 | 写密集，容忍短暂不一致 |
+
+Cache Aside 是最常用的模式：
+
+```csharp
+public async Task<ProductDto?> GetByIdAsync(int id, CancellationToken cancellationToken)
+{
+    string key = $"product:{id}";
+
+    ProductDto? cached = await _cache.GetAsync<ProductDto>(key, cancellationToken);
+    if (cached is not null) return cached;
+
+    ProductDto? product = await _dbContext.Products
+        .AsNoTracking()
+        .Where(p => p.Id == id)
+        .Select(p => new ProductDto(p.Id, p.Name, p.Price))
+        .FirstOrDefaultAsync(cancellationToken);
+
+    if (product is not null)
+    {
+        await _cache.SetAsync(key, product, TimeSpan.FromMinutes(5), cancellationToken);
+    }
+
+    return product;
+}
+
+public async Task UpdateAsync(int id, UpdateProductRequest request, CancellationToken cancellationToken)
+{
+    // update database
+    await _dbContext.SaveChangesAsync(cancellationToken);
+
+    // delete cache
+    await _cache.RemoveAsync($"product:{id}", cancellationToken);
+}
+```
+
+关键：**更新数据库后删除缓存，而不是更新缓存**。删除比更新更安全，避免并发写入导致缓存与数据库不一致。
+
+## 常见问题
+
+缓存穿透：查询不存在的数据，每次都打到数据库。可以缓存空结果，但要设置较短过期时间。
+
+缓存击穿：热点 Key 过期瞬间大量请求同时访问数据库。可以加互斥锁、提前刷新、随机过期时间。
+
+缓存雪崩：大量 Key 同时过期。可以给过期时间增加随机抖动。
+
+## 使用建议
+
+- 优先缓存读多写少的数据。
+- 明确缓存失效策略。
+- 不要缓存强一致性要求很高的数据。
+- 缓存中不要存敏感明文。
+- 分布式缓存要考虑序列化版本兼容。
+
+## 总结
+
+`IMemoryCache` 适合单机本地缓存，`IDistributedCache` 适合多实例共享缓存，Redis 是最常见实现。缓存的核心不是 API，而是 Key、过期、失效和一致性策略。

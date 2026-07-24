@@ -3,6 +3,7 @@ title: 'ASP.NET Core 异常处理：ExceptionHandler、ProblemDetails 与统一�
 date: '2026-07-21'
 excerpt: '系统理解 ASP.NET Core 异常处理：全局异常中间件、UseExceptionHandler、ProblemDetails、业务异常、状态码映射和统一错误响应。'
 tags: ['dotnet', 'aspnetcore', 'exception-handling', 'problemdetails']
+nextPost: 'dotnet/aspnet-core-authentication'
 ---
 
 # ASP.NET Core 异常处理：ExceptionHandler、ProblemDetails 与统一响应
@@ -156,10 +157,81 @@ int statusCode = ex switch
 {
     NotFoundException => StatusCodes.Status404NotFound,
     ConflictException => StatusCodes.Status409Conflict,
+    UnauthorizedException => StatusCodes.Status401Unauthorized,
+    ForbiddenException => StatusCodes.Status403Forbidden,
     ArgumentException => StatusCodes.Status400BadRequest,
     _ => StatusCodes.Status500InternalServerError
 };
 ```
+
+401 和 403 的区别：
+
+| 状态码 | 含义 | 典型异常 |
+|---|---|---|
+| 401 | 未认证，请求没有有效身份 | Token 过期或缺失 |
+| 403 | 已认证但无权限 | 权限不足、租户隔离越权 |
+
+在自定义异常中间件中区分 401/403，前端可以根据状态码决定是跳转登录页还是提示无权限。
+
+## 全局异常过滤器
+
+除了 Middleware 方式，也可以在 MVC 层注册全局 Exception Filter：
+
+```csharp
+public class GlobalExceptionFilter : IExceptionFilter
+{
+    private readonly ILogger<GlobalExceptionFilter> _logger;
+
+    public GlobalExceptionFilter(ILogger<GlobalExceptionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public void OnException(ExceptionContext context)
+    {
+        _logger.LogError(context.Exception, "Unhandled MVC exception");
+
+        int statusCode = context.Exception switch
+        {
+            NotFoundException => StatusCodes.Status404NotFound,
+            ConflictException => StatusCodes.Status409Conflict,
+            ArgumentException => StatusCodes.Status400BadRequest,
+            _ => StatusCodes.Status500InternalServerError
+        };
+
+        context.Result = new ObjectResult(new ProblemDetails
+        {
+            Title = "Request failed",
+            Status = statusCode,
+            Detail = context.Exception.Message
+        })
+        {
+            StatusCode = statusCode
+        };
+
+        context.ExceptionHandled = true;
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<GlobalExceptionFilter>();
+});
+```
+
+Middleware vs Exception Filter 选择：
+
+| 场景 | 推荐 |
+|---|---|
+| 捕获所有异常（包括非 MVC） | Middleware |
+| 只处理 MVC/Controller 层异常 | Exception Filter |
+| 需要返回 ProblemDetails | 两者都可以 |
+
+生产项目推荐以 Middleware 为主，Exception Filter 作为 MVC 层补充。
 
 ## 什么时候捕获异常
 

@@ -1,0 +1,779 @@
+---
+title: 'ASP.NET Core 与 EF Core：数据访问、DbContext 与查询实践'
+date: '2026-07-21'
+excerpt: '在 ASP.NET Core Web API 中系统集成 EF Core：DbContext 生命周期、实体建模、Fluent API、Migration、CRUD、查询性能、事务、并发控制、软删除和分层实践。'
+tags: ['dotnet', 'aspnetcore', 'efcore', 'database']
+nextPost: 'dotnet/aspnet-core-caching'
+---
+
+# ASP.NET Core 与 EF Core：数据访问、DbContext 与查询实践
+
+大多数 Web API 最终都要落到数据访问：查询商品、创建订单、更新库存、记录日志、读取用户权限。ASP.NET Core 本身负责处理 HTTP 请求，而 EF Core 负责把 C# 对象和数据库表连接起来。
+
+EF Core 是 .NET 官方 ORM。它让你用 LINQ 编写查询，再由查询提供程序翻译成 SQL；也让你用 `DbContext` 跟踪实体变化，并通过 `SaveChangesAsync` 持久化到数据库。
+
+这篇文章不只讲“怎么连数据库”，而是按生产项目常见链路讲清楚：如何注册 `DbContext`、如何建模实体、如何配置映射、如何迁移数据库、如何写 CRUD、如何避免性能坑，以及 Controller、Service、DbContext 的职责如何划分。
+
+:::tip 阶段三阅读顺序
+本文属于 ASP.NET Core 生产项目常用能力阶段。建议先掌握 [Controller](/posts/dotnet/aspnet-core-webapi-controller)、[参数绑定与模型验证](/posts/dotnet/aspnet-core-model-binding-validation)、[DI](/posts/dotnet/aspnet-core-dependency-injection)、[Configuration](/posts/dotnet/aspnet-core-configuration) 和 [C# LINQ](/posts/dotnet/csharp-linq)。
+:::
+
+## EF Core 在 ASP.NET Core 中的位置
+
+一个常见 Web API 请求链路是：
+
+```text
+HTTP Request
+-> Controller / Minimal API
+-> Application Service
+-> DbContext / EF Core
+-> Database
+-> DTO
+-> HTTP Response
+```
+
+阶段一为了演示简单，可以把内存集合写在 Controller 里。但生产项目中，Controller 不应该直接塞满查询和业务逻辑。更常见的职责划分是：
+
+| 层 | 职责 |
+|---|---|
+| Controller | 接收 HTTP 请求，返回 HTTP 响应 |
+| Service | 组织业务流程和事务边界 |
+| DbContext | 负责实体查询、变更跟踪和保存 |
+| Entity | 表达数据库持久化模型 |
+| DTO | 表达 API 输入输出契约 |
+
+EF Core 应该主要出现在 Service / Repository / Infrastructure 层，而不是散落在每个 Controller Action 里。
+
+## 安装 EF Core 包
+
+以 SQL Server 为例：
+
+```bash
+dotnet add package Microsoft.EntityFrameworkCore.SqlServer
+dotnet add package Microsoft.EntityFrameworkCore.Design
+```
+
+如果使用 PostgreSQL、MySQL、SQLite，需要安装对应 Provider。例如 SQLite：
+
+```bash
+dotnet add package Microsoft.EntityFrameworkCore.Sqlite
+```
+
+安装命令行工具：
+
+```bash
+dotnet tool install --global dotnet-ef
+```
+
+如果已经安装过，可以更新：
+
+```bash
+dotnet tool update --global dotnet-ef
+```
+
+## 配置连接字符串
+
+`appsettings.json`：
+
+```json
+{
+  "ConnectionStrings": {
+    "Default": "Server=.;Database=ProductDb;Trusted_Connection=True;TrustServerCertificate=True"
+  }
+}
+```
+
+生产环境不要把真实账号密码提交到仓库。可以用环境变量覆盖：
+
+```text
+ConnectionStrings__Default=Server=db;Database=ProductDb;User Id=app;Password=***;TrustServerCertificate=True
+```
+
+## 注册 DbContext
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddDbContext<AppDbContext>(options =>
+{
+    options.UseSqlServer(builder.Configuration.GetConnectionString("Default"));
+});
+```
+
+`AddDbContext<TContext>` 默认把 `DbContext` 注册为 Scoped。也就是说，每个 HTTP 请求会得到一个独立的 `DbContext` 实例。
+
+这是 Web API 中最常用、也最合理的生命周期：
+
+- 一个请求内可以共享同一个变更跟踪上下文。
+- 不同请求之间互不影响。
+- 请求结束后自动释放数据库相关资源。
+
+不要把 `DbContext` 注册成 Singleton。`DbContext` 不是线程安全的，也不适合跨请求长期持有。
+
+## 定义实体
+
+实体表示需要持久化到数据库的数据。
+
+```csharp
+public class Product
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public int Stock { get; set; }
+    public bool IsDeleted { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? UpdatedAt { get; set; }
+    public byte[] RowVersion { get; set; } = Array.Empty<byte>();
+}
+```
+
+几点建议：
+
+- 实体面向数据库和业务状态，不等于 API 响应模型。
+- 金额使用 `decimal`，并显式配置精度。
+- 时间建议统一使用 UTC 存储。
+- 并发控制可以使用 `RowVersion`。
+- 软删除可以使用 `IsDeleted`。
+
+## 定义 DbContext
+
+```csharp
+public class AppDbContext : DbContext
+{
+    public AppDbContext(DbContextOptions<AppDbContext> options)
+        : base(options)
+    {
+    }
+
+    public DbSet<Product> Products => Set<Product>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+    }
+}
+```
+
+`DbSet<Product>` 表示数据库中的商品集合。你可以通过它查询、添加、更新和删除商品。
+
+## 使用 IEntityTypeConfiguration 拆分配置
+
+当实体配置变多时，不建议全部塞进 `OnModelCreating`。可以使用 `IEntityTypeConfiguration<T>` 拆分。
+
+```csharp
+public class ProductConfiguration : IEntityTypeConfiguration<Product>
+{
+    public void Configure(EntityTypeBuilder<Product> builder)
+    {
+        builder.ToTable("Products");
+
+        builder.HasKey(product => product.Id);
+
+        builder.Property(product => product.Name)
+            .HasMaxLength(100)
+            .IsRequired();
+
+        builder.Property(product => product.Price)
+            .HasColumnType("decimal(18,2)")
+            .IsRequired();
+
+        builder.Property(product => product.RowVersion)
+            .IsRowVersion();
+
+        builder.HasQueryFilter(product => !product.IsDeleted);
+    }
+}
+```
+
+需要命名空间：
+
+```csharp
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+```
+
+这种方式让实体类保持干净，也方便按实体维护映射规则。
+
+## Migration 数据库迁移
+
+创建迁移：
+
+```bash
+dotnet ef migrations add InitialCreate
+```
+
+更新数据库：
+
+```bash
+dotnet ef database update
+```
+
+查看生成脚本：
+
+```bash
+dotnet ef migrations script
+```
+
+生产环境建议把迁移脚本纳入发布流程，由 CI/CD 或 DBA 审核执行。不要在生产应用启动时无脑自动执行迁移，避免启动时改库失败导致服务不可用。
+
+## DTO：不要直接暴露实体
+
+定义响应 DTO：
+
+```csharp
+public record ProductDto(
+    int Id,
+    string Name,
+    decimal Price,
+    int Stock);
+```
+
+定义请求 DTO：
+
+```csharp
+public class CreateProductRequest
+{
+    [Required]
+    [StringLength(100, MinimumLength = 2)]
+    public string Name { get; set; } = string.Empty;
+
+    [Range(0.01, 999999)]
+    public decimal Price { get; set; }
+
+    [Range(0, int.MaxValue)]
+    public int Stock { get; set; }
+}
+```
+
+请求模型、响应模型、数据库实体分开，可以减少 API 契约和数据库结构之间的耦合。
+
+## 查询列表：筛选、排序、分页、投影
+
+列表接口必须考虑分页。
+
+```csharp
+public class ProductQuery
+{
+    public string? Keyword { get; set; }
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 20;
+}
+```
+
+Service 查询：
+
+```csharp
+public async Task<List<ProductDto>> GetListAsync(
+    ProductQuery query,
+    CancellationToken cancellationToken)
+{
+    int page = Math.Max(query.Page, 1);
+    int pageSize = Math.Clamp(query.PageSize, 1, 100);
+
+    IQueryable<Product> products = _dbContext.Products.AsNoTracking();
+
+    if (!string.IsNullOrWhiteSpace(query.Keyword))
+    {
+        products = products.Where(product => product.Name.Contains(query.Keyword));
+    }
+
+    return await products
+        .OrderBy(product => product.Id)
+        .Skip((page - 1) * pageSize)
+        .Take(pageSize)
+        .Select(product => new ProductDto(
+            product.Id,
+            product.Name,
+            product.Price,
+            product.Stock))
+        .ToListAsync(cancellationToken);
+}
+```
+
+这里有几个关键点：
+
+- `AsNoTracking()` 用于只读查询。
+- 查询条件在 `IQueryable` 上拼接，让数据库执行筛选。
+- 先排序再分页。
+- 用 `Select` 投影 DTO，只查询需要的字段。
+- 用 `CancellationToken` 响应客户端取消请求。
+
+## 查询详情
+
+```csharp
+public async Task<ProductDto?> GetByIdAsync(int id, CancellationToken cancellationToken)
+{
+    return await _dbContext.Products
+        .AsNoTracking()
+        .Where(product => product.Id == id)
+        .Select(product => new ProductDto(
+            product.Id,
+            product.Name,
+            product.Price,
+            product.Stock))
+        .FirstOrDefaultAsync(cancellationToken);
+}
+```
+
+只读详情也可以直接投影，不一定要先查实体再手动映射。
+
+## 新增数据
+
+```csharp
+public async Task<ProductDto> CreateAsync(
+    CreateProductRequest request,
+    CancellationToken cancellationToken)
+{
+    var product = new Product
+    {
+        Name = request.Name,
+        Price = request.Price,
+        Stock = request.Stock,
+        CreatedAt = DateTime.UtcNow
+    };
+
+    _dbContext.Products.Add(product);
+    await _dbContext.SaveChangesAsync(cancellationToken);
+
+    return new ProductDto(product.Id, product.Name, product.Price, product.Stock);
+}
+```
+
+`Add` 只是把实体加入变更跟踪，真正写入数据库发生在 `SaveChangesAsync`。
+
+## 更新数据
+
+```csharp
+public async Task UpdateAsync(
+    int id,
+    UpdateProductRequest request,
+    CancellationToken cancellationToken)
+{
+    Product? product = await _dbContext.Products
+        .FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
+
+    if (product is null)
+    {
+        throw new NotFoundException("Product not found.");
+    }
+
+    product.Name = request.Name;
+    product.Price = request.Price;
+    product.Stock = request.Stock;
+    product.UpdatedAt = DateTime.UtcNow;
+
+    await _dbContext.SaveChangesAsync(cancellationToken);
+}
+
+public class UpdateProductRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public int Stock { get; set; }
+}
+```
+
+如果实体被 `DbContext` 查询出来，它就是被跟踪的。修改属性后调用 `SaveChangesAsync`，EF Core 会生成对应 UPDATE。
+
+## 删除数据：物理删除与软删除
+
+物理删除：
+
+```csharp
+_dbContext.Products.Remove(product);
+await _dbContext.SaveChangesAsync(cancellationToken);
+```
+
+软删除：
+
+```csharp
+product.IsDeleted = true;
+product.UpdatedAt = DateTime.UtcNow;
+await _dbContext.SaveChangesAsync(cancellationToken);
+```
+
+如果使用全局查询过滤器：
+
+```csharp
+builder.HasQueryFilter(product => !product.IsDeleted);
+```
+
+那么普通查询会自动排除软删除数据。
+
+需要查询包含软删除的数据时：
+
+```csharp
+var allProducts = await _dbContext.Products
+    .IgnoreQueryFilters()
+    .ToListAsync(cancellationToken);
+```
+
+## 多租户 Query Filter
+
+多租户系统中，每个租户只能看到自己的数据。可以在 `DbContext` 中注入租户 ID，并通过全局过滤器自动隔离：
+
+```csharp
+public class AppDbContext : DbContext
+{
+    private readonly int _tenantId;
+
+    public AppDbContext(DbContextOptions<AppDbContext> options, ITenantProvider tenantProvider)
+        : base(options)
+    {
+        _tenantId = tenantProvider.GetTenantId();
+    }
+
+    public DbSet<Product> Products => Set<Product>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Product>().HasQueryFilter(p => p.TenantId == _tenantId);
+    }
+}
+```
+
+租户提供者从请求上下文获取租户 ID：
+
+```csharp
+public interface ITenantProvider
+{
+    int GetTenantId();
+}
+
+public class TenantProvider : ITenantProvider
+{
+    private readonly IHttpContextAccessor _httpContextAccessor;
+
+    public TenantProvider(IHttpContextAccessor httpContextAccessor)
+    {
+        _httpContextAccessor = httpContextAccessor;
+    }
+
+    public int GetTenantId()
+    {
+        string? tenantId = _httpContextAccessor.HttpContext?.User.FindFirst("tenant_id")?.Value;
+        return int.TryParse(tenantId, out int id) ? id : 0;
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ITenantProvider, TenantProvider>();
+```
+
+这样所有通过 `DbContext` 发出的查询都会自动加上 `WHERE TenantId = @tenantId`，开发者不需要在每个查询中手动过滤。
+
+需要跨租户查询时使用 `IgnoreQueryFilters()`，但要严格控制使用场景。
+
+## Tracking 与 AsNoTracking
+
+EF Core 默认会跟踪查询出来的实体，用于后续更新。
+
+适合 Tracking 的场景：
+
+- 查询实体后要修改并保存。
+- 需要利用变更跟踪。
+
+适合 `AsNoTracking` 的场景：
+
+- 只读列表。
+- 只读详情。
+- 报表查询。
+- API 直接投影 DTO。
+
+```csharp
+var products = await _dbContext.Products
+    .AsNoTracking()
+    .ToListAsync(cancellationToken);
+```
+
+不要在所有查询上机械加 `AsNoTracking`。如果你需要更新实体，仍然需要 Tracking，或者手动 Attach 并指定状态。
+
+## Include 与关联加载
+
+假设有分类和商品，需要在 Fluent API 中配置关系：
+
+```csharp
+public class Product
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public int CategoryId { get; set; }
+    public Category Category { get; set; } = null!;
+}
+
+public class Category
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public List<Product> Products { get; set; } = new();
+}
+```
+
+关系配置：
+
+```csharp
+public class ProductConfiguration : IEntityTypeConfiguration<Product>
+{
+    public void Configure(EntityTypeBuilder<Product> builder)
+    {
+        builder.HasOne(product => product.Category)
+            .WithMany(category => category.Products)
+            .HasForeignKey(product => product.CategoryId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+```
+
+常见关系配置：
+
+| API | 含义 |
+|---|---|
+| `HasOne` | 当前实体有一个导航属性 |
+| `WithMany` | 对方实体有集合导航属性 |
+| `HasForeignKey` | 指定外键属性 |
+| `OnDelete` | 删除行为：Restrict/Cascade/SetNull |
+
+一对多是最常见关系。多对多需要中间表或使用 EF Core 5+ 的 `HasMany().WithMany()` 自动生成。
+
+使用 `Include` 加载关联：
+
+```csharp
+var products = await _dbContext.Products
+    .AsNoTracking()
+    .Include(product => product.Category)
+    .ToListAsync(cancellationToken);
+```
+
+但是 API 查询更推荐投影：
+
+```csharp
+var products = await _dbContext.Products
+    .AsNoTracking()
+    .Select(product => new
+    {
+        product.Id,
+        product.Name,
+        CategoryName = product.Category.Name
+    })
+    .ToListAsync(cancellationToken);
+```
+
+`Include` 容易加载过多数据。列表接口优先考虑投影。
+
+## 事务
+
+一次 `SaveChangesAsync` 默认会在事务中执行。如果一个业务流程需要多个保存点，可以手动事务。
+
+```csharp
+await using var transaction = await _dbContext.Database
+    .BeginTransactionAsync(cancellationToken);
+
+try
+{
+    _dbContext.Products.Add(product);
+    await _dbContext.SaveChangesAsync(cancellationToken);
+
+    _dbContext.StockLogs.Add(stockLog);
+    await _dbContext.SaveChangesAsync(cancellationToken);
+
+    await transaction.CommitAsync(cancellationToken);
+}
+catch
+{
+    await transaction.RollbackAsync(cancellationToken);
+    throw;
+}
+```
+
+如果可以把多个变更放到同一次 `SaveChangesAsync`，通常不需要手动事务。
+
+## 并发控制
+
+并发控制用于处理“两个用户同时修改同一条数据”的问题。
+
+SQL Server 常用 `rowversion`：
+
+```csharp
+builder.Property(product => product.RowVersion)
+    .IsRowVersion();
+```
+
+更新时如果并发冲突，EF Core 会抛出 `DbUpdateConcurrencyException`。
+
+```csharp
+try
+{
+    await _dbContext.SaveChangesAsync(cancellationToken);
+}
+catch (DbUpdateConcurrencyException)
+{
+    throw new ConflictException("Product has been modified by another request.");
+}
+```
+
+API 层可以把它映射成 `409 Conflict`。
+
+## Controller + Service 完整示例
+
+Controller 保持薄：
+
+```csharp
+[ApiController]
+[Route("api/products")]
+public class ProductsController : ControllerBase
+{
+    private readonly IProductService _productService;
+
+    public ProductsController(IProductService productService)
+    {
+        _productService = productService;
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<List<ProductDto>>> GetList(
+        [FromQuery] ProductQuery query,
+        CancellationToken cancellationToken)
+    {
+        List<ProductDto> products = await _productService.GetListAsync(query, cancellationToken);
+        return Ok(products);
+    }
+
+    [HttpGet("{id:int}")]
+    public async Task<ActionResult<ProductDto>> GetById(
+        int id,
+        CancellationToken cancellationToken)
+    {
+        ProductDto? product = await _productService.GetByIdAsync(id, cancellationToken);
+
+        if (product is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(product);
+    }
+
+    [HttpPost]
+    public async Task<ActionResult<ProductDto>> Create(
+        CreateProductRequest request,
+        CancellationToken cancellationToken)
+    {
+        ProductDto product = await _productService.CreateAsync(request, cancellationToken);
+        return CreatedAtAction(nameof(GetById), new { id = product.Id }, product);
+    }
+}
+```
+
+Service 负责业务和 EF Core：
+
+```csharp
+public interface IProductService
+{
+    Task<List<ProductDto>> GetListAsync(ProductQuery query, CancellationToken cancellationToken);
+    Task<ProductDto?> GetByIdAsync(int id, CancellationToken cancellationToken);
+    Task<ProductDto> CreateAsync(CreateProductRequest request, CancellationToken cancellationToken);
+}
+
+public class ProductService : IProductService
+{
+    private readonly AppDbContext _dbContext;
+
+    public ProductService(AppDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+
+    // 这里放前面示例中的查询和创建方法
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddScoped<IProductService, ProductService>();
+```
+
+## 常见性能问题
+
+### 过早 ToList
+
+不推荐：
+
+```csharp
+var products = await _dbContext.Products.ToListAsync(cancellationToken);
+
+var result = products
+    .Where(product => product.Price > 100)
+    .ToList();
+```
+
+这样会先把所有数据加载到内存，再筛选。
+
+推荐：
+
+```csharp
+var result = await _dbContext.Products
+    .Where(product => product.Price > 100)
+    .ToListAsync(cancellationToken);
+```
+
+### 过早 AsEnumerable
+
+`AsEnumerable()` 会把后续操作切换到内存执行。除非明确需要客户端处理，否则不要在数据库查询中提前使用。
+
+### N+1 查询
+
+循环中查询数据库容易产生 N+1：
+
+```csharp
+foreach (var order in orders)
+{
+    var customer = await _dbContext.Customers.FindAsync(order.CustomerId);
+}
+```
+
+应通过投影、关联查询或批量查询解决。
+
+### 返回实体
+
+不要直接返回 EF Core 实体：
+
+```csharp
+// 不推荐
+return Ok(await _dbContext.Products.ToListAsync());
+```
+
+推荐投影 DTO：
+
+```csharp
+return Ok(await _dbContext.Products
+    .AsNoTracking()
+    .Select(product => new ProductDto(product.Id, product.Name, product.Price, product.Stock))
+    .ToListAsync());
+```
+
+## 生产实践清单
+
+- `DbContext` 使用 Scoped 生命周期。
+- 连接字符串通过配置系统注入，不写死在代码里。
+- Migration 提交到仓库，生产执行要可控。
+- 列表接口必须分页。
+- 只读查询使用 `AsNoTracking()`。
+- API 返回 DTO，不直接返回实体。
+- 金额字段显式配置 decimal 精度。
+- 复杂实体映射使用 `IEntityTypeConfiguration<T>`。
+- 更新场景考虑并发控制。
+- 删除策略明确：物理删除还是软删除。
+- 查询性能关注 SQL、索引、N+1 和过度 Include。
+
+## 总结
+
+ASP.NET Core 与 EF Core 集成的关键不是“会写 `UseSqlServer`”，而是理解 `DbContext` 生命周期、实体和 DTO 的边界、LINQ 到 SQL 的翻译、变更跟踪、迁移、事务、并发和性能边界。
+
+当 Controller 只负责 HTTP，Service 负责业务流程，EF Core 负责数据访问时，项目结构会更清晰，也更容易测试和维护。

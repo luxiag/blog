@@ -3,6 +3,7 @@ title: 'ASP.NET Core Logging：ILogger、结构化日志与日志配置'
 date: '2026-07-21'
 excerpt: '掌握 ASP.NET Core 日志系统：ILogger、日志级别、结构化日志、日志分类、配置过滤、请求日志、敏感信息和生产建议。'
 tags: ['dotnet', 'aspnetcore', 'logging', 'ilogger']
+nextPost: 'dotnet/aspnet-core-exception-handling'
 ---
 
 # ASP.NET Core Logging：ILogger、结构化日志与日志配置
@@ -117,6 +118,109 @@ app.Use(async (context, next) =>
 ```
 
 生产项目通常使用 Serilog Request Logging 或 OpenTelemetry 采集更完整的请求信息。
+
+## 日志 Provider
+
+ASP.NET Core 内置多个日志 Provider，默认注册了 Console 和 Debug。可以在 `appsettings.json` 或代码中配置：
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information"
+    },
+    "Console": {
+      "LogLevel": {
+        "Default": "Information"
+      }
+    },
+    "Debug": {
+      "LogLevel": {
+        "Default": "Debug"
+      }
+    },
+    "EventSource": {
+      "LogLevel": {
+        "Default": "Warning"
+      }
+    }
+  }
+}
+```
+
+| Provider | 作用 |
+|---|---|
+| Console | 控制台输出，开发环境常用 |
+| Debug | `System.Diagnostics.Debug` 输出 |
+| EventSource | Windows ETW / dotnet-trace 采集 |
+| EventLog | Windows 事件日志 |
+| AzureAppServicesFile / Blob | Azure 日志集成 |
+
+## Serilog 接入
+
+Serilog 是 .NET 最流行的结构化日志库，支持丰富的 Sink（输出目标）。
+
+安装：
+
+```bash
+dotnet add package Serilog.AspNetCore
+dotnet add package Serilog.Sinks.Console
+dotnet add package Serilog.Sinks.File
+```
+
+配置：
+
+```csharp
+using Serilog;
+
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .Enrich.WithMachineName()
+    .Enrich.WithThreadId()
+    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+    .WriteTo.File(
+        path: "logs/app-.log",
+        rollingInterval: RollingInterval.Day,
+        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+    .CreateLogger();
+
+builder.Host.UseSerilog();
+```
+
+`appsettings.json` 中也可以配置：
+
+```json
+{
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft.AspNetCore": "Warning",
+        "Microsoft.EntityFrameworkCore": "Warning"
+      }
+    }
+  }
+}
+```
+
+代码中使用方式和内置 `ILogger<T>` 一样，Serilog 会接管所有日志输出。
+
+Serilog 的优势：
+
+- 结构化日志输出为 JSON，方便日志平台索引。
+- Enricher 自动附加 MachineName、ThreadId、Environment 等上下文。
+- 支持 Seq、Elasticsearch、Loki、Datadog 等多种 Sink。
+- `Serilog.AspNetCore` 自带请求日志中间件，替代手写请求日志。
+
+请求日志中间件：
+
+```csharp
+app.UseSerilogRequestLogging(options =>
+{
+    options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.000} ms";
+});
+```
 
 ## 异常日志
 

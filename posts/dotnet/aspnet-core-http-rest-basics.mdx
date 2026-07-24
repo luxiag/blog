@@ -134,6 +134,107 @@ Header 用来描述请求或响应的元信息。
 | `Cache-Control` | 缓存策略 |
 | `Set-Cookie` | 设置 Cookie |
 
+## Cookie
+
+Cookie 是浏览器自动携带的小块数据，常用于认证和会话管理。
+
+服务端通过 `Set-Cookie` 响应头设置 Cookie：
+
+```http
+HTTP/1.1 200 OK
+Set-Cookie: session_id=abc123; Path=/; HttpOnly; Secure; SameSite=Strict
+```
+
+浏览器之后对同一域的请求会自动带上：
+
+```http
+GET /api/orders HTTP/1.1
+Cookie: session_id=abc123
+```
+
+Cookie 关键属性：
+
+| 属性 | 作用 |
+|---|---|
+| `HttpOnly` | JavaScript 无法读取，防止 XSS 窃取 |
+| `Secure` | 只在 HTTPS 下传输 |
+| `SameSite` | 控制跨站请求是否携带，防止 CSRF |
+| `Path` | Cookie 生效的路径范围 |
+| `Expires / Max-Age` | 过期时间 |
+
+Web API 认证中，Cookie 和 JWT 是两种常见方案。Cookie 由浏览器自动管理，JWT 需要前端手动存储和携带。
+
+## CORS
+
+前后端分离时，前端（`https://app.example.com`）和后端 API（`https://api.example.com`）不同源，浏览器会阻止跨域请求。这叫同源策略。
+
+CORS（Cross-Origin Resource Sharing）是浏览器和服务器协商跨域访问的机制。
+
+预检请求：浏览器先发 `OPTIONS` 请求询问服务器是否允许跨域：
+
+```http
+OPTIONS /api/products HTTP/1.1
+Origin: https://app.example.com
+Access-Control-Request-Method: GET
+```
+
+服务器响应允许：
+
+```http
+HTTP/1.1 204 No Content
+Access-Control-Allow-Origin: https://app.example.com
+Access-Control-Allow-Methods: GET, POST, PUT, DELETE
+Access-Control-Allow-Headers: Authorization, Content-Type
+Access-Control-Allow-Credentials: true
+```
+
+ASP.NET Core 中配置 CORS：
+
+```csharp
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowApp", policy =>
+    {
+        policy.WithOrigins("https://app.example.com")
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
+    });
+});
+
+app.UseCors("AllowApp");
+```
+
+注意：
+
+- 不要用 `AllowAnyOrigin()` + `AllowCredentials()`，浏览器不允许。
+- `UseCors()` 要放在 `UseRouting()` 之后、`UseAuthentication()` 之前。
+- 生产环境必须明确指定允许的源。
+
+## HTTPS
+
+HTTPS = HTTP + TLS 加密。生产环境必须使用 HTTPS：
+
+- 防止请求和响应被窃听。
+- 防止请求被篡改（中间人攻击）。
+- Cookie 和 JWT 在 HTTPS 下才安全传输。
+- 很多浏览器 API（如 Service Worker、Geolocation）只允许 HTTPS 环境。
+
+ASP.NET Core 默认启用 HTTPS 重定向：
+
+```csharp
+app.UseHttpsRedirection();
+```
+
+生产环境还应启用 HSTS，告诉浏览器始终使用 HTTPS：
+
+```csharp
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+}
+```
+
 ## RESTful API 的核心思想
 
 RESTful API 的重点不是“URL 好看”，而是围绕资源设计接口。

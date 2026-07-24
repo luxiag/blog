@@ -1,0 +1,336 @@
+---
+title: 'ASP.NET Core 部署基础：Kestrel、Nginx、IIS 与 Docker'
+date: '2026-07-21'
+excerpt: '系统理解 ASP.NET Core 生产部署基础：Kestrel、反向代理、IIS、Nginx、Docker、环境变量、HTTPS、日志目录和发布检查清单。'
+tags: ['dotnet', 'aspnetcore', 'deployment', 'docker', 'nginx']
+---
+
+# ASP.NET Core 部署基础：Kestrel、Nginx、IIS 与 Docker
+
+开发环境中，`dotnet run` 就能启动 ASP.NET Core 应用。但生产部署要考虑的事情更多：进程如何守护、HTTPS 在哪里终止、配置如何注入、日志怎么收集、应用如何健康检查、容器如何构建、反向代理如何转发。
+
+这篇文章从部署视角梳理 ASP.NET Core 应用上线前必须掌握的基础能力。
+
+:::tip 阶段四阅读顺序
+本文属于部署、监控和架构进阶阶段。建议先掌握 [Configuration](/posts/dotnet/aspnet-core-configuration)、[Logging](/posts/dotnet/aspnet-core-logging)、[Health Checks](/posts/dotnet/aspnet-core-health-checks) 和 [OpenAPI](/posts/dotnet/aspnet-core-openapi-versioning)。
+:::
+
+## ASP.NET Core 生产运行模型
+
+ASP.NET Core 应用本身由 Kestrel 承载。生产中常见两种模式：
+
+```text
+Client -> Nginx / IIS / YARP -> Kestrel -> ASP.NET Core App
+```
+
+或容器环境：
+
+```text
+Client -> Load Balancer -> Container -> Kestrel -> ASP.NET Core App
+```
+
+Kestrel 是高性能 Web Server，但在公网生产环境通常会放在反向代理后面，由反向代理处理 TLS、压缩、静态资源、限流等边界能力。
+
+## 发布应用
+
+发布 Release 版本：
+
+```bash
+dotnet publish -c Release -o ./publish
+```
+
+常见发布产物包括：
+
+```text
+publish/
+├── MyApp.dll
+├── appsettings.json
+├── appsettings.Production.json
+├── web.config        # IIS 部署时可能存在
+└── runtimes/
+```
+
+运行：
+
+```bash
+dotnet MyApp.dll
+```
+
+生产环境不要使用 `dotnet run`，它面向开发构建流程。
+
+## 环境变量
+
+通过环境变量设置运行环境：
+
+```bash
+ASPNETCORE_ENVIRONMENT=Production
+```
+
+配置覆盖示例：
+
+```bash
+ConnectionStrings__Default="Server=db;Database=AppDb;User Id=app;Password=***"
+```
+
+容器中：
+
+```yaml
+environment:
+  ASPNETCORE_ENVIRONMENT: Production
+  ConnectionStrings__Default: Server=db;Database=AppDb;User Id=app;Password=***
+```
+
+生产敏感配置不要提交到 Git。
+
+## Nginx 反向代理
+
+Nginx 示例：
+
+```nginx
+server {
+    listen 80;
+    server_name api.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+ASP.NET Core 中启用转发头：
+
+```csharp
+app.UseForwardedHeaders();
+```
+
+生产中要配置可信代理，避免客户端伪造转发头。
+
+## IIS 部署
+
+Windows / IIS 部署需要安装 ASP.NET Core Hosting Bundle。IIS 通过 ASP.NET Core Module 转发请求到 Kestrel。
+
+适合场景：
+
+- Windows Server 传统部署
+- 企业内部系统
+- 已有 IIS 运维体系
+
+注意：
+
+- 应用池身份权限
+- 日志目录写入权限
+- Hosting Bundle 版本
+- Web.config 配置
+
+## Dockerfile 示例
+
+```dockerfile
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+COPY ["MyApp.csproj", "./"]
+RUN dotnet restore "MyApp.csproj"
+
+COPY . .
+RUN dotnet publish "MyApp.csproj" -c Release -o /app/publish /p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+
+COPY --from=build /app/publish .
+
+ENV ASPNETCORE_URLS=http://+:8080
+EXPOSE 8080
+
+ENTRYPOINT ["dotnet", "MyApp.dll"]
+```
+
+构建运行：
+
+```bash
+docker build -t myapp:1.0 .
+docker run -p 8080:8080 myapp:1.0
+```
+
+## 日志采集
+
+生产环境日志需要统一采集到日志平台，而不是只写本地文件。
+
+Serilog 常用 Sink：
+
+| Sink | 场景 |
+|---|---|
+| Console | 开发环境、容器 stdout |
+| File | 单机部署本地日志 |
+| Seq | 开发/测试环境日志查看 |
+| Elasticsearch + Kibana | 生产日志平台 |
+| Loki + Grafana | 轻量日志平台 |
+
+容器环境推荐输出到 stdout，由容器运行时收集：
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+Docker/K8s 中，stdout 日志由运行时自动采集，转发到日志平台。
+
+## 进程守护
+
+Linux 环境下 `dotnet MyApp.dll` 退出后进程就没了。需要进程守护工具自动重启。
+
+### systemd
+
+创建服务文件 `/etc/systemd/system/myapp.service`：
+
+```ini
+[Unit]
+Description=MyApp ASP.NET Core Application
+After=network.target
+
+[Service]
+Type=notify
+WorkingDirectory=/var/www/myapp
+ExecStart=/usr/bin/dotnet /var/www/myapp/MyApp.dll
+Restart=always
+RestartSec=10
+SyslogIdentifier=myapp
+User=www-data
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启用和启动：
+
+```bash
+sudo systemctl enable myapp
+sudo systemctl start myapp
+sudo systemctl status myapp
+```
+
+`Restart=always` 确保进程异常退出时自动重启。
+
+### Docker 重启策略
+
+```bash
+docker run --restart=always -p 8080:8080 myapp:1.0
+```
+
+| 策略 | 行为 |
+|---|---|
+| `no` | 不重启（默认） |
+| `always` | 总是重启 |
+| `on-failure` | 非零退出码时重启 |
+| `unless-stopped` | 除非手动停止，否则总是重启 |
+
+## 容器编排
+
+多服务部署需要编排工具管理多个容器。
+
+### docker-compose
+
+```yaml
+version: '3.8'
+services:
+  api:
+    image: myapp:1.0
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Default: "Server=db;Database=AppDb;User Id=app;Password=***"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      SA_PASSWORD: "YourStrong!Passw0rd"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+    healthcheck:
+      test: /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "$$SA_PASSWORD" -Q "SELECT 1"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+volumes:
+  sqldata:
+```
+
+启动：
+
+```bash
+docker-compose up -d
+docker-compose logs -f api
+```
+
+### Kubernetes 基础
+
+K8s 中用 Deployment 管理应用副本，Service 暴露访问：
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+        - name: myapp
+          image: myapp:1.0
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Production"
+```
+
+配合 [Health Checks](/posts/dotnet/aspnet-core-health-checks) 配置存活和就绪探针，K8s 可以自动重启不健康的 Pod。
+
+## HTTPS 与反向代理
+
+生产中常见做法是在 Nginx、IIS、Load Balancer 终止 HTTPS，然后转发到 Kestrel。
+
+如果在反向代理后使用 HTTPS 重定向、生成绝对链接、Cookie Secure 策略，需要正确配置 Forwarded Headers。
+
+## 发布前检查清单
+
+- `ASPNETCORE_ENVIRONMENT=Production`
+- 连接字符串来自环境变量或密钥管理
+- 日志级别合理
+- Swagger 是否允许在生产暴露
+- 健康检查路径可用
+- HTTPS 配置正确
+- 数据库迁移流程明确
+- 静态文件和上传目录权限正确
+- 反向代理转发头配置正确
+- 应用进程有守护或容器重启策略
+
+## 总结
+
+ASP.NET Core 部署不是简单复制 DLL。你需要理解 Kestrel、反向代理、环境变量、HTTPS、日志、健康检查和容器镜像。生产部署的目标是可启动、可配置、可观测、可回滚。

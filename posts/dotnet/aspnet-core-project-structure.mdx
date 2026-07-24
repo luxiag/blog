@@ -1,0 +1,241 @@
+---
+title: 'ASP.NET Core 项目结构：分层架构、Clean Architecture 与模块化'
+date: '2026-07-21'
+excerpt: '系统梳理 ASP.NET Core 项目结构设计：单项目、分层架构、Clean Architecture、模块化目录、依赖方向、项目引用和演进边界。'
+tags: ['dotnet', 'aspnetcore', 'architecture', 'clean-architecture']
+---
+
+# ASP.NET Core 项目结构：分层架构、Clean Architecture 与模块化
+
+项目刚开始时，一个 `Controllers` 目录、一个 `Models` 目录就能跑起来。但业务复杂后，如果 Controller 里塞满数据库查询、业务判断、外部接口调用和事务处理，项目会很快变得难以维护。
+
+项目结构设计的目标不是“看起来高级”，而是让代码职责清晰、依赖方向稳定、测试更容易、团队协作更可控。
+
+:::tip 阶段四阅读顺序
+建议先掌握 [DI](/posts/dotnet/aspnet-core-dependency-injection)、[EF Core](/posts/dotnet/aspnet-core-ef-core)、[测试](/posts/dotnet/aspnet-core-testing)，再阅读本文。后续可以继续学习 [DDD 入门](/posts/dotnet/aspnet-core-ddd-basics) 和 [CQRS 与 MediatR](/posts/dotnet/aspnet-core-cqrs-mediatr)。
+:::
+
+## 为什么项目结构会失控
+
+常见失控表现：
+
+- Controller 里直接写 EF Core 查询。
+- DTO、Entity、ViewModel 混用。
+- 业务逻辑散落在 Controller、Filter、Repository 中。
+- 服务之间互相调用形成环。
+- 基础设施代码反向影响业务代码。
+- 单元测试很难写，因为所有逻辑都依赖数据库和 Web 框架。
+
+项目结构的核心是拆职责，而不是拆文件夹。
+
+## 单项目结构
+
+小项目可以先用单项目结构。
+
+```text
+ProductApi/
+├── Controllers/
+├── DTOs/
+├── Entities/
+├── Services/
+├── Data/
+└── Program.cs
+```
+
+适合：
+
+- 原型项目
+- 小型内部工具
+- 团队人数少
+- 业务边界简单
+
+即使是单项目，也建议 Controller 调 Service，Service 调 DbContext，不要让 Controller 直接承载所有逻辑。
+
+## 分层架构
+
+业务变复杂后，可以拆成多个项目。
+
+```text
+src/
+├── Product.Api/
+├── Product.Application/
+├── Product.Domain/
+└── Product.Infrastructure/
+
+tests/
+├── Product.UnitTests/
+└── Product.IntegrationTests/
+```
+
+各层职责：
+
+| 项目 | 职责 |
+|---|---|
+| `Api` | HTTP 入口、Controller、认证授权配置 |
+| `Application` | 用例、应用服务、DTO、接口编排 |
+| `Domain` | 实体、值对象、领域规则、领域事件 |
+| `Infrastructure` | EF Core、外部服务、消息队列、文件存储 |
+
+依赖方向建议：
+
+```text
+Api -> Application -> Domain
+Infrastructure -> Application / Domain
+Api -> Infrastructure 只用于 DI 注册
+```
+
+Domain 不应该依赖 EF Core、ASP.NET Core、数据库、Redis、消息队列。
+
+## Clean Architecture 的核心
+
+Clean Architecture 的重点是依赖方向：内层不依赖外层。
+
+```text
+Frameworks / Drivers
+    -> Interface Adapters
+        -> Application
+            -> Domain
+```
+
+在 ASP.NET Core 项目中，可以落地为：
+
+```text
+Product.Domain
+Product.Application
+Product.Infrastructure
+Product.Api
+```
+
+核心原则：
+
+- 业务规则放在 Domain / Application。
+- EF Core 和第三方 API 放在 Infrastructure。
+- Api 只是交付方式之一。
+- 内层通过接口表达需求，外层提供实现。
+
+## 项目引用示例
+
+```text
+Product.Api
+  references Product.Application
+  references Product.Infrastructure
+
+Product.Application
+  references Product.Domain
+
+Product.Infrastructure
+  references Product.Application
+  references Product.Domain
+
+Product.Domain
+  references none
+```
+
+`Infrastructure` 引用 `Application` 是为了实现其中定义的接口，例如：
+
+```csharp
+public interface IProductRepository
+{
+    Task<Product?> GetByIdAsync(int id, CancellationToken cancellationToken);
+}
+```
+
+Infrastructure 实现：
+
+```csharp
+public class EfProductRepository : IProductRepository
+{
+    private readonly AppDbContext _dbContext;
+
+    public EfProductRepository(AppDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+}
+```
+
+## 模块化目录
+
+如果业务很多，也可以按功能模块组织 Application 层。
+
+```text
+Product.Application/
+├── Products/
+│   ├── CreateProduct/
+│   ├── UpdateProduct/
+│   └── GetProductList/
+├── Orders/
+│   ├── CreateOrder/
+│   └── CancelOrder/
+└── Common/
+```
+
+这种方式比按技术类型堆目录更贴近业务。
+
+不推荐所有 DTO 都放一个巨大 `DTOs` 目录、所有 Service 都放一个巨大 `Services` 目录。项目变大后，按业务功能聚合更容易维护。
+
+## Program.cs 中注册模块
+
+可以给每层提供扩展方法。
+
+```csharp
+builder.Services.AddApplication();
+builder.Services.AddInfrastructure(builder.Configuration);
+```
+
+Application：
+
+```csharp
+public static class DependencyInjection
+{
+    public static IServiceCollection AddApplication(this IServiceCollection services)
+    {
+        services.AddScoped<IProductService, ProductService>();
+        return services;
+    }
+}
+```
+
+Infrastructure：
+
+```csharp
+public static class DependencyInjection
+{
+    public static IServiceCollection AddInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddDbContext<AppDbContext>(options =>
+        {
+            options.UseSqlServer(configuration.GetConnectionString("Default"));
+        });
+
+        services.AddScoped<IProductRepository, EfProductRepository>();
+
+        return services;
+    }
+}
+```
+
+## 不要过度架构
+
+不是所有项目都需要四层架构、DDD、CQRS、MediatR。
+
+适合简单结构的情况：
+
+- CRUD 为主
+- 业务规则少
+- 团队很小
+- 生命周期短
+
+适合分层和模块化的情况：
+
+- 业务复杂
+- 多团队协作
+- 测试要求高
+- 外部依赖多
+- 需要长期演进
+
+## 总结
+
+ASP.NET Core 项目结构设计要围绕职责和依赖方向，而不是盲目套模板。小项目可以单项目分目录，大项目可以拆 Api、Application、Domain、Infrastructure。关键是让业务逻辑不被 Web 框架、数据库和第三方服务绑死。

@@ -205,6 +205,92 @@ public record CreateProductRequest(string Name, decimal Price);
 
 Route Group 适合给一组接口统一添加前缀、授权、过滤器等。
 
+## URL 生成
+
+路由不只是匹配 URL，还可以根据路由模板反向生成 URL。这在返回 `Location` Header 或做内部跳转时很有用。
+
+### Controller 中使用 Url.Action
+
+```csharp
+[HttpPost]
+public IActionResult Create(CreateProductRequest request)
+{
+    int id = 101;
+
+    string? url = Url.Action(nameof(GetById), new { id });
+
+    return Created(url!, new { Id = id });
+}
+```
+
+`Url.Action` 根据当前路由模板生成 URL，例如 `/api/products/101`。
+
+### Controller 中使用 CreatedAtAction
+
+更常见的写法：
+
+```csharp
+[HttpPost]
+public ActionResult<ProductDto> Create(CreateProductRequest request)
+{
+    int id = 101;
+
+    return CreatedAtAction(nameof(GetById), new { id }, new { Id = id });
+}
+```
+
+`CreatedAtAction` 会自动生成 `Location` 响应头：
+
+```http
+HTTP/1.1 201 Created
+Location: /api/products/101
+```
+
+### 使用 LinkGenerator
+
+`LinkGenerator` 是 ASP.NET Core 提供的路由 URL 生成服务，不依赖 `ControllerBase`：
+
+```csharp
+public class OrderService
+{
+    private readonly LinkGenerator _linkGenerator;
+
+    public OrderService(LinkGenerator linkGenerator)
+    {
+        _linkGenerator = linkGenerator;
+    }
+
+    public string GetOrderUrl(HttpContext httpContext, long orderId)
+    {
+        return _linkGenerator.GetPathByAction(
+            httpContext,
+            "GetById",
+            "Orders",
+            new { id = orderId }) ?? string.Empty;
+    }
+}
+```
+
+注册不需要额外代码，`LinkGenerator` 已内置在 DI 中。
+
+### Minimal API 中生成 URL
+
+```csharp
+app.MapPost("/api/products", (CreateProductRequest request, LinkGenerator linker) =>
+{
+    int id = 101;
+
+    string? url = linker.GetPathByName("GetProductById", new { id });
+
+    return TypedResults.Created(url, new { Id = id });
+});
+
+app.MapGet("/api/products/{id:int}", (int id) => Results.Ok(new { Id = id }))
+    .WithName("GetProductById");
+```
+
+Minimal API 需要 `WithName` 给 Endpoint 命名，才能通过名称生成 URL。
+
 ## 路由设计建议
 
 建议：

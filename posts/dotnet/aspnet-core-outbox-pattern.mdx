@@ -1,0 +1,214 @@
+---
+title: 'ASP.NET Core Outbox Pattern：数据库与消息一致性'
+date: '2026-07-21'
+excerpt: '理解 ASP.NET Core 中 Outbox Pattern 的落地方式：本地事务、Outbox 表、后台发布、幂等消费、重试和消息一致性边界。'
+tags: ['dotnet', 'aspnetcore', 'outbox', 'messaging', 'distributed-systems']
+---
+
+# ASP.NET Core Outbox Pattern：数据库与消息一致性
+
+在业务系统中，经常会遇到一个问题：数据库更新成功后，还要发布一条消息。例如订单创建后发布 `OrderCreated` 事件，库存服务、积分服务、通知服务都要消费它。
+
+如果数据库保存成功，但消息发布失败，系统状态就不一致。Outbox Pattern 用来解决这个问题。
+
+:::tip 阶段四阅读顺序
+建议先掌握 [EF Core](/posts/dotnet/aspnet-core-ef-core)、[BackgroundService](/posts/dotnet/aspnet-core-background-service)、[DDD 入门](/posts/dotnet/aspnet-core-ddd-basics) 后阅读本文。
+:::
+
+## 问题场景
+
+不可靠写法：
+
+```csharp
+order.Pay();
+await dbContext.SaveChangesAsync(cancellationToken);
+
+await messageBus.PublishAsync(new OrderPaidEvent(order.Id), cancellationToken);
+```
+
+如果 `SaveChangesAsync` 成功，但 `PublishAsync` 失败，订单已经支付，但外部系统收不到事件。
+
+反过来，如果先发消息再保存数据库，也可能消息发出去了但数据库保存失败。
+
+## Outbox 的核心思路
+
+在同一个数据库事务中：
+
+1. 保存业务数据。
+2. 保存待发布消息到 Outbox 表。
+
+然后由后台任务扫描 Outbox 表，把消息发布到消息队列。发布成功后标记为已发布。
+
+```text
+HTTP Request
+-> Save Order + Insert OutboxMessage in same transaction
+-> BackgroundService reads OutboxMessage
+-> Publish to Message Broker
+-> Mark as Processed
+```
+
+## Outbox 表设计
+
+```csharp
+public class OutboxMessage
+{
+    public long Id { get; set; }
+    public string Type { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
+    public DateTime OccurredAt { get; set; }
+    public DateTime? ProcessedAt { get; set; }
+    public string? Error { get; set; }
+    public int RetryCount { get; set; }
+}
+```
+
+EF Core 配置：
+
+```csharp
+public class OutboxMessageConfiguration : IEntityTypeConfiguration<OutboxMessage>
+{
+    public void Configure(EntityTypeBuilder<OutboxMessage> builder)
+    {
+        builder.ToTable("OutboxMessages");
+        builder.HasKey(message => message.Id);
+        builder.Property(message => message.Type).HasMaxLength(500).IsRequired();
+        builder.Property(message => message.Content).IsRequired();
+    }
+}
+```
+
+## 写入 Outbox
+
+```csharp
+public async Task PayOrderAsync(long orderId, CancellationToken cancellationToken)
+{
+    Order order = await _dbContext.Orders.FindAsync([orderId], cancellationToken)
+        ?? throw new NotFoundException("Order not found.");
+
+    order.Pay();
+
+    var domainEvent = new OrderPaidEvent(order.Id, order.CustomerId);
+
+    _dbContext.OutboxMessages.Add(new OutboxMessage
+    {
+        Type = domainEvent.GetType().FullName!,
+        Content = JsonSerializer.Serialize(domainEvent),
+        OccurredAt = DateTime.UtcNow
+    });
+
+    await _dbContext.SaveChangesAsync(cancellationToken);
+}
+```
+
+订单状态和 Outbox 消息在同一次 `SaveChangesAsync` 中提交，要么都成功，要么都失败。
+
+## 后台发布
+
+```csharp
+public class OutboxPublisher : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<OutboxPublisher> _logger;
+
+    public OutboxPublisher(IServiceScopeFactory scopeFactory, ILogger<OutboxPublisher> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+        {
+            try
+            {
+                await PublishPendingMessagesAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Outbox publishing failed.");
+            }
+        }
+    }
+
+    private async Task PublishPendingMessagesAsync(CancellationToken cancellationToken)
+    {
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var bus = scope.ServiceProvider.GetRequiredService<IMessageBus>();
+
+        List<OutboxMessage> messages = await dbContext.OutboxMessages
+            .Where(message => message.ProcessedAt == null)
+            .OrderBy(message => message.Id)
+            .Take(20)
+            .ToListAsync(cancellationToken);
+
+        foreach (OutboxMessage message in messages)
+        {
+            try
+            {
+                await bus.PublishAsync(message.Type, message.Content, cancellationToken);
+                message.ProcessedAt = DateTime.UtcNow;
+                message.Error = null;
+            }
+            catch (Exception ex)
+            {
+                message.RetryCount++;
+                message.Error = ex.Message;
+            }
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddHostedService<OutboxPublisher>();
+```
+
+## 幂等消费
+
+Outbox 保证消息最终会发布，但不能保证消费者只收到一次。消息队列和重试机制下，消费者必须支持幂等。
+
+常见方式：
+
+- 消息带唯一 `MessageId`。
+- 消费端记录已处理消息。
+- 根据业务唯一键避免重复写入。
+- 操作设计成可重复执行。
+
+## 重试与失败处理
+
+Outbox 表需要关注：
+
+- `RetryCount`
+- `Error`
+- `ProcessedAt`
+- 最大重试次数
+- 死信处理
+- 后台任务监控
+
+长期失败的消息不要无限重试，应进入人工处理或死信队列。
+
+## 使用边界
+
+Outbox 适合：
+
+- 数据库变更后发布集成事件。
+- 单体拆微服务过程中的事件发布。
+- 需要本地事务和消息最终一致。
+
+Outbox 不能解决：
+
+- 跨多个数据库的强一致事务。
+- 消费端业务幂等问题。
+- 消息顺序的所有复杂场景。
+
+## 总结
+
+Outbox Pattern 用本地数据库事务保证“业务数据”和“待发布消息”一起提交，再由后台任务异步发布消息。它牺牲实时性，换取最终一致性和更高可靠性，是 ASP.NET Core 生产系统中非常实用的消息一致性模式。

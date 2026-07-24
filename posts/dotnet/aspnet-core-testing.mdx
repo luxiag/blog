@@ -1,0 +1,618 @@
+---
+title: 'ASP.NET Core 测试：单元测试、集成测试与 WebApplicationFactory'
+date: '2026-07-24'
+excerpt: '系统掌握 ASP.NET Core Web API 测试：xUnit 单元测试、Moq 模拟依赖、Service 层测试、WebApplicationFactory 集成测试、API 端到端测试、数据库测试策略和测试组织。'
+tags: ['dotnet', 'aspnetcore', 'testing', 'xunit', 'integration-test']
+nextPost: 'dotnet/aspnet-core-security'
+---
+
+# ASP.NET Core 测试：单元测试、集成测试与 WebApplicationFactory
+
+写完 API 不代表它能正常工作。只有测试能告诉你：参数校验是否生效、业务逻辑是否正确、数据库查询是否返回预期结果、接口鉴权是否生效、异常处理是否返回正确状态码。
+
+ASP.NET Core 的测试体系分几个层次：单元测试验证独立逻辑，集成测试验证组件协作，API 端到端测试验证完整请求链路。这篇文章按实际项目需求讲清楚每一层怎么写、什么时候用、常见误区在哪里。
+
+:::tip 阶段三阅读顺序
+本文属于 ASP.NET Core 生产项目常用能力阶段。建议先掌握 [Controller](/posts/dotnet/aspnet-core-webapi-controller)、[DI](/posts/dotnet/aspnet-core-dependency-injection)、[异常处理](/posts/dotnet/aspnet-core-exception-handling) 和 [EF Core](/posts/dotnet/aspnet-core-ef-core)。
+:::
+
+## 测试层次
+
+| 层次 | 测试什么 | 工具 | 速度 |
+|---|---|---|---|
+| 单元测试 | 独立方法/类的逻辑 | xUnit / Moq | 快 |
+| 集成测试 | 多个组件协作 | WebApplicationFactory | 中 |
+| API 端到端测试 | 完整请求到响应 | HttpClient + Test Server | 中 |
+| 数据库测试 | 实际 SQL / Migration | Testcontainers / SQLite | 慢 |
+
+单元测试数量最多、速度最快；集成测试数量少但覆盖关键链路。不要只写一种，也不要追求 100% 覆盖率而忽视测试质量。
+
+## 创建测试项目
+
+### 使用 xUnit
+
+```bash
+dotnet new xunit -n ProductApi.Tests
+dotnet add ProductApi.Tests reference ../ProductApi/ProductApi.csproj
+```
+
+xUnit 是 ASP.NET Core 社区最常用的测试框架。
+
+### 安装常用包
+
+```bash
+dotnet add package Moq
+dotnet add package FluentAssertions
+dotnet add package Microsoft.AspNetCore.Mvc.Testing
+```
+
+| 包 | 用途 |
+|---|---|
+| `Moq` | 模拟接口依赖 |
+| `FluentAssertions` | 流畅断言语法 |
+| `Microsoft.AspNetCore.Mvc.Testing` | `WebApplicationFactory` |
+
+### 项目结构
+
+```text
+tests/
+  ProductApi.UnitTests/
+    Services/
+      ProductServiceTests.cs
+  ProductApi.IntegrationTests/
+    Controllers/
+      ProductsControllerTests.cs
+    CustomWebApplicationFactory.cs
+```
+
+单元测试和集成测试建议分开项目，因为运行速度和依赖不同。
+
+## 单元测试基础
+
+### xUnit 约定
+
+xUnit 使用 `[Fact]` 标记无参数测试，`[Theory]` 配合 `[InlineData]` 标记参数化测试。
+
+```csharp
+using Xunit;
+
+public class CalculatorTests
+{
+    [Fact]
+    public void Add_TwoNumbers_ReturnsSum()
+    {
+        int result = Calculator.Add(1, 2);
+
+        Assert.Equal(3, result);
+    }
+
+    [Theory]
+    [InlineData(1, 2, 3)]
+    [InlineData(-1, 1, 0)]
+    [InlineData(0, 0, 0)]
+    public void Add_MultipleCases_ReturnsExpected(int a, int b, int expected)
+    {
+        int result = Calculator.Add(a, b);
+
+        Assert.Equal(expected, result);
+    }
+}
+```
+
+### FluentAssertions
+
+FluentAssertions 提供更可读的断言语法：
+
+```csharp
+using FluentAssertions;
+
+result.Should().Be(3);
+result.Should().BeGreaterThan(0);
+list.Should().HaveCount(2);
+list.Should().Contain(item => item.Name == "Keyboard");
+exception.Should().BeOfType<NotFoundException>();
+```
+
+可读性对测试维护很重要。测试代码也是代码，需要让后来人看懂意图。
+
+## Moq 模拟依赖
+
+单元测试不应该依赖数据库、文件系统或外部服务。Moq 可以模拟接口，让测试只关注被测逻辑本身。
+
+### 基础用法
+
+```csharp
+using Moq;
+
+public class ProductServiceTests
+{
+    [Fact]
+    public void GetAll_ReturnsProducts()
+    {
+        var mockRepository = new Mock<IProductRepository>();
+        mockRepository
+            .Setup(repo => repo.GetAll())
+            .Returns(new List<ProductDto>
+            {
+                new(1, "Keyboard", 199m),
+                new(2, "Mouse", 99m)
+            });
+
+        var service = new ProductService(mockRepository.Object);
+
+        List<ProductDto> result = service.GetAll();
+
+        result.Should().HaveCount(2);
+        result[0].Name.Should().Be("Keyboard");
+    }
+}
+```
+
+关键点：
+
+- `Mock<T>` 创建接口的模拟对象。
+- `Setup` 配置方法调用的返回值。
+- `Object` 获取模拟实例，可以传给被测类。
+- 测试中不依赖真实数据库，只验证 `ProductService` 是否正确使用 Repository 返回数据。
+
+### 验证调用
+
+```csharp
+mockRepository.Verify(repo => repo.GetAll(), Times.Once);
+```
+
+`Verify` 检查某个方法是否被调用、调用几次。适合验证"保存是否被触发"这类行为。
+
+### 模拟异常
+
+```csharp
+mockRepository
+    .Setup(repo => repo.Save(It.IsAny<Product>()))
+    .Throws(new DbUpdateException("Database error"));
+```
+
+测试异常场景下 Service 是否正确处理。
+
+## Service 层单元测试
+
+业务逻辑应该尽量放在 Service 中，而不是散落在 Controller。这样 Service 可以独立测试。
+
+### 被测 Service
+
+```csharp
+public interface IProductService
+{
+    Task<ProductDto> CreateAsync(CreateProductRequest request, CancellationToken cancellationToken);
+}
+
+public class ProductService : IProductService
+{
+    private readonly IProductRepository _repository;
+    private readonly ILogger<ProductService> _logger;
+
+    public ProductService(IProductRepository repository, ILogger<ProductService> logger)
+    {
+        _repository = repository;
+        _logger = logger;
+    }
+
+    public async Task<ProductDto> CreateAsync(CreateProductRequest request, CancellationToken cancellationToken)
+    {
+        var product = new Product
+        {
+            Name = request.Name,
+            Price = request.Price,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _repository.AddAsync(product, cancellationToken);
+
+        return new ProductDto(product.Id, product.Name, product.Price);
+    }
+}
+```
+
+### 测试
+
+```csharp
+public class ProductServiceTests
+{
+    private readonly Mock<IProductRepository> _mockRepository;
+    private readonly Mock<ILogger<ProductService>> _mockLogger;
+    private readonly ProductService _service;
+
+    public ProductServiceTests()
+    {
+        _mockRepository = new Mock<IProductRepository>();
+        _mockLogger = new Mock<ILogger<ProductService>>();
+        _service = new ProductService(_mockRepository.Object, _mockLogger.Object);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ValidRequest_SavesAndReturnsDto()
+    {
+        var request = new CreateProductRequest
+        {
+            Name = "Keyboard",
+            Price = 199m
+        };
+
+        ProductDto result = await _service.CreateAsync(request, CancellationToken.None);
+
+        result.Name.Should().Be("Keyboard");
+        result.Price.Should().Be(199m);
+        _mockRepository.Verify(
+            repo => repo.AddAsync(It.Is<Product>(p => p.Name == "Keyboard"), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateAsync_RepositoryThrows_ExceptionPropagates()
+    {
+        _mockRepository
+            .Setup(repo => repo.AddAsync(It.IsAny<Product>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DbUpdateException("Database error"));
+
+        var request = new CreateProductRequest
+        {
+            Name = "Keyboard",
+            Price = 199m
+        };
+
+        await Assert.ThrowsAsync<DbUpdateException>(
+            () => _service.CreateAsync(request, CancellationToken.None));
+    }
+}
+```
+
+测试重点：
+
+- 正常路径：调用成功、返回值正确、Repository 被调用。
+- 异常路径：依赖抛异常时，Service 的行为是否符合预期。
+- 不关心 `ILogger` 的具体行为，直接用 Mock 占位。
+
+## 集成测试与 WebApplicationFactory
+
+`WebApplicationFactory<T>` 是 ASP.NET Core 提供的集成测试基础设施。它启动一个内存中的 Test Server，你可以通过 `HttpClient` 发送真实 HTTP 请求，验证完整请求链路。
+
+### 基础用法
+
+```csharp
+using Microsoft.AspNetCore.Mvc.Testing;
+
+public class BasicIntegrationTests : IClassFixture<WebApplicationFactory<Program>>
+{
+    private readonly WebApplicationFactory<Program> _factory;
+    private readonly HttpClient _client;
+
+    public BasicIntegrationTests(WebApplicationFactory<Program> factory)
+    {
+        _factory = factory;
+        _client = factory.CreateClient();
+    }
+
+    [Fact]
+    public async Task GetProducts_ReturnsSuccessStatusCode()
+    {
+        HttpResponseMessage response = await _client.GetAsync("/api/products");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+}
+```
+
+`IClassFixture<T>` 让 `WebApplicationFactory` 在测试类中共享，不会为每个测试重新启动 Server。
+
+### 自定义 WebApplicationFactory
+
+生产项目需要替换数据库、外部服务等依赖。
+
+```csharp
+public class CustomWebApplicationFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.ConfigureServices(services =>
+        {
+            var descriptor = services.SingleOrDefault(
+                d => d.ServiceType == typeof(DbContextOptions<AppDbContext>));
+
+            if (descriptor is not null)
+            {
+                services.Remove(descriptor);
+            }
+
+            services.AddDbContext<AppDbContext>(options =>
+            {
+                options.UseInMemoryDatabase("TestDb");
+            });
+        });
+
+        builder.UseEnvironment("Testing");
+    }
+}
+```
+
+这里把 SQL Server 替换为 InMemory 数据库，避免测试依赖真实数据库。
+
+### 使用自定义 Factory
+
+```csharp
+public class ProductsApiTests : IClassFixture<CustomWebApplicationFactory>
+{
+    private readonly HttpClient _client;
+    private readonly CustomWebApplicationFactory _factory;
+
+    public ProductsApiTests(CustomWebApplicationFactory factory)
+    {
+        _factory = factory;
+        _client = factory.CreateClient();
+    }
+}
+```
+
+## API 端到端测试
+
+端到端测试验证完整请求链路：路由匹配、参数绑定、模型验证、Controller、Service、数据库、响应序列化。
+
+### 完整 CRUD 测试示例
+
+```csharp
+public class ProductsApiTests : IClassFixture<CustomWebApplicationFactory>, IAsyncLifetime
+{
+    private readonly HttpClient _client;
+    private readonly CustomWebApplicationFactory _factory;
+    private readonly IServiceScope _scope;
+
+    public ProductsApiTests(CustomWebApplicationFactory factory)
+    {
+        _factory = factory;
+        _client = factory.CreateClient();
+        _scope = factory.Services.CreateScope();
+    }
+
+    [Fact]
+    public async Task CreateProduct_ValidRequest_ReturnsCreated()
+    {
+        var request = new CreateProductRequest
+        {
+            Name = "Keyboard",
+            Price = 199m
+        };
+
+        HttpResponseMessage response = await _client.PostAsJsonAsync("/api/products", request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        ProductDto? product = await response.Content.ReadFromJsonAsync<ProductDto>();
+
+        product.Should().NotBeNull();
+        product!.Name.Should().Be("Keyboard");
+        product.Price.Should().Be(199m);
+    }
+
+    [Fact]
+    public async Task CreateProduct_EmptyName_ReturnsBadRequest()
+    {
+        var request = new CreateProductRequest
+        {
+            Name = "",
+            Price = 199m
+        };
+
+        HttpResponseMessage response = await _client.PostAsJsonAsync("/api/products", request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task GetProduct_ExistingId_ReturnsProduct()
+    {
+        ProductDto created = await SeedProductAsync("Mouse", 99m);
+
+        HttpResponseMessage response = await _client.GetAsync($"/api/products/{created.Id}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task GetProduct_NonExistingId_ReturnsNotFound()
+    {
+        HttpResponseMessage response = await _client.GetAsync("/api/products/99999");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    private async Task<ProductDto> SeedProductAsync(string name, decimal price)
+    {
+        var request = new CreateProductRequest
+        {
+            Name = name,
+            Price = price
+        };
+
+        HttpResponseMessage response = await _client.PostAsJsonAsync("/api/products", request);
+        return (await response.Content.ReadFromJsonAsync<ProductDto>())!;
+    }
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
+    {
+        _scope.Dispose();
+    }
+}
+
+public record CreateProductRequest(string Name, decimal Price);
+public record ProductDto(int Id, string Name, decimal Price);
+```
+
+### 测试鉴权接口
+
+```csharp
+[Fact]
+public async Task GetProfile_WithoutToken_ReturnsUnauthorized()
+{
+    HttpResponseMessage response = await _client.GetAsync("/api/users/profile");
+
+    response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+}
+
+[Fact]
+public async Task GetProfile_WithValidToken_ReturnsOk()
+{
+    _client.DefaultRequestHeaders.Authorization =
+        new AuthenticationHeaderValue("Bearer", "test-token");
+
+    HttpResponseMessage response = await _client.GetAsync("/api/users/profile");
+
+    response.StatusCode.Should().Be(HttpStatusCode.OK);
+}
+```
+
+## 数据库测试策略
+
+### EF InMemory 的局限
+
+`UseInMemoryDatabase` 适合快速集成测试，但它不是真实数据库：
+
+- 不执行 SQL 约束（唯一索引、外键）
+- 不支持原生 SQL
+- 事务行为与真实数据库不同
+- 不验证 Migration
+
+不要完全依赖 InMemory 模拟数据库行为。
+
+### SQLite 内存数据库
+
+SQLite 内存模式比 InMemory 更接近真实数据库行为。
+
+```csharp
+services.AddDbContext<AppDbContext>(options =>
+{
+    SqliteConnection connection = new("Data Source=:memory:");
+    connection.Open();
+    options.UseSqlite(connection);
+});
+```
+
+SQLite 支持 SQL 约束，但不支持 SQL Server 特有语法（如 `rowversion`）。
+
+### Testcontainers
+
+Testcontainers 在 Docker 中启动真实数据库实例，测试行为最接近生产。
+
+```bash
+dotnet add package Testcontainers.MsSql
+```
+
+```csharp
+public class DatabaseFixture : IAsyncLifetime
+{
+    private readonly MsSqlContainer _container = new MsSqlBuilder()
+        .WithImage("mcr.microsoft.com/mssql/server:2022-latest")
+        .Build();
+
+    public string ConnectionString => _container.GetConnectionString();
+
+    public async Task InitializeAsync()
+    {
+        await _container.StartAsync();
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _container.DisposeAsync();
+    }
+}
+```
+
+Testcontainers 需要 Docker 环境，测试速度较慢，适合关键业务场景和 CI 流水线。
+
+### 选择建议
+
+| 方式 | 速度 | 真实性 | 适用场景 |
+|---|---|---|---|
+| InMemory | 最快 | 低 | 快速验证 Controller 链路 |
+| SQLite | 快 | 中 | 验证 SQL 约束和基本查询 |
+| Testcontainers | 慢 | 高 | 关键业务逻辑、Migration 验证 |
+
+## 测试组织与命名
+
+### 命名约定
+
+推荐 `Method_Scenario_Expected` 格式：
+
+```csharp
+[Fact]
+public void CreateAsync_ValidRequest_ReturnsProductDto()
+
+[Fact]
+public void CreateAsync_DuplicateName_ThrowsConflictException()
+
+[Fact]
+public void GetById_NonExistingId_ReturnsNull()
+```
+
+### Arrange-Act-Assert 模式
+
+```csharp
+[Fact]
+public async Task DeleteAsync_ExistingProduct_RemovesFromRepository()
+{
+    // Arrange
+    var product = new Product { Id = 1, Name = "Keyboard" };
+    _mockRepository.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(product);
+
+    // Act
+    await _service.DeleteAsync(1, CancellationToken.None);
+
+    // Assert
+    _mockRepository.Verify(r => r.RemoveAsync(product, It.IsAny<CancellationToken>()), Times.Once);
+}
+```
+
+测试代码结构清晰，后来人能快速理解测试意图。
+
+## 常见问题
+
+
+### Controller 要不要单元测试
+
+Controller 本身逻辑很薄（接收请求、调用 Service、返回结果），过度 Mock Controller 依赖的框架对象（如 `HttpContext`、`ModelState`）会导致测试脆弱。建议：
+
+- Controller 逻辑薄时，用集成测试覆盖。
+- 如果 Controller 包含复杂分支逻辑，先把逻辑移到 Service，再对 Service 做单元测试。
+
+### 测试数据如何管理
+
+- 单元测试用 Mock，不需要真实数据。
+- 集成测试在每次测试前清空并填充种子数据。
+- 测试之间不要依赖执行顺序。
+
+### CI 中运行测试
+
+```bash
+dotnet test --filter "Category=Unit" --no-build
+dotnet test --filter "Category=Integration" --no-build
+```
+
+可以把快速单元测试和慢速集成测试分开运行，单元测试每次提交都跑，集成测试在合并前或定时任务中跑。
+
+### 测试要不要测私有方法
+
+不要。私有方法是实现细节，测试应该面向公开行为。如果私有方法逻辑复杂到需要单独测试，说明它可能应该提取为独立的公开类。
+
+## 测试策略总结
+
+| 测试类型 | 覆盖范围 | 数量 | 建议 |
+|---|---|---|---|
+| Service 单元测试 | 业务逻辑 | 最多 | 优先编写 |
+| API 集成测试 | 完整请求链路 | 适量 | 关键接口必写 |
+| 数据库测试 | 查询和约束 | 少量 | 复杂查询用 Testcontainers |
+
+## 总结
+
+测试的目标不是 100% 覆盖率，而是让你有信心修改代码。业务逻辑放 Service 便于单元测试，关键 API 用 `WebApplicationFactory` 做集成测试，复杂查询用 Testcontainers 验证真实 SQL 行为。
+
+先给最核心的业务逻辑写单元测试，再给最重要的接口写集成测试，逐步扩大覆盖范围。不要一上来就追求全量覆盖，那样容易写出大量脆弱且没有价值的测试。

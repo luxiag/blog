@@ -3,6 +3,7 @@ title: 'ASP.NET Core Configuration：配置系统与环境变量'
 date: '2026-07-21'
 excerpt: '理解 ASP.NET Core 配置系统：appsettings.json、环境配置、环境变量、命令行参数、配置优先级、User Secrets 和生产配置建议。'
 tags: ['dotnet', 'aspnetcore', 'configuration', 'appsettings']
+nextPost: 'dotnet/aspnet-core-options'
 ---
 
 # ASP.NET Core Configuration：配置系统与环境变量
@@ -166,6 +167,97 @@ int port = smtpSection.GetValue<int>("Port");
 ```
 
 如果配置会被多个服务使用，建议不要到处注入 `IConfiguration`，而是使用强类型 Options。
+
+## 外部配置源
+
+生产项目可能需要从密钥管理服务读取配置，例如 Azure Key Vault、Consul、AWS Parameter Store 等。
+
+### Azure Key Vault
+
+```bash
+dotnet add package Azure.Extensions.AspNetCore.Configuration.Secrets
+dotnet add package Azure.Identity
+```
+
+```csharp
+builder.Configuration.AddAzureKeyVault(
+    new Uri("https://my-vault.vault.azure.net/"),
+    new DefaultAzureCredential());
+```
+
+Key Vault 中的 Secret 会被当作配置键读取，例如 Secret 名 `ConnectionStrings--Default` 对应 `ConnectionStrings:Default`。
+
+### Consul 配置中心
+
+```bash
+dotnet add package Consul
+```
+
+```csharp
+builder.Configuration.AddConsul("product-api/config", options =>
+{
+    options.Consul = new ConsulClient(config =>
+    {
+        config.Address = new Uri("http://consul:8500");
+    });
+    options.Optional = false;
+    options.ReloadOnChange = true;
+});
+```
+
+Consul 支持配置热更新，适合微服务场景。
+
+### 自定义配置源
+
+如果现有 Provider 不满足需求，可以实现 `IConfigurationSource` 和 `ConfigurationProvider`：
+
+```csharp
+public class DatabaseConfigurationSource : IConfigurationSource
+{
+    public string ConnectionString { get; set; } = string.Empty;
+
+    public IConfigurationProvider Build(IConfigurationBuilder builder)
+    {
+        return new DatabaseConfigurationProvider(ConnectionString);
+    }
+}
+
+public class DatabaseConfigurationProvider : ConfigurationProvider
+{
+    private readonly string _connectionString;
+
+    public DatabaseConfigurationProvider(string connectionString)
+    {
+        _connectionString = connectionString;
+    }
+
+    public override void Load()
+    {
+        using var connection = new SqlConnection(_connectionString);
+        var command = connection.CreateCommand();
+        command.CommandText = "SELECT [Key], [Value] FROM Configuration";
+
+        connection.Open();
+        using var reader = command.ExecuteReader();
+
+        while (reader.Read())
+        {
+            Set(reader.GetString(0), reader.GetString(1));
+        }
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Configuration.Add(new DatabaseConfigurationSource
+{
+    ConnectionString = builder.Configuration.GetConnectionString("Default")!
+});
+```
+
+自定义配置源的优先级取决于注册顺序，后注册的覆盖先注册的。
 
 ## 生产配置建议
 

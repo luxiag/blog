@@ -1,0 +1,175 @@
+---
+title: 'ASP.NET Core Health Checks：存活检查、就绪检查与依赖探测'
+date: '2026-07-21'
+excerpt: '掌握 ASP.NET Core Health Checks：live/readiness 探针、数据库依赖检查、自定义健康检查、响应格式和容器/Kubernetes 场景。'
+tags: ['dotnet', 'aspnetcore', 'healthchecks', 'deployment']
+---
+
+# ASP.NET Core Health Checks：存活检查、就绪检查与依赖探测
+
+健康检查用于回答一个生产问题：**这个应用现在能不能接收流量？**
+
+在容器、Kubernetes、负载均衡和自动化部署中，健康检查是服务发现、自动重启、流量切换的重要依据。
+
+:::tip 阶段四阅读顺序
+建议结合 [部署基础](/posts/dotnet/aspnet-core-deployment)、[Logging](/posts/dotnet/aspnet-core-logging) 和 [可观测性](/posts/dotnet/aspnet-core-observability) 阅读。
+:::
+
+## 最小健康检查
+
+注册：
+
+```csharp
+builder.Services.AddHealthChecks();
+```
+
+映射端点：
+
+```csharp
+app.MapHealthChecks("/health");
+```
+
+访问：
+
+```text
+GET /health
+```
+
+返回：
+
+```text
+Healthy
+```
+
+## Liveness 与 Readiness
+
+生产中建议区分两个检查：
+
+| 类型 | 作用 | 示例 |
+|---|---|---|
+| Liveness | 应用进程是否活着 | `/health/live` |
+| Readiness | 应用是否准备好接收流量 | `/health/ready` |
+
+配置：
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddCheck("self", () => HealthCheckResult.Healthy(), tags: new[] { "live" });
+
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("live")
+});
+
+app.MapHealthChecks("/health/ready");
+```
+
+`live` 不应该检查太多外部依赖，否则数据库短暂故障会导致应用被频繁重启。
+
+## 数据库健康检查
+
+可以添加数据库探测。以 SQL Server 为例，常用扩展包来自 `AspNetCore.HealthChecks.SqlServer`：
+
+```bash
+dotnet add package AspNetCore.HealthChecks.SqlServer
+```
+
+注册：
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddSqlServer(
+        builder.Configuration.GetConnectionString("Default")!,
+        name: "sqlserver",
+        tags: new[] { "ready" });
+```
+
+就绪检查包含数据库，存活检查不包含数据库。
+
+## 自定义健康检查
+
+```csharp
+public class DiskSpaceHealthCheck : IHealthCheck
+{
+    public Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken cancellationToken = default)
+    {
+        DriveInfo drive = new(AppContext.BaseDirectory);
+
+        if (drive.AvailableFreeSpace < 1024L * 1024 * 1024)
+        {
+            return Task.FromResult(HealthCheckResult.Unhealthy("Disk space is low."));
+        }
+
+        return Task.FromResult(HealthCheckResult.Healthy());
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddCheck<DiskSpaceHealthCheck>("disk", tags: new[] { "ready" });
+```
+
+## JSON 响应
+
+默认响应只有 `Healthy`，生产中常需要 JSON。
+
+```csharp
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+
+        var result = new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.Select(entry => new
+            {
+                name = entry.Key,
+                status = entry.Value.Status.ToString(),
+                description = entry.Value.Description,
+                duration = entry.Value.Duration.TotalMilliseconds
+            })
+        };
+
+        await context.Response.WriteAsJsonAsync(result);
+    }
+});
+```
+
+## Kubernetes 示例
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health/live
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 10
+```
+
+Readiness 失败时，Kubernetes 会停止向 Pod 转发流量；Liveness 失败时，可能重启容器。
+
+## 注意事项
+
+- Liveness 不要检查数据库、Redis 等外部依赖。
+- Readiness 可以检查关键依赖。
+- 健康检查要有超时，避免探针堆积。
+- 不要在公开网络暴露详细依赖信息。
+- 健康检查失败要配合日志和指标排查。
+
+## 总结
+
+健康检查是生产部署的基础设施。Liveness 判断应用是否活着，Readiness 判断是否能接流量。合理拆分探针，可以避免错误重启，也能让部署和流量切换更可靠。

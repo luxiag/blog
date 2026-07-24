@@ -3,6 +3,7 @@ title: 'ASP.NET Core Filters：过滤器管道与横切逻辑'
 date: '2026-07-21'
 excerpt: '理解 ASP.NET Core MVC Filters：Authorization、Resource、Action、Exception、Result Filter 的执行顺序、适用场景和 Middleware 区别。'
 tags: ['dotnet', 'aspnetcore', 'filters', 'mvc']
+nextPost: 'dotnet/aspnet-core-ef-core'
 ---
 
 # ASP.NET Core Filters：过滤器管道与横切逻辑
@@ -154,6 +155,119 @@ public class ApiExceptionFilter : IExceptionFilter
 ```
 
 全局异常处理更推荐 Middleware；Exception Filter 适合 MVC 层特定异常转换。
+
+## Resource Filter
+
+Resource Filter 在模型绑定前后执行，适合缓存短路和资源准备：
+
+```csharp
+public class CacheResourceFilter : IAsyncResourceFilter
+{
+    private readonly IMemoryCache _cache;
+
+    public CacheResourceFilter(IMemoryCache cache)
+    {
+        _cache = cache;
+    }
+
+    public async Task OnResourceExecutionAsync(
+        ResourceExecutingContext context,
+        ResourceExecutionDelegate next)
+    {
+        string cacheKey = context.HttpContext.Request.Path;
+
+        if (_cache.TryGetValue(cacheKey, out object? cached))
+        {
+            context.Result = new OkObjectResult(cached);
+            return;
+        }
+
+        ResourceExecutedContext executed = await next();
+
+        if (executed.Result is OkObjectResult okResult && okResult.Value is not null)
+        {
+            _cache.Set(cacheKey, okResult.Value, TimeSpan.FromMinutes(5));
+        }
+    }
+}
+```
+
+Resource Filter 可以在模型绑定前短路，直接返回缓存结果，跳过后续所有环节。
+
+## Result Filter 与响应包装
+
+Result Filter 在 Action 结果执行前后运行，适合统一包装响应格式：
+
+```csharp
+public class WrapResultFilter : IResultFilter
+{
+    public void OnResultExecuting(ResultExecutingContext context)
+    {
+        if (context.Result is ObjectResult objectResult)
+        {
+            objectResult.Value = new ApiResponse
+            {
+                Code = context.HttpContext.Response.StatusCode,
+                Data = objectResult.Value
+            };
+        }
+    }
+
+    public void OnResultExecuted(ResultExecutedContext context)
+    {
+    }
+}
+
+public class ApiResponse
+{
+    public int Code { get; set; }
+    public object? Data { get; set; }
+}
+```
+
+注册全局 Result Filter：
+
+```csharp
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<WrapResultFilter>();
+});
+```
+
+所有 Controller 返回的数据会被自动包装成 `{ Code, Data }` 格式。
+
+## Authorization Filter
+
+Authorization Filter 是最早执行的 Filter，可以在 MVC 层做授权拦截：
+
+```csharp
+public class ApiKeyAuthorizationFilter : IAuthorizationFilter
+{
+    private readonly IConfiguration _configuration;
+
+    public ApiKeyAuthorizationFilter(IConfiguration configuration)
+    {
+        _configuration = configuration;
+    }
+
+    public void OnAuthorization(AuthorizationFilterContext context)
+    {
+        if (!context.HttpContext.Request.Headers.TryGetValue("X-Api-Key", out var apiKey))
+        {
+            context.Result = new UnauthorizedResult();
+            return;
+        }
+
+        string? validKey = _configuration["ApiKeys:Default"];
+        if (apiKey != validKey)
+        {
+            context.Result = new ForbidResult();
+        }
+    }
+}
+```
+
+大多数场景直接用 `[Authorize]` + Policy 即可，自定义 Authorization Filter 适合特殊鉴权逻辑。
 
 ## Middleware 和 Filter 怎么选
 

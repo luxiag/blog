@@ -1,0 +1,178 @@
+---
+title: 'ASP.NET Core 可观测性：日志、指标、链路追踪与 OpenTelemetry'
+date: '2026-07-21'
+excerpt: '构建 ASP.NET Core 可观测性体系：结构化日志、Metrics、Tracing、TraceId、OpenTelemetry、OTLP 导出和生产排障思路。'
+tags: ['dotnet', 'aspnetcore', 'observability', 'opentelemetry', 'metrics', 'tracing']
+---
+
+# ASP.NET Core 可观测性：日志、指标、链路追踪与 OpenTelemetry
+
+生产问题不能靠猜。可观测性解决的是：**系统出问题时，我们能不能快速知道哪里出错、为什么出错、影响多大。**
+
+可观测性通常由三部分组成：日志、指标、链路追踪。
+
+:::tip 阶段四阅读顺序
+建议先掌握 [Logging](/posts/dotnet/aspnet-core-logging)、[异常处理](/posts/dotnet/aspnet-core-exception-handling)、[Health Checks](/posts/dotnet/aspnet-core-health-checks) 和 [HttpClientFactory](/posts/dotnet/aspnet-core-httpclient-factory)。
+:::
+
+## 三大支柱
+
+| 类型 | 解决问题 | 示例 |
+|---|---|---|
+| Logs | 发生了什么 | 订单创建失败日志 |
+| Metrics | 系统状态如何 | QPS、错误率、延迟、CPU |
+| Traces | 请求经过哪里 | API -> Service -> DB -> Redis |
+
+三者配合使用：指标发现异常，链路定位慢在哪，日志解释具体错误。
+
+## TraceId
+
+ASP.NET Core 请求通常会带有 TraceId。
+
+```csharp
+app.MapGet("/trace", (HttpContext context) => new
+{
+    TraceId = context.TraceIdentifier
+});
+```
+
+日志中带 TraceId，可以把同一次请求的日志串起来。
+
+```csharp
+_logger.LogInformation("Processing order {OrderId}. TraceId: {TraceId}",
+    orderId,
+    httpContext.TraceIdentifier);
+```
+
+## OpenTelemetry 基础
+
+OpenTelemetry 是日志、指标、链路追踪的开放标准。ASP.NET Core 可以通过 OpenTelemetry 自动采集 HTTP、HttpClient、EF Core 等信息。
+
+安装常用包：
+
+```bash
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Instrumentation.AspNetCore
+dotnet add package OpenTelemetry.Instrumentation.Http
+dotnet add package OpenTelemetry.Instrumentation.EntityFrameworkCore
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
+```
+
+## 配置 Tracing
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing =>
+    {
+        tracing
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddEntityFrameworkCoreInstrumentation()
+            .AddOtlpExporter();
+    });
+```
+
+OTLP 导出地址通常通过环境变量配置：
+
+```text
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+```
+
+数据可以发送到 OpenTelemetry Collector，再转发到 Jaeger、Tempo、Zipkin、云厂商 APM。
+
+## 配置 Metrics
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddRuntimeInstrumentation()
+            .AddOtlpExporter();
+    });
+```
+
+常见指标：
+
+- HTTP 请求总数
+- HTTP 请求耗时
+- 错误率
+- GC 次数
+- 线程池状态
+- HttpClient 调用耗时
+- 数据库查询耗时
+
+## 自定义指标
+
+```csharp
+public class OrderMetrics
+{
+    private readonly Counter<long> _createdOrders;
+
+    public OrderMetrics(IMeterFactory meterFactory)
+    {
+        Meter meter = meterFactory.Create("ProductApi.Orders");
+        _createdOrders = meter.CreateCounter<long>("orders.created");
+    }
+
+    public void OrderCreated()
+    {
+        _createdOrders.Add(1);
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddSingleton<OrderMetrics>();
+```
+
+## 结构化日志
+
+日志仍然重要。建议：
+
+```csharp
+_logger.LogInformation("Order {OrderId} created by user {UserId}", orderId, userId);
+```
+
+不要写成：
+
+```csharp
+_logger.LogInformation($"Order {orderId} created by user {userId}");
+```
+
+结构化字段更适合日志检索和聚合。
+
+## 生产排障流程
+
+1. 先看指标：错误率是否升高，延迟是否升高。
+2. 再看链路：慢在哪个下游，数据库还是外部 HTTP。
+3. 最后看日志：具体异常、业务参数、TraceId。
+4. 结合部署记录：是否刚发布、是否配置变更。
+
+## Health Checks 与可观测性
+
+Health Checks 是可观测性的第四支柱。日志、指标、链路追踪告诉你"出了什么问题"，健康检查告诉你"系统还能不能服务"。
+
+ASP.NET Core 健康检查可以纳入统一监控体系：
+
+- **Prometheus** 抓取 `/health` 端点状态，触发告警
+- **Kubernetes** 用存活/就绪探针自动摘除不健康 Pod
+- **Grafana Dashboard** 中将健康状态与指标、日志同屏展示
+
+健康检查配置详见 [Health Checks](/posts/dotnet/aspnet-core-health-checks)。
+
+## 注意事项
+
+- 不要在日志中记录敏感信息。
+- Trace 采样率要合理，避免数据量过大。
+- 指标命名要稳定，避免高基数字段。
+- 业务关键路径应有自定义指标。
+- OpenTelemetry Collector 建议作为统一出口。
+
+## 总结
+
+可观测性不是装一个日志库就结束。完整体系应该包括结构化日志、核心指标、分布式链路追踪和健康检查。OpenTelemetry 是现代 .NET 应用构建可观测性的推荐标准。

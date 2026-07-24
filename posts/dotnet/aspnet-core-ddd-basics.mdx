@@ -1,0 +1,228 @@
+---
+title: 'ASP.NET Core DDD 入门：实体、值对象、聚合与领域服务'
+date: '2026-07-21'
+excerpt: '面向 ASP.NET Core 项目的 DDD 入门：实体、值对象、聚合根、领域服务、领域事件、仓储接口和应用服务的职责边界。'
+tags: ['dotnet', 'aspnetcore', 'ddd', 'domain-driven-design']
+---
+
+# ASP.NET Core DDD 入门：实体、值对象、聚合与领域服务
+
+DDD（Domain-Driven Design，领域驱动设计）不是文件夹命名规范，也不是把项目拆成 Domain、Application、Infrastructure 就结束。它的核心是：**让代码围绕业务概念组织，并把关键业务规则放在领域模型中。**
+
+:::tip 阶段四阅读顺序
+建议先读 [项目结构](/posts/dotnet/aspnet-core-project-structure) 和 [EF Core](/posts/dotnet/aspnet-core-ef-core)，再阅读本文。DDD 适合业务复杂的项目，不适合所有 CRUD 系统。
+:::
+
+## 什么时候需要 DDD
+
+适合 DDD 的场景：
+
+- 业务规则复杂
+- 状态变化有严格约束
+- 多角色协作定义业务语言
+- 系统生命周期长
+- 简单 CRUD 已经无法表达业务规则
+
+不适合一开始就重度 DDD 的场景：
+
+- 简单后台管理
+- 数据表增删改查为主
+- 项目生命周期短
+- 团队还没有统一业务语言
+
+DDD 的成本不低，应该在业务复杂度值得时使用。
+
+## 实体 Entity
+
+实体有唯一身份，生命周期中属性可以变化，但身份不变。
+
+```csharp
+public class Order
+{
+    private readonly List<OrderItem> _items = new();
+
+    private Order()
+    {
+    }
+
+    public Order(long id, long customerId)
+    {
+        Id = id;
+        CustomerId = customerId;
+        Status = OrderStatus.Pending;
+        CreatedAt = DateTime.UtcNow;
+    }
+
+    public long Id { get; private set; }
+    public long CustomerId { get; private set; }
+    public OrderStatus Status { get; private set; }
+    public DateTime CreatedAt { get; private set; }
+    public IReadOnlyCollection<OrderItem> Items => _items;
+
+    public void AddItem(long productId, string productName, decimal price, int quantity)
+    {
+        if (Status != OrderStatus.Pending)
+        {
+            throw new InvalidOperationException("Only pending orders can be modified.");
+        }
+
+        _items.Add(new OrderItem(productId, productName, price, quantity));
+    }
+
+    public void Pay()
+    {
+        if (!_items.Any())
+        {
+            throw new InvalidOperationException("Cannot pay an empty order.");
+        }
+
+        Status = OrderStatus.Paid;
+    }
+}
+```
+
+业务规则应该尽量靠近实体，而不是散落在 Controller 中。
+
+## 值对象 Value Object
+
+值对象没有独立身份，通过值相等判断是否相同。
+
+```csharp
+public sealed record Money(decimal Amount, string Currency)
+{
+    public static Money Cny(decimal amount) => new(amount, "CNY");
+
+    public Money Add(Money other)
+    {
+        if (Currency != other.Currency)
+        {
+            throw new InvalidOperationException("Currency mismatch.");
+        }
+
+        return new Money(Amount + other.Amount, Currency);
+    }
+}
+```
+
+值对象适合表达金额、地址、坐标、时间范围等概念。
+
+## 聚合与聚合根
+
+聚合是一组需要保持一致性的对象集合，聚合根是外部访问这个聚合的入口。
+
+订单和订单项就是典型聚合：
+
+```text
+Order 聚合根
+└── OrderItem 子实体
+```
+
+外部代码不应该绕过 `Order` 直接修改 `OrderItem`。例如添加商品、支付订单等操作应通过 `Order` 方法完成。
+
+## 领域服务
+
+有些业务规则不自然属于某个实体，可以放到领域服务中。
+
+```csharp
+public class OrderPricingService
+{
+    public Money CalculateTotal(Order order)
+    {
+        decimal amount = order.Items.Sum(item => item.Price * item.Quantity);
+        return Money.Cny(amount);
+    }
+}
+```
+
+领域服务应该表达领域规则，不应该依赖数据库、HTTP 或消息队列。
+
+## 应用服务
+
+应用服务负责组织用例流程：加载聚合、调用领域方法、保存、发布事件。
+
+```csharp
+public class OrderApplicationService
+{
+    private readonly IOrderRepository _orders;
+
+    public OrderApplicationService(IOrderRepository orders)
+    {
+        _orders = orders;
+    }
+
+    public async Task PayAsync(long orderId, CancellationToken cancellationToken)
+    {
+        Order order = await _orders.GetByIdAsync(orderId, cancellationToken)
+            ?? throw new NotFoundException("Order not found.");
+
+        order.Pay();
+
+        await _orders.SaveChangesAsync(cancellationToken);
+    }
+}
+```
+
+应用服务可以依赖仓储接口、事务、当前用户、消息发布器等，但业务规则本身应尽量放到领域对象中。
+
+## 仓储接口
+
+仓储接口可以定义在 Domain 或 Application 中，实现放在 Infrastructure。
+
+```csharp
+public interface IOrderRepository
+{
+    Task<Order?> GetByIdAsync(long id, CancellationToken cancellationToken);
+    void Add(Order order);
+    Task SaveChangesAsync(CancellationToken cancellationToken);
+}
+```
+
+Infrastructure 中用 EF Core 实现：
+
+```csharp
+public class EfOrderRepository : IOrderRepository
+{
+    private readonly AppDbContext _dbContext;
+
+    public EfOrderRepository(AppDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+
+    public Task<Order?> GetByIdAsync(long id, CancellationToken cancellationToken)
+    {
+        return _dbContext.Orders
+            .Include(order => order.Items)
+            .FirstOrDefaultAsync(order => order.Id == id, cancellationToken);
+    }
+
+    public void Add(Order order) => _dbContext.Orders.Add(order);
+
+    public Task SaveChangesAsync(CancellationToken cancellationToken)
+    {
+        return _dbContext.SaveChangesAsync(cancellationToken);
+    }
+}
+```
+
+## 领域事件
+
+领域事件表示领域中已经发生的重要事实。
+
+```csharp
+public record OrderPaidDomainEvent(long OrderId, long CustomerId);
+```
+
+例如订单支付成功后，可以触发库存扣减、积分增加、消息通知等后续动作。复杂系统中，领域事件可以降低聚合之间的直接耦合。
+
+## 常见误区
+
+- 把贫血实体当 DDD：实体只有属性没有行为。
+- 把所有 Service 都叫 DomainService。
+- 用 Repository 包一层所有 EF Core 查询，但没有业务意义。
+- 为简单 CRUD 过度引入聚合、事件、复杂分层。
+- 领域层依赖 ASP.NET Core、EF Core、Redis 等基础设施。
+
+## 总结
+
+DDD 的核心是业务建模。实体和值对象表达业务概念，聚合维护一致性边界，领域服务承载不属于单个实体的领域规则，应用服务组织用例流程。ASP.NET Core 只是交付入口，真正复杂的业务规则应该进入领域模型。

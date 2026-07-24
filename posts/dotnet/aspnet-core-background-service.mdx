@@ -1,0 +1,167 @@
+---
+title: 'ASP.NET Core BackgroundService：后台任务、定时任务与队列消费'
+date: '2026-07-21'
+excerpt: '掌握 ASP.NET Core 后台服务：IHostedService、BackgroundService、CancellationToken、Scoped 服务、定时任务、队列消费和异常处理。'
+tags: ['dotnet', 'aspnetcore', 'backgroundservice', 'hostedservice']
+nextPost: 'dotnet/aspnet-core-file-upload-download'
+---
+
+# ASP.NET Core BackgroundService：后台任务、定时任务与队列消费
+
+不是所有工作都应该在 HTTP 请求中同步完成。发送邮件、处理消息、清理文件、同步数据、Outbox 发布等任务，更适合放到后台服务中。
+
+ASP.NET Core 提供 `IHostedService` 和 `BackgroundService` 来运行后台任务。
+
+:::tip 阶段三阅读顺序
+建议先掌握 [DI](/posts/dotnet/aspnet-core-dependency-injection)、[Logging](/posts/dotnet/aspnet-core-logging)、[异常处理](/posts/dotnet/aspnet-core-exception-handling) 和 [异步编程](/posts/dotnet/csharp-async-await)。
+:::
+
+## BackgroundService 基础
+
+```csharp
+public class CleanupWorker : BackgroundService
+{
+    private readonly ILogger<CleanupWorker> _logger;
+
+    public CleanupWorker(ILogger<CleanupWorker> logger)
+    {
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            _logger.LogInformation("Cleanup running at {Time}", DateTimeOffset.Now);
+
+            await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+        }
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddHostedService<CleanupWorker>();
+```
+
+`BackgroundService` 本身是 Singleton。
+
+## 支持 CancellationToken
+
+后台任务必须尊重 `stoppingToken`。
+
+```csharp
+while (!stoppingToken.IsCancellationRequested)
+{
+    await DoWorkAsync(stoppingToken);
+    await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+}
+```
+
+应用关闭时，Host 会触发取消，后台任务应尽快退出。
+
+## 使用 Scoped 服务
+
+后台服务是 Singleton，不能直接依赖 Scoped 服务，例如 `DbContext`。需要创建 Scope。
+
+```csharp
+public class OutboxWorker : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<OutboxWorker> _logger;
+
+    public OutboxWorker(IServiceScopeFactory scopeFactory, ILogger<OutboxWorker> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            using IServiceScope scope = _scopeFactory.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            // process database records
+            await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+        }
+    }
+}
+```
+
+## 异常处理
+
+后台循环中不要让异常直接终止整个服务。
+
+```csharp
+protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+{
+    while (!stoppingToken.IsCancellationRequested)
+    {
+        try
+        {
+            await ProcessAsync(stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // normal shutdown
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Background task failed");
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+    }
+}
+```
+
+异常要记录日志，并根据业务决定是否继续、退避或停止。
+
+## 定时任务
+
+.NET 6+ 可以使用 `PeriodicTimer`。
+
+```csharp
+protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+{
+    using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
+
+    while (await timer.WaitForNextTickAsync(stoppingToken))
+    {
+        await ProcessAsync(stoppingToken);
+    }
+}
+```
+
+复杂定时任务建议使用 Quartz.NET 或 Hangfire。
+
+## 队列消费
+
+简单进程内队列可以用 `Channel<T>`。
+
+```csharp
+public interface ITaskQueue
+{
+    ValueTask QueueAsync(string message, CancellationToken cancellationToken);
+    ValueTask<string> DequeueAsync(CancellationToken cancellationToken);
+}
+```
+
+真实生产场景通常使用 RabbitMQ、Kafka、Azure Service Bus、Redis Stream 等外部队列，避免应用重启后任务丢失。
+
+## 使用建议
+
+- 后台任务必须支持取消。
+- 不要直接注入 Scoped 服务，使用 `IServiceScopeFactory`。
+- 循环内部要处理异常。
+- 任务耗时、失败次数要记录日志和指标。
+- 重要任务不要只放内存队列，避免进程退出丢失。
+- 多实例部署要考虑任务是否会重复执行。
+
+## 总结
+
+`BackgroundService` 适合运行后台循环、定时任务和消息消费。它和 Web 请求共享同一个 Host 和 DI 容器，但生命周期不同，因此要特别注意取消、异常和 Scoped 服务使用方式。

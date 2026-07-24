@@ -1,0 +1,197 @@
+---
+title: 'ASP.NET Core CQRS 与 MediatR：命令查询分离实践'
+date: '2026-07-21'
+excerpt: '理解 ASP.NET Core 中 CQRS 与 MediatR 的实践方式：Command、Query、Handler、Pipeline Behavior、验证、日志和使用边界。'
+tags: ['dotnet', 'aspnetcore', 'cqrs', 'mediatr']
+---
+
+# ASP.NET Core CQRS 与 MediatR：命令查询分离实践
+
+CQRS（Command Query Responsibility Segregation）表示命令和查询职责分离。它不是必须搭配微服务，也不是必须使用 MediatR，但在复杂 Web API 中，它可以让用例组织更清晰。
+
+:::tip 阶段四阅读顺序
+建议先读 [项目结构](/posts/dotnet/aspnet-core-project-structure)、[DDD 入门](/posts/dotnet/aspnet-core-ddd-basics) 和 [测试](/posts/dotnet/aspnet-core-testing)，再阅读本文。
+:::
+
+## CQRS 解决什么问题
+
+普通 Service 变大后，常见问题是：
+
+- 一个 Service 中既有查询又有修改。
+- 方法越来越多，依赖越来越复杂。
+- 查询 DTO 和命令模型混在一起。
+- 横切逻辑难统一，例如验证、日志、事务。
+
+CQRS 把操作拆成两类：
+
+| 类型 | 作用 | 是否改变状态 |
+|---|---|---|
+| Command | 执行业务动作 | 是 |
+| Query | 查询数据 | 否 |
+
+## 安装 MediatR
+
+```bash
+dotnet add package MediatR
+```
+
+注册：
+
+```csharp
+builder.Services.AddMediatR(options =>
+{
+    options.RegisterServicesFromAssembly(typeof(CreateProductCommand).Assembly);
+});
+```
+
+## Command 示例
+
+```csharp
+public record CreateProductCommand(
+    string Name,
+    decimal Price,
+    int Stock) : IRequest<ProductDto>;
+```
+
+Handler：
+
+```csharp
+public class CreateProductCommandHandler : IRequestHandler<CreateProductCommand, ProductDto>
+{
+    private readonly AppDbContext _dbContext;
+
+    public CreateProductCommandHandler(AppDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+
+    public async Task<ProductDto> Handle(
+        CreateProductCommand request,
+        CancellationToken cancellationToken)
+    {
+        var product = new Product
+        {
+            Name = request.Name,
+            Price = request.Price,
+            Stock = request.Stock
+        };
+
+        _dbContext.Products.Add(product);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return new ProductDto(product.Id, product.Name, product.Price, product.Stock);
+    }
+}
+```
+
+Controller：
+
+```csharp
+[HttpPost]
+public async Task<ActionResult<ProductDto>> Create(
+    CreateProductCommand command,
+    ISender sender,
+    CancellationToken cancellationToken)
+{
+    ProductDto product = await sender.Send(command, cancellationToken);
+    return CreatedAtAction(nameof(GetById), new { id = product.Id }, product);
+}
+```
+
+## Query 示例
+
+```csharp
+public record GetProductListQuery(
+    string? Keyword,
+    int Page,
+    int PageSize) : IRequest<List<ProductDto>>;
+```
+
+Handler：
+
+```csharp
+public class GetProductListQueryHandler : IRequestHandler<GetProductListQuery, List<ProductDto>>
+{
+    private readonly AppDbContext _dbContext;
+
+    public GetProductListQueryHandler(AppDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+
+    public async Task<List<ProductDto>> Handle(
+        GetProductListQuery request,
+        CancellationToken cancellationToken)
+    {
+        IQueryable<Product> query = _dbContext.Products.AsNoTracking();
+
+        if (!string.IsNullOrWhiteSpace(request.Keyword))
+        {
+            query = query.Where(product => product.Name.Contains(request.Keyword));
+        }
+
+        return await query
+            .OrderBy(product => product.Id)
+            .Skip((request.Page - 1) * request.PageSize)
+            .Take(request.PageSize)
+            .Select(product => new ProductDto(product.Id, product.Name, product.Price, product.Stock))
+            .ToListAsync(cancellationToken);
+    }
+}
+```
+
+## Pipeline Behavior
+
+MediatR 的 Pipeline Behavior 可以统一处理验证、日志、事务等横切逻辑。
+
+```csharp
+public class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : notnull
+{
+    private readonly ILogger<LoggingBehavior<TRequest, TResponse>> _logger;
+
+    public LoggingBehavior(ILogger<LoggingBehavior<TRequest, TResponse>> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task<TResponse> Handle(
+        TRequest request,
+        RequestHandlerDelegate<TResponse> next,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Handling {RequestName}", typeof(TRequest).Name);
+
+        TResponse response = await next();
+
+        _logger.LogInformation("Handled {RequestName}", typeof(TRequest).Name);
+
+        return response;
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
+```
+
+## 使用边界
+
+适合使用 CQRS / MediatR 的场景：
+
+- 用例很多，Service 已经变得很大。
+- 每个操作有清晰输入输出。
+- 需要统一验证、日志、事务 Pipeline。
+- 团队接受这种组织方式。
+
+不适合的场景：
+
+- 简单 CRUD 项目。
+- 团队不熟悉，导致过度抽象。
+- 每个请求只是机械转发到 Handler，没有实际收益。
+
+## 总结
+
+CQRS 把修改和查询分离，MediatR 把请求和处理器解耦。它能让复杂应用的用例组织更清晰，但也会增加文件数量和抽象层级。是否使用，要看业务复杂度和团队维护能力。
