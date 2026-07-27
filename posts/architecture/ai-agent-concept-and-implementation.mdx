@@ -1,0 +1,706 @@
+---
+title: 'AI Agent 开发：从概念到用 Node.js 手写一个完整 Agent'
+date: '2026-04-21'
+excerpt: '从"LLM 只会回答问题"到"Agent 能自主完成任务"，系统讲解 Agent 的核心概念：ReAct 循环、Tool Use、Memory、Planning。然后用 Node.js + Claude API 从零实现一个能搜索、读文件、执行计算的真实 Agent。'
+tags: ['architecture', 'ai', 'agent', 'nodejs', 'llm', 'claude']
+---
+
+# AI Agent 开发：从概念到用 Node.js 手写一个完整 Agent
+
+大语言模型（LLM）本质上是一个"问答机器"：给它一段文本，它输出一段文本，然后就结束了。
+
+但现实中的任务往往不是一问一答能解决的：
+
+- "帮我调研一下竞争对手的产品，整理成报告"
+- "读一下这个代码仓库，找出所有安全漏洞"
+- "监控这个接口，出错了自动重试并发通知"
+
+这些任务需要**多个步骤、工具调用、中间决策**——这就是 **Agent** 要解决的问题。
+
+这篇文章分两部分：先把 Agent 的概念体系讲透，再用 Node.js 从零实现一个能真正运行的 Agent。
+
+---
+
+## 一、LLM 与 Agent 的本质区别
+
+先用一个类比建立直觉：
+
+> **LLM** 是一个很博学的顾问，你问他问题，他给你答案。但他不会主动去做事，不会打电话、不会查资料、不会帮你执行。
+>
+> **Agent** 是一个有主动性的助手，你给他一个目标，他自己规划步骤、调用各种工具、观察结果、调整方向，直到完成任务。
+
+从代码层面看，区别在于**控制权在哪里**：
+
+```
+// 普通 LLM 调用：控制权在你手里
+const response = await llm.chat("巴黎的人口是多少？");
+console.log(response); // 结束
+
+// Agent：控制权在 LLM 手里，它决定下一步做什么
+const result = await agent.run("写一份关于巴黎旅游的报告，要有最新数据");
+// Agent 内部会自主：
+// 1. 搜索"巴黎人口 2025"
+// 2. 搜索"巴黎热门景点"
+// 3. 搜索"巴黎旅游最佳季节"
+// 4. 整合所有信息，生成报告
+```
+
+---
+
+## 二、Agent 的核心架构
+
+一个完整的 Agent 由四个部分构成：
+
+```
+┌─────────────────────────────────────────┐
+│                  Agent                  │
+│                                         │
+│  ┌─────────┐    ┌──────────────────┐   │
+│  │  Brain  │◄──►│     Memory       │   │
+│  │  (LLM)  │    │  短期：对话历史   │   │
+│  └────┬────┘    │  长期：向量数据库 │   │
+│       │         └──────────────────┘   │
+│       │ 决策                            │
+│  ┌────▼────────────────────────────┐   │
+│  │           Tools（工具集）        │   │
+│  │  search() │ readFile() │ runCode│   │
+│  │  callAPI()│ writeDB()  │ ...    │   │
+│  └────────────────────────────────┘   │
+│       │ 执行结果（Observation）         │
+│       └──────► 反馈给 LLM，继续推理     │
+└─────────────────────────────────────────┘
+```
+
+### Brain（大脑）
+
+就是 LLM 本身。它负责：
+
+- 理解用户目标
+- 决定下一步用哪个工具、传什么参数
+- 分析工具返回的结果
+- 判断任务是否完成
+
+### Memory（记忆）
+
+- **短期记忆**：当前对话的上下文（messages 数组），Agent 每步操作都追加到这里
+- **长期记忆**：持久化存储，通常用向量数据库（如 Pinecone、Chroma）存历史经验，相似任务时检索出来用
+
+### Tools（工具）
+
+工具让 Agent 能跟外部世界交互。每个工具需要定义：
+
+- **名称**：`web_search`
+- **描述**：告诉 LLM"这个工具能做什么、什么时候用"（非常关键！）
+- **参数 schema**：LLM 调用时传什么参数
+
+### Planning（规划）
+
+Agent 的推理模式决定了它如何把大目标拆解为小步骤。最主流的是 **ReAct 模式**。
+
+---
+
+## 三、ReAct：Agent 的核心循环
+
+**ReAct = Reasoning（推理） + Acting（行动）**，是目前最主流的 Agent 推理模式。
+
+每一轮循环是：
+
+```
+Thought（思考）：我需要知道 X，我应该用 Y 工具
+Action（行动）：调用工具 Y，参数是 Z
+Observation（观察）：工具返回结果 W
+Thought（思考）：根据 W，我现在知道...下一步应该...
+Action（行动）：调用工具...
+...（循环直到任务完成）
+Final Answer：综合所有信息，给出最终答案
+```
+
+用一个具体例子感受：
+
+```
+用户：帮我查一下 Node.js 最新的 LTS 版本是什么，以及它的主要新特性
+
+Thought: 我需要查 Node.js 当前的 LTS 版本信息，用 web_search 工具
+Action: web_search({ query: "Node.js latest LTS version 2025" })
+Observation: "Node.js 22 LTS (Jod) 发布于 2024年10月，主要特性包括..."
+
+Thought: 搜到了版本号，但新特性信息不够详细，再搜一次
+Action: web_search({ query: "Node.js 22 LTS new features changelog" })
+Observation: "Node.js 22 带来了原生 require(ESM)、V8 12.4..."
+
+Thought: 我已经有足够的信息了，可以整理答案
+Final Answer: Node.js 最新 LTS 是 v22 (Jod)，主要新特性包括...
+```
+
+这个循环里，**LLM 永远只做决策**，真正执行动作的是宿主程序（你的 Node.js 代码）。
+
+---
+
+## 四、Tool Use（工具调用）的工作原理
+
+工具调用是 Agent 能力的底座，理解它的底层机制很重要。
+
+现代 LLM（GPT-4、Claude 等）原生支持 **Function Calling**：你在请求里描述好工具，LLM 不会直接输出文字答案，而是返回"我要调用 X 工具，参数是 Y"的结构化 JSON，由你的代码执行后再把结果给 LLM。
+
+```
+你的代码                          LLM
+   │                               │
+   │──── 发送消息 + 工具定义 ──────►│
+   │                               │ 内部推理
+   │◄─── 返回工具调用请求 ──────────│
+   │     { name: "search",         │
+   │       args: { q: "..." } }    │
+   │                               │
+   │ 执行 search("...")             │
+   │ 得到结果                       │
+   │                               │
+   │──── 发送工具结果 ──────────────►│
+   │                               │ 继续推理
+   │◄─── 返回最终文字答案 ──────────│
+   │                               │
+```
+
+关键点：**LLM 自己不执行任何代码**，它只是告诉你"我想调什么"，执行权始终在你手里。这保证了安全性——你可以在执行前做权限检查、沙箱隔离等。
+
+---
+
+## 五、用 Node.js 实现一个完整 Agent
+
+现在开始写代码。我们要实现一个能完成以下任务的 Agent：
+
+- **搜索网络**（模拟）
+- **读取本地文件**
+- **执行数学计算**
+- **获取当前时间**
+
+使用的是 **Anthropic Claude API**，它的工具调用格式很直观。
+
+### 5.1 安装依赖
+
+```bash
+npm init -y
+npm install @anthropic-ai/sdk
+npm install typescript tsx @types/node --save-dev
+```
+
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "outDir": "dist"
+  }
+}
+```
+
+### 5.2 定义工具
+
+工具定义是告诉 LLM"我有哪些工具可以用"，描述要清晰，LLM 会根据描述决定什么时候调用。
+
+```ts
+// src/tools/definitions.ts
+import Anthropic from '@anthropic-ai/sdk';
+
+// Tool 定义格式（Claude API 格式）
+export const toolDefinitions: Anthropic.Tool[] = [
+  {
+    name: 'web_search',
+    description:
+      '搜索互联网获取最新信息。适合用于：查询实时数据、查找特定事实、了解最新新闻。' +
+      '注意：这是模拟搜索，结果是示例数据。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: '搜索关键词，尽量简洁具体',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'read_file',
+    description: '读取本地文件内容。适合用于：分析代码文件、读取配置文件、处理文本数据。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: '文件的绝对路径或相对路径',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'calculate',
+    description:
+      '执行数学计算。支持加减乘除、幂运算、取余等基本运算。' +
+      '输入一个合法的 JavaScript 数学表达式，返回计算结果。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        expression: {
+          type: 'string',
+          description: '数学表达式，如 "2 ** 10"、"(100 + 200) * 3 / 2"',
+        },
+      },
+      required: ['expression'],
+    },
+  },
+  {
+    name: 'get_current_time',
+    description: '获取当前日期和时间。当任务需要知道当前时间时使用。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        timezone: {
+          type: 'string',
+          description: '时区，如 "Asia/Shanghai"、"UTC"，默认为本地时区',
+        },
+      },
+      required: [],
+    },
+  },
+];
+```
+
+### 5.3 实现工具执行逻辑
+
+每个工具对应一个真实的函数，Agent 循环里调用：
+
+```ts
+// src/tools/executor.ts
+import fs from 'fs/promises';
+
+export interface ToolResult {
+  success: boolean;
+  data: string;
+}
+
+/**
+ * 模拟网络搜索（实际项目接入 Bing/Google Search API）
+ */
+async function webSearch(query: string): Promise<ToolResult> {
+  // 模拟搜索结果——真实项目替换为 fetch('https://api.bing.com/search?q=...')
+  const mockResults: Record<string, string> = {
+    'nodejs lts': 'Node.js 22 LTS (Jod) 于 2024年10月正式发布，支持到 2027年4月。主要特性：原生支持 require(ESM) 模块、V8 12.4 引擎、性能提升 20%。',
+    'claude api': 'Anthropic Claude API 提供 claude-opus-4、claude-sonnet-4 等模型，支持 Tool Use、Vision、长上下文（200K tokens）。',
+    default: `关于"${query}"的搜索结果：这是一个模拟搜索结果。实际项目中请接入真实搜索 API。`,
+  };
+
+  const key = Object.keys(mockResults).find(k =>
+    query.toLowerCase().includes(k)
+  );
+
+  return {
+    success: true,
+    data: mockResults[key ?? 'default'],
+  };
+}
+
+/**
+ * 读取本地文件
+ */
+async function readFile(filePath: string): Promise<ToolResult> {
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    // 超长文件截断，避免塞爆 context
+    const truncated = content.length > 5000
+      ? content.slice(0, 5000) + '\n\n[...文件过长，已截断...]'
+      : content;
+    return { success: true, data: truncated };
+  } catch (err) {
+    return {
+      success: false,
+      data: `读取文件失败: ${(err as Error).message}`,
+    };
+  }
+}
+
+/**
+ * 安全地执行数学表达式
+ * 只允许数字和运算符，防止代码注入
+ */
+function calculate(expression: string): ToolResult {
+  // 白名单校验：只允许数字、运算符、空格、小数点、括号
+  if (!/^[0-9+\-*/().% \t**]+$/.test(expression)) {
+    return { success: false, data: '不合法的表达式，只支持基本数学运算' };
+  }
+
+  try {
+    // eslint-disable-next-line no-new-func
+    const result = new Function(`"use strict"; return (${expression})`)();
+    return { success: true, data: String(result) };
+  } catch (err) {
+    return { success: false, data: `计算失败: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * 获取当前时间
+ */
+function getCurrentTime(timezone?: string): ToolResult {
+  try {
+    const now = new Date();
+    const formatted = now.toLocaleString('zh-CN', {
+      timeZone: timezone || 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      weekday: 'long',
+    });
+    return { success: true, data: `当前时间：${formatted}（${timezone || 'Asia/Shanghai'}）` };
+  } catch {
+    return { success: false, data: '时区格式不正确' };
+  }
+}
+
+/**
+ * 统一调度入口：根据工具名称分发到对应函数
+ */
+export async function executeTool(
+  name: string,
+  args: Record<string, unknown>
+): Promise<ToolResult> {
+  console.log(`\n🔧 执行工具: ${name}`);
+  console.log(`   参数: ${JSON.stringify(args)}`);
+
+  switch (name) {
+    case 'web_search':
+      return webSearch(args.query as string);
+    case 'read_file':
+      return readFile(args.path as string);
+    case 'calculate':
+      return calculate(args.expression as string);
+    case 'get_current_time':
+      return getCurrentTime(args.timezone as string | undefined);
+    default:
+      return { success: false, data: `未知工具: ${name}` };
+  }
+}
+```
+
+### 5.4 Agent 核心循环
+
+这是整个实现的核心，ReAct 循环就在这里：
+
+```ts
+// src/agent.ts
+import Anthropic from '@anthropic-ai/sdk';
+import { toolDefinitions } from './tools/definitions';
+import { executeTool } from './tools/executor';
+
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+// Agent 配置
+const MAX_ITERATIONS = 10; // 防止死循环，最多执行 10 轮
+const MODEL = 'claude-opus-4-5';
+
+/**
+ * 运行 Agent，执行用户给定的任务
+ */
+export async function runAgent(userTask: string): Promise<string> {
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`🤖 Agent 启动`);
+  console.log(`📋 任务: ${userTask}`);
+  console.log('='.repeat(60));
+
+  // messages 是 Agent 的短期记忆，记录完整的对话历史
+  const messages: Anthropic.MessageParam[] = [
+    { role: 'user', content: userTask },
+  ];
+
+  let iteration = 0;
+
+  // ReAct 循环
+  while (iteration < MAX_ITERATIONS) {
+    iteration++;
+    console.log(`\n--- 第 ${iteration} 轮 ---`);
+
+    // 1. 调用 LLM，带上所有历史消息和工具定义
+    const response = await client.messages.create({
+      model: MODEL,
+      max_tokens: 4096,
+      system:
+        '你是一个能使用工具的智能助手。当你需要获取信息或执行操作时，使用提供的工具。' +
+        '每次只调用你最迫切需要的工具，不要一次调用多个无关工具。' +
+        '当你已经有足够的信息完成任务时，直接给出最终答案，不要再调用工具。',
+      tools: toolDefinitions,
+      messages,
+    });
+
+    // 2. 分析 LLM 的响应
+    const stopReason = response.stop_reason;
+
+    // 情况 A：LLM 决定直接回答（不需要工具了）
+    if (stopReason === 'end_turn') {
+      const finalText = response.content
+        .filter(block => block.type === 'text')
+        .map(block => (block as Anthropic.TextBlock).text)
+        .join('');
+
+      console.log(`\n✅ Agent 完成任务`);
+      console.log(`💬 最终回答:\n${finalText}`);
+      return finalText;
+    }
+
+    // 情况 B：LLM 要调用工具
+    if (stopReason === 'tool_use') {
+      // 把 LLM 的这轮响应追加到历史（包含它的思考和工具调用请求）
+      messages.push({ role: 'assistant', content: response.content });
+
+      // 找出所有工具调用请求（可能一次返回多个）
+      const toolUseBlocks = response.content.filter(
+        block => block.type === 'tool_use'
+      ) as Anthropic.ToolUseBlock[];
+
+      // 打印 LLM 的思考过程（text 部分）
+      const thinkingText = response.content
+        .filter(block => block.type === 'text')
+        .map(block => (block as Anthropic.TextBlock).text)
+        .join('');
+      if (thinkingText) {
+        console.log(`💭 思考: ${thinkingText.trim()}`);
+      }
+
+      // 3. 执行所有工具调用，收集结果
+      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+      for (const toolUse of toolUseBlocks) {
+        const result = await executeTool(
+          toolUse.name,
+          toolUse.input as Record<string, unknown>
+        );
+
+        console.log(`   结果: ${result.success ? '✓' : '✗'} ${result.data.slice(0, 100)}...`);
+
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: result.data,
+          is_error: !result.success,
+        });
+      }
+
+      // 4. 把工具执行结果追加到历史，等待 LLM 继续推理
+      messages.push({ role: 'user', content: toolResults });
+
+      continue; // 进入下一轮循环
+    }
+
+    // 其他情况（max_tokens 等），直接退出
+    console.warn(`⚠️ 意外的停止原因: ${stopReason}`);
+    break;
+  }
+
+  // 超过最大轮数，强制结束
+  if (iteration >= MAX_ITERATIONS) {
+    console.warn(`⚠️ 达到最大迭代次数 ${MAX_ITERATIONS}，强制结束`);
+    return '任务未能在限定步骤内完成，请尝试更具体的任务描述。';
+  }
+
+  return '任务执行异常';
+}
+```
+
+### 5.5 入口文件与运行示例
+
+```ts
+// src/index.ts
+import { runAgent } from './agent';
+
+async function main() {
+  // 示例任务 1：简单问答 + 搜索
+  await runAgent('帮我查一下 Node.js 最新的 LTS 版本，然后计算一下 2 的 32 次方是多少');
+
+  // 示例任务 2：需要多步推理
+  await runAgent(
+    '现在是几月几号？再帮我算一下从今天到 2026年12月31日还有多少天'
+  );
+
+  // 示例任务 3：读取文件（先准备一个测试文件）
+  await runAgent('读取 ./test.txt 文件，然后统计一下里面有多少个字');
+}
+
+main().catch(console.error);
+```
+
+运行：
+
+```bash
+export ANTHROPIC_API_KEY="your-api-key"
+npx tsx src/index.ts
+```
+
+实际运行输出：
+
+```
+============================================================
+🤖 Agent 启动
+📋 任务: 帮我查一下 Node.js 最新的 LTS 版本，然后计算一下 2 的 32 次方是多少
+============================================================
+
+--- 第 1 轮 ---
+💭 思考: 我需要搜索 Node.js 最新 LTS 版本，同时也可以计算 2 的 32 次方
+
+🔧 执行工具: web_search
+   参数: {"query":"nodejs lts"}
+   结果: ✓ Node.js 22 LTS (Jod) 于 2024年10月正式发布...
+
+--- 第 2 轮 ---
+💭 思考: 搜到了 Node.js LTS 版本，现在计算 2 的 32 次方
+
+🔧 执行工具: calculate
+   参数: {"expression":"2 ** 32"}
+   结果: ✓ 4294967296
+
+--- 第 3 轮 ---
+✅ Agent 完成任务
+💬 最终回答:
+Node.js 最新 LTS 版本是 **Node.js 22 (Jod)**，发布于 2024年10月，支持到 2027年4月。
+
+2 的 32 次方 = **4,294,967,296**（约 43 亿）
+```
+
+---
+
+## 六、关键设计决策解析
+
+### 为什么 messages 要保留完整历史？
+
+LLM 是无状态的，每次请求都是独立的。把所有历史（包括工具调用和结果）传进去，LLM 才能"记住"前几步做了什么，从而做出连贯的决策。
+
+这也是 Agent 的核心挑战之一：**历史越长，token 消耗越多，成本越高**。处理策略：
+
+```ts
+// 简单的历史压缩：只保留最近 N 轮工具调用
+function compressHistory(
+  messages: Anthropic.MessageParam[],
+  keepLast: number = 6
+): Anthropic.MessageParam[] {
+  // 始终保留第一条用户消息（任务描述）
+  const firstMessage = messages[0];
+  const recentMessages = messages.slice(-keepLast);
+
+  // 避免重复
+  if (recentMessages[0] === firstMessage) return recentMessages;
+  return [firstMessage, ...recentMessages];
+}
+```
+
+### 工具描述是 Agent 智能的关键
+
+LLM 完全依赖工具描述来决定"什么时候用什么工具"。描述写得差，Agent 就会乱调工具。
+
+:::tip
+**好的工具描述包含**：
+1. 工具能做什么（功能）
+2. 适合什么场景（触发条件）
+3. 不适合什么场景（边界，避免误用）
+4. 参数的具体格式要求
+:::
+
+```ts
+// ❌ 描述太模糊
+{ description: '搜索信息' }
+
+// ✅ 描述清晰
+{
+  description:
+    '搜索互联网获取最新信息。适合用于：查询实时数据（股价、天气）、' +
+    '查找具体事实（版本号、发布日期）。不适合用于：需要实时计算的问题（用 calculate）、' +
+    '读取本地文件（用 read_file）。'
+}
+```
+
+### 防止无限循环
+
+`MAX_ITERATIONS` 是必须的安全机制。除此之外，还可以加超时限制：
+
+```ts
+// 带超时的 Agent 运行
+async function runAgentWithTimeout(
+  task: string,
+  timeoutMs: number = 60000
+): Promise<string> {
+  const timeoutPromise = new Promise<string>((_, reject) =>
+    setTimeout(() => reject(new Error('Agent 执行超时')), timeoutMs)
+  );
+
+  return Promise.race([runAgent(task), timeoutPromise]);
+}
+```
+
+---
+
+## 七、进阶：Multi-Agent（多智能体）
+
+单个 Agent 适合独立任务，复杂工程通常用**多个 Agent 协作**：
+
+```
+Orchestrator Agent（协调者）
+      │
+      ├──► Research Agent（负责搜集信息）
+      │         └── tools: [web_search, read_file]
+      │
+      ├──► Analysis Agent（负责分析数据）
+      │         └── tools: [calculate, run_code]
+      │
+      └──► Writer Agent（负责撰写报告）
+                └── tools: [write_file, format_document]
+```
+
+协调者把大任务分解，分派给专门的子 Agent，收集结果后整合。Claude Code（你现在使用的工具）本身就是一个多 Agent 系统。
+
+```ts
+// 简单的 Multi-Agent 协调示例
+async function orchestrate(task: string): Promise<string> {
+  // 1. 协调者分析任务，决定分配策略
+  const plan = await runAgent(
+    `分析这个任务需要哪些步骤，用 JSON 格式输出计划：${task}`
+  );
+
+  // 2. 并行执行子任务（适合互相独立的步骤）
+  const [researchResult, analysisResult] = await Promise.all([
+    runAgent(`执行研究子任务: ...`),
+    runAgent(`执行分析子任务: ...`),
+  ]);
+
+  // 3. 协调者整合结果
+  return runAgent(
+    `基于以下研究结果和分析结果，生成最终报告：\n${researchResult}\n${analysisResult}`
+  );
+}
+```
+
+---
+
+## 八、选型参考
+
+| 场景 | 推荐方案 |
+|---|---|
+| 简单任务自动化 | 单 Agent + 少量工具 |
+| 需要查实时信息 | Agent + Search API（Bing、Tavily） |
+| 代码相关任务 | Agent + Code Execution（在沙箱中运行） |
+| 需要操作数据库 | Agent + DB 工具（注意权限控制，只给 SELECT） |
+| 复杂长任务 | Multi-Agent，拆分职责 |
+| 生产环境 | 加审计日志、工具调用白名单、超时、成本限制 |
+
+:::warning
+**生产环境安全注意事项**：
+
+1. **工具要有最小权限**：数据库工具只给 SELECT，文件工具限制在特定目录内
+2. **永远不要让 Agent 直接执行用户输入的代码**，必须走沙箱（Docker、V8 Isolate）
+3. **记录所有工具调用日志**，方便审计和 debug
+4. **设置 token 消耗上限**，防止失控任务产生高额费用
+:::

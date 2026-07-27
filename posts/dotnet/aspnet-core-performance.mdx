@@ -1,0 +1,478 @@
+---
+title: 'ASP.NET Core 性能优化：异步、连接池、压缩、缓存与诊断工具'
+date: '2026-07-21'
+excerpt: '系统梳理 ASP.NET Core 性能优化：异步 I/O、EF Core 查询、HttpClientFactory、响应压缩、缓存、限流、dotnet-counters 和性能排查路径。'
+tags: ['dotnet', 'aspnetcore', 'performance', 'diagnostics']
+nextPost: 'dotnet/aspnet-core-project-structure'
+---
+
+# ASP.NET Core 性能优化：异步、连接池、压缩、缓存与诊断工具
+
+性能优化不是看到哪里慢就随手加缓存。正确路径应该是：先测量，再定位瓶颈，最后选择合适手段优化。
+
+ASP.NET Core 常见性能瓶颈包括数据库查询、外部 HTTP 调用、同步阻塞、过度序列化、缓存缺失、线程池耗尽和资源限制。
+
+:::tip 阶段四阅读顺序
+建议先掌握 [EF Core](/posts/dotnet/aspnet-core-ef-core)、[缓存](/posts/dotnet/aspnet-core-caching)、[HttpClientFactory](/posts/dotnet/aspnet-core-httpclient-factory) 和 [可观测性](/posts/dotnet/aspnet-core-observability)。
+:::
+
+## 先测量再优化
+
+优化前先回答：
+
+- 哪个接口慢？
+- P50、P95、P99 延迟是多少？
+- 慢在数据库、外部 HTTP、CPU 还是锁等待？
+- 错误率是否升高？
+- 是否只有高峰期慢？
+
+没有指标的优化通常只是猜测。
+
+## 异步 I/O
+
+Web API 中数据库、HTTP、文件、队列调用都应该使用异步 API。
+
+推荐：
+
+```csharp
+var products = await dbContext.Products
+    .AsNoTracking()
+    .ToListAsync(cancellationToken);
+```
+
+不推荐：
+
+```csharp
+var products = dbContext.Products.ToList();
+```
+
+更不要在异步代码里使用 `.Result` 或 `.Wait()` 阻塞。
+
+## EF Core 查询优化
+
+常见建议：
+
+- 只读查询使用 `AsNoTracking()`。
+- 列表接口必须分页。
+- 使用 `Select` 投影 DTO。
+- 避免过度 `Include`。
+- 避免 N+1 查询。
+- 给常用查询条件建立数据库索引。
+
+示例：
+
+```csharp
+var result = await dbContext.Products
+    .AsNoTracking()
+    .Where(p => p.CategoryId == categoryId)
+    .OrderBy(p => p.Id)
+    .Skip((page - 1) * pageSize)
+    .Take(pageSize)
+    .Select(p => new ProductDto(p.Id, p.Name, p.Price))
+    .ToListAsync(cancellationToken);
+```
+
+## HttpClientFactory
+
+外部 HTTP 调用要设置超时和取消。
+
+```csharp
+builder.Services.AddHttpClient<IWeatherClient, WeatherClient>(client =>
+{
+    client.BaseAddress = new Uri("https://api.example.com");
+    client.Timeout = TimeSpan.FromSeconds(5);
+});
+```
+
+慢接口经常不是自己慢，而是下游服务慢。必须记录外部调用耗时。
+
+## 缓存
+
+缓存适合读多写少的数据：
+
+- 商品详情
+- 字典数据
+- 权限列表
+- 外部接口响应
+
+不要缓存强一致性要求很高的数据。缓存必须设计 Key、过期时间和失效策略。
+
+### IMemoryCache 基础用法
+
+```csharp
+builder.Services.AddMemoryCache();
+
+public class ProductService
+{
+    private readonly IMemoryCache _cache;
+    private readonly AppDbContext _dbContext;
+
+    public ProductService(IMemoryCache cache, AppDbContext dbContext)
+    {
+        _cache = cache;
+        _dbContext = dbContext;
+    }
+
+    public async Task<ProductDto?> GetProductAsync(int id, CancellationToken cancellationToken)
+    {
+        string cacheKey = $"product:{id}";
+
+        return await _cache.GetOrCreateAsync(cacheKey, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10);
+            entry.SlidingExpiration = TimeSpan.FromMinutes(2);
+
+            return await _dbContext.Products
+                .AsNoTracking()
+                .Where(p => p.Id == id)
+                .Select(p => new ProductDto(p.Id, p.Name, p.Price))
+                .FirstOrDefaultAsync(cancellationToken);
+        });
+    }
+}
+```
+
+`GetOrCreateAsync` 是原子操作：缓存命中时直接返回，未命中时执行工厂方法并写入缓存。
+
+### 缓存 Key 设计
+
+Key 必须唯一且包含所有影响结果的参数：
+
+```csharp
+string cacheKey = $"products:category={categoryId}:page={page}:size={pageSize}";
+```
+
+不要用模糊 Key（如 `"products"`），否则不同查询条件会返回错误缓存数据。
+
+### 缓存失效策略
+
+| 策略 | 配置 | 适用场景 |
+|---|---|---|
+| 绝对过期 | `AbsoluteExpirationRelativeToNow` | 数据有明确时效，到期自动失效 |
+| 滑动过期 | `SlidingExpiration` | 数据持续被访问时延长有效期 |
+| 主动清除 | `Remove()` | 数据变更时立即失效 |
+
+数据更新时主动清除缓存：
+
+```csharp
+public async Task UpdateProductAsync(int id, UpdateProductRequest request, CancellationToken cancellationToken)
+{
+    var product = await _dbContext.Products.FindAsync([id], cancellationToken);
+    if (product is null) return;
+
+    product.Name = request.Name;
+    product.Price = request.Price;
+    await _dbContext.SaveChangesAsync(cancellationToken);
+
+    _cache.Remove($"product:{id}");
+}
+```
+
+分布式缓存和缓存进阶内容详见 [ASP.NET Core 缓存](/posts/dotnet/aspnet-core-caching)。
+
+## 响应压缩
+
+启用响应压缩需要配置压缩提供者、MIME 类型和压缩级别：
+
+```csharp
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.Providers.Add<GzipCompressionProvider>();
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(
+    [
+        "application/json",
+        "application/ld+json",
+        "application/xml",
+        "text/json",
+        "text/xml",
+    ]);
+});
+
+builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
+{
+    options.Level = CompressionLevel.Fastest;
+});
+
+builder.Services.Configure<GzipCompressionProviderOptions>(options =>
+{
+    options.Level = CompressionLevel.Optimal;
+});
+
+app.UseResponseCompression();
+```
+
+`AddResponseCompression()` 不传任何提供者时，默认只注册 Gzip。且如果客户端不支持对应编码，中间件不会压缩响应。**生产环境必须显式添加 MIME 类型白名单**，否则默认白名单只覆盖 `text/plain`、`text/css` 等少数类型，JSON 响应不会压缩。
+
+### Brotli vs Gzip 选择
+
+| 特性 | Brotli | Gzip |
+|---|---|---|
+| 压缩率 | 更高（约比 Gzip 小 15-25%） | 基准 |
+| 压缩速度 | 较慢 | 较快 |
+| 浏览器支持 | 现代浏览器均支持（IE 不支持） | 所有浏览器 |
+| 适用场景 | 静态资源预压缩、带宽敏感 | 动态响应、兼容性优先 |
+
+推荐做法：同时注册 Brotli 和 Gzip，中间件会根据客户端 `Accept-Encoding` 自动选择。Brotli 优先，不支持时降级 Gzip。
+
+压缩级别选择：
+
+- `CompressionLevel.Fastest`：CPU 开销最小，压缩率一般，适合高 QPS 动态接口
+- `CompressionLevel.Optimal`：压缩率最高，CPU 开销大，适合静态资源预压缩
+- `CompressionLevel.NoCompression`：不压缩，可做条件判断后降级
+
+响应压缩适合文本类响应，例如 JSON、HTML、CSS、JS。对小响应（< 1KB）压缩收益不明显，对已经压缩的图片、视频无收益。
+
+## 限流保护
+
+限流不是性能优化本身，但能保护系统不被突发流量打垮。
+
+```csharp
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("fixed", limiterOptions =>
+    {
+        limiterOptions.PermitLimit = 100;
+        limiterOptions.Window = TimeSpan.FromMinutes(1);
+    });
+});
+
+app.UseRateLimiter();
+```
+
+## dotnet-counters
+
+`dotnet-counters` 可以查看运行时指标。
+
+```bash
+dotnet-counters monitor --process-id <pid>
+```
+
+关注：
+
+- CPU Usage
+- GC Heap Size
+- Gen 0/1/2 GC Count
+- ThreadPool Queue Length
+- Exception Count
+
+### 输出示例与指标解读
+
+运行后输出实时刷新的指标面板：
+
+```text
+Press p to pause, r to resume, q to quit.
+    Status: Running
+
+[System.Runtime]
+    CPU Usage (%)                                      12.3
+    Working Set (MB)                                   185.6
+    GC Heap Size (MB)                                   64.2
+    Gen 0 GC Count / 60 sec                             8
+    Gen 1 GC Count / 60 sec                             2
+    Gen 2 GC Count / 60 sec                             0
+    ThreadPool Queue Length                              3
+    ThreadPool Thread Count                             12
+    Exception Count / 60 sec                            0
+
+[Microsoft.AspNetCore.Hosting]
+    Request Count / 1 sec                              42
+    Current Requests                                    5
+    Failed Requests / 1 sec                             0
+```
+
+关键指标判断：
+
+| 指标 | 正常范围 | 异常信号 |
+|---|---|---|
+| CPU Usage | < 70% 随负载线性变化 | 持续 > 80% 可能是 CPU 密集操作或锁争用 |
+| GC Heap Size | 稳定或随请求量波动 | 持续增长不回落，可能内存泄漏 |
+| Gen 2 GC Count | 极少 | 频繁 Gen 2 GC 表示大量长存活对象，暂停时间变长 |
+| ThreadPool Queue Length | 接近 0 | 持续 > 0 表示线程池饥饿，可能有同步阻塞 |
+| Exception Count / sec | 接近 0 | 持续 > 0 说明有异常被频繁抛出和捕获 |
+
+### 自定义计数器监控
+
+只监控特定计数器，减少开销：
+
+```bash
+dotnet-counters monitor --process-id <pid> --counters System.Runtime[cpu-usage,gc-heap-size,threadpool-queue-length]
+```
+
+导出为文件供后续分析：
+
+```bash
+dotnet-counters collect --process-id <pid> --output counters.csv
+```
+
+## dotnet-trace
+
+采集 Trace：
+
+```bash
+dotnet-trace collect --process-id <pid>
+```
+
+适合进一步分析 CPU、锁等待、运行时事件。
+
+### 输出示例与常见分析场景
+
+采集完成后生成 `.nettrace` 文件，可用 Visual Studio、PerfView 或 `dotnet-trace report` 分析：
+
+```bash
+dotnet-trace report trace.nettrace --top 20
+```
+
+输出示例：
+
+```text
+Top 20 methods by exclusive time:
+
+    18.5% MyApi.Services.OrderService.ProcessOrderAsync()
+    12.3% System.Net.Http.HttpClient.SendAsync()
+     8.7% Microsoft.EntityFrameworkCore.SqlServer.Query.Internal.SqlServerQueryExecutionStrategy.ExecuteAsync()
+     5.2% System.Threading.Monitor.ObjWait()
+     3.1% System.Text.Json.JsonSerializer.DeserializeAsync()
+```
+
+常用采集 Profile：
+
+| Profile | 包含的事件 | 适用场景 |
+|---|---|---|
+| `cpu-sampling` | CPU 采样、线程时间 | CPU 热点分析 |
+| `gc-verbose` | GC 详细事件 | 内存问题、GC 暂停 |
+| `gc-collect` | GC 触发和完成 | 轻量 GC 监控 |
+| `thread-time` | 线程时间、锁等待 | 锁争用、线程池饥饿 |
+
+指定 Profile 采集：
+
+```bash
+dotnet-trace collect --process-id <pid> --profile cpu-sampling --duration 00:01:00
+```
+
+转换为 Chrome Trace 格式可视化：
+
+```bash
+dotnet-trace convert trace.nettrace --format Chromium
+```
+
+生成的 `.json` 文件可直接在 Chrome 浏览器 `chrome://tracing` 中打开查看火焰图。
+
+## 数据库连接池
+
+ADO.NET 和 EF Core 底层使用连接池，默认配置通常够用，但高并发场景需要调优。
+
+关键配置（连接字符串中）：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `Max Pool Size` | 100 | 最大连接数 |
+| `Min Pool Size` | 0 | 最小保持连接数 |
+| `Connection Timeout` | 15s | 获取连接超时 |
+| `Connection Lifetime` | 0 | 连接最大存活时间（0 为无限） |
+
+```text
+Server=db;Database=AppDb;User Id=app;Password=***;Max Pool Size=200;Min Pool Size=5
+```
+
+连接耗尽的典型表现：
+
+- 请求超时，错误日志出现 `Timeout expired`
+- 连接池等待队列增长
+- `dotnet-counters` 中 `ThreadPool Queue Length` 升高
+
+EF Core 还需要注意：
+
+- `DbContext` 默认不是连接池，每个请求一个实例（Scoped）
+- `DbContextPool` 可以复用 `DbContext` 实例，减少初始化开销
+
+```csharp
+builder.Services.AddDbContextPool<AppDbContext>(options =>
+    options.UseSqlServer(connectionString), poolSize: 128);
+```
+
+`AddDbContextPool` 比 `AddDbContext` 在高频请求场景下性能更好。
+
+## BenchmarkDotNet
+
+性能优化不能靠感觉。BenchmarkDotNet 是 .NET 基准测试标准工具，能消除 JIT、GC 等运行时干扰，给出稳定的测量结果。
+
+安装：
+
+```bash
+dotnet add package BenchmarkDotNet
+```
+
+示例 — 对比字符串拼接方式：
+
+```csharp
+[MemoryDiagnoser]
+public class StringConcatBenchmark
+{
+    private const int Count = 100;
+
+    [Benchmark(Baseline = true)]
+    public string StringConcat()
+    {
+        string result = "";
+        for (int i = 0; i < Count; i++)
+        {
+            result += i.ToString();
+        }
+        return result;
+    }
+
+    [Benchmark]
+    public string StringBuilder()
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < Count; i++)
+        {
+            sb.Append(i.ToString());
+        }
+        return sb.ToString();
+    }
+}
+```
+
+运行：
+
+```bash
+dotnet run -c Release
+```
+
+必须在 Release 模式运行，Debug 模式结果不可信。
+
+输出示例：
+
+```text
+| Method         | Mean     | Allocated |
+|--------------- |---------:|----------:|
+| StringConcat   | 3.450 us |  12.5 KB  |
+| StringBuilder  | 0.820 us |   0.5 KB  |
+```
+
+常见使用场景：
+
+- 对比多种实现方式的性能和内存分配
+- 验证缓存是否真的有效
+- 评估序列化库选型
+- 测试新版本升级后的性能回归
+
+## 性能优化清单
+
+- 先通过指标定位瓶颈。
+- 数据库查询先看 SQL 和索引。
+- 外部 HTTP 调用必须有超时。
+- 不要同步阻塞异步调用。
+- 只读查询加 `AsNoTracking()`。
+- 列表接口分页。
+- 热点读使用缓存。
+- 大响应考虑压缩。
+- 高流量接口考虑限流。
+- 用 OpenTelemetry 记录链路和耗时。
+
+## 总结
+
+ASP.NET Core 性能优化的核心是测量、定位、验证。不要先入为主地加缓存或改代码。先通过日志、指标、链路追踪和诊断工具找到瓶颈，再针对数据库、HTTP、缓存、序列化、线程池等方向优化。

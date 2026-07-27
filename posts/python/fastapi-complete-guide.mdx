@@ -1,0 +1,995 @@
+---
+title: 'FastAPI 系统教程：从入门到生产级 REST API'
+date: '2026-04-21'
+excerpt: '系统讲解 FastAPI 的核心特性与工程实践。覆盖路由与参数、Pydantic 数据校验、依赖注入、异步 IO、数据库集成（SQLAlchemy）、JWT 鉴权、中间件、测试，最后用一个完整的博客 API 串联所有知识点。'
+tags: ['python', 'fastapi', 'backend', 'rest-api', 'async']
+---
+
+# FastAPI 系统教程：从入门到生产级 REST API
+
+FastAPI 是 Python 生态中增长最快的 Web 框架。它把 Python 的类型注解系统用到极致：路由参数自动校验、请求体自动解析、响应自动序列化、API 文档自动生成——这些在其他框架里需要大量样板代码才能做到的事，FastAPI 让你几乎不需要额外写任何配置。
+
+这篇文章会带你从零搭建，一路走到生产可用的 REST API，包含鉴权、数据库、测试。
+
+---
+
+## 一、理解 FastAPI 的设计思路
+
+在开始写代码前，先建立一个核心认知：**FastAPI 的所有能力都建立在 Python 类型注解上**。
+
+```python
+# 这一个函数定义，FastAPI 能从中提取：
+# 1. 路由路径和方法
+# 2. 路径参数 user_id（int 类型，自动转换和校验）
+# 3. 查询参数 include_posts（bool 类型，默认 False）
+# 4. 返回值结构（用于生成文档和序列化）
+@app.get("/users/{user_id}")
+def get_user(user_id: int, include_posts: bool = False) -> dict:
+    ...
+```
+
+正因如此，你写的每一行类型注解，都同时服务于三个目的：**运行时校验、编辑器自动补全、API 文档生成**。
+
+### FastAPI 的技术栈
+
+```
+FastAPI          ← Web 框架层（路由、DI、OpenAPI）
+    │
+Starlette        ← ASGI 框架层（请求/响应、WebSocket、中间件）
+    │
+Pydantic         ← 数据校验层（类型解析、序列化）
+    │
+Uvicorn          ← ASGI 服务器（事件循环、HTTP 解析）
+```
+
+---
+
+## 二、环境搭建
+
+```bash
+# 推荐用 uv 管理依赖（比 pip 快很多）
+pip install uv
+
+uv init my-api && cd my-api
+uv add fastapi "uvicorn[standard]" pydantic
+
+# 或者直接用 pip
+pip install fastapi "uvicorn[standard]" pydantic
+```
+
+项目结构（本文最终目标）：
+
+```
+my-api/
+├── app/
+│   ├── __init__.py
+│   ├── main.py          # FastAPI 应用入口
+│   ├── models.py        # Pydantic 数据模型
+│   ├── database.py      # 数据库配置
+│   ├── dependencies.py  # 公共依赖
+│   ├── routers/
+│   │   ├── users.py
+│   │   └── posts.py
+│   └── auth/
+│       ├── jwt.py
+│       └── router.py
+├── tests/
+│   └── test_posts.py
+└── pyproject.toml
+```
+
+---
+
+## 三、路由与参数
+
+### 最简应用
+
+```python
+# app/main.py
+from fastapi import FastAPI
+
+app = FastAPI(
+    title="博客 API",
+    description="一个演示 FastAPI 核心特性的博客后端",
+    version="1.0.0",
+)
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
+```
+
+```bash
+uvicorn app.main:app --reload
+
+# 访问：
+# http://localhost:8000        ← API
+# http://localhost:8000/docs   ← Swagger UI（交互式文档）
+# http://localhost:8000/redoc  ← ReDoc 文档
+```
+
+### 路径参数
+
+```python
+from fastapi import Path
+
+@app.get("/posts/{post_id}")
+def get_post(
+    post_id: int = Path(gt=0, description="文章 ID，必须大于 0"),
+):
+    return {"post_id": post_id}
+
+# 多个路径参数
+@app.get("/users/{user_id}/posts/{post_id}")
+def get_user_post(user_id: int, post_id: int):
+    return {"user_id": user_id, "post_id": post_id}
+```
+
+:::warning
+**路由顺序很重要**。FastAPI 按定义顺序匹配路由，固定路径必须写在参数化路径**前面**：
+
+```python
+# ✅ 正确：/posts/featured 不会被 /posts/{post_id} 截获
+@app.get("/posts/featured")
+def get_featured(): ...
+
+@app.get("/posts/{post_id}")
+def get_post(post_id: int): ...
+
+# ❌ 错误：/posts/featured 会被当成 post_id="featured"，然后类型校验失败
+@app.get("/posts/{post_id}")
+def get_post(post_id: int): ...
+
+@app.get("/posts/featured")   # 永远不会匹配到
+def get_featured(): ...
+```
+:::
+
+### 查询参数
+
+函数参数中，没有对应路径段的自动视为查询参数：
+
+```python
+from typing import Annotated
+from fastapi import Query
+
+@app.get("/posts")
+def list_posts(
+    skip:    int = Query(default=0,  ge=0),
+    limit:   int = Query(default=20, ge=1, le=100),
+    keyword: str | None = Query(default=None, max_length=100),
+    tags:    list[str] = Query(default=[]),   # 支持多值：?tags=python&tags=fastapi
+):
+    return {
+        "skip": skip,
+        "limit": limit,
+        "keyword": keyword,
+        "tags": tags,
+    }
+
+# GET /posts?skip=0&limit=10&keyword=fastapi&tags=python&tags=backend
+```
+
+### 请求体
+
+用 Pydantic 模型接收 JSON 请求体：
+
+```python
+from pydantic import BaseModel
+
+class PostCreate(BaseModel):
+    title:   str
+    content: str
+    tags:    list[str] = []
+
+@app.post("/posts", status_code=201)
+def create_post(body: PostCreate):
+    # body 已经过校验和类型转换
+    return {"message": "创建成功", "post": body.model_dump()}
+```
+
+当函数参数同时有路径参数、查询参数和请求体时，FastAPI 的判断规则：
+
+| 参数来源 | 判断条件 |
+|---|---|
+| 路径参数 | 名称出现在 `@app.xxx("/path/{name}")` 中 |
+| 请求体 | 参数类型是 Pydantic `BaseModel` |
+| 查询参数 | 其余所有简单类型（int/str/bool 等） |
+
+---
+
+## 四、Pydantic 数据模型
+
+Pydantic 是 FastAPI 的数据层，负责校验、转换和序列化。
+
+### 基础用法
+
+```python
+from pydantic import BaseModel, Field, field_validator, model_validator
+from datetime import datetime
+from enum import Enum
+
+class PostStatus(str, Enum):
+    DRAFT     = "draft"
+    PUBLISHED = "published"
+    ARCHIVED  = "archived"
+
+class PostCreate(BaseModel):
+    title:   str   = Field(min_length=1, max_length=200, description="文章标题")
+    content: str   = Field(min_length=10, description="文章正文，至少 10 个字")
+    status:  PostStatus = PostStatus.DRAFT
+    tags:    list[str]  = Field(default=[], max_length=10)  # 最多 10 个标签
+
+    # 字段级自定义校验器
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, tags: list[str]) -> list[str]:
+        cleaned = [t.strip().lower() for t in tags if t.strip()]
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("标签不能重复")
+        return cleaned
+
+    # 跨字段校验
+    @model_validator(mode="after")
+    def check_published_has_content(self) -> "PostCreate":
+        if self.status == PostStatus.PUBLISHED and len(self.content) < 100:
+            raise ValueError("发布的文章正文不得少于 100 字")
+        return self
+```
+
+### 请求模型与响应模型分离
+
+这是 FastAPI 的最佳实践：**输入模型（Create/Update）和输出模型（Response）分开定义**，避免把密码、内部字段等暴露给客户端。
+
+```python
+from datetime import datetime
+
+# 创建时的输入
+class PostCreate(BaseModel):
+    title:   str
+    content: str
+    tags:    list[str] = []
+
+# 部分更新时的输入（所有字段可选）
+class PostUpdate(BaseModel):
+    title:   str | None = None
+    content: str | None = None
+    tags:    list[str] | None = None
+
+# 返回给客户端的结构
+class PostResponse(BaseModel):
+    id:         int
+    title:      str
+    content:    str
+    tags:       list[str]
+    status:     PostStatus
+    author_id:  int
+    created_at: datetime
+    updated_at: datetime
+
+    # 允许从 ORM 对象（SQLAlchemy model）直接转换
+    model_config = {"from_attributes": True}
+
+# 列表场景的精简版（不包含 content，减少传输量）
+class PostSummary(BaseModel):
+    id:         int
+    title:      str
+    tags:       list[str]
+    status:     PostStatus
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+```
+
+### model_dump 常用技巧
+
+```python
+post = PostCreate(title="Hello", content="World " * 20, tags=["python", "fastapi"])
+
+# 只导出指定字段
+post.model_dump(include={"title", "tags"})
+# {'title': 'Hello', 'tags': ['python', 'fastapi']}
+
+# 排除指定字段
+post.model_dump(exclude={"content"})
+
+# 只导出显式传入的字段（PATCH 接口必备）
+update = PostUpdate(title="New Title")   # 只传了 title
+update.model_dump(exclude_unset=True)
+# {'title': 'New Title'}  ← 不包含 content 和 tags（用户没有传）
+```
+
+---
+
+## 五、依赖注入（Dependency Injection）
+
+依赖注入是 FastAPI 最强大的特性之一，用于**提取可复用的逻辑**。
+
+### 基础用法
+
+```python
+from fastapi import Depends
+
+# 依赖函数：解析分页参数
+def get_pagination(
+    skip:  int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> dict:
+    return {"skip": skip, "limit": limit}
+
+# Annotated 写法更清晰（推荐）
+Pagination = Annotated[dict, Depends(get_pagination)]
+
+@app.get("/posts")
+def list_posts(page: Pagination):
+    return page
+
+@app.get("/users")
+def list_users(page: Pagination):   # 同一个依赖复用
+    return page
+```
+
+### 依赖链（依赖的依赖）
+
+依赖可以互相依赖，FastAPI 自动解析整个依赖图：
+
+```python
+# 依赖 1：获取 token
+def get_token(authorization: Annotated[str, Header()]) -> str:
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="缺少 Bearer token")
+    return authorization.removeprefix("Bearer ")
+
+# 依赖 2：解析 token，依赖 依赖1
+def get_current_user(token: Annotated[str, Depends(get_token)]) -> dict:
+    # 实际项目中这里解析 JWT
+    if token != "valid-token":
+        raise HTTPException(status_code=401, detail="Token 无效")
+    return {"id": 1, "name": "Alice", "role": "admin"}
+
+# 依赖 3：要求管理员权限，依赖 依赖2
+def require_admin(user: Annotated[dict, Depends(get_current_user)]) -> dict:
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return user
+
+CurrentUser = Annotated[dict, Depends(get_current_user)]
+AdminUser   = Annotated[dict, Depends(require_admin)]
+
+# 路由中使用
+@app.get("/profile")
+def get_profile(user: CurrentUser):
+    return user
+
+@app.delete("/users/{user_id}")
+def delete_user(user_id: int, admin: AdminUser):
+    return {"message": f"用户 {user_id} 已删除"}
+```
+
+### 依赖的生命周期：yield 依赖
+
+`yield` 依赖常用于管理需要清理的资源（数据库连接、文件句柄）：
+
+```python
+from sqlalchemy.orm import Session
+from app.database import SessionLocal
+
+# 每次请求创建一个 DB Session，请求结束后自动关闭
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db          # 路由函数在这里执行
+    except Exception:
+        db.rollback()     # 出异常时回滚
+        raise
+    finally:
+        db.close()        # 无论如何都关闭连接
+
+DB = Annotated[Session, Depends(get_db)]
+
+@app.get("/posts/{post_id}")
+def get_post(post_id: int, db: DB):
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="文章不存在")
+    return post
+```
+
+---
+
+## 六、数据库集成（SQLAlchemy）
+
+```bash
+uv add sqlalchemy aiosqlite   # aiosqlite 用于异步 SQLite
+# 生产环境用 PostgreSQL：uv add asyncpg
+```
+
+### 定义 ORM 模型
+
+```python
+# app/database.py
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
+from datetime import datetime, timezone
+
+DATABASE_URL = "sqlite:///./blog.db"
+
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+class Base(DeclarativeBase):
+    pass
+
+# ORM 模型
+class UserORM(Base):
+    __tablename__ = "users"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    username   = Column(String(50), unique=True, nullable=False, index=True)
+    email      = Column(String(200), unique=True, nullable=False)
+    hashed_pwd = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    posts = relationship("PostORM", back_populates="author")
+
+class PostORM(Base):
+    __tablename__ = "posts"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    title      = Column(String(200), nullable=False)
+    content    = Column(Text, nullable=False)
+    status     = Column(String(20), default="draft")
+    author_id  = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    author = relationship("UserORM", back_populates="posts")
+
+# 建表（启动时执行）
+def create_tables():
+    Base.metadata.create_all(bind=engine)
+```
+
+### CRUD 操作封装
+
+把数据库操作封装成独立函数，路由层只做请求/响应处理：
+
+```python
+# app/crud/posts.py
+from sqlalchemy.orm import Session
+from app.database import PostORM
+from app.models import PostCreate, PostUpdate
+
+def get_post(db: Session, post_id: int) -> PostORM | None:
+    return db.query(PostORM).filter(PostORM.id == post_id).first()
+
+def list_posts(
+    db: Session,
+    skip: int = 0,
+    limit: int = 20,
+    author_id: int | None = None,
+) -> list[PostORM]:
+    query = db.query(PostORM)
+    if author_id is not None:
+        query = query.filter(PostORM.author_id == author_id)
+    return query.order_by(PostORM.created_at.desc()).offset(skip).limit(limit).all()
+
+def create_post(db: Session, data: PostCreate, author_id: int) -> PostORM:
+    post = PostORM(**data.model_dump(), author_id=author_id)
+    db.add(post)
+    db.commit()
+    db.refresh(post)  # 从 DB 重新加载，确保 id/created_at 等字段有值
+    return post
+
+def update_post(db: Session, post: PostORM, data: PostUpdate) -> PostORM:
+    updates = data.model_dump(exclude_unset=True)  # 只更新传入的字段
+    for field, value in updates.items():
+        setattr(post, field, value)
+    db.commit()
+    db.refresh(post)
+    return post
+
+def delete_post(db: Session, post: PostORM) -> None:
+    db.delete(post)
+    db.commit()
+```
+
+### 路由层
+
+```python
+# app/routers/posts.py
+from fastapi import APIRouter, HTTPException
+from app.models import PostCreate, PostUpdate, PostResponse, PostSummary
+from app.crud import posts as crud
+from app.dependencies import DB, CurrentUser, Pagination
+
+router = APIRouter(prefix="/posts", tags=["文章"])
+
+@router.get("", response_model=list[PostSummary])
+def list_posts(page: Pagination, db: DB):
+    return crud.list_posts(db, **page)
+
+@router.post("", response_model=PostResponse, status_code=201)
+def create_post(body: PostCreate, db: DB, user: CurrentUser):
+    return crud.create_post(db, body, author_id=user["id"])
+
+@router.get("/{post_id}", response_model=PostResponse)
+def get_post(post_id: int, db: DB):
+    post = crud.get_post(db, post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="文章不存在")
+    return post
+
+@router.patch("/{post_id}", response_model=PostResponse)
+def update_post(post_id: int, body: PostUpdate, db: DB, user: CurrentUser):
+    post = crud.get_post(db, post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="文章不存在")
+    if post.author_id != user["id"]:
+        raise HTTPException(status_code=403, detail="无权修改他人文章")
+    return crud.update_post(db, post, body)
+
+@router.delete("/{post_id}", status_code=204)
+def delete_post(post_id: int, db: DB, user: CurrentUser):
+    post = crud.get_post(db, post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="文章不存在")
+    if post.author_id != user["id"]:
+        raise HTTPException(status_code=403, detail="无权删除他人文章")
+    crud.delete_post(db, post)
+```
+
+---
+
+## 七、JWT 鉴权
+
+```bash
+uv add python-jose[cryptography] passlib[bcrypt]
+```
+
+### JWT 工具函数
+
+```python
+# app/auth/jwt.py
+from datetime import datetime, timedelta, timezone
+from jose import jwt, JWTError
+from passlib.context import CryptContext
+from fastapi import HTTPException
+
+SECRET_KEY = "your-secret-key-at-least-32-chars"  # 生产环境用环境变量
+ALGORITHM  = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 小时
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return pwd_context.verify(plain, hashed)
+
+def create_access_token(payload: dict, expires_delta: timedelta | None = None) -> str:
+    data = payload.copy()
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    data["exp"] = expire
+    return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
+
+def decode_token(token: str) -> dict:
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token 无效或已过期")
+```
+
+### 鉴权依赖
+
+```python
+# app/dependencies.py
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from app.auth.jwt import decode_token
+from app.database import SessionLocal, UserORM
+from sqlalchemy.orm import Session
+from typing import Annotated, Generator
+
+# ── 数据库 Session ────────────────────────────────────────
+
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+DB = Annotated[Session, Depends(get_db)]
+
+# ── 当前用户 ──────────────────────────────────────────────
+
+bearer_scheme = HTTPBearer()
+
+def get_current_user(
+    db: DB,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
+) -> UserORM:
+    payload = decode_token(credentials.credentials)
+    user_id: int | None = payload.get("sub")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Token 缺少用户信息")
+
+    user = db.query(UserORM).filter(UserORM.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="用户不存在")
+    return user
+
+CurrentUser = Annotated[UserORM, Depends(get_current_user)]
+
+# ── 分页 ──────────────────────────────────────────────────
+
+from fastapi import Query
+
+def get_pagination(
+    skip:  int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> dict:
+    return {"skip": skip, "limit": limit}
+
+Pagination = Annotated[dict, Depends(get_pagination)]
+```
+
+### 注册 / 登录路由
+
+```python
+# app/auth/router.py
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+from app.database import UserORM
+from app.auth.jwt import hash_password, verify_password, create_access_token
+from app.dependencies import DB
+
+router = APIRouter(prefix="/auth", tags=["认证"])
+
+class RegisterBody(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    email:    str
+    password: str = Field(min_length=8)
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type:   str = "bearer"
+
+@router.post("/register", response_model=TokenResponse, status_code=201)
+def register(body: RegisterBody, db: DB):
+    if db.query(UserORM).filter(UserORM.username == body.username).first():
+        raise HTTPException(status_code=409, detail="用户名已存在")
+
+    user = UserORM(
+        username=body.username,
+        email=body.email,
+        hashed_pwd=hash_password(body.password),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token({"sub": user.id})
+    return {"access_token": token}
+
+@router.post("/login", response_model=TokenResponse)
+def login(body: LoginBody, db: DB):
+    user = db.query(UserORM).filter(UserORM.username == body.username).first()
+    if not user or not verify_password(body.password, user.hashed_pwd):
+        # 故意不区分"用户不存在"和"密码错误"，防止用户枚举攻击
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+    token = create_access_token({"sub": user.id})
+    return {"access_token": token}
+```
+
+---
+
+## 八、中间件与全局异常处理
+
+### 中间件
+
+```python
+# app/main.py
+import time
+from fastapi import Request
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(...)
+
+# CORS 中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "https://yourdomain.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 自定义中间件：请求耗时日志
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration = time.perf_counter() - start
+
+    print(
+        f"{request.method} {request.url.path} "
+        f"→ {response.status_code} "
+        f"({duration * 1000:.1f}ms)"
+    )
+    response.headers["X-Process-Time"] = f"{duration:.4f}"
+    return response
+```
+
+### 全局异常处理
+
+```python
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+
+# 覆盖 422 校验错误的默认格式，让客户端更容易解析
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = []
+    for error in exc.errors():
+        field = " → ".join(str(loc) for loc in error["loc"] if loc != "body")
+        errors.append({"field": field, "message": error["msg"]})
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "请求参数校验失败", "errors": errors},
+    )
+
+# 自定义业务异常
+class BusinessError(Exception):
+    def __init__(self, code: int, message: str):
+        self.code = code
+        self.message = message
+
+@app.exception_handler(BusinessError)
+async def business_error_handler(request: Request, exc: BusinessError):
+    return JSONResponse(
+        status_code=exc.code,
+        content={"detail": exc.message},
+    )
+```
+
+### 生命周期管理
+
+```python
+from contextlib import asynccontextmanager
+from app.database import create_tables
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动时
+    create_tables()
+    print("✅ 数据库表初始化完成")
+    yield
+    # 关闭时（清理连接池等）
+    print("👋 应用关闭")
+
+app = FastAPI(title="博客 API", lifespan=lifespan)
+```
+
+---
+
+## 九、路由拆分与应用组装
+
+```python
+# app/main.py（最终版本）
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.routers import posts, users
+from app.auth.router import router as auth_router
+from app.database import create_tables
+import time
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    create_tables()
+    yield
+
+app = FastAPI(title="博客 API", version="1.0.0", lifespan=lifespan)
+
+# 中间件
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+@app.middleware("http")
+async def add_process_time(request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    response.headers["X-Process-Time"] = f"{time.perf_counter() - start:.4f}"
+    return response
+
+# 挂载路由
+app.include_router(auth_router)
+app.include_router(posts.router)
+app.include_router(users.router)
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+```
+
+---
+
+## 十、测试
+
+FastAPI 内置 `TestClient`（基于 httpx），可以不启动服务器直接测试：
+
+```bash
+uv add pytest httpx --dev
+```
+
+```python
+# tests/test_posts.py
+import pytest
+from fastapi.testclient import TestClient
+from app.main import app
+from app.database import Base, engine
+
+@pytest.fixture(autouse=True)
+def reset_db():
+    """每个测试前重建数据库，保证隔离"""
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    yield
+
+@pytest.fixture
+def client():
+    return TestClient(app)
+
+@pytest.fixture
+def auth_headers(client: TestClient):
+    """注册并登录，返回鉴权 header"""
+    client.post("/auth/register", json={
+        "username": "testuser",
+        "email": "test@example.com",
+        "password": "password123",
+    })
+    resp = client.post("/auth/login", json={
+        "username": "testuser",
+        "password": "password123",
+    })
+    token = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+# ── 测试用例 ──────────────────────────────────────────────
+
+def test_create_post(client, auth_headers):
+    resp = client.post(
+        "/posts",
+        json={"title": "测试文章", "content": "这是一篇测试文章的内容。"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["title"] == "测试文章"
+    assert data["status"] == "draft"
+    assert "id" in data
+
+def test_create_post_requires_auth(client):
+    resp = client.post(
+        "/posts",
+        json={"title": "无权限", "content": "内容"},
+        # 不传 headers
+    )
+    assert resp.status_code == 403  # 没有 token 被 HTTPBearer 拒绝
+
+def test_update_only_own_post(client, auth_headers):
+    # 创建文章
+    post_resp = client.post(
+        "/posts",
+        json={"title": "原标题", "content": "原内容"},
+        headers=auth_headers,
+    )
+    post_id = post_resp.json()["id"]
+
+    # 注册另一个用户
+    client.post("/auth/register", json={
+        "username": "other",
+        "email": "other@example.com",
+        "password": "password123",
+    })
+    other_login = client.post("/auth/login", json={
+        "username": "other", "password": "password123"
+    })
+    other_headers = {"Authorization": f"Bearer {other_login.json()['access_token']}"}
+
+    # 用其他用户修改，应该 403
+    resp = client.patch(
+        f"/posts/{post_id}",
+        json={"title": "改标题"},
+        headers=other_headers,
+    )
+    assert resp.status_code == 403
+
+def test_list_posts_pagination(client, auth_headers):
+    # 创建 5 篇文章
+    for i in range(5):
+        client.post(
+            "/posts",
+            json={"title": f"文章 {i}", "content": f"内容 {i}"},
+            headers=auth_headers,
+        )
+
+    resp = client.get("/posts?skip=0&limit=3")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 3
+```
+
+```bash
+pytest tests/ -v
+```
+
+---
+
+## 十一、部署
+
+### Dockerfile
+
+```dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 安装 uv
+RUN pip install uv
+
+# 先复制依赖文件，利用 Docker 层缓存
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+COPY app/ ./app/
+
+# 生产环境用多 worker
+CMD ["uv", "run", "uvicorn", "app.main:app",
+     "--host", "0.0.0.0",
+     "--port", "8000",
+     "--workers", "4"]
+```
+
+### 生产环境配置
+
+```python
+# app/config.py（用 pydantic-settings 管理环境变量）
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    database_url:  str  = "sqlite:///./blog.db"
+    secret_key:    str  = "change-me-in-production"
+    debug:         bool = False
+    allowed_origins: list[str] = ["*"]
+
+    model_config = {"env_file": ".env"}
+
+settings = Settings()
+```
+
+```bash
+# .env（不提交到 git）
+DATABASE_URL=postgresql+asyncpg://user:password@localhost/blogdb
+SECRET_KEY=super-secret-random-string-at-least-32-chars
+DEBUG=false
+ALLOWED_ORIGINS=["https://yourdomain.com"]
+```
+
+:::tip
+**性能调优**：`uvicorn --workers N` 中，N 推荐设为 `2 * CPU 核心数 + 1`。如果用 Gunicorn 管理多进程则是 `gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app`。
+:::
+
+:::warning
+SQLite 不支持真正的并发写入，生产环境请换用 PostgreSQL 或 MySQL。
+:::

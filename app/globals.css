@@ -1,0 +1,775 @@
+@import "tailwindcss";
+@import '../styles/algolia-search.css';
+@import '../styles/code-highlight.css';
+
+:root {
+  --background: #f5f5f5;
+  --foreground: oklch(0.145 0 0);
+  --color-orange-800: #ea580c;
+  --color-neutral-100: #f5f5f5;
+  --color-neutral-200: oklch(0.145 0 0);
+  --color-neutral-300: oklch(0.145 0 0);
+  --color-neutral-400: oklch(0.145 0 0);
+  --color-neutral-500: oklch(0.145 0 0);
+  --color-neutral-950: oklch(0.145 0 0);
+  --border-color: oklch(0.145 0 0);
+
+  /* 字体系统 */
+  --font-sans: var(--font-inter), "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-serif: var(--font-noto-serif-sc), "Source Han Serif SC", "STSong", Georgia, serif;
+
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 20px;
+  --spacing-2xl: 24px;
+  --spacing-3xl: 32px;
+
+  /* 边框圆角 */
+  --radius-none: 0;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+  --radius-2xl: 12px;
+  --radius-full: 50%;
+
+  /* 阴影 */
+  --shadow-subtle: 0 2px 4px rgba(0, 0, 0, 0.05);
+  --shadow-tooltip: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter), "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-serif: var(--font-noto-serif-sc), "Source Han Serif SC", "STSong", Georgia, serif;
+}
+
+/* mdx-content 现代文档排版优化 */
+.mdx-content {
+  /* 中文标点挤压，提升排版质量 */
+  font-feature-settings: "kern" 1, "liga" 1;
+  text-rendering: optimizeLegibility;
+  /* 正文字号与行高：参考 Vite/Tailwind/Next.js 文档网站 */
+  font-size: 17px;
+  line-height: 1.75;
+}
+
+.mdx-content p,
+.mdx-content li {
+  /* 中英文混排时优化断行 */
+  overflow-wrap: break-word;
+  word-break: break-word;
+  /* 正文用柔和的深灰替代纯黑，降低与浅色背景的对比度，减轻长时间阅读的视觉疲劳 */
+  color: oklch(0.32 0 0);
+}
+
+.mdx-content p {
+  margin-bottom: 1.5em;
+}
+
+.mdx-content li {
+  margin-bottom: 0.375em;
+}
+
+.mdx-content ul,
+.mdx-content ol {
+  margin-bottom: 1.5em;
+}
+
+/* 正文内小标题：拉开与上文的距离，形成清晰的章节呼吸感 */
+.mdx-content h2,
+.mdx-content h3,
+.mdx-content h4 {
+  margin-top: 2em;
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+.mdx-content blockquote {
+  line-height: 1.75;
+}
+
+.mdx-content a {
+  color: var(--color-orange-800);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in oklch, var(--color-orange-800) 40%, transparent);
+  text-underline-offset: 2px;
+  transition: text-decoration-color 0.2s ease;
+}
+
+.mdx-content a:hover {
+  text-decoration-color: var(--color-orange-800);
+}
+
+.no-prose-pre-border pre {
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+  background: transparent !important;
+}
+
+.code-tabs .code-tabs-content > div {
+  margin: 0 !important;
+}
+
+.code-tabs .code-tabs-content > div > div {
+  border-radius: 0 !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+.code-tabs .code-tabs-content pre {
+  margin: 0 !important;
+  border-radius: 0 !important;
+  border: 0 !important;
+}
+
+.steps-content pre {
+  border: 1px solid oklch(0.9 0 0) !important;
+  border-radius: 0.5rem !important;
+  background: var(--hljs-bg, oklch(0.97 0 0)) !important;
+  margin: 0 !important;
+  padding: 1rem !important;
+}
+
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: clip;
+  max-width: 100vw;
+}
+
+html {
+  overflow-x: clip;
+  max-width: 100vw;
+}
+
+/* Typography */
+.features-title {
+  font-size: 100px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  background: repeating-linear-gradient(0deg,
+      var(--foreground) 0px,
+      var(--foreground) 4px,
+      transparent 4px,
+      transparent 8px);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.feature-card-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--foreground);
+}
+
+.feature-card-desc {
+  font-size: 16px;
+  color: var(--color-neutral-500);
+  line-height: 1.5;
+}
+
+/* 代码高亮 */
+.code-keyword {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.code-function {
+  color: var(--foreground);
+}
+
+.code-string {
+  color: var(--color-orange-800);
+}
+
+/* Cards */
+.card {
+  background: white;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.card-body {
+  padding: 24px;
+}
+
+/* Main Container */
+.main-card {
+  background: white;
+  border: 1px solid var(--color-neutral-200);
+  margin: 20px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.main-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--color-neutral-200);
+}
+
+.feature-block {
+  padding: 24px;
+  border-bottom: 1px solid var(--color-neutral-200);
+}
+
+/* Code Blocks */
+.code-file {
+  border: 1px solid var(--color-neutral-200);
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+}
+
+.code-file-header {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-neutral-200);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-neutral-500);
+  background: var(--color-neutral-100);
+}
+
+.code-file-content {
+  padding: 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Patterns */
+.pattern-dots {
+  background-image: radial-gradient(circle,
+      var(--color-neutral-400) 1px,
+      transparent 1px);
+  background-size: 6px 6px;
+}
+
+.pattern-lines {
+  background-image: repeating-linear-gradient(-45deg,
+      transparent,
+      transparent 3px,
+      var(--color-neutral-200) 3px,
+      var(--color-neutral-200) 4px);
+}
+
+/* 标签样式 */
+/* 标签样式 - Renamed to avoid conflict with PrismJS 'tag' token */
+.blog-tag {
+  display: inline-block;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: 0.75rem;
+  font-weight: 500;
+  background-color: var(--color-neutral-100);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-right: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
+}
+
+/* 加载动画 */
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-neutral-200);
+  border-top-color: var(--foreground);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* Animations */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-neutral-200);
+  border-top-color: var(--foreground);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+
+  * {
+    transition: none !important;
+  }
+}
+
+/* Responsive Typography */
+@media (max-width: 768px) {
+  .features-title {
+    font-size: 48px;
+  }
+
+  .card-body {
+    padding: var(--spacing-lg);
+  }
+
+  h1 {
+    font-size: 1.75rem;
+  }
+
+  h2 {
+    font-size: 1.25rem;
+  }
+
+  .mdx-content {
+    font-size: 16px;
+    line-height: 1.7;
+  }
+
+  .mdx-content h2,
+  .mdx-content h3,
+  .mdx-content h4 {
+    margin-top: 1.5em;
+  }
+
+  pre {
+    font-size: 12px;
+    padding: var(--spacing-md);
+  }
+
+  code {
+    font-size: 0.8125em;
+  }
+
+  blockquote {
+    padding: var(--spacing-md) var(--spacing-lg);
+    margin: var(--spacing-md) 0;
+  }
+}
+
+@media (max-width: 640px) {
+  h1 {
+    font-size: 1.5rem;
+  }
+
+  h2 {
+    font-size: 1.125rem;
+  }
+
+  h3 {
+    font-size: 1rem;
+  }
+
+  .mdx-content {
+    font-size: 15px;
+  }
+
+  .card-body {
+    padding: var(--spacing-md);
+  }
+
+  pre {
+    font-size: 11px;
+    padding: var(--spacing-sm);
+    overflow-x: auto;
+  }
+}
+
+
+
+/* 标题样式 */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin-top: 0;
+  margin-bottom: var(--spacing-md);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--foreground);
+}
+
+h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+}
+
+h3 {
+  font-size: 1.25rem;
+}
+
+/* 段落样式 */
+p {
+  margin-top: 0;
+  margin-bottom: var(--spacing-lg);
+  line-height: 1.75;
+}
+
+/* 列表样式 */
+ul,
+ol {
+  margin-top: 0;
+  margin-bottom: var(--spacing-lg);
+  padding-left: var(--spacing-2xl);
+}
+
+li {
+  margin-bottom: var(--spacing-sm);
+  line-height: 1.75;
+}
+
+/* 引用样式 - 由 MDXComponents blockquote 组件处理 */
+
+/* 表格样式 */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--spacing-lg);
+}
+
+thead, tbody {
+  width: 100%;
+}
+
+tr {
+  width: 100%;
+}
+
+th,
+td {
+  padding: var(--spacing-md);
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+th {
+  font-weight: 600;
+}
+
+/* 图片样式 */
+img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-lg);
+}
+
+/* 分隔线样式 */
+hr {
+  border: 0;
+  height: 1px;
+  background-color: var(--border-color);
+  margin: var(--spacing-3xl) 0;
+}
+
+
+/* 代码块样式 */
+code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 0.125em 0.25em;
+  border-radius: var(--radius-sm);
+}
+
+pre {
+  font-family: var(--font-mono);
+  background-color: white;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+pre code {
+  background-color: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+
+/* Custom Scrollbar for TOC and other navs */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Fix for CodePenDemo editor highlighting */
+/* Fix for CodePenDemo editor highlighting */
+.code-pen-editor pre,
+.code-pen-editor code,
+.code-pen-editor span {
+  background-color: transparent !important;
+  font-family: inherit !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+/* Hide default browser icons for date and time inputs */
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  position: absolute !important;
+  pointer-events: none !important;
+}
+
+/* Firefox specific */
+input[type="date"],
+input[type="time"] {
+  -moz-appearance: textfield;
+}
+
+/* Ensure custom inputs are clickable */
+input[type="date"],
+input[type="time"] {
+  cursor: pointer;
+}
+
+/* ── Admonition / Callout 样式 ───────────────────────────────────────────── */
+[class*="border-l-4"][class*="rounded-r"][class*="p-4"] {
+  position: relative;
+  border-left-width: 4px;
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0;
+  border: 1px solid transparent;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+[class*="border-l-4"][class*="rounded-r"][class*="p-4"]:hover {
+  box-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.06);
+  transform: translateY(-1px);
+}
+
+/* 图标 via ::before */
+[class*="border-l-4"][class*="rounded-r"][class*="p-4"]::before {
+  content: "";
+  position: absolute;
+  top: 1rem;
+  left: -1rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+}
+
+/* Note: 📌 */
+.border-blue-500 {
+  border-left-color: #3b82f6 !important;
+  background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
+  border-color: #bfdbfe;
+  border-left-width: 4px;
+}
+.border-blue-500::before {
+  content: "📌";
+  background: #dbeafe;
+}
+
+/* Dark mode - Note */
+:root.dark .border-blue-500,
+.dark .border-blue-500,
+[class*="dark"] .border-blue-500 {
+  background: linear-gradient(135deg, rgba(59,130,246,0.08) 0%, rgba(59,130,246,0.04) 100%);
+  border-color: rgba(59,130,246,0.2);
+}
+[class*="dark"] .border-blue-500::before {
+  background: rgba(59,130,246,0.2);
+}
+
+/* Tip: 💡 */
+.border-green-500 {
+  border-left-color: #22c55e !important;
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+  border-color: #bbf7d0;
+  border-left-width: 4px;
+}
+.border-green-500::before {
+  content: "💡";
+  background: #dcfce7;
+}
+:root.dark .border-green-500,
+.dark .border-green-500,
+[class*="dark"] .border-green-500 {
+  background: linear-gradient(135deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.04) 100%);
+  border-color: rgba(34,197,94,0.2);
+}
+[class*="dark"] .border-green-500::before {
+  background: rgba(34,197,94,0.2);
+}
+
+/* Warning: ⚠️ */
+.border-yellow-500 {
+  border-left-color: #eab308 !important;
+  background: linear-gradient(135deg, #fefce8 0%, #fef9c3 100%);
+  border-color: #fde68a;
+  border-left-width: 4px;
+}
+.border-yellow-500::before {
+  content: "⚠️";
+  background: #fef3c7;
+}
+:root.dark .border-yellow-500,
+.dark .border-yellow-500,
+[class*="dark"] .border-yellow-500 {
+  background: linear-gradient(135deg, rgba(234,179,8,0.08) 0%, rgba(234,179,8,0.04) 100%);
+  border-color: rgba(234,179,8,0.2);
+}
+[class*="dark"] .border-yellow-500::before {
+  background: rgba(234,179,8,0.2);
+}
+
+/* Important: 🔴 */
+.border-red-500 {
+  border-left-color: #ef4444 !important;
+  background: linear-gradient(135deg, #fef2f2 0%, #fff1f2 100%);
+  border-color: #fecaca;
+  border-left-width: 4px;
+}
+.border-red-500::before {
+  content: "🔴";
+  background: #fee2e2;
+}
+:root.dark .border-red-500,
+.dark .border-red-500,
+[class*="dark"] .border-red-500 {
+  background: linear-gradient(135deg, rgba(239,68,68,0.08) 0%, rgba(239,68,68,0.04) 100%);
+  border-color: rgba(239,68,68,0.2);
+}
+[class*="dark"] .border-red-500::before {
+  background: rgba(239,68,68,0.2);
+}
+
+/* Info: 🔵 */
+.border-cyan-500 {
+  border-left-color: #06b6d4 !important;
+  background: linear-gradient(135deg, #ecfeff 0%, #f0fdfa 100%);
+  border-color: #a5f3fc;
+  border-left-width: 4px;
+}
+.border-cyan-500::before {
+  content: "🔵";
+  background: #cffafe;
+}
+:root.dark .border-cyan-500,
+.dark .border-cyan-500,
+[class*="dark"] .border-cyan-500 {
+  background: linear-gradient(135deg, rgba(6,182,212,0.08) 0%, rgba(6,182,212,0.04) 100%);
+  border-color: rgba(6,182,212,0.2);
+}
+[class*="dark"] .border-cyan-500::before {
+  background: rgba(6,182,212,0.2);
+}
+
+/* Details: 📋 */
+.border-gray-500 {
+  border-left-color: #6b7280 !important;
+  background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+  border-color: #e5e7eb;
+  border-left-width: 4px;
+}
+.border-gray-500::before {
+  content: "📋";
+  background: #f3f4f6;
+}
+:root.dark .border-gray-500,
+.dark .border-gray-500,
+[class*="dark"] .border-gray-500 {
+  background: linear-gradient(135deg, rgba(107,114,128,0.08) 0%, rgba(107,114,128,0.04) 100%);
+  border-color: rgba(107,114,128,0.2);
+}
+[class*="dark"] .border-gray-500::before {
+  background: rgba(107,114,128,0.2);
+}
+
+/* Admonition title 排版 */
+[class*="border-l-4"][class*="rounded-r"][class*="p-4"] > div:first-child,
+[class*="border-l-4"][class*="rounded-r"][class*="p-4"] > p:first-child {
+  font-weight: 600;
+  font-size: 0.9375rem;
+  margin-bottom: 0.625rem;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+}
+
+/* Admonition body 内容 */
+[class*="border-l-4"][class*="rounded-r"][class*="p-4"] > p:not(:first-child) {
+  margin-bottom: 0.5rem;
+  line-height: 1.85;
+}
+[class*="border-l-4"][class*="rounded-r"][class*="p-4"] > p:last-child {
+  margin-bottom: 0;
+}
+[class*="border-l-4"][class*="rounded-r"][class*="p-4"] ul,
+[class*="border-l-4"][class*="rounded-r"][class*="p-4"] ol {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-left: 1.25rem;
+}
+[class*="border-l-4"][class*="rounded-r"][class*="p-4"] code {
+  font-size: 0.8125rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+}

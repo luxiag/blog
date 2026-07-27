@@ -1,0 +1,1253 @@
+---
+title: 'Python 系统教程：从语法基础到工程实践'
+date: '2026-04-21'
+excerpt: '面向已有编程经验的开发者，系统讲解 Python 的核心语法与特性。覆盖基础语法、数据结构、面向对象、异常处理、推导式、装饰器、生成器、标准库精华，最后用一个完整的命令行任务管理器串联所有知识点。'
+tags: ['python', 'tutorial', 'programming']
+---
+
+# Python 系统教程：从语法基础到工程实践
+
+这篇文章面向**已有编程经验**（Java、JavaScript、C# 等）的开发者，目标是帮你快速建立 Python 的完整知识体系，而不是从"什么是变量"讲起。
+
+每个知识点都会和你熟悉的语言做对比，帮你更快建立认知映射。
+
+---
+
+## 一、Python 是什么，适合哪些场景
+
+Python 有几个鲜明的定位：
+
+- **数据科学 / 机器学习**：NumPy、Pandas、PyTorch、TensorFlow 的生态首选
+- **自动化脚本**：文件处理、批量操作、爬虫，写起来极快
+- **后端 API**：FastAPI、Django、Flask 都很成熟
+- **AI/LLM 应用**：几乎所有 AI SDK 都优先支持 Python
+
+Python 的核心设计哲学是"**可读性第一**"。同样的功能，Python 代码往往比其他语言短 30%~50%。
+
+```python
+# 对比：从列表中取出所有偶数并平方
+
+# JavaScript
+const result = [1,2,3,4,5].filter(x => x % 2 === 0).map(x => x ** 2);
+
+# Python（列表推导式，一行完成）
+result = [x**2 for x in [1,2,3,4,5] if x % 2 == 0]
+
+print(result)  # [4, 16]
+```
+
+---
+
+## 二、基础语法
+
+### 缩进是语法
+
+Python 用缩进表示代码块，没有花括号。**标准缩进是 4 个空格**（不是 Tab）。
+
+```python
+# 正确 ✅
+def greet(name):
+    if name:
+        print(f"Hello, {name}!")
+    else:
+        print("Hello, stranger!")
+
+# 错误 ❌ —— 缩进不一致会报 IndentationError
+def greet(name):
+  if name:
+      print(f"Hello, {name}!")  # 混用 2 和 6 个空格
+```
+
+### 变量与类型
+
+Python 是**动态强类型**语言：变量不需要声明类型，但类型本身有严格的规则。
+
+```python
+# 动态类型：变量可以随时指向任何类型
+x = 42          # int
+x = "hello"     # 现在是 str，完全合法
+x = [1, 2, 3]   # 现在是 list
+
+# 强类型：不同类型不能隐式转换（和 JS 不同）
+print(1 + "2")   # ❌ TypeError: unsupported operand type(s)
+print(1 + int("2"))  # ✅ 3（需要显式转换）
+
+# 内置类型
+age: int = 25           # 整数（Python 整数没有溢出！）
+price: float = 3.14     # 浮点数
+name: str = "Alice"     # 字符串（单双引号都行）
+is_active: bool = True  # 布尔值（注意首字母大写）
+nothing = None          # 空值（等价于 null/nil）
+```
+
+:::note
+`age: int = 25` 中的 `: int` 是**类型注解（Type Hints）**，Python 3.5+ 引入。它只是文档/工具提示用，运行时不做检查。大型项目推荐加上，配合 mypy 做静态检查。
+:::
+
+### 字符串
+
+Python 字符串功能丰富，有三种常用写法：
+
+```python
+# 普通字符串
+s1 = 'hello'
+s2 = "world"
+
+# 多行字符串（三引号）
+s3 = """
+这是第一行
+这是第二行
+"""
+
+# f-string（Python 3.6+，推荐用这个插值）
+name = "Alice"
+age = 25
+msg = f"My name is {name}, I'm {age} years old."
+msg2 = f"Next year I'll be {age + 1}."  # 花括号内可以有表达式
+
+# 常用字符串方法
+s = "  Hello, World!  "
+print(s.strip())          # "Hello, World!"（去首尾空白）
+print(s.lower())          # "  hello, world!  "
+print(s.upper())          # "  HELLO, WORLD!  "
+print(s.replace(",", "")) # "  Hello World!  "
+print(s.split(","))       # ['  Hello', ' World!  ']
+print("hello" in s)       # True（包含判断）
+print(s.startswith("  H"))# True
+print(s.strip().split())  # ['Hello,', 'World!']（按空白分割）
+```
+
+### 运算符
+
+```python
+# 算术
+print(10 // 3)   # 3（整除，不是 /）
+print(10 % 3)    # 1（取余）
+print(2 ** 10)   # 1024（幂运算，不是 Math.pow）
+
+# 比较：和大多数语言一样，但有一个 Python 专属特性
+x = 5
+print(1 < x < 10)  # True（链式比较！等价于 1 < x and x < 10）
+
+# 逻辑：用英文单词，不是符号
+print(True and False)  # False（不是 &&）
+print(True or False)   # True（不是 ||）
+print(not True)        # False（不是 !）
+
+# 身份与相等：重要区别！
+a = [1, 2, 3]
+b = [1, 2, 3]
+c = a
+
+print(a == b)   # True（值相等）
+print(a is b)   # False（不是同一个对象）
+print(a is c)   # True（c 和 a 指向同一个对象）
+print(a is None)  # False（判断 None 用 is，不用 ==）
+```
+
+---
+
+## 三、控制流
+
+### if / elif / else
+
+```python
+score = 85
+
+if score >= 90:
+    grade = "A"
+elif score >= 80:
+    grade = "B"
+elif score >= 70:
+    grade = "C"
+else:
+    grade = "D"
+
+print(grade)  # B
+
+# 三元表达式（等价于 JS 的 condition ? a : b）
+label = "通过" if score >= 60 else "不通过"
+```
+
+### for 循环
+
+Python 的 `for` 是**遍历迭代器**，没有 C 式的 `for(int i=0; i<n; i++)`：
+
+```python
+# 遍历列表
+fruits = ["apple", "banana", "cherry"]
+for fruit in fruits:
+    print(fruit)
+
+# 需要下标时用 enumerate（不要用 range(len(...))）
+for index, fruit in enumerate(fruits):
+    print(f"{index}: {fruit}")
+# 0: apple
+# 1: banana
+# 2: cherry
+
+# 遍历数字范围（range 是左闭右开）
+for i in range(5):      # 0,1,2,3,4
+    print(i)
+
+for i in range(2, 8):   # 2,3,4,5,6,7
+    print(i)
+
+for i in range(0, 10, 2):  # 0,2,4,6,8（步长 2）
+    print(i)
+
+# 同时遍历两个序列（zip）
+names = ["Alice", "Bob"]
+scores = [90, 85]
+for name, score in zip(names, scores):
+    print(f"{name}: {score}")
+```
+
+### while 循环
+
+```python
+n = 1
+while n < 100:
+    n *= 2
+
+print(n)  # 128
+
+# break / continue 和其他语言一样
+for i in range(10):
+    if i == 3:
+        continue  # 跳过本次
+    if i == 7:
+        break     # 退出循环
+    print(i)
+```
+
+### match-case（Python 3.10+）
+
+Python 3.10 引入了结构化模式匹配，比 `switch` 更强大：
+
+```python
+command = "quit"
+
+match command:
+    case "quit" | "exit":
+        print("退出程序")
+    case "help":
+        print("显示帮助")
+    case str(cmd) if cmd.startswith("go "):
+        direction = cmd[3:]
+        print(f"移动到: {direction}")
+    case _:
+        print(f"未知命令: {command}")
+
+# 匹配数据结构（非常强大）
+point = (1, 0)
+match point:
+    case (0, 0):
+        print("原点")
+    case (x, 0):
+        print(f"x 轴上，x={x}")
+    case (0, y):
+        print(f"y 轴上，y={y}")
+    case (x, y):
+        print(f"普通点 ({x}, {y})")
+```
+
+---
+
+## 四、函数
+
+### 定义与调用
+
+```python
+def add(a: int, b: int) -> int:
+    """计算两数之和。
+
+    Args:
+        a: 第一个加数
+        b: 第二个加数
+
+    Returns:
+        两数之和
+    """
+    return a + b
+
+print(add(3, 4))   # 7
+```
+
+三引号内的字符串是 **docstring（文档字符串）**，是 Python 约定的函数文档写法。
+
+### 参数类型
+
+Python 函数参数非常灵活，有四种：
+
+```python
+def create_user(
+    name: str,               # 1. 普通参数（必传）
+    age: int = 18,           # 2. 默认参数（可省略）
+    *hobbies: str,           # 3. 可变位置参数（收集为 tuple）
+    role: str = "user",      # 4. 仅关键字参数（必须用名称传入）
+    **extra: str,            # 5. 可变关键字参数（收集为 dict）
+) -> dict:
+    return {
+        "name": name,
+        "age": age,
+        "hobbies": hobbies,
+        "role": role,
+        "extra": extra,
+    }
+
+# 调用示例
+print(create_user("Alice"))
+# {'name': 'Alice', 'age': 18, 'hobbies': (), 'role': 'user', 'extra': {}}
+
+print(create_user("Bob", 25, "reading", "coding", role="admin", city="Beijing"))
+# {'name': 'Bob', 'age': 25, 'hobbies': ('reading', 'coding'), 'role': 'admin', 'extra': {'city': 'Beijing'}}
+```
+
+:::warning
+**默认参数陷阱**：默认值是在函数**定义时**计算一次，不是每次调用时。可变类型（list、dict）做默认值会出 bug：
+
+```python
+# ❌ 错误写法
+def append_to(item, lst=[]):
+    lst.append(item)
+    return lst
+
+print(append_to(1))  # [1]
+print(append_to(2))  # [1, 2] ← 不是 [2]！lst 是共享的
+
+# ✅ 正确写法
+def append_to(item, lst=None):
+    if lst is None:
+        lst = []
+    lst.append(item)
+    return lst
+```
+:::
+
+### 解包传参
+
+```python
+def add(a, b, c):
+    return a + b + c
+
+nums = [1, 2, 3]
+print(add(*nums))   # 等价于 add(1, 2, 3)，* 解包列表
+
+config = {"a": 10, "b": 20, "c": 30}
+print(add(**config))  # 等价于 add(a=10, b=20, c=30)，** 解包字典
+```
+
+### lambda 与高阶函数
+
+```python
+# lambda：匿名函数，只能写一个表达式
+square = lambda x: x ** 2
+print(square(5))  # 25
+
+# 常配合 sorted、map、filter 使用
+people = [{"name": "Bob", "age": 25}, {"name": "Alice", "age": 30}]
+sorted_people = sorted(people, key=lambda p: p["age"])  # 按年龄排序
+
+# map：对每个元素应用函数，返回迭代器
+nums = [1, 2, 3, 4, 5]
+squares = list(map(lambda x: x**2, nums))   # [1, 4, 9, 16, 25]
+
+# filter：过滤元素
+evens = list(filter(lambda x: x % 2 == 0, nums))  # [2, 4]
+
+# 实际项目中推荐用推导式替代 map/filter（更 Pythonic）
+squares = [x**2 for x in nums]
+evens = [x for x in nums if x % 2 == 0]
+```
+
+### 闭包
+
+```python
+def make_counter(start: int = 0):
+    count = start  # 被内层函数捕获
+
+    def counter():
+        nonlocal count  # 声明要修改外层变量（不加 nonlocal 则只读）
+        count += 1
+        return count
+
+    return counter
+
+c1 = make_counter()
+c2 = make_counter(10)
+
+print(c1())  # 1
+print(c1())  # 2
+print(c2())  # 11（独立的状态）
+```
+
+---
+
+## 五、内置数据结构
+
+Python 有四种核心内置容器，熟练使用是写出 Pythonic 代码的关键。
+
+### list（列表）
+
+有序、可变、允许重复，等价于其他语言的动态数组：
+
+```python
+nums = [3, 1, 4, 1, 5, 9, 2, 6]
+
+# 索引与切片
+print(nums[0])     # 3（正向索引）
+print(nums[-1])    # 6（负向索引，从尾部数）
+print(nums[2:5])   # [4, 1, 5]（切片：左闭右开）
+print(nums[:3])    # [3, 1, 4]（省略开始）
+print(nums[::2])   # [3, 4, 5, 2]（步长为 2）
+print(nums[::-1])  # [6, 2, 9, 5, 1, 4, 1, 3]（反转）
+
+# 修改
+nums.append(7)          # 末尾追加
+nums.insert(0, 0)       # 在索引 0 插入
+nums.extend([10, 11])   # 追加多个
+removed = nums.pop()    # 移除并返回最后一个
+nums.remove(1)          # 移除第一个值为 1 的元素
+
+# 查询
+print(1 in nums)        # True
+print(nums.count(1))    # 统计出现次数
+print(nums.index(4))    # 返回第一个 4 的索引
+
+# 排序（sort 原地修改，sorted 返回新列表）
+nums.sort()              # 升序，原地
+nums.sort(reverse=True)  # 降序，原地
+new_list = sorted(nums)  # 返回新列表，不修改原列表
+```
+
+### tuple（元组）
+
+有序、**不可变**，常用于表示固定结构的数据：
+
+```python
+point = (3, 4)
+r, g, b = (255, 128, 0)   # 解包（非常常用）
+x, *rest = (1, 2, 3, 4)   # 扩展解包：x=1, rest=[2,3,4]
+
+# 元组比列表快，用于不需要修改的数据（坐标、RGB、数据库行）
+# 单元素元组必须加逗号！
+single = (42,)   # 这是元组
+not_tuple = (42) # 这只是括号里的整数
+```
+
+### dict（字典）
+
+键值对，Python 3.7+ 保证**插入顺序**：
+
+```python
+user = {
+    "name": "Alice",
+    "age": 25,
+    "skills": ["python", "sql"],
+}
+
+# 访问
+print(user["name"])              # "Alice"（不存在则 KeyError）
+print(user.get("email"))         # None（不存在返回 None，不报错）
+print(user.get("email", "N/A"))  # "N/A"（指定默认值）
+
+# 修改
+user["email"] = "alice@example.com"  # 新增或修改
+user.update({"age": 26, "city": "Beijing"})  # 批量更新
+
+# 删除
+del user["city"]
+popped = user.pop("age")  # 移除并返回值
+
+# 遍历
+for key in user:               # 遍历 key
+    print(key)
+
+for key, value in user.items():  # 遍历 key-value（最常用）
+    print(f"{key}: {value}")
+
+# 合并字典（Python 3.9+）
+defaults = {"color": "red", "size": 10}
+overrides = {"size": 20, "weight": 5}
+merged = defaults | overrides   # {'color': 'red', 'size': 20, 'weight': 5}
+
+# 实用技巧：setdefault（不存在时才设置）
+user.setdefault("hobbies", []).append("reading")
+
+# defaultdict（collections 模块）：访问不存在的 key 时自动创建默认值
+from collections import defaultdict
+word_count = defaultdict(int)
+for word in "the cat sat on the mat".split():
+    word_count[word] += 1  # 不需要检查 key 是否存在
+print(dict(word_count))  # {'the': 2, 'cat': 1, 'sat': 1, 'on': 1, 'mat': 1}
+```
+
+### set（集合）
+
+无序、不重复，基于哈希表，查找 O(1)：
+
+```python
+a = {1, 2, 3, 4, 5}
+b = {3, 4, 5, 6, 7}
+
+# 集合运算
+print(a | b)   # 并集：{1,2,3,4,5,6,7}
+print(a & b)   # 交集：{3,4,5}
+print(a - b)   # 差集：{1,2}
+print(a ^ b)   # 对称差：{1,2,6,7}
+
+# 最常用：去重
+names = ["Alice", "Bob", "Alice", "Charlie", "Bob"]
+unique = list(set(names))   # 去重（顺序不保证）
+
+# 快速查找（比 list 快得多）
+allowed_ips = {"192.168.1.1", "10.0.0.1", "172.16.0.1"}
+print("192.168.1.1" in allowed_ips)  # True，O(1)
+```
+
+---
+
+## 六、面向对象编程
+
+### 基础类
+
+```python
+class Animal:
+    # 类变量（所有实例共享）
+    kingdom = "Animalia"
+
+    def __init__(self, name: str, age: int):
+        # 实例变量（每个实例独立）
+        self.name = name
+        self.age = age
+        self._energy = 100      # 约定：单下划线表示"内部使用"
+        self.__secret = "hidden" # 双下划线触发名称改写（name mangling）
+
+    def speak(self) -> str:
+        """子类应该覆盖这个方法"""
+        raise NotImplementedError("子类必须实现 speak()")
+
+    def eat(self, food: str) -> None:
+        self._energy += 10
+        print(f"{self.name} 吃了 {food}，精力变为 {self._energy}")
+
+    # __str__：print(obj) 时调用
+    def __str__(self) -> str:
+        return f"{self.name}（{self.age} 岁）"
+
+    # __repr__：在 REPL / 调试器中显示，应该能重建对象
+    def __repr__(self) -> str:
+        return f"Animal(name={self.name!r}, age={self.age})"
+```
+
+### 继承
+
+```python
+class Dog(Animal):  # 继承 Animal
+    def __init__(self, name: str, age: int, breed: str):
+        super().__init__(name, age)  # 调用父类 __init__
+        self.breed = breed
+
+    def speak(self) -> str:  # 覆盖父类方法
+        return f"{self.name} 说：汪汪！"
+
+    def fetch(self, item: str) -> str:
+        return f"{self.name} 捡回了 {item}"
+
+
+class Cat(Animal):
+    def speak(self) -> str:
+        return f"{self.name} 说：喵~"
+
+    # 调用父类方法
+    def eat(self, food: str) -> None:
+        print(f"{self.name} 优雅地")
+        super().eat(food)   # 调用 Animal.eat
+
+
+dog = Dog("旺财", 3, "拉布拉多")
+cat = Cat("咪咪", 2)
+
+print(dog)         # 旺财（3 岁）
+print(dog.speak()) # 旺财 说：汪汪！
+print(repr(dog))   # Animal(name='旺财', age=3)
+
+# 多态：通过统一接口操作不同子类
+animals: list[Animal] = [dog, cat]
+for animal in animals:
+    print(animal.speak())
+```
+
+### 魔术方法（Dunder Methods）
+
+魔术方法让你的类支持 Python 内置操作符和函数：
+
+```python
+class Vector:
+    def __init__(self, x: float, y: float):
+        self.x = x
+        self.y = y
+
+    def __add__(self, other: "Vector") -> "Vector":
+        return Vector(self.x + other.x, self.y + other.y)
+
+    def __sub__(self, other: "Vector") -> "Vector":
+        return Vector(self.x - other.x, self.y - other.y)
+
+    def __mul__(self, scalar: float) -> "Vector":
+        return Vector(self.x * scalar, self.y * scalar)
+
+    def __abs__(self) -> float:  # abs(v)
+        return (self.x**2 + self.y**2) ** 0.5
+
+    def __eq__(self, other: object) -> bool:  # v1 == v2
+        if not isinstance(other, Vector):
+            return NotImplemented
+        return self.x == other.x and self.y == other.y
+
+    def __len__(self) -> int:   # len(v)，这里返回维度数
+        return 2
+
+    def __getitem__(self, index: int) -> float:  # v[0], v[1]
+        return (self.x, self.y)[index]
+
+    def __repr__(self) -> str:
+        return f"Vector({self.x}, {self.y})"
+
+
+v1 = Vector(1, 2)
+v2 = Vector(3, 4)
+
+print(v1 + v2)   # Vector(4, 6)
+print(v2 - v1)   # Vector(2, 2)
+print(v1 * 3)    # Vector(3, 6)
+print(abs(v2))   # 5.0
+print(v1 == Vector(1, 2))  # True
+print(v1[0])     # 1
+```
+
+### dataclass（推荐用于数据容器）
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass
+class Point:
+    x: float
+    y: float
+    label: str = ""   # 有默认值的字段
+
+@dataclass
+class Polygon:
+    vertices: list[Point] = field(default_factory=list)  # 可变类型默认值
+
+    def add_vertex(self, p: Point) -> None:
+        self.vertices.append(p)
+
+p1 = Point(1.0, 2.0, "A")
+p2 = Point(3.0, 4.0)
+
+print(p1)          # Point(x=1.0, y=2.0, label='A')
+print(p1 == Point(1.0, 2.0, "A"))  # True（自动生成 __eq__）
+```
+
+`@dataclass` 自动生成 `__init__`、`__repr__`、`__eq__`，省去大量样板代码。
+
+---
+
+## 七、异常处理
+
+```python
+# 基础结构
+try:
+    result = 10 / 0
+except ZeroDivisionError as e:
+    print(f"除零错误: {e}")
+except (TypeError, ValueError) as e:
+    print(f"类型或值错误: {e}")
+except Exception as e:
+    print(f"未预期的错误: {type(e).__name__}: {e}")
+    raise  # 重新抛出，保留原始调用栈
+else:
+    # 没有异常时执行
+    print(f"结果: {result}")
+finally:
+    # 无论如何都执行（常用于清理资源）
+    print("清理完成")
+
+# 自定义异常（继承 Exception）
+class InsufficientFundsError(Exception):
+    def __init__(self, balance: float, amount: float):
+        self.balance = balance
+        self.amount = amount
+        super().__init__(
+            f"余额不足：当前 {balance}，需要 {amount}"
+        )
+
+def withdraw(balance: float, amount: float) -> float:
+    if amount > balance:
+        raise InsufficientFundsError(balance, amount)
+    return balance - amount
+
+try:
+    new_balance = withdraw(100.0, 150.0)
+except InsufficientFundsError as e:
+    print(e)           # 余额不足：当前 100.0，需要 150.0
+    print(e.balance)   # 100.0（可以访问自定义属性）
+```
+
+---
+
+## 八、文件操作
+
+### 基础读写
+
+```python
+# 始终用 with 语句（自动关闭文件，即使出异常）
+with open("data.txt", "w", encoding="utf-8") as f:
+    f.write("第一行\n")
+    f.writelines(["第二行\n", "第三行\n"])
+
+with open("data.txt", "r", encoding="utf-8") as f:
+    content = f.read()       # 读全部（小文件用这个）
+    # 或
+    lines = f.readlines()    # 读成列表，每行是一个元素
+    # 或
+    for line in f:           # 逐行迭代（大文件推荐，节省内存）
+        print(line.rstrip()) # rstrip() 去掉行尾换行符
+```
+
+### pathlib（推荐，比 os.path 更优雅）
+
+```python
+from pathlib import Path
+
+# 构建路径（跨平台，自动处理 / 和 \）
+home = Path.home()
+project = Path("/work/myproject")
+config = project / "config" / "settings.json"  # / 运算符拼接路径
+
+# 路径信息
+print(config.name)        # "settings.json"
+print(config.stem)        # "settings"
+print(config.suffix)      # ".json"
+print(config.parent)      # Path('/work/myproject/config')
+
+# 文件操作
+config.parent.mkdir(parents=True, exist_ok=True)  # 创建目录
+config.write_text('{"key": "value"}', encoding="utf-8")  # 写文件
+text = config.read_text(encoding="utf-8")          # 读文件
+
+# 遍历目录
+for py_file in project.rglob("*.py"):   # 递归查找所有 .py 文件
+    print(py_file)
+
+# 判断
+print(config.exists())    # True/False
+print(config.is_file())   # True
+print(config.is_dir())    # False
+```
+
+---
+
+## 九、推导式
+
+推导式是 Python 最 Pythonic 的特性之一，用简洁语法构建数据结构。
+
+```python
+nums = range(1, 11)  # 1 到 10
+
+# 列表推导式
+squares = [x**2 for x in nums]
+# [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+
+even_squares = [x**2 for x in nums if x % 2 == 0]
+# [4, 16, 36, 64, 100]
+
+# 嵌套推导式（展开矩阵）
+matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+flat = [x for row in matrix for x in row]
+# [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+# 字典推导式
+word_len = {word: len(word) for word in ["apple", "banana", "cherry"]}
+# {'apple': 5, 'banana': 6, 'cherry': 6}
+
+# 集合推导式（自动去重）
+unique_lens = {len(word) for word in ["apple", "banana", "cherry"]}
+# {5, 6}
+
+# 生成器表达式（不立即计算，节省内存）
+# 用圆括号而不是方括号
+gen = (x**2 for x in range(1_000_000))  # 不会立即计算 100 万个数
+total = sum(gen)  # 边生成边求和，内存占用极低
+```
+
+---
+
+## 十、装饰器
+
+装饰器本质是**接收函数、返回函数的高阶函数**，用于在不修改原函数的前提下添加功能。
+
+```python
+import functools
+import time
+
+# 手写一个计时装饰器
+def timer(func):
+    @functools.wraps(func)  # 保留原函数的 __name__、__doc__ 等元信息
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)        # 调用原函数
+        elapsed = time.perf_counter() - start
+        print(f"{func.__name__} 耗时 {elapsed:.4f}s")
+        return result
+    return wrapper
+
+@timer
+def slow_function(n: int) -> int:
+    total = sum(range(n))
+    return total
+
+slow_function(10_000_000)  # slow_function 耗时 0.2341s
+
+# 带参数的装饰器（多一层包装）
+def retry(max_attempts: int = 3, delay: float = 1.0):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if attempt == max_attempts:
+                        raise
+                    print(f"第 {attempt} 次失败: {e}，{delay}s 后重试")
+                    time.sleep(delay)
+        return wrapper
+    return decorator
+
+@retry(max_attempts=3, delay=0.5)
+def fetch_data(url: str) -> dict:
+    # 模拟可能失败的网络请求
+    import random
+    if random.random() < 0.7:
+        raise ConnectionError("网络超时")
+    return {"data": "success"}
+```
+
+### 类装饰器
+
+```python
+# property：把方法变成属性访问
+class Circle:
+    def __init__(self, radius: float):
+        self._radius = radius
+
+    @property
+    def radius(self) -> float:
+        return self._radius
+
+    @radius.setter
+    def radius(self, value: float) -> None:
+        if value < 0:
+            raise ValueError("半径不能为负数")
+        self._radius = value
+
+    @property
+    def area(self) -> float:
+        import math
+        return math.pi * self._radius ** 2
+
+c = Circle(5)
+print(c.radius)  # 5（像属性一样访问，不用加括号）
+print(c.area)    # 78.53...
+c.radius = 10    # 触发 setter，做了校验
+```
+
+---
+
+## 十一、生成器
+
+生成器是一种**懒加载**的迭代器，用 `yield` 暂停执行，每次调用 `next()` 继续：
+
+```python
+# 生成器函数
+def fibonacci():
+    """无限 Fibonacci 数列生成器"""
+    a, b = 0, 1
+    while True:
+        yield a       # 暂停，返回 a
+        a, b = b, a + b  # 下次调用时从这里继续
+
+# 取前 10 个 Fibonacci 数
+gen = fibonacci()
+fibs = [next(gen) for _ in range(10)]
+print(fibs)  # [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
+
+# 更实用的例子：分批处理大文件，不一次性读入内存
+def read_in_chunks(file_path: str, chunk_size: int = 1024):
+    with open(file_path, "rb") as f:
+        while chunk := f.read(chunk_size):  # := 是海象运算符（Python 3.8+）
+            yield chunk
+
+# 调用方完全不感知文件大小，内存始终只占一个 chunk
+for chunk in read_in_chunks("large_file.bin"):
+    process(chunk)
+```
+
+---
+
+## 十二、标准库精华
+
+Python "自带电池"，很多场景不需要第三方库。
+
+```python
+# ── collections ──────────────────────────────────────────
+from collections import Counter, deque, namedtuple
+
+# Counter：计数器
+text = "mississippi"
+count = Counter(text)
+print(count.most_common(3))  # [('s', 4), ('i', 4), ('p', 2)]
+
+# deque：双端队列，两端 O(1) 操作（list 头部操作是 O(n)）
+dq = deque([1, 2, 3], maxlen=5)  # maxlen 满了后自动丢弃旧元素
+dq.appendleft(0)
+dq.rotate(1)   # 整体右移一位
+
+# namedtuple：有字段名的元组
+Point = namedtuple("Point", ["x", "y"])
+p = Point(3, 4)
+print(p.x, p.y)  # 比 p[0], p[1] 更可读
+
+# ── itertools ─────────────────────────────────────────────
+from itertools import chain, product, combinations, islice
+
+# chain：把多个迭代器串联成一个
+combined = list(chain([1, 2], [3, 4], [5]))  # [1,2,3,4,5]
+
+# product：笛卡尔积
+suits = ["♠", "♥", "♦", "♣"]
+values = ["A", "2", "K"]
+cards = list(product(values, suits))  # 12 张牌的所有组合
+
+# combinations：组合
+from itertools import combinations
+teams = list(combinations(["A","B","C","D"], 2))  # 两两配对
+# [('A','B'),('A','C'),('A','D'),('B','C'),('B','D'),('C','D')]
+
+# islice：惰性切片（可以切无限序列）
+first_5_fibs = list(islice(fibonacci(), 5))  # [0,1,1,2,3]
+
+# ── contextlib ────────────────────────────────────────────
+from contextlib import contextmanager
+
+# 把普通函数变成上下文管理器（支持 with 语句）
+@contextmanager
+def timer_ctx(label: str):
+    start = time.perf_counter()
+    try:
+        yield                    # with 块的代码在这里执行
+    finally:
+        elapsed = time.perf_counter() - start
+        print(f"[{label}] 耗时 {elapsed:.4f}s")
+
+with timer_ctx("数据处理"):
+    data = [x**2 for x in range(1_000_000)]
+
+# ── json ──────────────────────────────────────────────────
+import json
+
+data = {"name": "Alice", "age": 25, "scores": [90, 85, 92]}
+json_str = json.dumps(data, ensure_ascii=False, indent=2)  # 序列化
+print(json_str)
+
+parsed = json.loads(json_str)  # 反序列化
+print(parsed["name"])
+
+json.dump(data, open("data.json", "w"), ensure_ascii=False)  # 写文件
+data2 = json.load(open("data.json"))                         # 读文件
+
+# ── re（正则表达式）────────────────────────────────────────
+import re
+
+text = "联系方式：13812345678 或 021-88888888"
+
+# findall：找所有匹配
+phones = re.findall(r'\b1[3-9]\d{9}\b', text)
+print(phones)  # ['13812345678']
+
+# sub：替换
+masked = re.sub(r'(\d{3})\d{4}(\d{4})', r'\1****\2', text)
+print(masked)  # 联系方式：138****5678 或 021-88888888
+
+# 预编译（频繁使用时更高效）
+phone_re = re.compile(r'\b1[3-9]\d{9}\b')
+result = phone_re.search(text)
+if result:
+    print(result.group())  # 13812345678
+```
+
+---
+
+## 十三、综合实战：命令行任务管理器
+
+把前面所有知识点串联成一个完整的小应用：支持增删查改任务、按优先级过滤、持久化到 JSON 文件。
+
+```python
+# todo_manager.py
+import json
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from datetime import datetime
+from enum import Enum
+import functools
+
+
+# ── 数据模型 ──────────────────────────────────────────────
+
+class Priority(Enum):
+    LOW = 1
+    MEDIUM = 2
+    HIGH = 3
+
+    def __str__(self) -> str:
+        return self.name.capitalize()
+
+
+@dataclass
+class Task:
+    title: str
+    priority: Priority = Priority.MEDIUM
+    done: bool = False
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    id: int = field(default=0)
+
+    def complete(self) -> None:
+        self.done = True
+
+    def __str__(self) -> str:
+        status = "✅" if self.done else "⬜"
+        return f"[{self.id}] {status} [{self.priority}] {self.title}"
+
+
+# ── 存储层 ────────────────────────────────────────────────
+
+class TaskStore:
+    def __init__(self, file_path: str = "tasks.json"):
+        self.path = Path(file_path)
+        self._tasks: list[Task] = []
+        self._next_id: int = 1
+        self._load()
+
+    def _load(self) -> None:
+        if not self.path.exists():
+            return
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        self._tasks = [
+            Task(
+                title=t["title"],
+                priority=Priority[t["priority"]],
+                done=t["done"],
+                created_at=t["created_at"],
+                id=t["id"],
+            )
+            for t in raw.get("tasks", [])
+        ]
+        self._next_id = raw.get("next_id", 1)
+
+    def _save(self) -> None:
+        data = {
+            "next_id": self._next_id,
+            "tasks": [
+                {**asdict(t), "priority": t.priority.name}
+                for t in self._tasks
+            ],
+        }
+        self.path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    # 装饰器：自动保存（每次写操作后持久化）
+    def _auto_save(method):
+        @functools.wraps(method)
+        def wrapper(self, *args, **kwargs):
+            result = method(self, *args, **kwargs)
+            self._save()
+            return result
+        return wrapper
+
+    @_auto_save
+    def add(self, title: str, priority: Priority = Priority.MEDIUM) -> Task:
+        task = Task(title=title, priority=priority, id=self._next_id)
+        self._next_id += 1
+        self._tasks.append(task)
+        return task
+
+    @_auto_save
+    def complete(self, task_id: int) -> Task:
+        task = self._get_or_raise(task_id)
+        task.complete()
+        return task
+
+    @_auto_save
+    def delete(self, task_id: int) -> Task:
+        task = self._get_or_raise(task_id)
+        self._tasks.remove(task)
+        return task
+
+    def list_tasks(
+        self,
+        priority: Priority | None = None,
+        show_done: bool = True,
+    ) -> list[Task]:
+        tasks = self._tasks
+        if priority is not None:
+            tasks = [t for t in tasks if t.priority == priority]
+        if not show_done:
+            tasks = [t for t in tasks if not t.done]
+        # 按优先级降序，再按 id 升序
+        return sorted(tasks, key=lambda t: (-t.priority.value, t.id))
+
+    def _get_or_raise(self, task_id: int) -> Task:
+        for task in self._tasks:
+            if task.id == task_id:
+                return task
+        raise KeyError(f"任务 #{task_id} 不存在")
+
+
+# ── CLI 入口 ──────────────────────────────────────────────
+
+def main() -> None:
+    store = TaskStore()
+
+    commands = {
+        "add":      "add <title> [low|medium|high]  添加任务",
+        "done":     "done <id>                      标记完成",
+        "delete":   "delete <id>                    删除任务",
+        "list":     "list [high|medium|low] [--todo] 列出任务",
+        "help":     "help                           显示帮助",
+        "quit":     "quit                           退出",
+    }
+
+    print("📝 任务管理器（输入 help 查看命令）")
+
+    while True:
+        try:
+            raw = input("\n> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n👋 再见！")
+            break
+
+        if not raw:
+            continue
+
+        parts = raw.split()
+        cmd, args = parts[0].lower(), parts[1:]
+
+        try:
+            match cmd:
+                case "add":
+                    if not args:
+                        print("用法: add <title> [low|medium|high]")
+                        continue
+                    priority_map = {p.name.lower(): p for p in Priority}
+                    priority = priority_map.get(
+                        args[-1].lower(), Priority.MEDIUM
+                    )
+                    title_parts = args[:-1] if args[-1].lower() in priority_map else args
+                    task = store.add(" ".join(title_parts), priority)
+                    print(f"✅ 已添加: {task}")
+
+                case "done":
+                    task = store.complete(int(args[0]))
+                    print(f"✅ 已完成: {task}")
+
+                case "delete":
+                    task = store.delete(int(args[0]))
+                    print(f"🗑️  已删除: {task.title}")
+
+                case "list":
+                    priority = None
+                    show_done = True
+                    for arg in args:
+                        if arg.upper() in Priority.__members__:
+                            priority = Priority[arg.upper()]
+                        elif arg == "--todo":
+                            show_done = False
+                    tasks = store.list_tasks(priority, show_done)
+                    if not tasks:
+                        print("（暂无任务）")
+                    else:
+                        for t in tasks:
+                            print(t)
+
+                case "help":
+                    for line in commands.values():
+                        print(f"  {line}")
+
+                case "quit" | "exit":
+                    print("👋 再见！")
+                    return
+
+                case _:
+                    print(f"未知命令: {cmd}，输入 help 查看帮助")
+
+        except KeyError as e:
+            print(f"❌ {e}")
+        except (ValueError, IndexError):
+            print("❌ 参数格式错误")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+运行效果：
+
+```bash
+$ python todo_manager.py
+
+📝 任务管理器（输入 help 查看命令）
+
+> add 写单元测试 high
+✅ 已添加: [1] ⬜ [High] 写单元测试
+
+> add 更新文档
+✅ 已添加: [2] ⬜ [Medium] 更新文档
+
+> add 买咖啡 low
+✅ 已添加: [3] ⬜ [Low] 买咖啡
+
+> list
+[1] ⬜ [High] 写单元测试
+[2] ⬜ [Medium] 更新文档
+[3] ⬜ [Low] 买咖啡
+
+> done 1
+✅ 已完成: [1] ✅ [High] 写单元测试
+
+> list --todo
+[2] ⬜ [Medium] 更新文档
+[3] ⬜ [Low] 买咖啡
+```
+
+这个实战示例综合运用了：`@dataclass`（数据模型）、`Enum`（枚举类型）、`pathlib`（文件操作）、`json`（序列化）、装饰器（自动保存）、推导式、`match-case`（命令分发）、自定义异常处理。
+
+---
+
+## 下一步
+
+掌握本文内容后，可以继续深入：
+
+| 方向 | 推荐学习 |
+|---|---|
+| 包管理与虚拟环境 | [Python 包管理与虚拟环境](/posts/python/python-package-management) — venv、pip、pyproject.toml、uv |
+| 异步编程 | [Python 异步编程](/posts/python/python-asyncio) — asyncio、事件循环、并发模式、aiohttp |
+| 测试 | [Python 测试](/posts/python/python-testing) — pytest、fixture、mock、覆盖率 |
+| 类型检查 | [Python 类型系统](/posts/python/python-type-system) — 类型注解、typing、mypy |
+| Web 后端 | [FastAPI 系统教程](/posts/python/fastapi-complete-guide) — REST API、Pydantic、鉴权、部署 |
+| 数据处理 | NumPy、Pandas |

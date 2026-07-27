@@ -1,0 +1,164 @@
+---
+title: '上帝的切纸刀：平面与空间几何完全指南'
+date: '2026-03-01'
+description: '平面不仅仅是地面。在图形学中，平面是切割空间的刀，是反射光线的镜子，是构建视锥体的墙壁。本文将带你深入理解平面的"点法式"定义，掌握点到平面的距离计算、投影以及空间中面与面的交互。'
+tags: ['Math', 'Geometry', 'Plane', 'Distance']
+---
+
+# 上帝的切纸刀：平面与空间几何完全指南
+
+在 3D 游戏中，我们经常看到"地板"、"墙壁"。但数学上的**平面 (Plane)**，比这些要抽象得多。
+它没有边界，没有厚度，像一张无限延伸的纸，把整个宇宙一分为二。
+
+理解平面，是理解 **SDF (有向距离场)**、**阴影矩阵**、**视锥体剔除** 的基础。
+
+---
+
+## 一、 平面的定义：点法式
+
+初中数学教过 `Ax + By + Cz + D = 0`。这个公式是对的，但不够直观。
+在图形学中，我们几乎只用**点法式 (Point-Normal Form)** 来定义平面。
+
+一个平面由两个要素决定：
+1.  **法线 (Normal, $\vec{n}$)**：决定了平面的**朝向**（比如"朝上"）。**必须归一化**。
+2.  **点 (Point, $P_0$)**：决定了平面的**位置**（比如"高度是 0"）。
+
+**核心公式**：
+对于平面上任意一点 $P$，它与 $P_0$ 的连线，必须垂直于法线。
+$$ (P - P_0) \cdot \vec{n} = 0 $$
+
+展开后：$\vec{n} \cdot P - \vec{n} \cdot P_0 = 0$。
+令 $d = - \vec{n} \cdot P_0$，就得到了熟悉的 $\vec{n} \cdot P + d = 0$。这个 $d$ 其实就是原点到平面的（有向）距离。
+
+## 二、 点与平面的关系：图形学最重要的距离
+
+给定一个任意点 $Q$，它在平面的哪一侧？离平面有多远？
+这只需要一个**点积**就能算出来。
+
+### 1. 有向距离 (Signed Distance)
+$$ \text{dist} = (Q - P_0) \cdot \vec{n} $$
+
+*   **dist > 0**：点在平面**正面**（法线指向的那一侧）。
+*   **dist < 0**：点在平面**背面**。
+*   **dist = 0**：点在**平面上**。
+
+这就是 **SDF** 的核心原理！
+
+### 2. 投影 (Projection)
+如何找到点 $Q$ 在平面上的投影点 $Q'$？
+很简单，从 $Q$ 出发，沿着法线反方向走 `dist` 这么远，就到了。
+$$ Q' = Q - \text{dist} \cdot \vec{n} $$
+
+### 3. 翻转/反射 (Reflection)
+如何找到点 $Q$ 关于平面的对称点 $Q''$？
+走两倍的距离。
+$$ Q'' = Q - 2 \cdot \text{dist} \cdot \vec{n} $$
+这在制作**水面反射**效果时非常有用（把摄像机翻转到水面下）。
+
+<ShaderPreview title="Plane Distance Visualizer" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 2D 平面 (直线) 定义
+struct Plane {
+    vec2 p; // 平面上一点
+    vec2 n; // 法线
+};
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    // 1. 定义一个旋转的平面
+    float angle = uTime * 0.5;
+    vec2 normal = vec2(sin(angle), cos(angle));
+    vec2 p0 = vec2(0.0, 0.0); // 穿过原点
+    Plane plane = Plane(p0, normal);
+    
+    // 2. 鼠标/目标点 (用红色圆点表示)
+    // 这里我们用一个固定的点演示
+    vec2 target = vec2(0.5, 0.5);
+    
+    // 3. 计算有向距离
+    float dist = dot(target - plane.p, plane.n);
+    
+    // 4. 计算投影点
+    vec2 proj = target - dist * plane.n;
+    
+    // --- 可视化 ---
+    vec3 col = vec3(0.0);
+    
+    // A. 绘制半空间 (Half Space)
+    // 计算当前像素到平面的距离
+    float pixelDist = dot(uv - plane.p, plane.n);
+    // 正面是绿色微光，背面是红色微光
+    col += (pixelDist > 0.0) ? vec3(0.0, 0.1, 0.0) : vec3(0.1, 0.0, 0.0);
+    
+    // B. 绘制平面 (白线)
+    float line = 1.0 - step(0.01, abs(pixelDist));
+    col = mix(col, vec3(1.0), line);
+    
+    // C. 绘制法线 (黄色箭头)
+    // 从原点画一根线
+    float dNormal = length(uv - plane.n * 0.5); // 简单的点
+    if(dNormal < 0.05) col = vec3(1.0, 1.0, 0.0);
+    
+    // D. 绘制目标点 (红色)
+    if(length(uv - target) < 0.05) col = vec3(1.0, 0.0, 0.0);
+    
+    // E. 绘制投影点 (蓝色)
+    if(length(uv - proj) < 0.05) col = vec3(0.0, 0.5, 1.0);
+    
+    // F. 绘制距离连线 (虚线效果)
+    // 从 target 到 proj 的线段
+    // 简单的线段 SDF
+    vec2 pa = uv - target;
+    vec2 ba = proj - target;
+    float h = clamp(dot(pa, ba)/dot(ba, ba), 0.0, 1.0);
+    float dLine = length(pa - ba * h);
+    if(dLine < 0.005) col = vec3(1.0);
+    
+    gl_FragColor = vec4(col, 1.0);
+}
+`} />
+
+## 三、 构建平面：三点定面
+
+如果你只知道三角形的三个顶点 A, B, C，如何算出它所在的平面？
+
+1.  **算两个边向量**：$\vec{e1} = B - A$, $\vec{e2} = C - A$。
+2.  **叉积求法线**：$\vec{n} = \text{normalize}(\vec{e1} \times \vec{e2})$。
+3.  **定点**：随便选一个，比如 A。
+4.  **结果**：平面 $(A, \vec{n})$。
+
+*注意：顶点的顺序（顺时针/逆时针）决定了法线的方向（正面/背面）。*
+
+## 四、 空间几何实战
+
+### 1. 线面相交 (Line-Plane Intersection)
+我们在射线篇讲过，这里复习一下。
+射线 $P(t) = O + tD$，平面 $(P_0, \vec{n})$。
+相交时间：
+$$ t = \frac{(P_0 - O) \cdot \vec{n}}{D \cdot \vec{n}} $$
+
+### 2. 面面相交 (Plane-Plane Intersection)
+两个不平行的平面相交，会得到一条**直线**。
+这条直线的方向是什么？
+很简单，它必须同时垂直于两个平面的法线。
+$$ \vec{D}_{line} = \vec{n}_1 \times \vec{n}_2 $$
+
+### 3. 视锥体剔除 (Frustum Culling)
+视锥体由 6 个平面组成。
+判断一个球体是否在视锥体内：
+只需要判断球心到这 6 个平面的距离。
+*   如果球心到任意一个平面的距离 < -radius（在平面背面且距离超过半径），说明球体**完全在外面**。
+*   可以直接剔除，不渲染。
+
+## 总结
+
+平面是空间几何的积木。
+
+1.  **点法式**：用一个点和一个法线定义平面。
+2.  **点积**：计算点到平面的距离，判断正反面。
+3.  **叉积**：通过三点构建平面，或者计算两个平面的交线。
+
+掌握了平面，你就能在 3D 世界里自由地"切割"空间了。

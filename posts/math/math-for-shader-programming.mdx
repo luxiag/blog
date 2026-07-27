@@ -1,0 +1,213 @@
+---
+title: '重拾数学：写给前端的 GLSL 数学补习班'
+date: '2025-02-28'
+description: '毕业后就把数学还给老师了？别担心。本文为你精心挑选了 Shader 编程中最常用的数学概念——向量、点积、三角函数、线性插值，用最通俗的语言和可视化示例带你重新认识它们。'
+tags: ['WebGL', 'GLSL', 'Math', 'Tutorial']
+---
+
+# 重拾数学：写给前端的 GLSL 数学补习班
+
+听到"图形学数学"，很多人的第一反应是恐惧：复杂的公式、看不懂的符号、痛苦的考试回忆。
+
+但好消息是：**写 Shader 不需要你成为数学家。** 你只需要掌握几个核心工具，就能解决 90% 的问题。而且在 Shader 中，数学不再是纸上的符号，而是**看得见的颜色和形状**。
+
+本文将用最直观的方式，帮你捡起那些"最有用"的数学知识。
+
+## 一、 向量 (Vector)：一切的基础
+
+在学校里，向量是"有大小和方向的量"。在 GLSL 中，它就是**一个装着数字的盒子**。
+
+*   `vec2(x, y)`: 2个数字。常用于坐标 (UV)、2D 位置。
+*   `vec3(r, g, b)`: 3个数字。常用于颜色、3D 位置。
+*   `vec4(r, g, b, a)`: 4个数字。常用于带透明度的颜色。
+
+### 1. 向量加减法
+想象你在地图上走路。
+*   **加法**：你从 A 点出发，走了一段距离（向量 V），就到了 B 点。`B = A + V`。
+*   **减法**：你想知道从 A 到 B 怎么走？`V = B - A`。
+
+### 2. 向量乘法（缩放）
+`vec2 v = vec2(1.0, 2.0);`
+`v * 2.0` 变成了 `vec2(2.0, 4.0)`。方向没变，但是步子迈得更大了。
+
+<ShaderPreview title="向量颜色" code={`
+varying vec2 vUv;
+
+void main() {
+    // vUv 就是一个向量 vec2(x, y)
+    // 我们可以直接把向量赋值给颜色
+    // x 变成红色，y 变成绿色
+    gl_FragColor = vec4(vUv.x, vUv.y, 0.0, 1.0);
+}
+`} />
+
+## 二、 距离 (Distance)与长度 (Length)
+
+如果你想画一个圆，或者想知道两个物体离得有多远，你需要求**模**（长度）。
+在 GLSL 中，只需要一个函数：`length()`。
+
+*   `length(vec2(3.0, 4.0))` 结果是 `5.0` (勾股定理：3² + 4² = 5²)。
+
+**实战：画光晕**
+计算当前像素距离中心的距离，距离越近越亮。
+
+<ShaderPreview title="Distance Field" code={`
+varying vec2 vUv;
+
+void main() {
+    // 1. 把原点移到中心
+    vec2 center = vUv - 0.5;
+    
+    // 2. 计算距离
+    float d = length(center);
+    
+    // 3. 距离越近(d越小)，颜色越亮
+    // 我们用 1.0 / d 来制造发光效果
+    float glow = 0.05 / d;
+    
+    gl_FragColor = vec4(vec3(glow), 1.0);
+}
+`} />
+
+## 三、 插值 (Mix/Lerp)
+
+这是 Shader 中最最最常用的函数：`mix(x, y, a)`。
+它的意思是：**根据比例 a，混合 x 和 y。**
+
+*   如果 `a = 0.0`，结果是 `x`。
+*   如果 `a = 1.0`，结果是 `y`。
+*   如果 `a = 0.5`，结果是 `x` 和 `y` 的平均值。
+
+想象你在调色板上调色，`x` 是红色，`y` 是蓝色。`a` 就是你加蓝色的比例。
+
+<ShaderPreview title="Color Mixing" code={`
+varying vec2 vUv;
+
+void main() {
+    vec3 red = vec3(1.0, 0.0, 0.0);
+    vec3 blue = vec3(0.0, 0.0, 1.0);
+    
+    // 随 X 轴从左到右，从红变蓝
+    vec3 color = mix(red, blue, vUv.x);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 四、 平滑过渡 (Smoothstep)
+
+如果你只需要记住一个 GLSL 函数，那一定是 `smoothstep`。
+它是一个**魔法过滤器**。
+
+*   `step(edge, x)`: 硬切。小于 `edge` 是 0，大于 `edge` 是 1。边缘像刀切一样锋利（有锯齿）。
+*   `smoothstep(edge1, edge2, x)`: 软切。在 `edge1` 和 `edge2` 之间，它会生成一条平滑的 S 型曲线。
+
+**为什么它这么重要？**
+因为自然界没有绝对锋利的边缘。阴影是柔和的，水波是渐变的。用 `smoothstep` 可以让你的画面瞬间从"像个程序"变成"像个艺术品"。
+
+<ShaderPreview title="Step vs Smoothstep" code={`
+varying vec2 vUv;
+
+void main() {
+    float x = vUv.x;
+    
+    // 上半部分：硬切 (Step)
+    float hard = step(0.5, x);
+    
+    // 下半部分：软切 (Smoothstep)
+    // 在 0.4 到 0.6 之间平滑过渡
+    float soft = smoothstep(0.4, 0.6, x);
+    
+    // 拼合显示
+    float final = (vUv.y > 0.5) ? hard : soft;
+    
+    gl_FragColor = vec4(vec3(final), 1.0);
+}
+`} />
+
+## 五、 周期与波动 (Sin/Cos)
+
+这就是我们在学校学的**三角函数**。但在 Shader 里，你不需要算三角形边长，你只需要知道：**它们是制造波动的机器。**
+
+*   `sin(x)`: 输出在 -1 到 1 之间反复横跳。
+*   想让波动变快？`sin(x * 10.0)` (增加频率)
+*   想让波动幅度变大？`sin(x) * 5.0` (增加振幅)
+*   想让波动整体抬高？`sin(x) + 2.0` (垂直位移)
+
+**应用场景**：呼吸灯、水波纹、摆动的草、闪烁的星星。
+
+<ShaderPreview title="Sin Wave" code={`
+uniform float uTime;
+varying vec2 vUv;
+
+void main() {
+    // 1. 基础正弦波
+    float y = sin(vUv.x * 10.0 + uTime) * 0.2;
+    
+    // 2. 把它画出来
+    // 如果当前像素的 y 接近计算出的波浪 y (中心在 0.5)
+    float line = 1.0 - smoothstep(0.01, 0.02, abs(vUv.y - 0.5 - y));
+    
+    gl_FragColor = vec4(vec3(line), 1.0);
+}
+`} />
+
+## 六、 点积 (Dot Product)
+
+这个听起来有点硬核，但它的几何意义非常直观：**两个方向有多"一致"？**
+
+*   `dot(A, B)`
+*   如果 A 和 B 方向**相同**，结果是 1.0。
+*   如果 A 和 B **垂直**（完全无关），结果是 0.0。
+*   如果 A 和 B **相反**，结果是 -1.0。
+
+**最经典应用：光照**
+光照怎么算？看**光线方向**和**物体表面朝向（法线）**的夹角。
+*   正对着光：最亮 (`dot = 1`)。
+*   侧对着光：变暗。
+*   背对着光：全黑 (`dot <= 0`)。
+
+这就所谓的 **Lambert 光照模型**，3D 渲染的基石。
+
+<ShaderPreview title="Fake 3D Light" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    // 1. 模拟一个球体表面的法线 (Normal)
+    vec2 p = vUv * 2.0 - 1.0; // -1 到 1
+    float z = sqrt(1.0 - p.x*p.x - p.y*p.y); // 算出球面的 z
+    
+    // 如果在圆外，就涂黑
+    if (length(p) > 1.0) {
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    
+    vec3 normal = vec3(p.x, p.y, z);
+    
+    // 2. 定义一个旋转的光源
+    vec3 lightDir = normalize(vec3(sin(uTime), 0.5, cos(uTime)));
+    
+    // 3. 核心：点积计算亮度
+    float diffuse = max(dot(normal, lightDir), 0.0);
+    
+    // 加上一点环境光
+    vec3 color = vec3(1.0, 0.5, 0.2) * (diffuse + 0.1);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 总结
+
+恭喜你！你已经复习了 Shader 编程中最核心的数学概念：
+
+1.  **向量**：装数字的容器，表示颜色或位置。
+2.  **长度 (length)**：测量距离，画圆的基础。
+3.  **插值 (mix)**：颜色的混合器。
+4.  **平滑 (smoothstep)**：让一切变柔和的滤镜。
+5.  **正弦 (sin)**：制造动画和波动的引擎。
+6.  **点积 (dot)**：计算光照和方向一致性的工具。
+
+这些公式不需要死记硬背。在写 Shader 的过程中，你会一遍又一遍地用到它们，直到它们像呼吸一样自然。

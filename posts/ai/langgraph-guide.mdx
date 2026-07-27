@@ -1,0 +1,1431 @@
+---
+title: 'LangGraph 完全指南：用图结构构建可控的 AI Agent'
+date: '2026-06-08'
+description: '本文面向了解 LangChain 基础但未使用过 LangGraph 的开发者，系统讲解 LangGraph 的核心概念（StateGraph、Node、Edge、Conditional Edge、Checkpointer），解释为什么需要图结构来编排 Agent 工作流，并通过完整代码示例演示如何构建带有条件分支、循环、人工审批和持久化记忆的 AI Agent。'
+tags: ['AI', 'LangGraph', 'LangChain', 'Agent', 'LLM']
+---
+
+# LangGraph 完全指南：用图结构构建可控的 AI Agent
+
+你已经用 LangChain 构建过简单的 Chain 和 Agent，它们能处理线性的任务流。但当需求变得更复杂时，你会遇到这些问题：
+
+- Agent 在循环调用工具时不可控，容易陷入死循环或偏离目标
+- 想让工作流在某些条件下走不同分支，但 Chain 是线性的
+- 需要在关键步骤加入人工审批，但不知道如何暂停和恢复
+- Agent 执行到一半报错了，想从断点恢复而不是重头再来
+- 多个 Agent 需要协作，但不知道如何编排它们的交互顺序
+
+这些问题的本质是：**线性的 Chain 无法表达复杂的控制流**。你需要的是一种能表达分支、循环、暂停、恢复的编排方式——这正是图（Graph）结构天然擅长的。
+
+**LangGraph 就是为此而生的**。它让你用"节点 + 边"的方式来定义 Agent 的执行流程，每个节点是一步操作，边决定了流程走向，使得复杂的 Agent 行为变得可视化、可控制、可调试。
+
+---
+
+## 一、LangGraph 是什么
+
+LangGraph 是 LangChain 团队开发的一个库，专门用于构建**有状态的、多步骤的 LLM 应用**。它的核心思想是将应用逻辑建模为一个**有向图（Directed Graph）**：
+
+```mermaid
+graph LR
+    A[用户输入] --> B[LLM 思考]
+    B --> C{需要工具?}
+    C -- 是 --> D[调用工具]
+    D --> B
+    C -- 否 --> E[输出结果]
+```
+
+与普通 Chain 相比，LangGraph 的关键差异：
+
+| 特性 | LangChain Chain/LCEL | LangGraph |
+| :--- | :--- | :--- |
+| **执行流程** | 线性（管道式） | 图结构（支持分支、循环） |
+| **状态管理** | 手动传递 | 自动管理共享状态 |
+| **持久化** | 无内置支持 | Checkpointer 内置支持 |
+| **人工介入** | 需自行实现 | interrupt / Command 原生支持 |
+| **可视化** | 难以直观展示 | 可直接绘制执行图 |
+| **错误恢复** | 从头重来 | 从检查点恢复 |
+
+:::note
+LangGraph 并不取代 LangChain，而是构建在其之上。LangGraph 负责**编排（Orchestration）**，LangChain 提供**组件（Components）**——两者是互补关系。你完全可以在 LangGraph 的节点中使用 LangChain 的 Prompt、Model、Tool 等模块。
+:::
+
+### 安装
+
+```bash
+pip install langgraph langchain-openai langchain-core
+```
+
+如果需要持久化功能：
+
+```bash
+pip install langgraph-checkpoint-sqlite
+# 或使用 PostgreSQL
+pip install langgraph-checkpoint-postgres
+```
+
+---
+
+## 二、核心概念：图的三要素
+
+LangGraph 的所有应用都围绕三个核心概念构建：**State（状态）**、**Node（节点）** 和 **Edge（边）**。
+
+### 2.1 State：共享的数据容器
+
+State 是图中所有节点共享的数据结构，定义了"在整个工作流执行过程中需要传递和积累的信息"。
+
+```python
+from typing import Annotated, TypedDict
+from langgraph.graph.message import add_messages
+
+# 定义状态结构
+class AgentState(TypedDict):
+    """Agent 的状态定义"""
+    # messages 使用 add_messages reducer，新消息会追加而非覆盖
+    messages: Annotated[list, add_messages]
+    # 普通字段，每次更新会覆盖之前的值
+    current_step: str
+    retry_count: int
+```
+
+:::important
+State 中字段的更新策略由 **Reducer** 决定：
+- **默认行为**：后写覆盖前值（last-write-wins）
+- **`add_messages`**：专门为消息列表设计的 reducer，会自动追加新消息
+- **自定义 Reducer**：你可以用 `Annotated[type, reducer_fn]` 定义任意更新逻辑
+:::
+
+Reducer 是 LangGraph 状态管理的精髓。来看一个自定义 Reducer 的例子：
+
+```python
+from typing import Annotated, TypedDict
+
+def add_to_set(current: set, new: set) -> set:
+    """集合取并集的 reducer"""
+    return current | new
+
+def increment(current: int, new: int) -> int:
+    """累加 reducer"""
+    return current + new
+
+class TaskState(TypedDict):
+    messages: Annotated[list, add_messages]
+    # 已访问的 URL 只增不减
+    visited_urls: Annotated[set, add_to_set]
+    # 步骤计数器，每次 +1
+    step_count: Annotated[int, increment]
+    # 最终结果，覆盖写入
+    result: str
+```
+
+### 2.2 Node：执行逻辑的载体
+
+Node 是一个普通的 Python 函数（同步或异步），接收当前 State，返回要更新的 State 字段：
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage
+
+model = ChatOpenAI(model="gpt-4o")
+
+def chatbot(state: AgentState) -> dict:
+    """聊天节点：调用 LLM 生成回复"""
+    messages = state["messages"]
+    response = model.invoke(messages)
+    # 返回要更新的字段，messages 会通过 add_messages reducer 追加
+    return {"messages": [response]}
+
+def classify(state: AgentState) -> dict:
+    """分类节点：判断用户意图"""
+    last_message = state["messages"][-1].content
+    # 简单分类逻辑
+    if "天气" in last_message:
+        return {"current_step": "weather"}
+    elif "新闻" in last_message:
+        return {"current_step": "news"}
+    else:
+        return {"current_step": "general"}
+```
+
+:::tip
+节点函数只需要返回**要更新的字段**，不需要返回完整的 State。LangGraph 会自动将返回值与现有 State 合并（根据 Reducer 规则）。
+:::
+
+### 2.3 Edge：控制流转的路径
+
+Edge 定义了节点之间的连接关系，决定执行完一个节点后下一步去哪里。LangGraph 支持三种类型的边：
+
+**普通边（Normal Edge）**——无条件跳转：
+
+```python
+# 执行完 node_a 后，一定去 node_b
+graph.add_edge("node_a", "node_b")
+```
+
+**条件边（Conditional Edge）**——根据状态动态选择：
+
+```python
+def route_decision(state: AgentState) -> str:
+    """根据状态决定下一步去哪个节点"""
+    if state["current_step"] == "weather":
+        return "weather_tool"
+    elif state["current_step"] == "news":
+        return "news_tool"
+    else:
+        return "general_reply"
+
+# 执行完 classify 后，根据 route_decision 的返回值选择下一个节点
+graph.add_conditional_edges(
+    "classify",
+    route_decision,
+    {
+        "weather_tool": "weather_node",
+        "news_tool": "news_node",
+        "general_reply": "reply_node",
+    }
+)
+```
+
+**入口边（Entry Edge）**——图的起点：
+
+```python
+graph.set_entry_point("classify")
+# 或使用 START 常量
+from langgraph.graph import START
+graph.add_edge(START, "classify")
+```
+
+---
+
+## 三、构建你的第一个 Graph
+
+理论讲完了，我们来动手构建一个完整的对话机器人。它能记住对话历史，并在每轮对话中更新状态。
+
+```python
+from typing import Annotated, TypedDict
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+
+# 第一步：定义状态
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+
+# 第二步：初始化模型
+model = ChatOpenAI(model="gpt-4o", temperature=0.7)
+
+# 第三步：定义节点
+def chatbot(state: State) -> dict:
+    """对话节点"""
+    response = model.invoke(state["messages"])
+    return {"messages": [response]}
+
+# 第四步：构建图
+graph_builder = StateGraph(State)
+
+# 添加节点
+graph_builder.add_node("chatbot", chatbot)
+
+# 添加边
+graph_builder.add_edge(START, "chatbot")  # 入口 → chatbot
+graph_builder.add_edge("chatbot", END)    # chatbot → 结束
+
+# 第五步：编译图
+graph = graph_builder.compile()
+
+# 第六步：运行
+result = graph.invoke({
+    "messages": [HumanMessage(content="你好，请介绍一下你自己")]
+})
+
+print(result["messages"][-1].content)
+```
+
+:::tip
+`graph_builder.compile()` 会验证图的结构是否合法（比如是否有孤立节点、是否有无法到达 END 的路径），不合法会抛出错误。编译后的 `graph` 对象是不可变的，可以安全地在多线程中复用。
+:::
+
+可视化这个图的结构：
+
+```python
+# 生成 Mermaid 图表
+print(graph.get_graph().draw_mermaid())
+
+# 或者生成 PNG 图片（需要安装 pygraphviz 或 grandalf）
+from IPython.display import Image, display
+display(Image(graph.get_graph().draw_mermaid_png()))
+```
+
+---
+
+## 四、工具调用：让 Agent 具备行动能力
+
+一个只能聊天的 Bot 远远不够。LangGraph 的真正威力在于让 Agent 能**调用工具**并根据结果决定下一步行动。
+
+### 4.1 定义工具
+
+```python
+from langchain_core.tools import tool
+
+@tool
+def get_weather(city: str) -> str:
+    """获取指定城市的当前天气信息"""
+    # 实际项目中这里会调用天气 API
+    weather_data = {
+        "北京": "晴，25°C，微风",
+        "上海": "多云，28°C，东南风3级",
+        "深圳": "阵雨，30°C，南风2级",
+    }
+    return weather_data.get(city, f"暂无{city}的天气数据")
+
+@tool
+def search_web(query: str) -> str:
+    """搜索互联网获取最新信息"""
+    # 实际项目中这里会调用搜索 API
+    return f"搜索「{query}」的结果：这是一条模拟搜索结果..."
+
+@tool
+def calculate(expression: str) -> str:
+    """计算数学表达式"""
+    try:
+        result = eval(expression)  # 生产环境请用安全的计算方式
+        return f"计算结果：{expression} = {result}"
+    except Exception as e:
+        return f"计算错误：{e}"
+```
+
+### 4.2 构建带工具的 Agent
+
+```python
+from typing import Annotated, TypedDict
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_openai import ChatOpenAI
+
+# 状态定义
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]
+
+# 将工具绑定到模型
+tools = [get_weather, search_web, calculate]
+model = ChatOpenAI(model="gpt-4o").bind_tools(tools)
+
+# Agent 节点：让 LLM 决定是否调用工具
+def agent(state: AgentState) -> dict:
+    response = model.invoke(state["messages"])
+    return {"messages": [response]}
+
+# 构建图
+graph_builder = StateGraph(AgentState)
+
+# 添加节点
+graph_builder.add_node("agent", agent)
+graph_builder.add_node("tools", ToolNode(tools))  # 预置的工具执行节点
+
+# 添加边
+graph_builder.add_edge(START, "agent")
+
+# 条件边：如果 LLM 决定调用工具，去 tools 节点；否则结束
+graph_builder.add_conditional_edges(
+    "agent",
+    tools_condition,  # 内置的条件函数，检查最后一条消息是否包含工具调用
+)
+
+# 工具执行完后，回到 agent 让 LLM 看结果
+graph_builder.add_edge("tools", "agent")
+
+# 编译
+agent_graph = graph_builder.compile()
+```
+
+执行流程：
+
+```mermaid
+graph TD
+    A[START] --> B[Agent\nLLM 思考]
+    B --> C{tools_condition\n需要调用工具?}
+    C -- 是 --> D[Tools\n执行工具]
+    D --> B
+    C -- 否 --> E[END\n返回结果]
+```
+
+### 4.3 运行与观察
+
+```python
+from langchain_core.messages import HumanMessage
+
+# 运行 Agent
+result = agent_graph.invoke({
+    "messages": [HumanMessage(content="北京今天天气怎么样？另外帮我算一下 123 * 456")]
+})
+
+# 打印完整的消息流程
+for msg in result["messages"]:
+    role = msg.__class__.__name__
+    print(f"[{role}] {msg.content}")
+    if hasattr(msg, "tool_calls") and msg.tool_calls:
+        for tc in msg.tool_calls:
+            print(f"  → 调用工具: {tc['name']}({tc['args']})")
+```
+
+输出示例：
+
+```
+[HumanMessage] 北京今天天气怎么样？另外帮我算一下 123 * 456
+[AIMessage]
+  → 调用工具: get_weather({"city": "北京"})
+  → 调用工具: calculate({"expression": "123 * 456"})
+[ToolMessage] 晴，25°C，微风
+[ToolMessage] 计算结果：123 * 456 = 56088
+[AIMessage] 北京今天天气晴朗，气温25°C，有微风，非常舒适！
+另外，123 × 456 = 56,088。
+```
+
+:::note
+`tools_condition` 是 LangGraph 预置的条件函数，它检查 Agent 最后一条消息中是否包含 `tool_calls`。如果有，返回 `"tools"`；否则返回 `END`。你也可以自定义类似的条件函数。
+:::
+
+---
+
+## 五、条件分支与路由
+
+实际应用中，工作流往往不是简单的"要不要调工具"，而是需要**多路分支**。LangGraph 的条件边让你能根据任意状态来路由。
+
+### 5.1 多路由示例：客服分流系统
+
+```python
+from typing import Annotated, TypedDict, Literal
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+
+class CustomerState(TypedDict):
+    messages: Annotated[list, add_messages]
+    intent: str  # 用户意图
+    sentiment: str  # 情感倾向
+
+model = ChatOpenAI(model="gpt-4o")
+
+# 节点1：意图识别
+def classify_intent(state: CustomerState) -> dict:
+    classify_prompt = [
+        SystemMessage(content="""分析用户消息，返回意图分类。
+只返回以下之一：complaint（投诉）、inquiry（咨询）、purchase（购买）、technical（技术问题）"""),
+        state["messages"][-1]
+    ]
+    response = model.invoke(classify_prompt)
+    intent = response.content.strip().lower()
+    return {"intent": intent}
+
+# 节点2-5：不同意图的处理节点
+def handle_complaint(state: CustomerState) -> dict:
+    response = model.invoke([
+        SystemMessage(content="你是投诉处理专员，态度诚恳，先道歉再解决问题。"),
+        *state["messages"]
+    ])
+    return {"messages": [response]}
+
+def handle_inquiry(state: CustomerState) -> dict:
+    response = model.invoke([
+        SystemMessage(content="你是咨询顾问，专业解答用户疑问。"),
+        *state["messages"]
+    ])
+    return {"messages": [response]}
+
+def handle_purchase(state: CustomerState) -> dict:
+    response = model.invoke([
+        SystemMessage(content="你是销售顾问，帮助用户完成购买决策。"),
+        *state["messages"]
+    ])
+    return {"messages": [response]}
+
+def handle_technical(state: CustomerState) -> dict:
+    response = model.invoke([
+        SystemMessage(content="你是技术支持工程师，提供详细的技术解决方案。"),
+        *state["messages"]
+    ])
+    return {"messages": [response]}
+
+# 路由函数
+def route_by_intent(state: CustomerState) -> str:
+    intent = state.get("intent", "inquiry")
+    route_map = {
+        "complaint": "handle_complaint",
+        "inquiry": "handle_inquiry",
+        "purchase": "handle_purchase",
+        "technical": "handle_technical",
+    }
+    return route_map.get(intent, "handle_inquiry")
+
+# 构建图
+graph = StateGraph(CustomerState)
+
+graph.add_node("classify", classify_intent)
+graph.add_node("handle_complaint", handle_complaint)
+graph.add_node("handle_inquiry", handle_inquiry)
+graph.add_node("handle_purchase", handle_purchase)
+graph.add_node("handle_technical", handle_technical)
+
+graph.add_edge(START, "classify")
+graph.add_conditional_edges("classify", route_by_intent)
+graph.add_edge("handle_complaint", END)
+graph.add_edge("handle_inquiry", END)
+graph.add_edge("handle_purchase", END)
+graph.add_edge("handle_technical", END)
+
+customer_service = graph.compile()
+```
+
+```mermaid
+graph TD
+    A[START] --> B[意图识别]
+    B --> C{路由分发}
+    C -- complaint --> D[投诉处理]
+    C -- inquiry --> E[咨询回复]
+    C -- purchase --> F[购买引导]
+    C -- technical --> G[技术支持]
+    D --> H[END]
+    E --> H
+    F --> H
+    G --> H
+```
+
+### 5.2 路由的最佳实践
+
+```python
+# 方式一：返回节点名称字符串
+def simple_router(state: State) -> str:
+    if state["score"] > 0.8:
+        return "high_priority"
+    return "normal"
+
+# 方式二：使用 Literal 类型标注，获得更好的类型检查
+def typed_router(state: State) -> Literal["high_priority", "normal", "reject"]:
+    score = state["score"]
+    if score > 0.8:
+        return "high_priority"
+    elif score > 0.3:
+        return "normal"
+    else:
+        return "reject"
+```
+
+---
+
+## 六、循环与迭代：Agent 的核心模式
+
+LangGraph 最强大的特性之一是原生支持**循环**。这是 Agent 能"思考→行动→观察→再思考"的基础。
+
+### 6.1 ReAct 循环模式
+
+ReAct（Reasoning + Acting）是最经典的 Agent 模式：LLM 先推理当前应该做什么，再执行动作，然后观察结果，循环直到任务完成。
+
+```python
+from typing import Annotated, TypedDict
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage
+
+class ReActState(TypedDict):
+    messages: Annotated[list, add_messages]
+    iteration_count: int
+
+tools = [get_weather, search_web, calculate]
+model = ChatOpenAI(model="gpt-4o").bind_tools(tools)
+
+SYSTEM_PROMPT = """你是一个能使用工具的智能助手。
+解决问题时，请遵循以下步骤：
+1. 分析用户的问题
+2. 决定是否需要使用工具获取信息
+3. 如果需要，调用适当的工具
+4. 根据工具返回的结果，决定是否需要继续使用工具
+5. 当信息足够时，给出最终答案
+
+注意：每次只调用必要的工具，避免不必要的调用。"""
+
+def agent_node(state: ReActState) -> dict:
+    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+    response = model.invoke(messages)
+    return {
+        "messages": [response],
+        "iteration_count": state.get("iteration_count", 0) + 1
+    }
+
+# 带安全限制的条件函数
+def should_continue(state: ReActState) -> str:
+    """决定是继续调用工具还是结束"""
+    # 安全阀：最多循环 10 次
+    if state.get("iteration_count", 0) >= 10:
+        return END
+
+    # 检查最后一条消息是否有工具调用
+    last_message = state["messages"][-1]
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        return "tools"
+    return END
+
+# 构建图
+graph = StateGraph(ReActState)
+graph.add_node("agent", agent_node)
+graph.add_node("tools", ToolNode(tools))
+
+graph.add_edge(START, "agent")
+graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
+graph.add_edge("tools", "agent")
+
+react_agent = graph.compile()
+```
+
+:::warning
+循环是强大的，但也是危险的。Agent 可能陷入无限循环（比如工具始终返回模糊结果，LLM 反复尝试）。**务必设置循环上限**，可以通过：
+1. 状态中的计数器（如上面的 `iteration_count`）
+2. 编译时设置 `recursion_limit` 参数：`graph.compile(recursion_limit=25)`
+:::
+
+### 6.2 自我修正模式
+
+循环的一个典型应用是让 Agent 检查自己的输出，如果不满意就重新生成：
+
+```python
+from langchain_core.messages import AIMessage
+
+class WriterState(TypedDict):
+    messages: Annotated[list, add_messages]
+    draft: str
+    feedback: str
+    revision_count: int
+
+def writer(state: WriterState) -> dict:
+    """写作节点"""
+    if state.get("feedback"):
+        prompt = f"请根据以下反馈修改文章：\n反馈：{state['feedback']}\n\n原文：{state['draft']}"
+    else:
+        prompt = state["messages"][-1].content
+
+    response = model.invoke([SystemMessage(content="你是专业作家"), HumanMessage(content=prompt)])
+    return {"draft": response.content, "revision_count": state.get("revision_count", 0) + 1}
+
+def reviewer(state: WriterState) -> dict:
+    """审稿节点"""
+    review_prompt = f"""请评审以下文章，如果质量达标返回"APPROVED"，
+否则给出具体修改建议。
+
+文章内容：
+{state['draft']}"""
+
+    response = model.invoke([SystemMessage(content="你是严格的编辑"), HumanMessage(content=review_prompt)])
+    return {"feedback": response.content}
+
+def should_revise(state: WriterState) -> str:
+    """决定是否需要修改"""
+    if state.get("revision_count", 0) >= 3:
+        return "end"  # 最多修改3次
+    if "APPROVED" in state.get("feedback", ""):
+        return "end"
+    return "revise"
+
+graph = StateGraph(WriterState)
+graph.add_node("writer", writer)
+graph.add_node("reviewer", reviewer)
+
+graph.add_edge(START, "writer")
+graph.add_edge("writer", "reviewer")
+graph.add_conditional_edges("reviewer", should_revise, {"revise": "writer", "end": END})
+
+editor_agent = graph.compile()
+```
+
+```mermaid
+graph TD
+    A[START] --> B[Writer 写作]
+    B --> C[Reviewer 审稿]
+    C --> D{质量达标?}
+    D -- 否且未超限 --> B
+    D -- 是或已达上限 --> E[END]
+```
+
+---
+
+## 七、持久化与 Checkpointer
+
+LangGraph 内置了**检查点（Checkpoint）**机制，可以在每个节点执行后自动保存状态快照。这带来三个关键能力：
+
+1. **对话记忆**：多轮对话自动持久化
+2. **断点恢复**：执行失败后从最后一个成功节点恢复
+3. **时间旅行**：回溯到任意历史状态
+
+### 7.1 添加持久化
+
+```python
+from langgraph.checkpoint.memory import MemorySaver
+
+# 内存存储（开发测试用）
+memory = MemorySaver()
+
+# 编译时传入 checkpointer
+graph = graph_builder.compile(checkpointer=memory)
+
+# 运行时必须指定 thread_id 来标识会话
+config = {"configurable": {"thread_id": "user-123"}}
+
+# 第一轮对话
+result1 = graph.invoke(
+    {"messages": [HumanMessage(content="我叫张三")]},
+    config=config
+)
+
+# 第二轮对话（同一个 thread_id，自动恢复上下文）
+result2 = graph.invoke(
+    {"messages": [HumanMessage(content="我叫什么名字？")]},
+    config=config
+)
+# Agent 会记住你叫张三
+```
+
+### 7.2 生产环境持久化
+
+```python
+# SQLite 持久化（适合单机部署）
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+with SqliteSaver.from_conn_string("checkpoints.db") as checkpointer:
+    graph = graph_builder.compile(checkpointer=checkpointer)
+    # ... 正常使用
+
+# PostgreSQL 持久化（适合分布式部署）
+from langgraph.checkpoint.postgres import PostgresSaver
+
+with PostgresSaver.from_conn_string("postgresql://user:pass@host/db") as checkpointer:
+    graph = graph_builder.compile(checkpointer=checkpointer)
+    # ... 正常使用
+```
+
+### 7.3 状态快照与时间旅行
+
+```python
+# 获取当前状态快照
+snapshot = graph.get_state(config)
+print(snapshot.values)  # 当前状态
+print(snapshot.next)    # 下一个要执行的节点
+
+# 获取完整历史
+for state in graph.get_state_history(config):
+    print(f"节点: {state.metadata.get('source')}, 消息数: {len(state.values['messages'])}")
+
+# 时间旅行：回到某个历史检查点
+old_config = {"configurable": {"thread_id": "user-123", "checkpoint_id": "some-checkpoint-id"}}
+result = graph.invoke(
+    {"messages": [HumanMessage(content="从这个时间点重新开始")]},
+    config=old_config
+)
+```
+
+---
+
+## 八、Human-in-the-Loop：人工介入
+
+很多场景下，Agent 不能完全自主行动。比如：执行高风险操作前需要人工确认、Agent 不确定时需要人工澄清、敏感操作需要审批。LangGraph 提供了 `interrupt` 机制来优雅地处理这些场景。
+
+### 8.1 基本中断模式
+
+```python
+from langgraph.types import interrupt, Command
+
+class ApprovalState(TypedDict):
+    messages: Annotated[list, add_messages]
+    action: str
+    approved: bool
+
+def plan_action(state: ApprovalState) -> dict:
+    """规划要执行的操作"""
+    response = model.invoke(state["messages"])
+    return {"action": response.content, "messages": [response]}
+
+def human_review(state: ApprovalState) -> dict:
+    """人工审批节点"""
+    # interrupt 会暂停图的执行，等待外部输入
+    decision = interrupt(
+        # 传递给用户的信息
+        {"action": state["action"], "prompt": "是否批准执行此操作？(yes/no)"}
+    )
+    return {"approved": decision == "yes"}
+
+def execute_action(state: ApprovalState) -> dict:
+    """执行操作"""
+    if state["approved"]:
+        return {"messages": [AIMessage(content=f"已执行：{state['action']}")]}
+    else:
+        return {"messages": [AIMessage(content="操作已取消")]}
+
+# 构建图
+graph = StateGraph(ApprovalState)
+graph.add_node("plan", plan_action)
+graph.add_node("review", human_review)
+graph.add_node("execute", execute_action)
+
+graph.add_edge(START, "plan")
+graph.add_edge("plan", "review")
+graph.add_edge("review", "execute")
+graph.add_edge("execute", END)
+
+approval_graph = graph.compile(checkpointer=MemorySaver())
+```
+
+### 8.2 使用中断
+
+```python
+config = {"configurable": {"thread_id": "approval-1"}}
+
+# 第一次调用：会在 human_review 节点暂停
+result = approval_graph.invoke(
+    {"messages": [HumanMessage(content="删除所有过期数据")]},
+    config=config
+)
+# 此时图已暂停，等待人工输入
+
+# 获取当前状态，查看中断信息
+snapshot = approval_graph.get_state(config)
+print(snapshot.tasks)  # 可以看到中断时传递的信息
+
+# 人工决策后，使用 Command 恢复执行
+from langgraph.types import Command
+
+approval_graph.invoke(
+    Command(resume="yes"),  # 传递审批决策
+    config=config
+)
+```
+
+### 8.3 interrupt_before / interrupt_after
+
+除了在节点内部调用 `interrupt()`，你也可以在编译时指定哪些节点需要在执行前/后暂停：
+
+```python
+# 在 "dangerous_action" 节点执行前暂停
+graph = graph_builder.compile(
+    checkpointer=memory,
+    interrupt_before=["dangerous_action"]
+)
+
+# 在 "generate_report" 节点执行后暂停（让用户检查结果）
+graph = graph_builder.compile(
+    checkpointer=memory,
+    interrupt_after=["generate_report"]
+)
+```
+
+---
+
+## 九、流式输出
+
+LangGraph 支持多种流式输出模式，让用户无需等待整个图执行完毕就能看到中间结果。
+
+### 9.1 流式模式
+
+```python
+from langchain_core.messages import HumanMessage
+
+config = {"configurable": {"thread_id": "stream-1"}}
+input_msg = {"messages": [HumanMessage(content="解释量子计算")]}
+
+# 模式1：stream - 按节点输出
+for event in agent_graph.stream(input_msg, config=config):
+    for node_name, output in event.items():
+        print(f"--- {node_name} ---")
+        if "messages" in output:
+            print(output["messages"][-1].content[:100])
+
+# 模式2：stream_mode="values" - 每次输出完整状态
+for state in agent_graph.stream(input_msg, config=config, stream_mode="values"):
+    if state["messages"]:
+        print(state["messages"][-1].content[:100])
+
+# 模式3：stream_mode="updates" - 只输出状态变更
+for update in agent_graph.stream(input_msg, config=config, stream_mode="updates"):
+    print(update)
+```
+
+### 9.2 Token 级别的流式输出
+
+如果你需要像 ChatGPT 一样逐 token 输出，使用 `astream_events`：
+
+```python
+async def stream_tokens():
+    config = {"configurable": {"thread_id": "token-stream-1"}}
+    input_msg = {"messages": [HumanMessage(content="写一首关于编程的诗")]}
+
+    async for event in agent_graph.astream_events(input_msg, config=config, version="v2"):
+        # 只关注 LLM 的 token 流
+        if event["event"] == "on_chat_model_stream":
+            chunk = event["data"]["chunk"]
+            if chunk.content:
+                print(chunk.content, end="", flush=True)
+
+# 运行
+import asyncio
+asyncio.run(stream_tokens())
+```
+
+---
+
+## 十、子图与多 Agent 协作
+
+当应用变得复杂时，可以将图拆分为**子图（Subgraph）**，每个子图负责一个子任务，主图负责编排它们。
+
+### 10.1 子图定义
+
+```python
+# ============ 子图1：研究 Agent ============
+class ResearchState(TypedDict):
+    messages: Annotated[list, add_messages]
+    research_topic: str
+    findings: str
+
+def research_node(state: ResearchState) -> dict:
+    response = model.invoke([
+        SystemMessage(content="你是研究员，深入调研给定主题并给出详细发现。"),
+        HumanMessage(content=f"请研究以下主题：{state['research_topic']}")
+    ])
+    return {"findings": response.content, "messages": [response]}
+
+research_graph = StateGraph(ResearchState)
+research_graph.add_node("research", research_node)
+research_graph.add_edge(START, "research")
+research_graph.add_edge("research", END)
+research_subgraph = research_graph.compile()
+
+# ============ 子图2：写作 Agent ============
+class WritingState(TypedDict):
+    messages: Annotated[list, add_messages]
+    material: str
+    article: str
+
+def writing_node(state: WritingState) -> dict:
+    response = model.invoke([
+        SystemMessage(content="你是专业作家，根据给定的素材写出高质量文章。"),
+        HumanMessage(content=f"素材：{state['material']}\n\n请据此写一篇文章。")
+    ])
+    return {"article": response.content, "messages": [response]}
+
+writing_graph = StateGraph(WritingState)
+writing_graph.add_node("write", writing_node)
+writing_graph.add_edge(START, "write")
+writing_graph.add_edge("write", END)
+writing_subgraph = writing_graph.compile()
+```
+
+### 10.2 主图编排
+
+```python
+class OrchestratorState(TypedDict):
+    messages: Annotated[list, add_messages]
+    topic: str
+    research_result: str
+    final_article: str
+
+def call_researcher(state: OrchestratorState) -> dict:
+    """调用研究子图"""
+    result = research_subgraph.invoke({
+        "messages": [],
+        "research_topic": state["topic"],
+        "findings": ""
+    })
+    return {"research_result": result["findings"]}
+
+def call_writer(state: OrchestratorState) -> dict:
+    """调用写作子图"""
+    result = writing_subgraph.invoke({
+        "messages": [],
+        "material": state["research_result"],
+        "article": ""
+    })
+    return {"final_article": result["article"]}
+
+# 主图
+main_graph = StateGraph(OrchestratorState)
+main_graph.add_node("researcher", call_researcher)
+main_graph.add_node("writer", call_writer)
+
+main_graph.add_edge(START, "researcher")
+main_graph.add_edge("researcher", "writer")
+main_graph.add_edge("writer", END)
+
+orchestrator = main_graph.compile()
+
+# 运行
+result = orchestrator.invoke({
+    "messages": [HumanMessage(content="写一篇关于量子计算的科普文章")],
+    "topic": "量子计算的基本原理和应用前景",
+    "research_result": "",
+    "final_article": ""
+})
+```
+
+```mermaid
+graph TD
+    A[START] --> B[研究 Agent\n调研主题]
+    B --> C[写作 Agent\n撰写文章]
+    C --> D[END]
+
+    subgraph 研究子图
+        B1[搜索资料] --> B2[总结发现]
+    end
+
+    subgraph 写作子图
+        C1[组织结构] --> C2[生成文章]
+    end
+```
+
+---
+
+## 十一、预构建组件：快速上手
+
+LangGraph 提供了一些常用模式的预构建实现，让你无需从零搭建：
+
+### 11.1 create_react_agent
+
+最常用的 ReAct Agent，一行代码搞定：
+
+```python
+from langgraph.prebuilt import create_react_agent
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+
+@tool
+def multiply(a: int, b: int) -> int:
+    """将两个数相乘"""
+    return a * b
+
+@tool
+def add(a: int, b: int) -> int:
+    """将两个数相加"""
+    return a + b
+
+model = ChatOpenAI(model="gpt-4o")
+tools = [multiply, add]
+
+# 一行创建完整的 ReAct Agent
+agent = create_react_agent(
+    model=model,
+    tools=tools,
+    # 可选：添加系统提示
+    prompt="你是一个数学计算助手，善于使用工具解决计算问题。"
+)
+
+# 使用
+result = agent.invoke({
+    "messages": [HumanMessage(content="计算 (12 + 8) * 5")]
+})
+print(result["messages"][-1].content)
+```
+
+### 11.2 ToolNode
+
+`ToolNode` 是一个预构建节点，自动处理工具调用消息并执行对应工具：
+
+```python
+from langgraph.prebuilt import ToolNode
+
+# 工具节点会自动：
+# 1. 从最后一条 AI 消息中提取 tool_calls
+# 2. 并行执行所有工具调用
+# 3. 将结果作为 ToolMessage 返回
+tool_node = ToolNode(tools=[get_weather, search_web, calculate])
+
+# 如果需要错误处理
+tool_node = ToolNode(
+    tools=[get_weather, search_web],
+    handle_tool_errors=True  # 工具执行出错时返回错误信息而非抛异常
+)
+```
+
+### 11.3 tools_condition
+
+内置的条件路由，判断是否需要调用工具：
+
+```python
+from langgraph.prebuilt import tools_condition
+
+# 等价于以下自定义逻辑：
+def my_tools_condition(state):
+    last_msg = state["messages"][-1]
+    if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+        return "tools"
+    return END
+```
+
+---
+
+## 十二、实战案例：构建一个研究助手
+
+把前面学到的所有概念综合起来，构建一个完整的研究助手 Agent。它能：
+
+1. 接收用户的研究问题
+2. 自动搜索相关信息
+3. 整理出研究报告
+4. 让用户审核并提出修改意见
+5. 根据反馈迭代修改
+
+```python
+from typing import Annotated, TypedDict, Literal
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import interrupt
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.tools import tool
+
+# ========== 工具定义 ==========
+@tool
+def web_search(query: str) -> str:
+    """搜索网络获取最新信息"""
+    return f"搜索「{query}」的结果：\n1. ...\n2. ...\n3. ..."
+
+@tool
+def save_note(content: str) -> str:
+    """保存研究笔记"""
+    return f"笔记已保存：{content[:50]}..."
+
+# ========== 状态定义 ==========
+class ResearchAssistantState(TypedDict):
+    messages: Annotated[list, add_messages]
+    research_question: str
+    collected_info: list[str]
+    report: str
+    revision_count: int
+    phase: str  # planning | researching | writing | reviewing
+
+# ========== 模型和工具 ==========
+model = ChatOpenAI(model="gpt-4o")
+tools = [web_search, save_note]
+model_with_tools = model.bind_tools(tools)
+
+# ========== 节点定义 ==========
+def planner(state: ResearchAssistantState) -> dict:
+    """规划研究策略"""
+    response = model.invoke([
+        SystemMessage(content="""你是研究策略规划师。
+根据用户的研究问题，制定搜索策略：列出需要搜索的关键词和角度。"""),
+        HumanMessage(content=f"研究问题：{state['research_question']}")
+    ])
+    return {
+        "messages": [response],
+        "phase": "researching"
+    }
+
+def researcher(state: ResearchAssistantState) -> dict:
+    """执行研究（调用搜索工具）"""
+    response = model_with_tools.invoke([
+        SystemMessage(content="""你是研究员。使用搜索工具收集信息。
+当你觉得信息足够时，不要再调用工具，直接总结你的发现。"""),
+        *state["messages"][-5:]  # 只保留最近的上下文
+    ])
+    return {"messages": [response]}
+
+def writer(state: ResearchAssistantState) -> dict:
+    """撰写研究报告"""
+    response = model.invoke([
+        SystemMessage(content="""你是报告撰写专家。
+根据收集的研究信息，撰写一份结构清晰的研究报告。
+包含：摘要、主要发现、分析、结论。"""),
+        HumanMessage(content=f"研究问题：{state['research_question']}\n\n"
+                           f"收集到的信息：\n{''.join(state.get('collected_info', []))}\n\n"
+                           f"对话历史摘要：{state['messages'][-1].content if state['messages'] else '无'}")
+    ])
+    return {
+        "report": response.content,
+        "messages": [response],
+        "phase": "reviewing"
+    }
+
+def human_reviewer(state: ResearchAssistantState) -> dict:
+    """人工审核节点"""
+    feedback = interrupt({
+        "report": state["report"],
+        "prompt": "请审核研究报告。输入'approve'批准，或输入修改意见："
+    })
+
+    if feedback.lower() == "approve":
+        return {"phase": "done"}
+    else:
+        return {
+            "phase": "writing",
+            "messages": [HumanMessage(content=f"修改意见：{feedback}")],
+            "revision_count": state.get("revision_count", 0) + 1
+        }
+
+# ========== 路由函数 ==========
+def research_router(state: ResearchAssistantState) -> str:
+    """研究阶段的路由"""
+    last_msg = state["messages"][-1]
+    if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+        return "tools"
+    return "writer"  # 不再需要工具，进入写作阶段
+
+def review_router(state: ResearchAssistantState) -> str:
+    """审核后的路由"""
+    if state.get("phase") == "done" or state.get("revision_count", 0) >= 3:
+        return END
+    return "writer"
+
+# ========== 构建图 ==========
+from langgraph.prebuilt import ToolNode
+
+graph = StateGraph(ResearchAssistantState)
+
+# 添加节点
+graph.add_node("planner", planner)
+graph.add_node("researcher", researcher)
+graph.add_node("tools", ToolNode(tools))
+graph.add_node("writer", writer)
+graph.add_node("reviewer", human_reviewer)
+
+# 添加边
+graph.add_edge(START, "planner")
+graph.add_edge("planner", "researcher")
+graph.add_conditional_edges("researcher", research_router, {"tools": "tools", "writer": "writer"})
+graph.add_edge("tools", "researcher")
+graph.add_edge("writer", "reviewer")
+graph.add_conditional_edges("reviewer", review_router, {END: END, "writer": "writer"})
+
+# 编译
+research_assistant = graph.compile(checkpointer=MemorySaver())
+```
+
+执行流程图：
+
+```mermaid
+graph TD
+    A[START] --> B[Planner\n制定研究策略]
+    B --> C[Researcher\n搜索信息]
+    C --> D{需要更多信息?}
+    D -- 是 --> E[Tools\n执行搜索]
+    E --> C
+    D -- 否 --> F[Writer\n撰写报告]
+    F --> G[Human Review\n人工审核]
+    G --> H{批准?}
+    H -- 修改意见 --> F
+    H -- 批准或超限 --> I[END]
+```
+
+使用这个 Agent：
+
+```python
+config = {"configurable": {"thread_id": "research-1"}}
+
+# 启动研究
+result = research_assistant.invoke(
+    {
+        "messages": [HumanMessage(content="帮我研究 LLM 在医疗领域的应用现状")],
+        "research_question": "LLM 在医疗领域的应用现状和未来趋势",
+        "collected_info": [],
+        "report": "",
+        "revision_count": 0,
+        "phase": "planning"
+    },
+    config=config
+)
+
+# 图会在 reviewer 节点暂停，等待人工审核
+snapshot = research_assistant.get_state(config)
+print("报告已生成，等待审核...")
+
+# 人工审核后恢复
+from langgraph.types import Command
+research_assistant.invoke(
+    Command(resume="请补充关于 AI 辅助诊断的准确率数据"),
+    config=config
+)
+```
+
+---
+
+## 十三、调试与可观测性
+
+### 13.1 使用 LangSmith 追踪
+
+LangGraph 原生支持 [LangSmith](https://smith.langchain.com/) 追踪，让你可视化每一步的输入、输出和延迟：
+
+```python
+import os
+
+# 设置环境变量即可启用
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_API_KEY"] = "your-api-key"
+os.environ["LANGCHAIN_PROJECT"] = "my-langgraph-project"
+
+# 之后的所有 graph.invoke() 调用都会自动被追踪
+```
+
+### 13.2 打印执行步骤
+
+```python
+# 通过 stream 观察每个节点的执行
+for event in graph.stream(input_data, config=config):
+    for node_name, output in event.items():
+        print(f"\n{'='*50}")
+        print(f"节点: {node_name}")
+        print(f"输出: {output}")
+        print(f"{'='*50}")
+```
+
+### 13.3 获取图结构
+
+```python
+# Mermaid 格式（可粘贴到 Mermaid Live Editor 预览）
+print(graph.get_graph().draw_mermaid())
+
+# ASCII 格式
+graph.get_graph().print_ascii()
+```
+
+---
+
+## 十四、最佳实践与常见陷阱
+
+### 最佳实践
+
+1. **State 设计要精简**：只放真正需要跨节点共享的数据，临时变量放在节点内部
+
+```python
+# 好的设计：State 只包含核心数据
+class GoodState(TypedDict):
+    messages: Annotated[list, add_messages]
+    final_answer: str
+    approval_status: str
+
+# 不好的设计：把临时变量也放进 State
+class BadState(TypedDict):
+    messages: Annotated[list, add_messages]
+    temp_prompt: str  # 这只在一个节点内用
+    loop_variable: int  # 这可以用节点内局部变量
+    debug_info: dict  # 调试信息不该污染 State
+```
+
+2. **始终设置 recursion_limit**：
+
+```python
+graph = graph_builder.compile(
+    checkpointer=memory,
+    recursion_limit=30  # 根据业务场景合理设置
+)
+```
+
+3. **节点函数保持纯粹**：一个节点做一件事
+
+```python
+# 好：每个节点职责单一
+def classify(state): ...
+def fetch_data(state): ...
+def generate_reply(state): ...
+
+# 不好：一个节点做了太多事
+def do_everything(state):
+    # 分类 + 获取数据 + 生成回复 全在一个函数里
+    ...
+```
+
+4. **错误处理要周全**：
+
+```python
+def safe_tool_node(state: AgentState) -> dict:
+    """带错误处理的工具节点"""
+    try:
+        # 执行工具逻辑
+        result = execute_tool(state)
+        return {"messages": [ToolMessage(content=result)]}
+    except Exception as e:
+        # 将错误信息作为工具结果返回给 LLM
+        error_msg = f"工具执行出错：{str(e)}。请换一种方式尝试。"
+        return {"messages": [ToolMessage(content=error_msg)]}
+```
+
+### 常见陷阱
+
+:::warning 常见陷阱
+
+**1. 忘记 Reducer 导致状态丢失**
+
+```python
+# 错误：messages 没有用 add_messages，每次会被覆盖
+class BadState(TypedDict):
+    messages: list  # 丢失了历史消息！
+
+# 正确：
+class GoodState(TypedDict):
+    messages: Annotated[list, add_messages]
+```
+
+**2. 条件边的返回值与映射不匹配**
+
+```python
+# 错误：路由函数返回 "end"，但映射中没有这个 key
+def router(state):
+    return "end"  # 找不到对应的节点！
+
+graph.add_conditional_edges("node", router, {
+    "continue": "next_node",
+    "stop": END  # 应该用 "end" 而非 "stop"
+})
+```
+
+**3. 在有循环的图中不设置退出条件**
+
+Agent 可能因为 LLM 持续产生工具调用而陷入无限循环，务必有退出机制。
+
+**4. Checkpointer 的 thread_id 冲突**
+
+不同用户/会话必须使用不同的 `thread_id`，否则状态会互相覆盖。
+
+:::
+
+---
+
+## 十五、LangGraph 与其他框架对比
+
+| 框架 | 适用场景 | 优势 | 劣势 |
+| :--- | :--- | :--- | :--- |
+| **LangGraph** | 复杂 Agent、多步骤工作流 | 精确控制流程、持久化、人工介入 | 学习曲线较陡 |
+| **LangChain LCEL** | 简单线性 Chain | 简洁直观、上手快 | 不支持循环和复杂分支 |
+| **CrewAI** | 多 Agent 角色扮演 | 易于定义 Agent 角色 | 控制力弱、不够灵活 |
+| **AutoGen** | 多 Agent 对话 | 自然的对话式协作 | 执行路径不可预测 |
+
+**选择建议**：
+
+- 如果你的应用是简单的 Prompt → LLM → 输出，用 **LCEL** 就够了
+- 如果你需要循环、分支、持久化、人工介入中的任意一个，选 **LangGraph**
+- 如果你需要多个 Agent 角色协作且不关心底层控制，试试 **CrewAI**
+
+---
+
+## 总结
+
+LangGraph 的核心价值在于：将复杂的 Agent 行为从"不可预测的黑盒"变为"可视化、可控制、可调试的状态机"。
+
+回顾本文的知识脉络：
+
+```mermaid
+graph TD
+    A[图的三要素\nState / Node / Edge] --> B[基础图构建\n线性工作流]
+    B --> C[工具调用\nAgent 能行动]
+    C --> D[条件分支\n多路由]
+    D --> E[循环\nReAct 模式]
+    E --> F[持久化\nCheckpointer]
+    F --> G[人工介入\ninterrupt]
+    G --> H[流式输出\nstream]
+    H --> I[子图\n多 Agent 协作]
+    I --> J[实战\n完整案例]
+```
+
+掌握这些概念后，你已经具备构建生产级 AI Agent 的能力。LangGraph 的设计哲学是"显式优于隐式"——你定义的每一条边、每一个条件都是可见的、可调试的。这种透明性在生产环境中价值巨大。
+
+:::tip 下一步学习
+- [LangGraph 官方文档](https://langchain-ai.github.io/langgraph/) —— 完整 API 参考
+- [LangGraph Studio](https://github.com/langchain-ai/langgraph-studio) —— 可视化调试工具
+- [LangGraph Cloud](https://langchain-ai.github.io/langgraph/cloud/) —— 云端部署方案
+:::

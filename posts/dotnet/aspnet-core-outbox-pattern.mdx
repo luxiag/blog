@@ -1,0 +1,763 @@
+---
+title: 'ASP.NET Core Outbox Pattern：数据库与消息一致性'
+date: '2026-07-21'
+excerpt: '理解 ASP.NET Core 中 Outbox Pattern 的落地方式：本地事务、Outbox 表、后台发布、幂等消费、重试和消息一致性边界。'
+tags: ['dotnet', 'aspnetcore', 'outbox', 'messaging', 'distributed-systems']
+---
+
+# ASP.NET Core Outbox Pattern：数据库与消息一致性
+
+在业务系统中，经常会遇到一个问题：数据库更新成功后，还要发布一条消息。例如订单创建后发布 `OrderCreated` 事件，库存服务、积分服务、通知服务都要消费它。
+
+如果数据库保存成功，但消息发布失败，系统状态就不一致。Outbox Pattern 用来解决这个问题。
+
+:::tip 阶段四阅读顺序
+建议先掌握 [EF Core](/posts/dotnet/aspnet-core-ef-core)、[BackgroundService](/posts/dotnet/aspnet-core-background-service)、[DDD 入门](/posts/dotnet/aspnet-core-ddd-basics) 后阅读本文。
+:::
+
+## 问题场景
+
+不可靠写法：
+
+```csharp
+order.Pay();
+await dbContext.SaveChangesAsync(cancellationToken);
+
+await messageBus.PublishAsync(new OrderPaidEvent(order.Id), cancellationToken);
+```
+
+如果 `SaveChangesAsync` 成功，但 `PublishAsync` 失败，订单已经支付，但外部系统收不到事件。
+
+反过来，如果先发消息再保存数据库，也可能消息发出去了但数据库保存失败。
+
+## Outbox 的核心思路
+
+在同一个数据库事务中：
+
+1. 保存业务数据。
+2. 保存待发布消息到 Outbox 表。
+
+然后由后台任务扫描 Outbox 表，把消息发布到消息队列。发布成功后标记为已发布。
+
+```text
+HTTP Request
+-> Save Order + Insert OutboxMessage in same transaction
+-> BackgroundService reads OutboxMessage
+-> Publish to Message Broker
+-> Mark as Processed
+```
+
+## IMessageBus 接口
+
+后台发布和业务代码都依赖 `IMessageBus`，它的签名如下：
+
+```csharp
+public interface IMessageBus
+{
+    Task PublishAsync(string type, string content, CancellationToken cancellationToken = default);
+}
+```
+
+`type` 是事件类型的全限定名（如 `OrderPaidEvent` 的 `FullName`），`content` 是 JSON 序列化后的事件体。具体的实现可以是 RabbitMQ、Kafka、Azure Service Bus 等，本文不关注传输细节。
+
+## Outbox 表设计
+
+```csharp
+public enum OutboxMessageStatus
+{
+    Pending = 0,
+    InProgress = 1,
+    Published = 2,
+    Failed = 3
+}
+
+public class OutboxMessage
+{
+    public long Id { get; set; }
+    public Guid MessageId { get; set; }
+    public string Type { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
+    public DateTime OccurredAt { get; set; }
+    public OutboxMessageStatus Status { get; set; } = OutboxMessageStatus.Pending;
+    public DateTime? ProcessedAt { get; set; }
+    public string? Error { get; set; }
+    public int RetryCount { get; set; }
+    public int MaxRetries { get; set; } = 5;
+}
+```
+
+`MessageId` 是全局唯一标识，消费者用它做幂等去重。`Status` 字段从 `Pending` 开始，发布时先转到 `InProgress`，成功后变 `Published`，失败则回退到 `Pending`（或超过重试上限后标记 `Failed`）。
+
+EF Core 配置：
+
+```csharp
+public class OutboxMessageConfiguration : IEntityTypeConfiguration<OutboxMessage>
+{
+    public void Configure(EntityTypeBuilder<OutboxMessage> builder)
+    {
+        builder.ToTable("OutboxMessages");
+        builder.HasKey(message => message.Id);
+        builder.Property(message => message.MessageId).IsRequired();
+        builder.HasIndex(message => message.MessageId).IsUnique();
+        builder.Property(message => message.Type).HasMaxLength(500).IsRequired();
+        builder.Property(message => message.Content).IsRequired();
+        builder.Property(message => message.Status).IsRequired();
+        builder.HasIndex(message => message.Status);
+    }
+}
+```
+
+## 写入 Outbox
+
+```csharp
+public async Task PayOrderAsync(long orderId, CancellationToken cancellationToken)
+{
+    Order order = await _dbContext.Orders.FindAsync([orderId], cancellationToken)
+        ?? throw new NotFoundException("Order not found.");
+
+    order.Pay();
+
+    var domainEvent = new OrderPaidEvent(order.Id, order.CustomerId);
+
+    _dbContext.OutboxMessages.Add(new OutboxMessage
+    {
+        MessageId = Guid.NewGuid(),
+        Type = domainEvent.GetType().FullName!,
+        Content = JsonSerializer.Serialize(domainEvent),
+        OccurredAt = DateTime.UtcNow,
+        Status = OutboxMessageStatus.Pending
+    });
+
+    await _dbContext.SaveChangesAsync(cancellationToken);
+}
+```
+
+订单状态和 Outbox 消息在同一次 `SaveChangesAsync` 中提交，要么都成功，要么都失败。
+
+## 后台发布
+
+### 基础版本（单实例）
+
+```csharp
+public class OutboxPublisher : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<OutboxPublisher> _logger;
+
+    public OutboxPublisher(IServiceScopeFactory scopeFactory, ILogger<OutboxPublisher> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+        {
+            try
+            {
+                await PublishPendingMessagesAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Outbox publishing failed.");
+            }
+        }
+    }
+
+    private async Task PublishPendingMessagesAsync(CancellationToken cancellationToken)
+    {
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var bus = scope.ServiceProvider.GetRequiredService<IMessageBus>();
+
+        List<OutboxMessage> messages = await dbContext.OutboxMessages
+            .Where(message => message.Status == OutboxMessageStatus.Pending)
+            .OrderBy(message => message.Id)
+            .Take(20)
+            .ToListAsync(cancellationToken);
+
+        if (messages.Count == 0)
+        {
+            return;
+        }
+
+        foreach (OutboxMessage message in messages)
+        {
+            message.Status = OutboxMessageStatus.InProgress;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        bool allSucceeded = true;
+
+        foreach (OutboxMessage message in messages)
+        {
+            try
+            {
+                await bus.PublishAsync(message.Type, message.Content, cancellationToken);
+                message.Status = OutboxMessageStatus.Published;
+                message.ProcessedAt = DateTime.UtcNow;
+                message.Error = null;
+            }
+            catch (Exception ex)
+            {
+                allSucceeded = false;
+                message.RetryCount++;
+                message.Error = ex.Message;
+
+                if (message.RetryCount >= message.MaxRetries)
+                {
+                    message.Status = OutboxMessageStatus.Failed;
+                    _logger.LogError("Outbox message {Id} exceeded max retries.", message.Id);
+                }
+                else
+                {
+                    message.Status = OutboxMessageStatus.Pending;
+                }
+            }
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddHostedService<OutboxPublisher>();
+```
+
+### 并发安全：多实例部署的重复发布问题
+
+上面的版本在单实例下工作正常，但多实例部署时存在严重问题：两个 Pod 同时轮询，都会读到同一批 `Pending` 消息，导致重复发布。
+
+核心思路是**先把消息状态从 `Pending` 改为 `InProgress`，再发布**。利用数据库行级锁或原子更新，确保同一条消息只被一个实例抢占。
+
+#### 方案一：基于 Status 字段的原子更新
+
+```csharp
+private async Task<List<OutboxMessage>> ClaimMessagesAsync(
+    AppDbContext dbContext, int batchSize, CancellationToken cancellationToken)
+{
+    DateTime cutoff = DateTime.UtcNow.AddMinutes(-5);
+
+    List<OutboxMessage> messages = await dbContext.OutboxMessages
+        .Where(message => message.Status == OutboxMessageStatus.Pending
+                       && message.OccurredAt <= cutoff)
+        .OrderBy(message => message.Id)
+        .Take(batchSize)
+        .ToListAsync(cancellationToken);
+
+    if (messages.Count == 0)
+    {
+        return messages;
+    }
+
+    foreach (OutboxMessage message in messages)
+    {
+        message.Status = OutboxMessageStatus.InProgress;
+    }
+
+    try
+    {
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return messages;
+    }
+    catch (DbUpdateConcurrencyException)
+    {
+        foreach (var entry in dbContext.ChangeTracker.Entries<OutboxMessage>())
+        {
+            entry.State = EntityState.Detached;
+        }
+
+        return new List<OutboxMessage>();
+    }
+}
+```
+
+EF Core 默认的并发令牌机制会在 `UPDATE` 时加 `WHERE Status = 0`（即 `Pending`）。如果另一个实例已经先把它改成 `InProgress`，`SaveChanges` 影响行数为 0，抛出 `DbUpdateConcurrencyException`，当前实例放弃这批消息。
+
+要让 EF Core 生成带旧值条件的 `UPDATE` 语句，需要把 `Status` 标记为并发令牌：
+
+```csharp
+builder.Property(message => message.Status)
+    .IsRequired()
+    .IsConcurrencyToken();
+```
+
+这样 EF Core 在 `UPDATE` 时会生成：
+
+```sql
+UPDATE OutboxMessages
+SET Status = 1
+WHERE Id = @id AND Status = 0
+```
+
+只有 `Status` 仍是 `Pending` 的行才会被更新，实现了原子抢占。
+
+#### 方案二：原生 SQL 先锁后取
+
+对于高并发场景，可以用原生 SQL 先批量锁定再加载：
+
+```csharp
+private async Task<List<OutboxMessage>> ClaimMessagesRawSqlAsync(
+    AppDbContext dbContext, int batchSize, CancellationToken cancellationToken)
+{
+    var ids = await dbContext.OutboxMessages
+        .Where(message => message.Status == OutboxMessageStatus.Pending)
+        .OrderBy(message => message.Id)
+        .Take(batchSize)
+        .Select(message => message.Id)
+        .ToListAsync(cancellationToken);
+
+    if (ids.Count == 0)
+    {
+        return new List<OutboxMessage>();
+    }
+
+    string idList = string.Join(",", ids);
+    int updated = await dbContext.Database.ExecuteSqlRawAsync(
+        $"""
+        UPDATE OutboxMessages
+        SET Status = 1
+        WHERE Id IN ({idList}) AND Status = 0
+        """,
+        cancellationToken);
+
+    if (updated == 0)
+    {
+        return new List<OutboxMessage>();
+    }
+
+    return await dbContext.OutboxMessages
+        .Where(message => ids.Contains(message.Id) && message.Status == OutboxMessageStatus.InProgress)
+        .OrderBy(message => message.Id)
+        .ToListAsync(cancellationToken);
+}
+```
+
+`WHERE Status = 0` 确保只有未被抢占的消息才会被更新，`updated` 为 0 说明这批已被别的实例拿走了。
+
+两种方案对比：
+
+| | 方案一（EF Core 并发令牌） | 方案二（原生 SQL） |
+|---|---|---|
+| 抢占粒度 | 逐行抢占，冲突时整批放弃 | 批量抢占，只拿到真正空闲的行 |
+| 代码侵入 | 需要加 `IsConcurrencyToken()` | 需要写原生 SQL |
+| 数据库兼容 | EF Core 自动适配方言 | 需按数据库调整语法 |
+| 适用场景 | 中等并发、批量规模小 | 高并发、批量规模大 |
+
+### 消息顺序性
+
+Outbox 按 `Id` 排序取出消息，但 `foreach` 逐条发布时，如果第 3 条失败、第 4 条成功，消费端收到的顺序就与写入顺序不一致。
+
+有三种常见策略：
+
+#### 策略一：整批原子提交
+
+```csharp
+private async Task PublishBatchAtomicallyAsync(
+    List<OutboxMessage> messages,
+    AppDbContext dbContext,
+    IMessageBus bus,
+    CancellationToken cancellationToken)
+{
+    OutboxMessage? failedMessage = null;
+
+    foreach (OutboxMessage message in messages)
+    {
+        try
+        {
+            await bus.PublishAsync(message.Type, message.Content, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            failedMessage = message;
+            message.RetryCount++;
+            message.Error = ex.Message;
+            _logger.LogWarning("Failed to publish message {Id}: {Error}", message.Id, ex.Message);
+            break;
+        }
+
+        message.Status = OutboxMessageStatus.Published;
+        message.ProcessedAt = DateTime.UtcNow;
+        message.Error = null;
+    }
+
+    if (failedMessage != null)
+    {
+        if (failedMessage.RetryCount >= failedMessage.MaxRetries)
+        {
+            failedMessage.Status = OutboxMessageStatus.Failed;
+        }
+        else
+        {
+            failedMessage.Status = OutboxMessageStatus.Pending;
+        }
+
+        long failedId = failedMessage.Id;
+        foreach (OutboxMessage message in messages.Where(m => m.Id > failedId))
+        {
+            message.Status = OutboxMessageStatus.Pending;
+        }
+    }
+
+    await dbContext.SaveChangesAsync(cancellationToken);
+}
+```
+
+遇到失败立即停止，未发布的消息保持 `Pending`，下次继续。消费端收到的是严格有序的子序列，失败消息之前的顺序完全正确。
+
+缺点：一条消息阻塞整批，如果某条消息持续失败，后面的消息全部延迟。
+
+#### 策略二：跳过失败消息继续发布
+
+```csharp
+private async Task PublishBatchWithSkipAsync(
+    List<OutboxMessage> messages,
+    AppDbContext dbContext,
+    IMessageBus bus,
+    CancellationToken cancellationToken)
+{
+    foreach (OutboxMessage message in messages)
+    {
+        try
+        {
+            await bus.PublishAsync(message.Type, message.Content, cancellationToken);
+            message.Status = OutboxMessageStatus.Published;
+            message.ProcessedAt = DateTime.UtcNow;
+            message.Error = null;
+        }
+        catch (Exception ex)
+        {
+            message.RetryCount++;
+            message.Error = ex.Message;
+
+            if (message.RetryCount >= message.MaxRetries)
+            {
+                message.Status = OutboxMessageStatus.Failed;
+            }
+            else
+            {
+                message.Status = OutboxMessageStatus.Pending;
+            }
+
+            _logger.LogWarning("Skipped message {Id}, will retry later.", message.Id);
+        }
+    }
+
+    await dbContext.SaveChangesAsync(cancellationToken);
+}
+```
+
+跳过失败消息继续发布，吞吐量不会受单条消息影响，但顺序无法保证。适用于对顺序要求不严格的场景（如通知类事件）。
+
+#### 策略三：按聚合根分组保序
+
+```csharp
+private async Task PublishPendingByAggregateAsync(
+    AppDbContext dbContext,
+    IMessageBus bus,
+    CancellationToken cancellationToken)
+{
+    List<OutboxMessage> messages = await dbContext.OutboxMessages
+        .Where(message => message.Status == OutboxMessageStatus.Pending)
+        .OrderBy(message => message.Id)
+        .Take(50)
+        .ToListAsync(cancellationToken);
+
+    var groups = messages.GroupBy(message =>
+    {
+        var payload = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(message.Content);
+        return payload!.TryGetValue("AggregateId", out JsonElement aggId) ? aggId.GetInt64() : message.Id;
+    });
+
+    foreach (var group in groups)
+    {
+        OutboxMessage? failedMessage = null;
+
+        foreach (OutboxMessage message in group)
+        {
+            if (failedMessage != null)
+            {
+                break;
+            }
+
+            try
+            {
+                await bus.PublishAsync(message.Type, message.Content, cancellationToken);
+                message.Status = OutboxMessageStatus.Published;
+                message.ProcessedAt = DateTime.UtcNow;
+            }
+            catch (Exception ex)
+            {
+                failedMessage = message;
+                message.RetryCount++;
+                message.Error = ex.Message;
+                message.Status = OutboxMessageStatus.Pending;
+            }
+        }
+
+        long failedId = failedMessage?.Id ?? long.MaxValue;
+        foreach (OutboxMessage message in group.Where(m => m.Id > failedId))
+        {
+            message.Status = OutboxMessageStatus.Pending;
+        }
+    }
+
+    await dbContext.SaveChangesAsync(cancellationToken);
+}
+```
+
+不同聚合根的消息可以并行发布，同一聚合根内保持严格顺序。这是生产环境最常用的折中方案——既不因一条失败消息阻塞全局，又保证了同一业务实体的事件顺序。
+
+策略对比：
+
+| | 整批原子提交 | 跳过失败继续 | 按聚合根分组保序 |
+|---|---|---|---|
+| 顺序保证 | 严格有序 | 无保证 | 同聚合根内有序 |
+| 吞吐量 | 低（一条卡全批） | 高 | 中 |
+| 复杂度 | 低 | 低 | 中 |
+| 适用场景 | 强顺序需求 | 通知/日志类事件 | 典型业务场景 |
+
+## 幂等消费
+
+Outbox 保证消息最终会发布，但不能保证消费者只收到一次。消息队列和重试机制下，消费者必须支持幂等。
+
+### 消费端去重表
+
+最常见的做法是建一张 `ConsumedMessage` 表，记录已处理的 `MessageId`：
+
+```csharp
+public class ConsumedMessage
+{
+    public Guid MessageId { get; set; }
+    public DateTime ConsumedAt { get; set; }
+}
+```
+
+```csharp
+public class ConsumedMessageConfiguration : IEntityTypeConfiguration<ConsumedMessage>
+{
+    public void Configure(EntityTypeBuilder<ConsumedMessage> builder)
+    {
+        builder.ToTable("ConsumedMessages");
+        builder.HasKey(message => message.MessageId);
+    }
+}
+```
+
+消费者基类封装去重逻辑：
+
+```csharp
+public abstract class IdempotentConsumer<TEvent>
+{
+    private readonly AppDbContext _dbContext;
+    private readonly ILogger _logger;
+
+    protected IdempotentConsumer(AppDbContext dbContext, ILogger logger)
+    {
+        _dbContext = dbContext;
+        _logger = logger;
+    }
+
+    public async Task HandleAsync(Guid messageId, TEvent payload, CancellationToken cancellationToken)
+    {
+        bool alreadyConsumed = await _dbContext.ConsumedMessages
+            .AnyAsync(message => message.MessageId == messageId, cancellationToken);
+
+        if (alreadyConsumed)
+        {
+            _logger.LogInformation("Message {MessageId} already consumed, skipping.", messageId);
+            return;
+        }
+
+        _dbContext.ConsumedMessages.Add(new ConsumedMessage
+        {
+            MessageId = messageId,
+            ConsumedAt = DateTime.UtcNow
+        });
+
+        await HandleCoreAsync(payload, cancellationToken);
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    protected abstract Task HandleCoreAsync(TEvent payload, CancellationToken cancellationToken);
+}
+```
+
+具体消费者：
+
+```csharp
+public class OrderPaidConsumer : IdempotentConsumer<OrderPaidEvent>
+{
+    private readonly AppDbContext _dbContext;
+
+    public OrderPaidConsumer(AppDbContext dbContext, ILogger<OrderPaidConsumer> logger)
+        : base(dbContext, logger)
+    {
+        _dbContext = dbContext;
+    }
+
+    protected override async Task HandleCoreAsync(OrderPaidEvent payload, CancellationToken cancellationToken)
+    {
+        Inventory inventory = await _dbContext.Inventories
+            .FindAsync([payload.OrderId], cancellationToken)
+            ?? throw new NotFoundException("Inventory not found.");
+
+        inventory.Reserve(payload.OrderId);
+    }
+}
+```
+
+关键点：`ConsumedMessage` 的写入和业务操作在同一个 `SaveChangesAsync` 中提交。如果业务逻辑抛异常，`ConsumedMessage` 也不会写入，下次收到同一条消息时会重新执行。如果 `SaveChangesAsync` 成功，`MessageId` 已记录，后续重复消息直接跳过。
+
+### 消费端去重的其他方式
+
+| 方式 | 适用场景 | 说明 |
+|---|---|---|
+| 去重表 | 通用 | 独立表记录 `MessageId`，适用所有场景 |
+| 业务唯一键 | 消息与业务实体一对一 | 如 `OrderPaidEvent.OrderId`，用 `INSERT WHERE NOT EXISTS` 避免重复 |
+| 天然幂等操作 | 操作本身可重复执行 | 如 `UPDATE SET Status = Paid WHERE OrderId = @id`，重复执行结果不变 |
+
+选择原则：优先利用业务逻辑天然幂等，其次用业务唯一键，最后才用去重表。去重表是兜底方案，通用但有额外存储和查询开销。
+
+## Outbox 清理策略
+
+Outbox 表会持续增长。已发布的消息留太久会拖慢查询、占用空间，需要定期清理。
+
+### 清理方案
+
+```csharp
+public class OutboxCleanupService : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<OutboxCleanupService> _logger;
+    private readonly TimeSpan _retentionPeriod = TimeSpan.FromDays(7);
+
+    public OutboxCleanupService(
+        IServiceScopeFactory scopeFactory,
+        ILogger<OutboxCleanupService> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromHours(6));
+
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+        {
+            try
+            {
+                await CleanupAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Outbox cleanup failed.");
+            }
+        }
+    }
+
+    private async Task CleanupAsync(CancellationToken cancellationToken)
+    {
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        DateTime cutoff = DateTime.UtcNow - _retentionPeriod;
+
+        int deleted = await dbContext.OutboxMessages
+            .Where(message => message.Status == OutboxMessageStatus.Published
+                           && message.ProcessedAt != null
+                           && message.ProcessedAt < cutoff)
+            .ExecuteDeleteAsync(cancellationToken);
+
+        if (deleted > 0)
+        {
+            _logger.LogInformation("Cleaned up {Count} published outbox messages older than {Cutoff}.", deleted, cutoff);
+        }
+
+        int failedCount = await dbContext.OutboxMessages
+            .CountAsync(message => message.Status == OutboxMessageStatus.Failed, cancellationToken);
+
+        if (failedCount > 0)
+        {
+            _logger.LogWarning("{Count} outbox messages in Failed status require manual review.", failedCount);
+        }
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddHostedService<OutboxCleanupService>();
+```
+
+### 清理决策要点
+
+| 状态 | 处理方式 | 说明 |
+|---|---|---|
+| `Published` | 保留 7-30 天后删除 | 保留期用于排查问题和审计 |
+| `Failed` | 不自动删除 | 需要人工介入或转入死信表 |
+| `Pending` / `InProgress` | 不删除 | 仍在发布流程中 |
+
+生产环境的清理策略需要根据业务要求调整：
+
+- **审计需求强的领域**（金融、支付）：`Published` 消息归档到冷存储而非直接删除，保留半年到数年。
+- **高频事件场景**：缩短保留期到 3-7 天，或者按条数限制（如只保留最近 10 万条）。
+- `InProgress` 状态如果长时间不更新（如超过 30 分钟），说明发布实例可能崩溃，需要将其重置为 `Pending` 让其他实例重新处理。
+
+```csharp
+DateTime inProgressCutoff = DateTime.UtcNow.AddMinutes(-30);
+List<OutboxMessage> staleMessages = await dbContext.OutboxMessages
+    .Where(message => message.Status == OutboxMessageStatus.InProgress
+                   && message.OccurredAt < inProgressCutoff)
+    .ToListAsync(cancellationToken);
+
+foreach (OutboxMessage message in staleMessages)
+{
+    message.Status = OutboxMessageStatus.Pending;
+}
+
+await dbContext.SaveChangesAsync(cancellationToken);
+```
+
+## 重试与失败处理
+
+Outbox 表需要关注：
+
+- `RetryCount`
+- `Error`
+- `ProcessedAt`
+- 最大重试次数
+- 死信处理
+- 后台任务监控
+
+长期失败的消息不要无限重试，应进入人工处理或死信队列。
+
+## 使用边界
+
+Outbox 适合：
+
+- 数据库变更后发布集成事件。
+- 单体拆微服务过程中的事件发布。
+- 需要本地事务和消息最终一致。
+
+Outbox 不能解决：
+
+- 跨多个数据库的强一致事务。
+- 消费端业务幂等问题（需消费者自行实现去重）。
+- 跨聚合根的消息全局顺序（只能保证同聚合根内的顺序）。
+
+## 总结
+
+Outbox Pattern 用本地数据库事务保证"业务数据"和"待发布消息"一起提交，再由后台任务异步发布消息。它牺牲实时性，换取最终一致性和更高可靠性，是 ASP.NET Core 生产系统中非常实用的消息一致性模式。
+
+生产落地还需要关注三个核心问题：多实例部署时的并发抢占（通过 `Status` 字段 + `IsConcurrencyToken()` 实现原子更新）、消息顺序性（按聚合根分组保序是最实用的折中方案）、消费端幂等去重（通过 `MessageId` 去重表或业务唯一键实现）。解决了这三点，Outbox 才能真正在分布式系统中稳定运行。

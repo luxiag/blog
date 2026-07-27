@@ -1,0 +1,162 @@
+---
+title: '指哪打哪：射线 (Ray) 与相交检测完全指南'
+date: '2024-11-16'
+description: '点击鼠标选中模型、FPS 游戏的开枪判定、光线追踪渲染……这一切的背后都是同一个数学模型：射线。本文将带你从零构建射线，并推导它与球体、平面、AABB 盒子的相交算法。'
+tags: ['Math', 'Ray', 'Collision', 'Physics']
+---
+
+# 指哪打哪：射线 (Ray) 与相交检测完全指南
+
+在 3D 游戏和图形学中，**射线 (Ray)** 是探测世界的触角。
+*   玩家点击鼠标：从摄像机发射一条射线，看它戳到了谁。
+*   玩家开枪：从枪口发射一条射线，看它击中了谁。
+*   光线追踪：从眼睛发射无数条射线，看它们反弹到了哪里。
+
+本文将深入浅出地讲解射线的数学定义，以及它与各种几何体的"碰撞"检测。
+
+## 一、 什么是射线？
+
+射线是一条**有起点、有方向**，但**没有终点**的线。
+它可以用一个简单的公式表示：
+
+$$ P(t) = \vec{Origin} + t \cdot \vec{Direction} $$
+
+*   $\vec{Origin}$ (起点)：射线的发射位置（如摄像机位置）。
+*   $\vec{Direction}$ (方向)：**必须归一化**的单位向量。
+*   $t$ (距离)：一个标量。
+    *   $t=0$：在起点。
+    *   $t=10$：在沿方向 10 米处。
+    *   $t<0$：在背后（通常我们只关心 $t \ge 0$）。
+
+## 二、 射线 vs 球体 (Ray-Sphere Intersection)
+
+这是最基础的相交测试。
+假设球心在 $C$，半径为 $r$。球面上任意点 $P$ 满足：$||P - C||^2 = r^2$。
+把射线公式代入球体公式，就变成了一个**一元二次方程**：
+
+$$ t^2 + 2(\vec{D} \cdot (\vec{O} - \vec{C}))t + ||\vec{O} - \vec{C}||^2 - r^2 = 0 $$
+
+解这个方程（求 $t$）：
+*   **$\Delta < 0$**：无解。射线没打中球。
+*   **$\Delta = 0$**：一个解。射线擦边而过（切线）。
+*   **$\Delta > 0$**：两个解。射线穿过球体（一个入点，一个出点）。我们通常取**较小的那个正数解**（最近的交点）。
+
+## 三、 射线 vs 平面 (Ray-Plane Intersection)
+
+平面由一个点 $P_0$ 和法线 $\vec{N}$ 定义。
+平面方程：$(P - P_0) \cdot \vec{N} = 0$。也就是：平面上任意点与 $P_0$ 的连线，都垂直于法线。
+
+把射线代入，解出 $t$：
+$$ t = \frac{(P_0 - \vec{O}) \cdot \vec{N}}{\vec{D} \cdot \vec{N}} $$
+
+*   如果分母 $\vec{D} \cdot \vec{N} = 0$，说明射线与平面平行（无交点）。
+*   如果 $t < 0$，说明平面在射线背后。
+
+## 四、 射线 vs 盒子 (Ray-AABB Intersection)
+
+这是工程中最常用的。为了加速计算，我们通常给物体套一个**轴对齐包围盒 (AABB)**。如果射线连盒子都没打中，就不用去算复杂的网格三角形了。
+
+**算法：Slab Method (切片法)**
+AABB 盒子其实是 3 组平行平面的交集（X轴一对，Y轴一对，Z轴一对）。
+1.  算出射线进入和离开 X 轴范围的时间 $[t_{minX}, t_{maxX}]$。
+2.  算出进入和离开 Y 轴范围的时间 $[t_{minY}, t_{maxY}]$。
+3.  ... Z 轴同理。
+4.  **求交集**：最终的进入时间是所有 $t_{min}$ 的最大值，离开时间是所有 $t_{max}$ 的最小值。
+5.  **判断**：如果 $t_{enter} \le t_{exit}$ 且 $t_{exit} \ge 0$，则相交。
+
+<ShaderPreview title="Ray Intersection Visualizer" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 射线定义
+struct Ray { vec3 ro; vec3 rd; };
+
+// 1. 球体求交
+// 返回距离 t，如果没击中返回 -1.0
+float iSphere(Ray ray, vec3 spherePos, float r) {
+    vec3 oc = ray.ro - spherePos;
+    float b = dot(oc, ray.rd);
+    float c = dot(oc, oc) - r*r;
+    float h = b*b - c;
+    if (h < 0.0) return -1.0; // Delta < 0
+    return -b - sqrt(h); // 取最近的解
+}
+
+// 2. 平面求交 (y = planeY)
+float iPlane(Ray ray, float planeY) {
+    // ray.ro.y + t * ray.rd.y = planeY
+    float t = (planeY - ray.ro.y) / ray.rd.y;
+    if (t < 0.0) return -1.0;
+    return t;
+}
+
+void main() {
+    // 简单的光线追踪设置
+    vec2 uv = vUv * 2.0 - 1.0;
+    vec3 ro = vec3(0.0, 1.0, 3.0); // 相机位置
+    vec3 rd = normalize(vec3(uv, -1.5)); // 射线方向
+    
+    vec3 col = vec3(0.0);
+    
+    // 场景物体
+    vec3 spherePos = vec3(sin(uTime), 1.0, 0.0);
+    float planeY = 0.0;
+    
+    // 求交测试
+    float tSphere = iSphere(Ray(ro, rd), spherePos, 1.0);
+    float tPlane = iPlane(Ray(ro, rd), planeY);
+    
+    // 简单的 Z-Buffer 逻辑：谁近画谁
+    float t = 10000.0;
+    float id = 0.0; // 0=空, 1=球, 2=地
+    
+    if (tSphere > 0.0 && tSphere < t) { t = tSphere; id = 1.0; }
+    if (tPlane > 0.0 && tPlane < t) { t = tPlane; id = 2.0; }
+    
+    // 渲染
+    if (id == 1.0) { // 球
+        vec3 pos = ro + rd * t;
+        vec3 nor = normalize(pos - spherePos);
+        vec3 light = normalize(vec3(1.0, 1.0, 1.0));
+        float diff = max(dot(nor, light), 0.0);
+        col = vec3(1.0, 0.2, 0.2) * (diff + 0.2);
+    } else if (id == 2.0) { // 地板
+        vec3 pos = ro + rd * t;
+        // 棋盘格
+        float check = mod(floor(pos.x) + floor(pos.z), 2.0);
+        col = vec3(0.5 + check * 0.5);
+        // 阴影 (Ray Casting Shadow)
+        // 从地板点向光源发射一条射线，看是否撞到球
+        vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
+        if (iSphere(Ray(pos + vec3(0.0,0.01,0.0), lightDir), spherePos, 1.0) > 0.0) {
+            col *= 0.5;
+        }
+    } else { // 天空
+        col = mix(vec3(0.5, 0.7, 1.0), vec3(0.0), rd.y);
+    }
+    
+    gl_FragColor = vec4(col, 1.0);
+}
+`} />
+
+## 五、 Raymarching：另一种思路
+
+对于形状极其复杂（如云朵、分形）或者没有解析公式的物体，解方程太难了。
+这时我们用 **Raymarching (光线步进)**。
+
+它不解方程，而是像盲人摸象一样，沿着射线一步步往前走。
+*   "前面还有多远？" (SDF 距离场)
+*   "还有 10 米。" -> 往前走 10 米。
+*   "还有 5 米。" -> 往前走 5 米。
+*   "距离 < 0.001 米。" -> **撞到了！**
+
+这在 ShaderToy 和体积渲染中非常流行。
+
+## 总结
+
+1.  **射线公式**：$O + tD$ 是所有计算的基石。
+2.  **球体相交**：解一元二次方程。简单、快速。
+3.  **AABB 相交**：切片法。用于物理引擎的粗略检测 (Broad Phase)。
+4.  **Raymarching**：步进迭代。用于复杂形状和体积渲染。
+
+掌握了射线，你就掌握了与虚拟世界互动的最重要手段。

@@ -1,0 +1,568 @@
+---
+title: 'ASP.NET Core DDD 入门：实体、值对象、聚合与领域服务'
+date: '2026-07-21'
+excerpt: '面向 ASP.NET Core 项目的 DDD 入门：实体、值对象、聚合根、领域服务、领域事件、仓储接口和应用服务的职责边界。'
+tags: ['dotnet', 'aspnetcore', 'ddd', 'domain-driven-design']
+nextPost: 'dotnet/aspnet-core-cqrs-mediatr'
+---
+
+# ASP.NET Core DDD 入门：实体、值对象、聚合与领域服务
+
+DDD（Domain-Driven Design，领域驱动设计）不是文件夹命名规范，也不是把项目拆成 Domain、Application、Infrastructure 就结束。它的核心是：**让代码围绕业务概念组织，并把关键业务规则放在领域模型中。**
+
+:::tip 阶段四阅读顺序
+建议先读 [项目结构](/posts/dotnet/aspnet-core-project-structure) 和 [EF Core](/posts/dotnet/aspnet-core-ef-core)，再阅读本文。DDD 适合业务复杂的项目，不适合所有 CRUD 系统。
+:::
+
+## 什么时候需要 DDD
+
+适合 DDD 的场景：
+
+- 业务规则复杂
+- 状态变化有严格约束
+- 多角色协作定义业务语言
+- 系统生命周期长
+- 简单 CRUD 已经无法表达业务规则
+
+不适合一开始就重度 DDD 的场景：
+
+- 简单后台管理
+- 数据表增删改查为主
+- 项目生命周期短
+- 团队还没有统一业务语言
+
+DDD 的成本不低，应该在业务复杂度值得时使用。
+
+## 实体 Entity
+
+实体有唯一身份，生命周期中属性可以变化，但身份不变。
+
+```csharp
+public class Order
+{
+    private readonly List<OrderItem> _items = new();
+
+    private Order()
+    {
+    }
+
+    public Order(long id, long customerId)
+    {
+        Id = id;
+        CustomerId = customerId;
+        Status = OrderStatus.Pending;
+        CreatedAt = DateTime.UtcNow;
+    }
+
+    public long Id { get; private set; }
+    public long CustomerId { get; private set; }
+    public OrderStatus Status { get; private set; }
+    public DateTime CreatedAt { get; private set; }
+    public IReadOnlyCollection<OrderItem> Items => _items;
+
+    public void AddItem(long productId, string productName, decimal price, int quantity)
+    {
+        if (Status != OrderStatus.Pending)
+        {
+            throw new InvalidOperationException("Only pending orders can be modified.");
+        }
+
+        _items.Add(new OrderItem(productId, productName, price, quantity));
+    }
+
+    public void Pay()
+    {
+        if (!_items.Any())
+        {
+            throw new InvalidOperationException("Cannot pay an empty order.");
+        }
+
+        Status = OrderStatus.Paid;
+    }
+}
+```
+
+业务规则应该尽量靠近实体，而不是散落在 Controller 中。
+
+:::note private Order() 的作用
+`Order` 中的无参私有构造函数 `private Order() {}` 不是摆设——EF Core 在从数据库加载实体时，需要通过无参构造函数创建对象实例，然后填充属性。如果只有带参构造函数，EF Core 无法反序列化。将无参构造函数设为 `private` 可以防止外部误用，同时满足 EF Core 的需求。
+:::
+
+## 值对象 Value Object
+
+值对象没有独立身份，通过值相等判断是否相同。
+
+```csharp
+public sealed record Money(decimal Amount, string Currency)
+{
+    public static Money Cny(decimal amount) => new(amount, "CNY");
+
+    public Money Add(Money other)
+    {
+        if (Currency != other.Currency)
+        {
+            throw new InvalidOperationException("Currency mismatch.");
+        }
+
+        return new Money(Amount + other.Amount, Currency);
+    }
+}
+```
+
+值对象适合表达金额、地址、坐标、时间范围等概念。
+
+### 值对象与 EF Core 映射
+
+值对象在领域模型中很优雅，但数据库是关系型的——`Money` 不是一张独立的表。EF Core 提供了 **Owned Entity** 机制，将值对象映射为所属实体表的列：
+
+```csharp
+public class OrderConfiguration : IEntityTypeConfiguration<Order>
+{
+    public void Configure(EntityTypeBuilder<Order> builder)
+    {
+        builder.OwnsOne(o => o.TotalPrice, money =>
+        {
+            money.Property(m => m.Amount).HasColumnName("TotalPrice_Amount");
+            money.Property(m => m.Currency).HasColumnName("TotalPrice_Currency");
+        });
+
+        builder.OwnsMany(o => o.Items, item =>
+        {
+            item.OwnsOne(i => i.UnitPrice, money =>
+            {
+                money.Property(m => m.Amount).HasColumnName("UnitPrice_Amount");
+                money.Property(m => m.Currency).HasColumnName("UnitPrice_Currency");
+            });
+        });
+    }
+}
+```
+
+`OwnsOne` 告诉 EF Core：`Money` 的属性是 `Order` 表的一部分，不是独立表。`OwnsMany` 用于集合中的值对象。查询时 EF Core 会自动加载 Owned 属性，无需 `Include`。
+
+:::warning OwnsOne 与复杂类型
+EF Core 8+ 引入了 `ComplexProperty` 作为 `OwnsOne` 的替代，语法更简洁且不可为 null。如果项目使用 EF Core 8+，可以考虑 `builder.ComplexProperty(o => o.TotalPrice)`。两者区别：`OwnsOne` 可为 null 且是可选导航属性，`ComplexProperty` 总是存在且是值类型语义。对于 `Money` 这种必须存在的值对象，`ComplexProperty` 更合适。
+:::
+
+## 聚合与聚合根
+
+聚合是一组需要保持一致性的对象集合，聚合根是外部访问这个聚合的入口。
+
+订单和订单项就是典型聚合：
+
+```text
+Order 聚合根
+└── OrderItem 子实体
+```
+
+外部代码不应该绕过 `Order` 直接修改 `OrderItem`。例如添加商品、支付订单等操作应通过 `Order` 方法完成。
+
+### 聚合如何保证不变式
+
+不变式（invariant）是聚合必须始终满足的业务规则。例如：**已支付的订单不能再添加商品**。聚合根的职责就是保证所有修改操作都不违反不变式。
+
+如果外部能直接操作 `OrderItem`，不变式就会失效：
+
+```csharp
+public class OrderItem
+{
+    public long ProductId { get; set; }
+    public decimal Price { get; set; }
+    public int Quantity { get; set; }
+}
+```
+
+```csharp
+var item = order.Items.First();
+item.Quantity = -5;
+item.Price = 0;
+```
+
+上面的代码完全合法，但业务上不可接受——数量为负数、价格为 0。因为 `OrderItem` 的属性是公开可写的，任何人都能绕过 `Order` 的校验逻辑。
+
+正确的做法是封闭所有修改入口：
+
+```csharp
+public class OrderItem
+{
+    public long ProductId { get; private set; }
+    public string ProductName { get; private set; }
+    public decimal Price { get; private set; }
+    public int Quantity { get; private set; }
+
+    internal OrderItem(long productId, string productName, decimal price, int quantity)
+    {
+        if (quantity <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(quantity), "Quantity must be positive.");
+        }
+
+        if (price < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(price), "Price cannot be negative.");
+        }
+
+        ProductId = productId;
+        ProductName = productName;
+        Price = price;
+        Quantity = quantity;
+    }
+}
+```
+
+- `private set` 禁止外部直接赋值
+- `internal` 构造函数只允许同一程序集（即 `Order` 聚合根）创建实例
+- 构造函数内校验不变式
+
+这样，所有对 `OrderItem` 的修改都必须经过 `Order.AddItem()`，聚合根就能统一拦截非法操作：
+
+```csharp
+public class Order
+{
+    private readonly List<OrderItem> _items = new();
+    public IReadOnlyCollection<OrderItem> Items => _items;
+
+    public void AddItem(long productId, string productName, decimal price, int quantity)
+    {
+        if (Status != OrderStatus.Pending)
+        {
+            throw new InvalidOperationException("Only pending orders can be modified.");
+        }
+
+        var existingItem = _items.FirstOrDefault(i => i.ProductId == productId);
+        if (existingItem is not null)
+        {
+            _items.Remove(existingItem);
+            quantity += existingItem.Quantity;
+        }
+
+        _items.Add(new OrderItem(productId, productName, price, quantity));
+    }
+}
+```
+
+`IReadOnlyCollection<OrderItem>` 阻止外部通过集合修改内容，`private set` 阻止外部修改属性，`internal` 构造函数阻止外部创建实例——三道防线确保不变式不被破坏。
+
+## 领域服务
+
+有些业务规则不自然属于某个实体，可以放到领域服务中。
+
+```csharp
+public class OrderPricingService
+{
+    public Money CalculateTotal(Order order)
+    {
+        decimal amount = order.Items.Sum(item => item.Price * item.Quantity);
+        return Money.Cny(amount);
+    }
+}
+```
+
+领域服务应该表达领域规则，不应该依赖数据库、HTTP 或消息队列。
+
+## 应用服务
+
+应用服务负责组织用例流程：加载聚合、调用领域方法、保存、发布事件。
+
+```csharp
+public class OrderApplicationService
+{
+    private readonly IOrderRepository _orders;
+
+    public OrderApplicationService(IOrderRepository orders)
+    {
+        _orders = orders;
+    }
+
+    public async Task PayAsync(long orderId, CancellationToken cancellationToken)
+    {
+        Order order = await _orders.GetByIdAsync(orderId, cancellationToken)
+            ?? throw new NotFoundException("Order not found.");
+
+        order.Pay();
+
+        await _orders.SaveChangesAsync(cancellationToken);
+    }
+}
+```
+
+应用服务可以依赖仓储接口、事务、当前用户、消息发布器等，但业务规则本身应尽量放到领域对象中。
+
+## 仓储接口
+
+仓储接口可以定义在 Domain 或 Application 中，实现放在 Infrastructure。
+
+```csharp
+public interface IOrderRepository
+{
+    Task<Order?> GetByIdAsync(long id, CancellationToken cancellationToken);
+    void Add(Order order);
+    Task SaveChangesAsync(CancellationToken cancellationToken);
+}
+```
+
+Infrastructure 中用 EF Core 实现：
+
+```csharp
+public class EfOrderRepository : IOrderRepository
+{
+    private readonly AppDbContext _dbContext;
+
+    public EfOrderRepository(AppDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+
+    public Task<Order?> GetByIdAsync(long id, CancellationToken cancellationToken)
+    {
+        return _dbContext.Orders
+            .Include(order => order.Items)
+            .FirstOrDefaultAsync(order => order.Id == id, cancellationToken);
+    }
+
+    public void Add(Order order) => _dbContext.Orders.Add(order);
+
+    public Task SaveChangesAsync(CancellationToken cancellationToken)
+    {
+        return _dbContext.SaveChangesAsync(cancellationToken);
+    }
+}
+```
+
+## 领域事件
+
+领域事件表示领域中已经发生的重要事实。
+
+```csharp
+public record OrderPaidDomainEvent(long OrderId, long CustomerId);
+```
+
+例如订单支付成功后，可以触发库存扣减、积分增加、消息通知等后续动作。复杂系统中，领域事件可以降低聚合之间的直接耦合。
+
+### 聚合收集领域事件
+
+领域事件由聚合产生，但聚合不应该自己发布——它只负责收集，发布时机交给基础设施：
+
+```csharp
+public interface IAggregateRoot
+{
+    IReadOnlyCollection<object> GetDomainEvents();
+    void ClearDomainEvents();
+}
+```
+
+```csharp
+public class Order : IAggregateRoot
+{
+    private readonly List<object> _domainEvents = new();
+
+    public IReadOnlyCollection<object> GetDomainEvents() => _domainEvents;
+    public void ClearDomainEvents() => _domainEvents.Clear();
+
+    public void Pay()
+    {
+        if (!_items.Any())
+        {
+            throw new InvalidOperationException("Cannot pay an empty order.");
+        }
+
+        Status = OrderStatus.Paid;
+        _domainEvents.Add(new OrderPaidDomainEvent(Id, CustomerId));
+    }
+}
+```
+
+聚合在执行业务操作时将事件加入内部列表，不关心谁来处理。
+
+### 在 SaveChanges 中拦截并派发
+
+最可靠的事件派发时机是 `SaveChanges`——保证事件只在数据真正持久化后才触发，避免事务回滚后事件却已发出的不一致问题：
+
+```csharp
+public class AppDbContext : DbContext
+{
+    private readonly IDomainEventDispatcher _dispatcher;
+
+    public AppDbContext(DbContextOptions<AppDbContext> options, IDomainEventDispatcher dispatcher)
+        : base(options)
+    {
+        _dispatcher = dispatcher;
+    }
+
+    public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        var aggregates = ChangeTracker
+            .Entries<IAggregateRoot>()
+            .Where(e => e.Entity.GetDomainEvents().Any())
+            .Select(e => e.Entity)
+            .ToList();
+
+        var domainEvents = aggregates
+            .SelectMany(a => a.GetDomainEvents())
+            .ToList();
+
+        aggregates.ForEach(a => a.ClearDomainEvents());
+
+        var result = await base.SaveChangesAsync(cancellationToken);
+
+        foreach (var domainEvent in domainEvents)
+        {
+            await _dispatcher.DispatchAsync(domainEvent, cancellationToken);
+        }
+
+        return result;
+    }
+}
+```
+
+流程：
+
+1. 从 `ChangeTracker` 中找出有待发事件的聚合
+2. 收集所有事件后清空聚合的事件列表
+3. **先保存数据**（`base.SaveChangesAsync`）
+4. 保存成功后再派发事件
+
+先保存再派发是关键——如果保存失败（比如数据库异常），事件不会发出；如果先派发再保存，事件处理方可能已经执行了库存扣减，但订单数据却没存进去。
+
+### 事件派发器接口与实现
+
+```csharp
+public interface IDomainEventDispatcher
+{
+    Task DispatchAsync(object domainEvent, CancellationToken cancellationToken);
+}
+```
+
+```csharp
+public class MediatRDomainEventDispatcher : IDomainEventDispatcher
+{
+    private readonly IMediator _mediator;
+
+    public MediatRDomainEventDispatcher(IMediator mediator)
+    {
+        _mediator = mediator;
+    }
+
+    public async Task DispatchAsync(object domainEvent, CancellationToken cancellationToken)
+    {
+        await _mediator.Publish(domainEvent, cancellationToken);
+    }
+}
+```
+
+```csharp
+public class OrderPaidEventHandler : INotificationHandler<OrderPaidDomainEvent>
+{
+    private readonly IInventoryService _inventory;
+
+    public OrderPaidEventHandler(IInventoryService inventory)
+    {
+        _inventory = inventory;
+    }
+
+    public async Task Handle(OrderPaidDomainEvent notification, CancellationToken cancellationToken)
+    {
+        await _inventory.DeductStockAsync(notification.OrderId, cancellationToken);
+    }
+}
+```
+
+通过 MediatR 的 `Publish` 机制，一个领域事件可以被多个处理器接收，且处理器之间互不干扰。
+
+## 限界上下文 Bounded Context
+
+前面讲的实体、值对象、聚合都发生在一个上下文内部。DDD 最核心的概念是：**同一个词在不同上下文中含义不同。**
+
+"产品"在销售上下文中是指商品目录项（有名称、价格、描述），在库存上下文中是指仓库中的物理货物（有 SKU、仓位、数量），在物流上下文中是包裹中的物品（有重量、尺寸、目的地）。如果用一个 `Product` 类承载所有场景的需求，它会变成一个什么都有的"上帝类"，任何变更都可能牵连所有模块。
+
+限界上下文就是为每个子域定义独立的模型边界：
+
+```text
+销售上下文 (Sales)           库存上下文 (Inventory)         物流上下文 (Shipping)
+┌──────────────────┐        ┌──────────────────┐         ┌──────────────────┐
+│ Product          │        │ Product          │         │ Product          │
+│ - Name           │        │ - Sku            │         │ - Weight         │
+│ - Price          │        │ - WarehouseSlot  │         │ - Dimensions     │
+│ - Description    │        │ - StockQuantity   │         │ - Destination    │
+└──────────────────┘        └──────────────────┘         └──────────────────┘
+```
+
+三个 `Product` 是不同的类、不同的表、不同的聚合根。它们通过唯一标识（如 `ProductId`）关联，但不共享模型。
+
+### 上下文映射 Context Map
+
+不同限界上下文之间需要通信，上下文映射定义了它们的关系模式：
+
+| 模式 | 含义 |
+|------|------|
+| **Shared Kernel** | 两个上下文共享一小部分模型（如 `ProductId` 值对象） |
+| **Conformist** | 下游完全遵从上游的模型定义 |
+| **Anticorruption Layer** | 下游通过翻译层隔离上游模型，保护自己的模型不受侵蚀 |
+| **Open Host Service** | 上游提供标准协议（如 REST API）供多个下游使用 |
+
+其中 **Anticorruption Layer（防腐层）** 最值得关注。当你的订单上下文需要对接外部支付系统时，不应该把外部系统的模型直接引入自己的领域：
+
+```csharp
+public class PaymentGatewayAdapter : IPaymentGateway
+{
+    private readonly ExternalPaymentServiceClient _client;
+
+    public PaymentGatewayAdapter(ExternalPaymentServiceClient client)
+    {
+        _client = client;
+    }
+
+    public async Task<PaymentResult> ChargeAsync(Money amount, string paymentMethod, CancellationToken cancellationToken)
+    {
+        var request = new ExternalChargeRequest
+        {
+            AmountInCents = (long)(amount.Amount * 100),
+            CurrencyCode = amount.Currency,
+            Method = paymentMethod
+        };
+
+        var response = await _client.ChargeAsync(request, cancellationToken);
+
+        return new PaymentResult(response.TransactionId, response.Success);
+    }
+}
+```
+
+外部支付系统的 `AmountInCents`、`CurrencyCode` 概念不会污染订单上下文的 `Money` 值对象——适配器负责翻译。
+
+### ASP.NET Core 中如何划分
+
+中小型项目不必拆成独立微服务，可以在单体中用模块划分：
+
+```text
+src/
+├── OrderManagement/          订单上下文
+│   ├── Domain/
+│   │   ├── Orders/
+│   │   └── Products/         订单视角的 Product
+│   ├── Application/
+│   └── Infrastructure/
+├── Inventory/                库存上下文
+│   ├── Domain/
+│   │   ├── Stock/
+│   │   └── Products/         库存视角的 Product
+│   ├── Application/
+│   └── Infrastructure/
+└── Shared/                   Shared Kernel
+    └── CommonTypes/
+        └── ProductId.cs      共享的值对象
+```
+
+关键是：**每个上下文的 `Product` 是独立的类，不互相引用。** 上下文之间通过 `ProductId`（Shared Kernel）和集成事件（如 `OrderPaidDomainEvent`）通信，不直接访问对方的数据库表。
+
+## 常见误区
+
+- 把贫血实体当 DDD：实体只有属性没有行为。
+- 把所有 Service 都叫 DomainService。
+- 用 Repository 包一层所有 EF Core 查询，但没有业务意义。
+- 为简单 CRUD 过度引入聚合、事件、复杂分层。
+- 领域层依赖 ASP.NET Core、EF Core、Redis 等基础设施。
+
+## 总结
+
+DDD 的核心是业务建模。实体和值对象表达业务概念，聚合维护一致性边界，领域服务承载不属于单个实体的领域规则，应用服务组织用例流程。ASP.NET Core 只是交付入口，真正复杂的业务规则应该进入领域模型。

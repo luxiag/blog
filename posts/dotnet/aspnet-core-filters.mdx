@@ -1,0 +1,597 @@
+---
+title: 'ASP.NET Core Filters：过滤器管道与横切逻辑'
+date: '2026-07-21'
+excerpt: '理解 ASP.NET Core MVC Filters：Authorization、Resource、Action、Exception、Result Filter 的执行顺序、适用场景和 Middleware 区别。'
+tags: ['dotnet', 'aspnetcore', 'filters', 'mvc']
+nextPost: 'dotnet/aspnet-core-ef-core'
+---
+
+# ASP.NET Core Filters：过滤器管道与横切逻辑
+
+Filter 是 ASP.NET Core MVC / Controller 层的扩展点。它比 Middleware 更靠近 Controller Action，适合处理 Action 前后的横切逻辑。
+
+:::tip 阶段二阅读顺序
+建议先读 [Middleware 请求管道](/posts/dotnet/aspnet-core-middleware)、[异常处理](/posts/dotnet/aspnet-core-exception-handling)、[Authorization](/posts/dotnet/aspnet-core-authorization)，再阅读本文。
+:::
+
+## Filter 类型
+
+| Filter | 执行位置 | 常见用途 |
+|---|---|---|
+| Authorization Filter | 最早执行 | 授权判断 |
+| Resource Filter | 模型绑定前后 | 缓存、短路、资源准备 |
+| Action Filter | Action 前后 | 参数检查、操作日志、耗时统计 |
+| Exception Filter | Action 或 Result 异常 | MVC 内异常处理 |
+| Result Filter | Result 执行前后 | 响应包装、结果日志 |
+
+执行大致顺序：
+
+```text
+Authorization Filter
+ -> Resource Filter
+ -> Model Binding
+ -> Action Filter
+ -> Action
+ -> Result Filter
+ -> Response
+```
+
+## Action Filter
+
+Action Filter 是最常见的 Filter。
+
+```csharp
+public class RequestLogActionFilter : IActionFilter
+{
+    private readonly ILogger<RequestLogActionFilter> _logger;
+
+    public RequestLogActionFilter(ILogger<RequestLogActionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public void OnActionExecuting(ActionExecutingContext context)
+    {
+        _logger.LogInformation("Executing action {ActionName}",
+            context.ActionDescriptor.DisplayName);
+    }
+
+    public void OnActionExecuted(ActionExecutedContext context)
+    {
+        _logger.LogInformation("Executed action {ActionName}",
+            context.ActionDescriptor.DisplayName);
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddScoped<RequestLogActionFilter>();
+```
+
+使用：
+
+```csharp
+[ServiceFilter(typeof(RequestLogActionFilter))]
+[HttpGet]
+public IActionResult Get()
+{
+    return Ok();
+}
+```
+
+## ServiceFilter、TypeFilter 与 IFilterFactory
+
+上面使用了 `[ServiceFilter(typeof(...))]` 来应用 Filter。为什么不能直接 `[RequestLogActionFilter]`？因为 Attribute 参数只接受编译期常量，而 Filter 通常需要 DI 注入服务。ASP.NET Core 提供了三种机制解决这一问题。
+
+### ServiceFilter
+
+`[ServiceFilter]` 从 DI 容器解析 Filter 实例。Filter 必须事先注册到 DI：
+
+```csharp
+builder.Services.AddScoped<RequestLogActionFilter>();
+```
+
+```csharp
+[ServiceFilter(typeof(RequestLogActionFilter))]
+[HttpGet]
+public IActionResult Get() => Ok();
+```
+
+如果未注册，运行时抛出 `InvalidOperationException`。
+
+### TypeFilter
+
+`[TypeFilter]` 不需要预先注册 Filter——它用 `ActivatorUtilities` 自动创建实例，并通过构造函数注入 DI 中的服务：
+
+```csharp
+public class TenantActionFilter : IActionFilter
+{
+    private readonly ITenantService _tenantService;
+    private readonly ILogger<TenantActionFilter> _logger;
+
+    public TenantActionFilter(ITenantService tenantService, ILogger<TenantActionFilter> logger)
+    {
+        _tenantService = tenantService;
+        _logger = logger;
+    }
+
+    public void OnActionExecuting(ActionExecutingContext context)
+    {
+        _logger.LogInformation("Tenant: {Tenant}", _tenantService.GetCurrentTenant());
+    }
+
+    public void OnActionExecuted(ActionExecutedContext context) { }
+}
+```
+
+不需要注册 Filter，直接使用：
+
+```csharp
+[TypeFilter(typeof(TenantActionFilter))]
+[HttpGet]
+public IActionResult Get() => Ok();
+```
+
+`TypeFilter` 还支持通过 `Arguments` 传递非 DI 参数：
+
+```csharp
+[TypeFilter(typeof(TenantActionFilter), Arguments = new object[] { "fallback-tenant" })]
+```
+
+### 对比
+
+| | ServiceFilter | TypeFilter |
+|---|---|---|
+| 是否需要注册 Filter | 必须注册到 DI | 不需要 |
+| 生命周期 | 跟随 DI 注册（Scoped/Singleton 等） | 每次请求创建 |
+| 传递额外参数 | 不支持 | 通过 `Arguments` 支持 |
+| 适用场景 | Filter 本身需要控制生命周期 | 简单场景、需要传参 |
+
+### IFilterFactory
+
+`ServiceFilter` 和 `TypeFilter` 本质上都是 `IFilterFactory` 的内置实现。`IFilterFactory` 是 Attribute + DI 的桥梁：Attribute 实现 `IFilterFactory`，在请求时通过 `CreateInstance` 从 DI 创建真正的 Filter 实例。
+
+当你需要更灵活的控制（比如根据 Attribute 参数动态选择 Filter 实例），可以直接实现 `IFilterFactory`：
+
+```csharp
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
+public class CacheFilterAttribute : Attribute, IFilterFactory
+{
+    public int DurationMinutes { get; set; }
+
+    public bool IsReusable => false;
+
+    public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
+    {
+        var filter = serviceProvider.GetRequiredService<CacheResourceFilter>();
+        filter.DurationMinutes = DurationMinutes;
+        return filter;
+    }
+}
+```
+
+```csharp
+public class CacheResourceFilter : IAsyncResourceFilter
+{
+    private readonly IMemoryCache _cache;
+
+    public int DurationMinutes { get; set; }
+
+    public CacheResourceFilter(IMemoryCache cache)
+    {
+        _cache = cache;
+    }
+
+    public async Task OnResourceExecutionAsync(
+        ResourceExecutingContext context,
+        ResourceExecutionDelegate next)
+    {
+        string cacheKey = context.HttpContext.Request.Path;
+
+        if (_cache.TryGetValue(cacheKey, out object? cached))
+        {
+            context.Result = new OkObjectResult(cached);
+            return;
+        }
+
+        ResourceExecutedContext executed = await next();
+
+        if (executed.Result is OkObjectResult okResult && okResult.Value is not null)
+        {
+            _cache.Set(cacheKey, okResult.Value, TimeSpan.FromMinutes(DurationMinutes));
+        }
+    }
+}
+```
+
+使用时通过 Attribute 属性控制行为：
+
+```csharp
+[CacheFilter(DurationMinutes = 10)]
+[HttpGet]
+public IActionResult Get() => Ok();
+```
+
+## 全局 Filter
+
+```csharp
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<RequestLogActionFilter>();
+});
+```
+
+全局 Filter 会作用于所有 Controller Action。
+
+## Async Filter
+
+异步场景使用 `IAsyncActionFilter`。
+
+```csharp
+public class TimingActionFilter : IAsyncActionFilter
+{
+    private readonly ILogger<TimingActionFilter> _logger;
+
+    public TimingActionFilter(ILogger<TimingActionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task OnActionExecutionAsync(
+        ActionExecutingContext context,
+        ActionExecutionDelegate next)
+    {
+        var start = DateTimeOffset.UtcNow;
+
+        ActionExecutedContext executedContext = await next();
+
+        var elapsed = DateTimeOffset.UtcNow - start;
+        _logger.LogInformation("Action completed in {Elapsed}ms", elapsed.TotalMilliseconds);
+    }
+}
+```
+
+异步 Filter 中，`await next()` 表示继续执行 Action。
+
+## Filter 排序：IOrderedFilter
+
+当同一个 Action 上注册了多个同类型的 Filter，执行顺序由注册顺序决定：全局 Filter 先于 Controller 级别，Controller 级别先于 Action 级别。但同一级别的多个 Filter 之间，顺序不可控——这会导致依赖执行顺序的逻辑出错。
+
+`IOrderedFilter` 通过 `Order` 属性解决此问题。**Order 值越小越先执行**，与 ASP.NET Core 中间件的顺序语义一致。
+
+```csharp
+public class LogActionFilter : IActionFilter, IOrderedFilter
+{
+    private readonly ILogger<LogActionFilter> _logger;
+
+    public int Order => -100;
+
+    public LogActionFilter(ILogger<LogActionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public void OnActionExecuting(ActionExecutingContext context)
+    {
+        _logger.LogInformation("Log filter executing first");
+    }
+
+    public void OnActionExecuted(ActionExecutedContext context) { }
+}
+
+public class ValidateActionFilter : IActionFilter, IOrderedFilter
+{
+    private readonly ILogger<ValidateActionFilter> _logger;
+
+    public int Order => 0;
+
+    public ValidateActionFilter(ILogger<ValidateActionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public void OnActionExecuting(ActionExecutingContext context)
+    {
+        _logger.LogInformation("Validate filter executing second");
+    }
+
+    public void OnActionExecuted(ActionExecutedContext context) { }
+}
+```
+
+```csharp
+[ServiceFilter(typeof(LogActionFilter))]
+[ServiceFilter(typeof(ValidateActionFilter))]
+[HttpGet]
+public IActionResult Get() => Ok();
+```
+
+即使 `[ServiceFilter(typeof(ValidateActionFilter))]` 写在前面，`LogActionFilter` 的 `Order = -100` 也会让它先执行。
+
+### 默认 Order 值
+
+不实现 `IOrderedFilter` 的 Filter 默认 `Order = 0`。Filter 的排序规则是先按 `Order` 排序，Order 相同再按作用范围排序：全局 > Controller > Action。
+
+### 生产中的典型场景
+
+缓存 Filter 必须在日志 Filter 之前执行（否则缓存命中时日志 Filter 还是会记录无意义的 Action 开始日志）：
+
+```csharp
+public class CacheResourceFilter : IAsyncResourceFilter, IOrderedFilter
+{
+    public int Order => -200;
+}
+
+public class LogActionFilter : IActionFilter, IOrderedFilter
+{
+    public int Order => -100;
+}
+```
+
+Order 间隔留大一些（如 -200、-100、0、100），方便后续插入新的 Filter。
+
+## Exception Filter
+
+Exception Filter 只能捕获 MVC Action 或 Result 执行阶段的异常，不能捕获 Middleware 中发生的异常。
+
+```csharp
+public class ApiExceptionFilter : IExceptionFilter
+{
+    private readonly ILogger<ApiExceptionFilter> _logger;
+
+    public ApiExceptionFilter(ILogger<ApiExceptionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public void OnException(ExceptionContext context)
+    {
+        _logger.LogError(context.Exception, "Action exception");
+
+        context.Result = new ObjectResult(new ProblemDetails
+        {
+            Title = "Action failed",
+            Status = StatusCodes.Status500InternalServerError
+        })
+        {
+            StatusCode = StatusCodes.Status500InternalServerError
+        };
+
+        context.ExceptionHandled = true;
+    }
+}
+```
+
+全局异常处理更推荐 Middleware；Exception Filter 适合 MVC 层特定异常转换。
+
+## Resource Filter
+
+Resource Filter 在模型绑定前后执行，适合缓存短路和资源准备：
+
+```csharp
+public class CacheResourceFilter : IAsyncResourceFilter
+{
+    private readonly IMemoryCache _cache;
+
+    public CacheResourceFilter(IMemoryCache cache)
+    {
+        _cache = cache;
+    }
+
+    public async Task OnResourceExecutionAsync(
+        ResourceExecutingContext context,
+        ResourceExecutionDelegate next)
+    {
+        string cacheKey = context.HttpContext.Request.Path;
+
+        if (_cache.TryGetValue(cacheKey, out object? cached))
+        {
+            context.Result = new OkObjectResult(cached);
+            return;
+        }
+
+        ResourceExecutedContext executed = await next();
+
+        if (executed.Result is OkObjectResult okResult && okResult.Value is not null)
+        {
+            _cache.Set(cacheKey, okResult.Value, TimeSpan.FromMinutes(5));
+        }
+    }
+}
+```
+
+Resource Filter 可以在模型绑定前短路，直接返回缓存结果，跳过后续所有环节。
+
+## Result Filter 与响应包装
+
+Result Filter 在 Action 结果执行前后运行，适合统一包装响应格式：
+
+```csharp
+public class WrapResultFilter : IResultFilter
+{
+    public void OnResultExecuting(ResultExecutingContext context)
+    {
+        if (context.Result is ObjectResult objectResult)
+        {
+            objectResult.Value = new ApiResponse
+            {
+                Code = context.HttpContext.Response.StatusCode,
+                Data = objectResult.Value
+            };
+        }
+    }
+
+    public void OnResultExecuted(ResultExecutedContext context)
+    {
+    }
+}
+
+public class ApiResponse
+{
+    public int Code { get; set; }
+    public object? Data { get; set; }
+}
+```
+
+注册全局 Result Filter：
+
+```csharp
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<WrapResultFilter>();
+});
+```
+
+所有 Controller 返回的数据会被自动包装成 `{ Code, Data }` 格式。
+
+## IAlwaysRunResultFilter：异常场景下的响应包装
+
+上面的 `WrapResultFilter` 存在一个隐蔽问题：当 Action 抛出异常且被 Exception Filter 捕获处理后，**Result Filter 默认不会执行**。这意味着 Exception Filter 返回的 `ProblemDetails` 不会被 `WrapResultFilter` 包装，API 响应格式不一致。
+
+```text
+正常流程：Action -> Result Filter（包装）-> 响应 { Code, Data }
+异常流程：Action 抛异常 -> Exception Filter -> 响应 { Title, Status }  // 未被包装！
+```
+
+`IAlwaysRunResultFilter`（和异步版本 `IAlwaysRunAsyncResultFilter`）在任何情况下都会执行，包括异常被处理后：
+
+```csharp
+public class AlwaysWrapResultFilter : IAlwaysRunResultFilter
+{
+    public void OnResultExecuting(ResultExecutingContext context)
+    {
+        if (context.Result is ObjectResult objectResult)
+        {
+            objectResult.Value = new ApiResponse
+            {
+                Code = context.HttpContext.Response.StatusCode,
+                Data = objectResult.Value
+            };
+        }
+    }
+
+    public void OnResultExecuted(ResultExecutedContext context) { }
+}
+```
+
+完整的异常 + 包装配合示例：
+
+```csharp
+public class ApiExceptionFilter : IExceptionFilter, IOrderedFilter
+{
+    private readonly ILogger<ApiExceptionFilter> _logger;
+
+    public int Order => -1000;
+
+    public ApiExceptionFilter(ILogger<ApiExceptionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public void OnException(ExceptionContext context)
+    {
+        _logger.LogError(context.Exception, "Action exception");
+
+        context.Result = new ObjectResult(new ProblemDetails
+        {
+            Title = "Action failed",
+            Status = StatusCodes.Status500InternalServerError
+        })
+        {
+            StatusCode = StatusCodes.Status500InternalServerError
+        };
+
+        context.ExceptionHandled = true;
+    }
+}
+```
+
+```csharp
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<ApiExceptionFilter>();
+    options.Filters.Add<AlwaysWrapResultFilter>();
+});
+```
+
+:::caution Exception Filter 的 Order 必须更小
+`ApiExceptionFilter` 的 `Order = -1000` 确保它先于 `AlwaysWrapResultFilter` 执行。Exception Filter 先捕获异常并设置 `Result`，然后 `IAlwaysRunResultFilter` 才能对这个 `Result` 进行包装。如果顺序反了，包装 Filter 看到的还是原始异常状态。
+:::
+
+最终效果——无论正常还是异常，响应格式统一：
+
+```json
+{
+  "code": 200,
+  "data": { "id": 1, "name": "example" }
+}
+```
+
+```json
+{
+  "code": 500,
+  "data": { "title": "Action failed", "status": 500 }
+}
+```
+
+## Authorization Filter
+
+Authorization Filter 是最早执行的 Filter，可以在 MVC 层做授权拦截：
+
+```csharp
+public class ApiKeyAuthorizationFilter : IAuthorizationFilter
+{
+    private readonly IConfiguration _configuration;
+
+    public ApiKeyAuthorizationFilter(IConfiguration configuration)
+    {
+        _configuration = configuration;
+    }
+
+    public void OnAuthorization(AuthorizationFilterContext context)
+    {
+        if (!context.HttpContext.Request.Headers.TryGetValue("X-Api-Key", out var apiKey))
+        {
+            context.Result = new UnauthorizedResult();
+            return;
+        }
+
+        string? validKey = _configuration["ApiKeys:Default"];
+        if (apiKey != validKey)
+        {
+            context.Result = new ForbidResult();
+        }
+    }
+}
+```
+
+大多数场景直接用 `[Authorize]` + Policy 即可，自定义 Authorization Filter 适合特殊鉴权逻辑。
+
+## Middleware 和 Filter 怎么选
+
+| 场景 | 推荐 |
+|---|---|
+| 全局异常处理 | Middleware |
+| 请求日志、TraceId、租户识别 | Middleware |
+| Action 参数检查 | Filter |
+| Action 耗时统计 | Filter 或 Middleware |
+| 认证授权 | 框架 Authentication / Authorization Middleware + Policy |
+| Controller 返回结果包装 | Result Filter |
+
+原则：越靠近 HTTP 管道的能力用 Middleware，越靠近 MVC Action 的能力用 Filter。
+
+## 使用建议
+
+- 不要把业务逻辑放进 Filter。
+- Filter 适合横切逻辑，不适合替代 Service。
+- 全局异常优先用 Middleware。
+- 需要 DI 的 Filter 用 `ServiceFilter` 或注册全局 Filter；需要传参用 `TypeFilter`；需要 Attribute 属性控制行为用 `IFilterFactory`。
+- 同步和异步接口不要混用，异步逻辑用 Async Filter。
+- 多个同类型 Filter 用 `IOrderedFilter` 控制顺序，Order 间隔留大一些。
+- 异常场景下 Result Filter 默认不执行，需要包装响应时用 `IAlwaysRunResultFilter`。
+
+## 总结
+
+Filter 是 Controller 层的扩展点，适合处理 Action 前后的横切逻辑。它和 Middleware 都能扩展请求处理流程，但作用层级不同：Middleware 面向整个 HTTP 管道，Filter 面向 MVC / Controller 执行过程。

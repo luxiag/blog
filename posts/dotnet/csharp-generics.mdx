@@ -1,0 +1,434 @@
+---
+title: 'C# 泛型：类型安全的复用机制'
+date: '2026-07-14'
+excerpt: '从 object 方案的问题出发，系统理解 C# 泛型方法、泛型类、泛型接口、泛型委托、泛型约束、default、协变和逆变。'
+tags: ['dotnet', 'csharp', 'generic', 'type-system']
+nextPost: 'dotnet/csharp-extension-methods-iterators'
+---
+
+# C# 泛型：类型安全的复用机制
+
+泛型是 C# 类型系统里最重要的能力之一。它解决的问题不是“少写几个重复方法”这么简单，而是让一套逻辑可以复用到不同类型上，同时保留编译期类型检查。
+
+:::tip C# 语言系列阅读顺序
+建议先读 [C# 语言核心知识路线](/posts/dotnet/csharp-language-roadmap)，再按顺序阅读：[基础语法](/posts/dotnet/csharp-basic-syntax) -> [面向对象基础](/posts/dotnet/csharp-object-oriented-basics) -> [集合与异常处理](/posts/dotnet/csharp-collections-exceptions) -> [类型系统](/posts/dotnet/csharp-type-system) -> 泛型 -> [扩展方法与迭代器](/posts/dotnet/csharp-extension-methods-iterators) -> [委托、事件与 Lambda](/posts/dotnet/csharp-delegate-event-lambda) -> [LINQ](/posts/dotnet/csharp-linq)。
+:::
+
+## 为什么需要泛型
+
+没有泛型时，如果同一段逻辑要处理不同类型，最直接的方式是写多个重载。
+
+```csharp
+public static void PrintInt(int value)
+{
+    Console.WriteLine(value);
+}
+
+public static void PrintString(string value)
+{
+    Console.WriteLine(value);
+}
+
+public static void PrintDateTime(DateTime value)
+{
+    Console.WriteLine(value);
+}
+```
+
+这种写法的问题很明显：逻辑重复、维护成本高，每新增一种类型就要新增一个方法。
+
+另一种方式是用 `object`。
+
+```csharp
+public static void PrintObject(object value)
+{
+    Console.WriteLine(value);
+}
+
+PrintObject(123);
+PrintObject("hello");
+PrintObject(DateTime.Now);
+```
+
+`object` 看起来通用，但它丢失了类型信息。调用方传什么都可以，编译器无法帮你检查类型是否符合预期。值类型传给 `object` 还会发生装箱。
+
+泛型提供了第三种方式：**把类型作为参数传进来**。
+
+```csharp
+public static void Print<T>(T value)
+{
+    Console.WriteLine(value);
+}
+
+Print(123);
+Print("hello");
+Print(DateTime.Now);
+```
+
+`T` 是类型参数。方法定义时不指定具体类型，调用时由编译器推断或由调用方明确指定。
+
+## 泛型方法
+
+泛型方法适合一段逻辑可以应用到多种类型的场景。
+
+```csharp
+public static T FirstOrDefaultValue<T>(IEnumerable<T> source, T defaultValue)
+{
+    foreach (T item in source)
+    {
+        return item;
+    }
+
+    return defaultValue;
+}
+
+var numbers = new List<int>();
+int number = FirstOrDefaultValue(numbers, -1);
+
+var names = new List<string> { "Alice" };
+string name = FirstOrDefaultValue(names, "Unknown");
+
+Console.WriteLine(number);
+Console.WriteLine(name);
+```
+
+调用泛型方法时，编译器通常能根据参数推断 `T`。
+
+```csharp
+Print(123);        // T 推断为 int
+Print<string>("a"); // 也可以显式指定
+```
+
+## 泛型类
+
+泛型类适合把某个类型参数贯穿到整个类型的多个成员中。
+
+```csharp
+public class Box<T>
+{
+    private T? _value;
+
+    public void Set(T value)
+    {
+        _value = value;
+    }
+
+    public T? Get()
+    {
+        return _value;
+    }
+}
+
+var intBox = new Box<int>();
+intBox.Set(100);
+
+var stringBox = new Box<string>();
+stringBox.Set("hello");
+
+Console.WriteLine(intBox.Get());
+Console.WriteLine(stringBox.Get());
+```
+
+`Box<int>` 和 `Box<string>` 是两个不同的构造类型。它们来自同一个泛型类型定义 `Box<T>`。
+
+## 泛型接口
+
+泛型接口在 .NET 中非常常见，例如 `IEnumerable<T>`、`IComparable<T>`、`IRepository<T>`。
+
+```csharp
+public interface IRepository<T>
+{
+    void Add(T entity);
+    T? FindById(long id);
+}
+
+public class InMemoryRepository<T> : IRepository<T>
+    where T : Entity
+{
+    private readonly List<T> _items = new();
+
+    public void Add(T entity)
+    {
+        _items.Add(entity);
+    }
+
+    public T? FindById(long id)
+    {
+        return _items.FirstOrDefault(item => item.Id == id);
+    }
+}
+
+public abstract class Entity
+{
+    public long Id { get; init; }
+}
+
+public class Product : Entity
+{
+    public string Name { get; init; } = string.Empty;
+}
+```
+
+接口描述“对某种实体的仓储能力”，具体实体类型由 `T` 决定。
+
+## 泛型委托
+
+委托也可以是泛型的。事实上，常用的 `Func<T, TResult>` 和 `Action<T>` 本身就是泛型委托。
+
+```csharp
+public delegate bool Filter<T>(T value);
+
+public static List<T> FindAll<T>(IEnumerable<T> source, Filter<T> filter)
+{
+    var result = new List<T>();
+
+    foreach (T item in source)
+    {
+        if (filter(item))
+        {
+            result.Add(item);
+        }
+    }
+
+    return result;
+}
+
+var numbers = new[] { 1, 2, 3, 4, 5 };
+List<int> evenNumbers = FindAll(numbers, n => n % 2 == 0);
+
+Console.WriteLine(string.Join(", ", evenNumbers));
+```
+
+实际项目里通常直接使用 `Func<T, bool>`，不需要自己定义 `Filter<T>`。
+
+## 泛型约束
+
+没有约束时，编译器只知道 `T` 是某个类型，但不知道它有什么成员。
+
+```csharp
+public static void PrintName<T>(T value)
+{
+    // value.Name 无法编译，因为编译器不知道 T 一定有 Name
+}
+```
+
+约束用于告诉编译器：`T` 必须满足某些条件。
+
+```csharp
+public interface INamed
+{
+    string Name { get; }
+}
+
+public static void PrintName<T>(T value)
+    where T : INamed
+{
+    Console.WriteLine(value.Name);
+}
+
+public class User : INamed
+{
+    public string Name { get; init; } = string.Empty;
+}
+
+PrintName(new User { Name = "Alice" });
+```
+
+常见约束：
+
+| 约束 | 含义 |
+|---|---|
+| `where T : class` | `T` 必须是引用类型 |
+| `where T : struct` | `T` 必须是非可空值类型 |
+| `where T : notnull` | `T` 不能是可空类型 |
+| `where T : unmanaged` | `T` 必须是非托管类型 |
+| `where T : new()` | `T` 必须有公共无参构造函数 |
+| `where T : BaseClass` | `T` 必须继承某个基类 |
+| `where T : IInterface` | `T` 必须实现某个接口 |
+| `where T : Enum` | `T` 必须是枚举类型 |
+
+多个约束可以组合。
+
+```csharp
+public static T CreateNamed<T>()
+    where T : INamed, new()
+{
+    return new T();
+}
+```
+
+`new()` 约束必须放在约束列表最后。
+
+## default(T)
+
+泛型代码里经常需要返回某个类型的默认值。
+
+```csharp
+public static T GetDefault<T>()
+{
+    return default!;
+}
+
+Console.WriteLine(GetDefault<int>());       // 0
+Console.WriteLine(GetDefault<bool>());      // False
+Console.WriteLine(GetDefault<string>() is null); // True
+```
+
+不同类型的默认值不同：
+
+- 数值类型默认是 `0`
+- `bool` 默认是 `false`
+- `DateTime` 默认是 `DateTime.MinValue`
+- 引用类型默认是 `null`
+- 结构体默认是所有字段的默认值组合
+
+## 泛型集合为什么重要
+
+泛型集合比非泛型集合更安全，也能避免很多装箱拆箱。
+
+```csharp
+var numbers = new List<int>();
+numbers.Add(1);
+numbers.Add(2);
+
+// numbers.Add("hello"); // 编译错误
+
+foreach (int number in numbers)
+{
+    Console.WriteLine(number);
+}
+```
+
+如果使用老的非泛型集合，错误会推迟到运行时。
+
+```csharp
+var list = new System.Collections.ArrayList();
+list.Add(1);
+list.Add("hello");
+
+foreach (int number in list)
+{
+    Console.WriteLine(number); // 遇到字符串时运行时异常
+}
+```
+
+这就是泛型的核心价值：**让类型错误尽量在编译期暴露**。
+
+## 协变：out
+
+协变允许把“更具体的输出类型”赋给“更通用的输出类型”。C# 中泛型变体只支持接口和委托的泛型参数，普通泛型类不能直接声明协变或逆变。
+
+`IEnumerable<out T>` 中的 `out` 表示 `T` 只作为输出位置使用。
+
+```csharp
+IEnumerable<string> strings = new List<string> { "a", "b" };
+IEnumerable<object> objects = strings;
+
+foreach (object item in objects)
+{
+    Console.WriteLine(item);
+}
+```
+
+这是安全的，因为从 `IEnumerable<string>` 中读出来的每个 `string` 都一定也是 `object`。
+
+自定义协变接口：
+
+```csharp
+public interface IProducer<out T>
+{
+    T Produce();
+}
+
+public class DogProducer : IProducer<Dog>
+{
+    public Dog Produce() => new Dog();
+}
+
+IProducer<Dog> dogProducer = new DogProducer();
+IProducer<Animal> animalProducer = dogProducer;
+
+public class Animal { }
+public class Dog : Animal { }
+```
+
+`out T` 不能用于方法参数输入位置，否则不安全。
+
+## 逆变：in
+
+逆变允许把“更通用的输入处理器”赋给“更具体的输入处理器”。
+
+`Action<in T>` 中的 `in` 表示 `T` 只作为输入位置使用。
+
+```csharp
+Action<object> printObject = value => Console.WriteLine(value);
+
+Action<string> printString = printObject;
+
+printString("hello");
+```
+
+这是安全的，因为能处理任意 `object` 的方法，一定也能处理 `string`。
+
+自定义逆变接口：
+
+```csharp
+public interface IConsumer<in T>
+{
+    void Consume(T value);
+}
+
+public class AnimalConsumer : IConsumer<Animal>
+{
+    public void Consume(Animal value)
+    {
+        Console.WriteLine(value.GetType().Name);
+    }
+}
+
+IConsumer<Animal> animalConsumer = new AnimalConsumer();
+IConsumer<Dog> dogConsumer = animalConsumer;
+
+dogConsumer.Consume(new Dog());
+```
+
+`in T` 不能用于返回值输出位置。
+
+## 泛型类不自动支持变体
+
+下面这段代码不能编译：
+
+```csharp
+List<string> strings = new() { "a" };
+
+// List<object> objects = strings; // 编译错误
+```
+
+原因是 `List<T>` 同时消费和产出 `T`。如果允许 `List<string>` 转成 `List<object>`，就可能往里面加入任意 `object`，破坏原来的 `List<string>`。
+
+```csharp
+// 假设这能成立，就会出现问题：
+// objects.Add(new object());
+// string value = strings[1]; // 不再安全
+```
+
+因此变体主要出现在只读输出接口、只写输入接口和委托上。
+
+## 什么时候使用泛型
+
+适合使用泛型的场景：
+
+- 容器：`List<T>`、`Dictionary<TKey, TValue>`
+- 仓储：`IRepository<TEntity>`
+- 结果包装：`Result<T>`
+- 缓存封装：`CacheItem<T>`
+- 统一处理器：`IHandler<TCommand>`
+- 委托和回调：`Func<T, TResult>`、`Action<T>`
+
+不要为了“看起来高级”滥用泛型。如果一个类型只服务于一个明确业务对象，直接写具体类型通常更清晰。
+
+## 总结
+
+泛型的核心价值是：**类型参数化、逻辑复用、编译期类型安全**。
+
+掌握泛型后，再看 `List<T>`、`IEnumerable<T>`、`Func<T>`、`IOptions<T>`、`DbSet<TEntity>`、`IRepository<T>` 这些 .NET API，就能理解它们为什么这样设计。

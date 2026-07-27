@@ -1,0 +1,1225 @@
+---
+title: 'SQL 系统进阶 · Part 5：PostgreSQL 深度实战'
+date: '2026-05-11'
+excerpt: '「SQL 从入门到专家」系列收官篇。把通用 SQL 原理落到 PostgreSQL：从架构原理、数据类型、索引机制，到事务隔离、窗口函数、JSON 支持与性能调优，覆盖日常开发与生产运维。'
+tags: ['PostgreSQL', 'Database', 'SQL', 'Backend', 'Performance']
+---
+
+# SQL 系统进阶 · Part 5：PostgreSQL 深度实战
+
+:::info 本文是「SQL 从入门到专家」系列的收官篇（第五篇）
+1. [Part 1 · 入门指南](/posts/sql/sql-beginner-guide) —— 建立 SQL 心智模型
+2. [Part 2 · 实战练习（一）：基础巩固](/posts/sql/sql-exercises) —— 10 道题巩固基础
+3. [Part 3 · 实战练习（二）：进阶应用](/posts/sql/sql-practice-lab) —— 21 道电商数据集题
+4. [Part 4 · 进阶：执行计划、索引原理与查询优化](/posts/sql/sql-advanced-performance) —— 数据库中立的性能方法论
+5. **Part 5 · PostgreSQL 深度实战（本文）** —— 把通用原理落到一个具体数据库
+:::
+
+走到这里，你已经掌握了通用的 SQL 语法（Part 1）、做了大量练习（Part 2/3），也理解了执行计划、索引原理与查询优化的**数据库中立**方法论（Part 4）。
+
+这一篇是系列的收官：把前面学的所有抽象原理，落到**一个具体的、功能最完善的数据库**上。你会看到 Part 4 讲的"MVCC""B-Tree 索引""执行计划""锁"在 PostgreSQL 里是怎么实现、怎么操作的。
+
+PostgreSQL（简称 PG）是目前功能最完善的开源关系型数据库之一。它不只是"会存数据"——它支持复杂查询、事务控制、JSON 文档、全文检索、地理信息、自定义类型……几乎涵盖了任何生产场景的需求。
+
+本文面向**已完成前四篇、希望深入掌握一个生产级数据库**的开发者，目标是让你读完后能：
+
+- 理解 PG 的架构与执行模型（对照 Part 4 的通用执行模型）
+- 写出正确、高效的查询
+- 在生产环境中做索引优化与性能排查
+- 不踩常见的事务、锁、类型等坑
+
+:::tip 为什么选 PostgreSQL 作为收官？
+Part 4 讲的原理适用于所有关系数据库。这里选 PG 是因为它把这些原理实现得最完整、最"教科书"——它原生支持 MVCC、提供 4 种以上索引类型、`EXPLAIN` 信息最丰富。把 PG 吃透，迁移到 MySQL、Oracle 等其他数据库时，你会发现底层逻辑是相通的。
+:::
+
+---
+
+## 1. PostgreSQL 架构概览
+
+理解 PG 的运行机制，是所有优化和排查的前提。
+
+### 1.1 进程模型
+
+PG 使用**多进程架构**（而非多线程），每个客户端连接对应一个独立的后端进程（`backend`）。
+
+```
+Client
+  │
+  ▼
+postmaster（主进程）
+  ├── backend process（每个连接一个）
+  ├── autovacuum worker
+  ├── WAL writer
+  ├── bgwriter（后台写进程）
+  ├── checkpointer
+  └── stats collector
+```
+
+关键进程说明：
+
+| 进程 | 职责 |
+|------|------|
+| `postmaster` | 监听连接请求，fork 子进程 |
+| `backend` | 处理单个客户端的 SQL 请求 |
+| `autovacuum` | 自动清理死元组，更新统计信息 |
+| `WAL writer` | 将 WAL 日志异步刷盘 |
+| `checkpointer` | 定期将脏页写入磁盘，推进检查点 |
+
+### 1.2 存储模型：堆文件与 MVCC
+
+PG 使用**堆（Heap）**存储数据，每张表对应一组堆文件。
+
+与 MySQL InnoDB 的聚簇索引不同，**PG 的主键索引和数据是分离的**：
+
+- 堆文件按插入顺序存储行
+- 每个索引是独立的 B-tree（或其他类型）文件，存储的是指向堆的指针（`ctid`）
+
+这意味着：PG 更新一行 = 写入新版本行 + 将旧版本标记为"已删除"，旧版本由 `autovacuum` 定期清理。这就是 **MVCC（多版本并发控制）** 的实现方式。
+
+:::note
+这种设计让并发读写互不阻塞（读不加锁），但如果 `autovacuum` 没有及时清理死元组，表会膨胀，查询也会变慢。生产环境要关注表的膨胀（bloat）情况。
+:::
+
+### 1.3 一条 SQL 的生命周期
+
+```mermaid
+flowchart LR
+  A[客户端发送 SQL] --> B[Parser 语法解析]
+  B --> C[Analyzer 语义分析]
+  C --> D[Rewriter 规则重写]
+  D --> E[Planner/Optimizer 生成执行计划]
+  E --> F[Executor 执行]
+  F --> G[返回结果]
+```
+
+其中 **Planner** 是性能调优的核心——它根据统计信息（`pg_statistic`）和代价模型选择最优执行计划。`EXPLAIN` 命令展示的正是这里生成的计划。
+
+---
+
+## 2. 数据类型
+
+PG 的类型系统远比 MySQL 丰富，选对类型能减少存储空间、提升查询性能、避免隐式转换坑。
+
+### 2.1 数值类型
+
+| 类型 | 大小 | 范围 / 说明 |
+|------|------|-------------|
+| `smallint` | 2 bytes | -32768 ~ 32767 |
+| `integer` / `int` | 4 bytes | -2^31 ~ 2^31-1 |
+| `bigint` | 8 bytes | -2^63 ~ 2^63-1 |
+| `numeric(p,s)` | 可变 | 精确小数，用于金额 |
+| `real` | 4 bytes | 浮点数，有精度损失 |
+| `double precision` | 8 bytes | 双精度浮点 |
+| `serial` / `bigserial` | 4/8 bytes | 自增整数（本质是 sequence） |
+
+:::warning
+`real` 和 `double precision` 是浮点类型，存在精度问题。**金额字段必须用 `numeric`**，绝不能用浮点类型，否则计算结果会出现 `0.1 + 0.2 ≠ 0.3` 的问题。
+:::
+
+```sql
+-- 错误示范：金额用 float
+CREATE TABLE orders (
+  amount float  -- 危险！
+);
+
+-- 正确做法：金额用 numeric
+CREATE TABLE orders (
+  amount numeric(12, 2)  -- 最多 12 位数，2 位小数
+);
+```
+
+### 2.2 字符串类型
+
+| 类型 | 说明 |
+|------|------|
+| `varchar(n)` | 最多 n 个字符，超出报错 |
+| `char(n)` | 固定 n 个字符，不足补空格 |
+| `text` | 无限长度字符串 |
+
+**PG 建议优先使用 `text`**：PG 内部对三种类型的存储方式几乎相同，`varchar(n)` 的长度限制只是额外的约束，并不提升性能。`char(n)` 因为补空格会带来比较时的隐患，几乎不推荐使用。
+
+### 2.3 时间类型
+
+| 类型 | 说明 |
+|------|------|
+| `date` | 仅日期（2026-05-11） |
+| `time` | 仅时间（14:30:00） |
+| `timestamp` | 日期+时间，无时区 |
+| `timestamptz` | 日期+时间，带时区（存储为 UTC） |
+| `interval` | 时间间隔（'3 days', '2 hours'） |
+
+:::warning
+**强烈推荐使用 `timestamptz` 而非 `timestamp`**。`timestamptz` 存储时转为 UTC，读取时根据会话时区转换；`timestamp` 不做时区转换，在多时区环境下极易出 bug。
+:::
+
+```sql
+-- 设置会话时区
+SET timezone = 'Asia/Shanghai';
+
+SELECT NOW();                         -- 显示上海时间
+SELECT NOW() AT TIME ZONE 'UTC';      -- 转换到 UTC 显示
+SELECT NOW() AT TIME ZONE 'America/New_York';  -- 转换到纽约时间
+```
+
+### 2.4 布尔类型
+
+```sql
+-- PG 原生支持 boolean 类型
+CREATE TABLE users (
+  is_active boolean DEFAULT true
+);
+
+-- 接受多种写法
+INSERT INTO users (is_active) VALUES (true), (false), ('t'), ('f'), ('yes'), ('no');
+```
+
+### 2.5 UUID 类型
+
+PG 原生支持 `uuid` 类型，配合扩展可自动生成：
+
+```sql
+-- 启用 uuid 扩展（PG 13+ 内置 gen_random_uuid()，无需扩展）
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+CREATE TABLE users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL
+);
+```
+
+### 2.6 数组类型
+
+PG 支持任意类型的数组，这是 MySQL 不具备的能力：
+
+```sql
+CREATE TABLE posts (
+  id serial PRIMARY KEY,
+  title text,
+  tags text[]   -- 文本数组
+);
+
+INSERT INTO posts (title, tags)
+VALUES ('PostgreSQL 指南', ARRAY['postgresql', 'database', 'sql']);
+
+-- 查询包含特定 tag 的文章
+SELECT * FROM posts WHERE 'postgresql' = ANY(tags);
+
+-- 查询同时包含两个 tag 的文章
+SELECT * FROM posts WHERE tags @> ARRAY['postgresql', 'sql'];
+```
+
+### 2.7 JSON / JSONB 类型
+
+这是 PG 的"杀手锏"之一，让它在文档存储场景下也能胜任：
+
+| 类型 | 存储方式 | 特点 |
+|------|----------|------|
+| `json` | 原始文本 | 保留原始格式，每次查询重新解析 |
+| `jsonb` | 二进制 | 写入时解析，支持索引，查询更快 |
+
+**实际使用一律优先选 `jsonb`**：
+
+```sql
+CREATE TABLE events (
+  id serial PRIMARY KEY,
+  payload jsonb NOT NULL,
+  created_at timestamptz DEFAULT NOW()
+);
+
+INSERT INTO events (payload)
+VALUES ('{"type": "click", "user_id": 42, "meta": {"page": "/home"}}');
+
+-- 用 -> 取对象字段（返回 JSON）
+SELECT payload -> 'type' FROM events;
+
+-- 用 ->> 取文本值（返回 text）
+SELECT payload ->> 'type' FROM events;
+
+-- 用 #> 取嵌套路径（返回 JSON）
+SELECT payload #> '{meta, page}' FROM events;
+
+-- 用 #>> 取嵌套路径文本
+SELECT payload #>> '{meta, page}' FROM events;
+
+-- 用 @> 判断是否包含
+SELECT * FROM events WHERE payload @> '{"type": "click"}';
+
+-- 在 jsonb 字段上建 GIN 索引（加速 @> 查询）
+CREATE INDEX idx_events_payload ON events USING GIN (payload);
+```
+
+---
+
+## 3. 索引机制
+
+索引是查询性能的核心，PG 提供的索引类型远比 MySQL 丰富。
+
+### 3.1 B-tree 索引（默认）
+
+适合：等值查询、范围查询、排序。这是 `CREATE INDEX` 的默认类型。
+
+```sql
+-- 单列索引
+CREATE INDEX idx_users_email ON users (email);
+
+-- 多列索引（顺序很重要）
+CREATE INDEX idx_orders_user_date ON orders (user_id, created_at DESC);
+
+-- 唯一索引
+CREATE UNIQUE INDEX idx_users_email_unique ON users (email);
+
+-- 部分索引（只索引满足条件的行，减小索引体积）
+CREATE INDEX idx_active_users ON users (email) WHERE is_active = true;
+
+-- 表达式索引（对函数结果建索引）
+CREATE INDEX idx_users_lower_email ON users (lower(email));
+```
+
+:::tip
+**部分索引**非常实用：比如 `orders` 表中只有 `status = 'pending'` 的订单需要频繁查询，那么只对这部分数据建索引，可以大幅减小索引体积，提升写入速度。
+:::
+
+### 3.2 GIN 索引
+
+适合：数组、JSONB、全文检索——含有多值的列。
+
+```sql
+-- JSONB 字段的 GIN 索引
+CREATE INDEX idx_events_payload ON events USING GIN (payload);
+
+-- 数组字段的 GIN 索引
+CREATE INDEX idx_posts_tags ON posts USING GIN (tags);
+
+-- 全文检索的 GIN 索引
+CREATE INDEX idx_posts_search ON posts USING GIN (to_tsvector('english', content));
+```
+
+### 3.3 GiST 索引
+
+适合：几何类型（PostGIS）、范围类型、全文检索的 `tsvector`。
+
+```sql
+-- 范围类型查询（例：查询时间段是否重叠）
+CREATE TABLE reservations (
+  id serial PRIMARY KEY,
+  room_id int,
+  period tstzrange  -- 时间范围类型
+);
+
+CREATE INDEX idx_reservations_period ON reservations USING GiST (period);
+
+-- 查询某时间段内有哪些预订
+SELECT * FROM reservations WHERE period && '[2026-05-10, 2026-05-15)'::tstzrange;
+```
+
+### 3.4 BRIN 索引
+
+适合：物理顺序与数据顺序高度一致的大表（如时序数据按时间顺序插入的日志表）。
+
+索引体积极小，但只适合特定场景：
+
+```sql
+-- 日志表，按时间顺序写入，用 BRIN 而非 B-tree
+CREATE TABLE logs (
+  id bigserial PRIMARY KEY,
+  created_at timestamptz DEFAULT NOW(),
+  message text
+);
+
+CREATE INDEX idx_logs_created_at ON logs USING BRIN (created_at);
+```
+
+### 3.5 读懂 EXPLAIN
+
+`EXPLAIN ANALYZE` 是性能排查最重要的工具：
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+SELECT u.name, COUNT(o.id) AS order_count
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+WHERE u.is_active = true
+GROUP BY u.id, u.name
+ORDER BY order_count DESC
+LIMIT 10;
+```
+
+关键字段解读：
+
+| 字段 | 含义 |
+|------|------|
+| `Seq Scan` | 全表扫描，通常是优化目标 |
+| `Index Scan` | 使用索引，但会回表读堆 |
+| `Index Only Scan` | 纯索引扫描，无需回表，最优 |
+| `Hash Join` / `Merge Join` / `Nested Loop` | 连接算法 |
+| `cost=X..Y` | 估算代价（启动代价..总代价） |
+| `actual time=X..Y` | 实际执行时间（ms） |
+| `rows=N` | 实际返回行数 |
+| `Buffers: hit=N read=N` | 命中缓存 vs 磁盘读取 |
+
+:::tip
+如果 `rows=1000`（实际）但计划器估计是 `rows=10`，说明统计信息不准，可以执行 `ANALYZE <table>` 更新统计信息。
+:::
+
+---
+
+## 4. 事务与并发控制
+
+### 4.1 事务基础
+
+```sql
+BEGIN;
+
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+
+-- 成功则提交
+COMMIT;
+
+-- 出错则回滚
+-- ROLLBACK;
+```
+
+PG 支持**保存点（Savepoint）**，可以部分回滚：
+
+```sql
+BEGIN;
+
+INSERT INTO orders (user_id, amount) VALUES (1, 100);
+SAVEPOINT sp1;
+
+INSERT INTO order_items (order_id, product_id) VALUES (1, 999);  -- 假设这里失败
+
+ROLLBACK TO SAVEPOINT sp1;  -- 只回滚到 sp1，保留前面的 INSERT
+
+COMMIT;
+```
+
+### 4.2 RETURNING 子句：操作后直接拿结果
+
+PG 独有的强大特性——`INSERT`、`UPDATE`、`DELETE` 后可以用 `RETURNING` 直接返回受影响的行，省去一次额外查询：
+
+```sql
+-- 插入后拿到生成的 ID 和默认值
+INSERT INTO orders (user_id, amount, status)
+VALUES (1, 299.00, 'pending')
+RETURNING id, created_at;
+
+-- 更新后拿到新旧值对比
+UPDATE products
+SET price = price * 0.9
+WHERE category = 'electronics'
+RETURNING id, name, price AS new_price;
+
+-- 删除后知道删了什么
+DELETE FROM orders
+WHERE created_at < '2024-01-01'
+RETURNING id, user_id;
+
+-- 配合 CTE 使用（最强大的模式）
+WITH new_order AS (
+  INSERT INTO orders (user_id, amount) VALUES (1, 199.00)
+  RETURNING id
+)
+INSERT INTO order_items (order_id, product_id, quantity)
+SELECT id, 42, 2 FROM new_order;
+```
+
+:::tip 为什么 RETURNING 很重要？
+在应用层，你通常需要插入后拿到自增 ID。没有 `RETURNING`，你需要先 `INSERT` 再 `SELECT last_insert_id()`。`RETURNING` 把这两步合成一步，既快又不会在并发时拿错 ID。
+:::
+
+### 4.3 隔离级别
+
+PG 支持 SQL 标准定义的四个隔离级别，但实现上有自己的特点（基于 MVCC）：
+
+| 隔离级别 | 脏读 | 不可重复读 | 幻读 |
+|----------|------|------------|------|
+| `READ UNCOMMITTED` | PG 不允许（等同 READ COMMITTED） | 可能 | 可能 |
+| `READ COMMITTED`（默认） | 不可能 | 可能 | 可能 |
+| `REPEATABLE READ` | 不可能 | 不可能 | PG 中不可能* |
+| `SERIALIZABLE` | 不可能 | 不可能 | 不可能 |
+
+*PG 的 MVCC 让 `REPEATABLE READ` 也避免了幻读。
+
+```sql
+-- 修改当前事务的隔离级别
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+-- ...
+COMMIT;
+
+-- 修改会话默认隔离级别
+SET default_transaction_isolation = 'serializable';
+```
+
+### 4.4 锁机制
+
+PG 有多个粒度的锁：
+
+```sql
+-- 行级锁（SELECT ... FOR UPDATE）
+-- 锁定查询到的行，其他事务无法修改这些行
+SELECT * FROM orders WHERE user_id = 1 FOR UPDATE;
+
+-- 跳过已锁定的行（SKIP LOCKED）
+-- 常用于实现并发队列
+SELECT * FROM tasks WHERE status = 'pending' LIMIT 1 FOR UPDATE SKIP LOCKED;
+
+-- 表级锁
+LOCK TABLE orders IN EXCLUSIVE MODE;
+```
+
+`SKIP LOCKED` 的队列处理模式：
+
+```sql
+-- Worker 1 和 Worker 2 可以同时处理不同任务，互不干扰
+BEGIN;
+SELECT id, payload
+FROM task_queue
+WHERE status = 'pending'
+ORDER BY created_at
+LIMIT 1
+FOR UPDATE SKIP LOCKED;
+
+-- 处理任务...
+UPDATE task_queue SET status = 'done' WHERE id = :task_id;
+COMMIT;
+```
+
+### 4.5 死锁
+
+PG 自动检测死锁，并回滚其中一个事务：
+
+```sql
+-- 事务 A                          事务 B
+BEGIN;                             BEGIN;
+UPDATE accounts SET ... WHERE id=1; UPDATE accounts SET ... WHERE id=2;
+-- 等待 B 释放 id=2 的锁           -- 等待 A 释放 id=1 的锁
+UPDATE accounts SET ... WHERE id=2; UPDATE accounts SET ... WHERE id=1;
+-- 死锁！PG 自动检测并回滚其中一方
+```
+
+**避免死锁的关键：在所有事务中以相同的顺序加锁**（例如，总是先锁 id 较小的行）。
+
+---
+
+## 5. 高级查询特性
+
+### 5.1 窗口函数
+
+窗口函数是 PG 中最强大的分析工具之一，能在不 GROUP BY 的情况下做分组计算：
+
+```sql
+-- 基本语法：<函数> OVER (PARTITION BY ... ORDER BY ... ROWS/RANGE ...)
+
+-- 每个用户的订单按时间排序，计算累计消费金额
+SELECT
+  user_id,
+  order_date,
+  amount,
+  SUM(amount) OVER (
+    PARTITION BY user_id
+    ORDER BY order_date
+    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  ) AS cumulative_amount
+FROM orders;
+```
+
+常用窗口函数：
+
+| 函数 | 说明 |
+|------|------|
+| `ROW_NUMBER()` | 行号（唯一） |
+| `RANK()` | 排名（相同值并列，跳过下一名次） |
+| `DENSE_RANK()` | 排名（相同值并列，不跳过） |
+| `LAG(col, n)` | 向前取第 n 行的值 |
+| `LEAD(col, n)` | 向后取第 n 行的值 |
+| `FIRST_VALUE(col)` | 窗口内第一行的值 |
+| `LAST_VALUE(col)` | 窗口内最后一行的值 |
+| `NTILE(n)` | 将行分成 n 个桶，返回桶编号 |
+
+```sql
+-- 每个部门薪资前 3 名
+WITH ranked AS (
+  SELECT
+    name,
+    department,
+    salary,
+    RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS rnk
+  FROM employees
+)
+SELECT * FROM ranked WHERE rnk <= 3;
+
+-- 计算与上一条订单的时间间隔
+SELECT
+  id,
+  user_id,
+  order_date,
+  order_date - LAG(order_date) OVER (
+    PARTITION BY user_id ORDER BY order_date
+  ) AS days_since_last_order
+FROM orders;
+```
+
+### 5.2 CTE（公用表表达式）
+
+CTE 让复杂查询变得可读和可复用：
+
+```sql
+-- 基础 CTE
+WITH monthly_revenue AS (
+  SELECT
+    DATE_TRUNC('month', created_at) AS month,
+    SUM(amount) AS revenue
+  FROM orders
+  WHERE status = 'completed'
+  GROUP BY 1
+)
+SELECT
+  month,
+  revenue,
+  revenue - LAG(revenue) OVER (ORDER BY month) AS revenue_change
+FROM monthly_revenue
+ORDER BY month;
+```
+
+**递归 CTE**（处理树形/层级数据）：
+
+```sql
+-- 组织架构树：找出某员工的所有下属
+WITH RECURSIVE subordinates AS (
+  -- 初始查询：直接下属
+  SELECT id, name, manager_id, 1 AS depth
+  FROM employees
+  WHERE id = 1  -- 从 CEO 开始
+
+  UNION ALL
+
+  -- 递归部分：逐层展开
+  SELECT e.id, e.name, e.manager_id, s.depth + 1
+  FROM employees e
+  JOIN subordinates s ON e.manager_id = s.id
+)
+SELECT * FROM subordinates ORDER BY depth, name;
+```
+
+### 5.3 全文检索
+
+PG 内置全文检索，无需 Elasticsearch 也能处理中小规模的搜索需求：
+
+```sql
+-- tsvector: 文档的词向量（已处理词形还原）
+-- tsquery: 搜索词
+
+-- 基础用法
+SELECT title
+FROM posts
+WHERE to_tsvector('english', content) @@ to_tsquery('english', 'postgresql & index');
+
+-- 对多列做全文检索
+SELECT title
+FROM posts
+WHERE to_tsvector('english', title || ' ' || content) @@ plainto_tsquery('english', 'postgresql index performance');
+
+-- 计算相关性排序
+SELECT
+  title,
+  ts_rank(to_tsvector('english', content), query) AS rank
+FROM posts, to_tsquery('english', 'postgresql') query
+WHERE to_tsvector('english', content) @@ query
+ORDER BY rank DESC;
+```
+
+持久化 `tsvector` 列（推荐做法，避免每次查询重新计算）：
+
+```sql
+ALTER TABLE posts ADD COLUMN search_vector tsvector;
+
+-- 用触发器自动维护
+CREATE FUNCTION posts_search_vector_update() RETURNS trigger AS $$
+BEGIN
+  NEW.search_vector = to_tsvector('english', NEW.title || ' ' || COALESCE(NEW.content, ''));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER posts_search_vector_trigger
+BEFORE INSERT OR UPDATE ON posts
+FOR EACH ROW EXECUTE FUNCTION posts_search_vector_update();
+
+-- 建 GIN 索引
+CREATE INDEX idx_posts_search_vector ON posts USING GIN (search_vector);
+```
+
+### 5.4 LATERAL JOIN：关联子查询 + JOIN
+
+`LATERAL` 允许在 `FROM` 子句中，后面的子查询可以引用前面表的列——这在普通 JOIN 中是做不到的。
+
+```sql
+-- 每个用户的最近 3 笔订单（普通写法需要子查询 + 窗口函数）
+-- LATERAL 写法更直观：
+SELECT u.name, latest.*
+FROM users u
+CROSS JOIN LATERAL (
+  SELECT id, amount, created_at
+  FROM orders o
+  WHERE o.user_id = u.id
+  ORDER BY created_at DESC
+  LIMIT 3
+) latest;
+
+-- 每个分类的商品 Top 5
+SELECT c.name, top_products.*
+FROM categories c
+CROSS JOIN LATERAL (
+  SELECT p.name, p.price
+  FROM products p
+  WHERE p.category_id = c.id
+  ORDER BY p.sales DESC
+  LIMIT 5
+) top_products;
+
+-- LEFT JOIN LATERAL：即使子查询返回空也保留左表行
+SELECT u.name, recent.amount
+FROM users u
+LEFT JOIN LATERAL (
+  SELECT amount FROM orders o
+  WHERE o.user_id = u.id
+  ORDER BY created_at DESC
+  LIMIT 1
+) recent ON true;
+```
+
+:::tip LATERAL vs 普通子查询
+普通 `FROM` 子查询是**独立**的，不能引用外部表的列。加了 `LATERAL` 后，子查询变成了"对每一行执行一次"的关联子查询。`CROSS JOIN LATERAL` 等价于 `LATERAL` 直接写在 `FROM` 里（不写 JOIN 时默认是 `CROSS JOIN LATERAL`）。
+:::
+
+### 5.5 继承与分区表
+
+**声明式表分区**（PG 10+）是处理大表的推荐方案：
+
+```sql
+-- 创建分区父表（按月分区）
+CREATE TABLE logs (
+  id bigserial,
+  created_at timestamptz NOT NULL,
+  message text
+) PARTITION BY RANGE (created_at);
+
+-- 创建具体分区
+CREATE TABLE logs_2026_04 PARTITION OF logs
+  FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
+
+CREATE TABLE logs_2026_05 PARTITION OF logs
+  FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+
+-- 查询时，PG 自动只扫描相关分区（partition pruning）
+SELECT * FROM logs WHERE created_at >= '2026-05-01' AND created_at < '2026-06-01';
+```
+
+:::tip
+分区表最大的好处不是查询性能，而是**维护性**：可以直接 `DROP TABLE logs_2026_04` 删除旧数据，比 `DELETE` 快 100 倍，也不会造成表膨胀。
+:::
+
+### 5.6 物化视图：预计算 + 缓存复杂查询
+
+普通视图每次查询都重新执行底层 SQL。物化视图（Materialized View）把结果**物理存储**到磁盘，适合底层查询很重但数据可以容忍一定延迟的场景。
+
+```sql
+-- 创建物化视图：每个用户的消费汇总
+CREATE MATERIALIZED VIEW mv_user_spending AS
+SELECT
+  u.id AS user_id,
+  u.name,
+  COUNT(o.id) AS order_count,
+  SUM(o.amount) AS total_spent
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+GROUP BY u.id, u.name;
+
+-- 查询和普通表一样
+SELECT * FROM mv_user_spending WHERE total_spent > 1000;
+
+-- 刷新数据（全量重新计算）
+REFRESH MATERIALIZED VIEW mv_user_spending;
+
+-- 刷新时允许并发读（加 CONCURRENTLY 关键字，需要唯一索引）
+CREATE UNIQUE INDEX ON mv_user_spending (user_id);
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_user_spending;
+```
+
+**物化视图 vs 普通视图 vs 汇总表：**
+
+| 方案 | 数据实时性 | 查询性能 | 维护成本 |
+|------|-----------|----------|----------|
+| 普通视图 | 实时 | 取决于底层查询 | 无需维护 |
+| 物化视图 | 需要手动/定时刷新 | 快（直接读物化数据） | 需要刷新策略 |
+| 汇总表 | 应用层控制 | 最快 | 应用层维护一致性 |
+
+:::tip 适用场景
+- 报表/仪表盘：每天凌晨刷新一次物化视图，白天查询直接命中
+- 复杂聚合：底层 JOIN + GROUP BY 很重，但业务不需要秒级实时
+- 配合 `pg_cron` 扩展实现定时自动刷新
+:::
+
+---
+
+## 6. 性能调优
+
+### 6.1 关键配置参数
+
+`postgresql.conf` 中最重要的几个参数：
+
+```ini
+# 共享缓冲区：建议设为物理内存的 25%
+shared_buffers = 4GB
+
+# 工作内存：每个排序/哈希操作可用的内存（谨慎设大，并发连接多时会累加）
+work_mem = 64MB
+
+# 维护操作内存（VACUUM、CREATE INDEX 等）
+maintenance_work_mem = 512MB
+
+# 有效缓存大小：告诉 Planner OS 缓存大小（不实际分配），影响计划选择
+effective_cache_size = 12GB
+
+# WAL 日志模式（replica 支持流复制，logical 支持逻辑复制）
+wal_level = replica
+
+# 检查点间隔（越大 WAL 越多，崩溃恢复越慢，但减少 I/O 压力）
+checkpoint_timeout = 10min
+max_wal_size = 4GB
+```
+
+### 6.2 连接池
+
+每个 PG 连接是一个进程，代价比线程高。**生产环境必须使用连接池**，推荐 **PgBouncer**：
+
+```
+应用服务器 → PgBouncer（连接池） → PostgreSQL
+```
+
+PgBouncer 的三种模式：
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| Session | 一个客户端连接对应一个 PG 连接，直到客户端断开 | 需要使用会话级特性（临时表、prepared statement） |
+| Transaction | 只在事务期间持有 PG 连接（推荐） | 大多数 Web 应用场景 |
+| Statement | 每条语句结束立即归还（限制最多） | 几乎不用 |
+
+### 6.3 常见慢查询排查
+
+**启用慢查询日志**：
+
+```ini
+# postgresql.conf
+log_min_duration_statement = 1000  # 记录超过 1 秒的查询（毫秒）
+log_destination = 'csvlog'
+```
+
+**用 `pg_stat_statements` 扩展分析 Top SQL**：
+
+```sql
+-- 启用扩展
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+-- 查询最耗时的 Top 10 SQL
+SELECT
+  calls,
+  round(total_exec_time::numeric, 2) AS total_ms,
+  round(mean_exec_time::numeric, 2) AS avg_ms,
+  round(stddev_exec_time::numeric, 2) AS stddev_ms,
+  rows,
+  LEFT(query, 100) AS query_snippet
+FROM pg_stat_statements
+ORDER BY total_exec_time DESC
+LIMIT 10;
+```
+
+**检查索引使用情况**：
+
+```sql
+-- 找出从未被使用过的索引（可以考虑删除）
+SELECT
+  schemaname,
+  tablename,
+  indexname,
+  pg_size_pretty(pg_relation_size(indexrelid)) AS index_size,
+  idx_scan AS scans
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0
+ORDER BY pg_relation_size(indexrelid) DESC;
+
+-- 找出缺少索引的表（顺序扫描次数多）
+SELECT
+  relname AS table,
+  seq_scan,
+  seq_tup_read,
+  idx_scan,
+  n_live_tup AS live_rows
+FROM pg_stat_user_tables
+WHERE seq_scan > 0
+ORDER BY seq_tup_read DESC
+LIMIT 20;
+```
+
+### 6.4 COPY：大批量数据导入导出
+
+`COPY` 是 PG 中批量操作数据的最快方式，比逐条 `INSERT` 快 10 倍以上：
+
+```sql
+-- 从 CSV 文件导入数据到表
+COPY users FROM '/path/to/users.csv' WITH (FORMAT CSV, HEADER true);
+
+-- 导出表数据到 CSV
+COPY users TO '/path/to/users_export.csv' WITH (FORMAT CSV, HEADER true);
+
+-- 导出查询结果
+COPY (SELECT name, email FROM users WHERE is_active = true)
+TO '/path/to/active_users.csv' WITH (FORMAT CSV);
+
+-- 从 stdin 导入（适合应用层管道操作）
+COPY users FROM STDIN WITH (FORMAT CSV);
+-- 然后通过 psql 的 \copy 命令或程序管道发送数据
+```
+
+**pg_dump 逻辑备份（整个库/表）：**
+
+```bash
+# 导出整个数据库为 SQL 文本
+pg_dump -U myuser -d mydb -f backup.sql
+
+# 导出为自定义格式（压缩，可选择性恢复）
+pg_dump -U myuser -d mydb -Fc -f backup.dump
+
+# 只导出表结构
+pg_dump -U myuser -d mydb -t users -s -f users_schema.sql
+
+# 恢复
+pg_restore -U myuser -d mydb backup.dump
+```
+
+:::tip COPY vs INSERT 的性能差异
+`COPY` 直接将数据写入缓冲区，绕过了逐行解析和约束检查的开销。对于超过 1 万行的数据导入，优先用 `COPY` 而非多条 `INSERT`。
+:::
+
+### 6.5 VACUUM 与表膨胀
+
+由于 MVCC，更新和删除不会立即释放空间，需要 VACUUM 来回收：
+
+```sql
+-- 普通 VACUUM：回收死元组，但不缩小文件大小
+VACUUM orders;
+
+-- VACUUM ANALYZE：回收 + 更新统计信息（日常推荐）
+VACUUM ANALYZE orders;
+
+-- VACUUM FULL：完全重写表，缩小文件大小（需要 ACCESS EXCLUSIVE 锁，慎用）
+VACUUM FULL orders;
+
+-- 查看表的膨胀情况
+SELECT
+  relname,
+  n_live_tup,
+  n_dead_tup,
+  round(n_dead_tup * 100.0 / NULLIF(n_live_tup + n_dead_tup, 0), 2) AS dead_ratio,
+  last_autovacuum,
+  last_autoanalyze
+FROM pg_stat_user_tables
+ORDER BY n_dead_tup DESC
+LIMIT 20;
+```
+
+:::warning
+**`VACUUM FULL` 会持有 `ACCESS EXCLUSIVE` 锁**，期间任何读写都会被阻塞，不能在业务高峰期执行。如果需要在线缩小表，可以用 `pg_repack` 扩展替代。
+:::
+
+---
+
+## 7. 常用扩展
+
+PG 的扩展生态非常丰富，以下是最常用的几个：
+
+| 扩展 | 功能 |
+|------|------|
+| `pgcrypto` | 加密函数（`gen_random_uuid()`、`crypt()`、`hmac()` 等） |
+| `pg_stat_statements` | SQL 执行统计，性能排查必备 |
+| `postgis` | 地理信息系统支持（空间数据、地理查询） |
+| `pg_trgm` | 三元组相似度匹配，支持模糊搜索（LIKE 加速） |
+| `hstore` | 键值对类型（已被 jsonb 基本取代） |
+| `uuid-ossp` | UUID 生成（PG 13+ 用 `gen_random_uuid()` 替代） |
+| `pg_partman` | 自动管理分区表（创建、删除过期分区） |
+| `timescaledb` | 时序数据优化（在 PG 基础上提供自动分区、压缩等） |
+
+```sql
+-- 用 pg_trgm 实现模糊搜索加速
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- 建 GIN 索引加速 LIKE 查询
+CREATE INDEX idx_users_name_trgm ON users USING GIN (name gin_trgm_ops);
+
+-- 现在 LIKE 查询会走索引
+SELECT * FROM users WHERE name LIKE '%john%';
+
+-- 也可以按相似度排序
+SELECT name, similarity(name, 'john') AS sim
+FROM users
+WHERE name % 'john'  -- % 是 pg_trgm 的相似度操作符
+ORDER BY sim DESC;
+```
+
+---
+
+## 8. 完整示例：构建一个博客系统的数据模型
+
+把前面的知识点综合起来，设计一个具有实用价值的博客数据库：
+
+```sql
+-- 用户表
+CREATE TABLE users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email text UNIQUE NOT NULL,
+  username text UNIQUE NOT NULL,
+  password_hash text NOT NULL,
+  created_at timestamptz DEFAULT NOW(),
+  updated_at timestamptz DEFAULT NOW()
+);
+
+-- 文章表（带全文检索支持）
+CREATE TABLE posts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  author_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title text NOT NULL,
+  slug text UNIQUE NOT NULL,
+  content text NOT NULL,
+  tags text[] DEFAULT '{}',
+  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'archived')),
+  search_vector tsvector,         -- 全文检索向量
+  metadata jsonb DEFAULT '{}',    -- 扩展字段（灵活存储额外信息）
+  published_at timestamptz,
+  created_at timestamptz DEFAULT NOW(),
+  updated_at timestamptz DEFAULT NOW()
+);
+
+-- 评论表（自引用支持嵌套评论）
+CREATE TABLE comments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  post_id uuid NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  parent_id uuid REFERENCES comments(id) ON DELETE CASCADE,  -- 父评论 ID
+  content text NOT NULL,
+  created_at timestamptz DEFAULT NOW()
+);
+
+-- 索引
+CREATE INDEX idx_posts_author ON posts (author_id);
+CREATE INDEX idx_posts_tags ON posts USING GIN (tags);
+CREATE INDEX idx_posts_metadata ON posts USING GIN (metadata);
+CREATE INDEX idx_posts_search ON posts USING GIN (search_vector);
+CREATE INDEX idx_posts_published ON posts (published_at DESC) WHERE status = 'published';
+CREATE INDEX idx_comments_post ON comments (post_id, created_at);
+CREATE INDEX idx_comments_parent ON comments (parent_id) WHERE parent_id IS NOT NULL;
+
+-- 自动维护 search_vector 的触发器
+CREATE OR REPLACE FUNCTION posts_update_search_vector()
+RETURNS trigger AS $$
+BEGIN
+  NEW.search_vector = to_tsvector('english',
+    COALESCE(NEW.title, '') || ' ' || COALESCE(NEW.content, '')
+  );
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER posts_search_vector_trigger
+BEFORE INSERT OR UPDATE ON posts
+FOR EACH ROW EXECUTE FUNCTION posts_update_search_vector();
+
+-- 自动更新 updated_at 的通用触发器函数
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS trigger AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER users_updated_at
+BEFORE UPDATE ON users
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+```
+
+基于这个模型的几个实用查询：
+
+```sql
+-- 1. 全文搜索文章（按相关性排序）
+SELECT
+  p.id,
+  p.title,
+  p.slug,
+  u.username AS author,
+  p.published_at,
+  ts_rank(p.search_vector, query) AS rank
+FROM posts p
+JOIN users u ON u.id = p.author_id,
+to_tsquery('english', 'postgresql & performance') query
+WHERE p.status = 'published'
+  AND p.search_vector @@ query
+ORDER BY rank DESC
+LIMIT 20;
+
+-- 2. 递归查询某文章的所有评论（含嵌套层级）
+WITH RECURSIVE comment_tree AS (
+  -- 顶级评论
+  SELECT id, content, user_id, parent_id, created_at, 0 AS depth
+  FROM comments
+  WHERE post_id = 'some-post-uuid' AND parent_id IS NULL
+
+  UNION ALL
+
+  -- 子评论
+  SELECT c.id, c.content, c.user_id, c.parent_id, c.created_at, ct.depth + 1
+  FROM comments c
+  JOIN comment_tree ct ON c.parent_id = ct.id
+)
+SELECT ct.*, u.username
+FROM comment_tree ct
+JOIN users u ON u.id = ct.user_id
+ORDER BY depth, created_at;
+
+-- 3. 统计每个作者的文章数和最后发布时间（含没有文章的作者）
+SELECT
+  u.username,
+  COUNT(p.id) AS post_count,
+  MAX(p.published_at) AS last_published_at,
+  ARRAY_AGG(DISTINCT unnest_tag) FILTER (WHERE unnest_tag IS NOT NULL) AS all_tags
+FROM users u
+LEFT JOIN posts p ON p.author_id = u.id AND p.status = 'published'
+LEFT JOIN LATERAL unnest(p.tags) AS unnest_tag ON true
+GROUP BY u.id, u.username
+ORDER BY post_count DESC;
+```
+
+---
+
+## 9. 常见问题与注意事项
+
+### Q1：`SERIAL` vs `IDENTITY` vs `UUID`，主键用哪个？
+
+| 方案 | 推荐度 | 说明 |
+|------|--------|------|
+| `SERIAL` | 不推荐 | 历史遗留，本质是 `integer + sequence`，有隐式依赖问题 |
+| `GENERATED ALWAYS AS IDENTITY` | 推荐（整数 ID） | SQL 标准语法，PG 10+ 支持，优于 SERIAL |
+| `UUID (gen_random_uuid())` | 推荐（分布式场景） | 无冲突，适合分布式/多数据库合并；但索引效率略低于整数 |
+
+```sql
+-- 推荐写法（整数 ID）
+CREATE TABLE posts (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  ...
+);
+
+-- 推荐写法（UUID）
+CREATE TABLE posts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  ...
+);
+```
+
+### Q2：为什么 `COUNT(*)` 在 PG 里很慢？
+
+因为 PG 的 MVCC 机制——每次扫描都需要检查行的可见性，所以 `COUNT(*)` 必须做全表扫描。
+
+**解决方案**：
+
+```sql
+-- 1. 如果只需要估算（允许误差），用 reltuples
+SELECT reltuples::bigint AS estimated_count
+FROM pg_class
+WHERE relname = 'orders';
+
+-- 2. 建立并维护计数缓存表（适合高频 COUNT 场景）
+-- 3. 对大表加合适的 WHERE 条件，配合索引缩小扫描范围
+```
+
+### Q3：`NULL` 的陷阱
+
+```sql
+-- NULL 不等于 NULL！
+SELECT NULL = NULL;   -- 返回 NULL（不是 true）
+SELECT NULL != NULL;  -- 返回 NULL（不是 false）
+
+-- 正确判断 NULL
+SELECT * FROM users WHERE deleted_at IS NULL;
+SELECT * FROM users WHERE deleted_at IS NOT NULL;
+
+-- NULL 在聚合中被忽略
+SELECT AVG(score) FROM results;  -- NULL 值不参与计算
+
+-- COALESCE：取第一个非 NULL 值
+SELECT COALESCE(nickname, username, 'Anonymous') AS display_name FROM users;
+
+-- 注意：NULL 排序默认在最后（NULLS LAST）
+-- 如需 NULL 排在最前：
+SELECT * FROM users ORDER BY deleted_at NULLS FIRST;
+```
+
+### Q4：`IN` vs `EXISTS`，哪个更快？
+
+```sql
+-- IN：子查询结果集小时性能好
+SELECT * FROM orders WHERE user_id IN (SELECT id FROM users WHERE is_vip = true);
+
+-- EXISTS：子查询结果集大时性能好，找到第一个就停止
+SELECT * FROM orders o WHERE EXISTS (
+  SELECT 1 FROM users u WHERE u.id = o.user_id AND u.is_vip = true
+);
+```
+
+实际上，PG 的查询优化器通常会将两者转换为相同的执行计划，大多数情况下无需刻意选择。但对于**相关子查询**，`EXISTS` 更符合语义，也更易于优化器处理。
+
+### Q5：连接查询中的 `ON` vs `WHERE`
+
+```sql
+-- LEFT JOIN + WHERE 变成了 INNER JOIN（常见坑！）
+SELECT u.name, o.amount
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+WHERE o.amount > 100;   -- 过滤掉了没有订单的用户，LEFT JOIN 失效
+
+-- 正确写法：过滤条件放在 ON 子句中
+SELECT u.name, o.amount
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id AND o.amount > 100;
+-- 现在没有订单的用户也会出现（o.amount 为 NULL）
+```
+
+---
+
+## 总结
+
+PostgreSQL 的核心竞争力在于：
+
+1. **MVCC 并发模型**：读写互不阻塞，事务隔离级别实现完善
+2. **丰富的类型系统**：JSONB、数组、范围类型让 PG 兼具关系型和文档型数据库的能力
+3. **多样的索引类型**：B-tree、GIN、GiST、BRIN 各有适用场景
+4. **强大的分析能力**：窗口函数、CTE、递归查询，SQL 表达力极强
+5. **可扩展性**：扩展生态丰富，PostGIS、TimescaleDB 等扩展了边界
+
+理解架构原理（MVCC、堆存储、进程模型）是调优的基础；学会用 `EXPLAIN ANALYZE` 读执行计划，用 `pg_stat_statements` 找 Top SQL，是日常性能排查的两板斧；合理设计索引（类型选择、部分索引、表达式索引）是性能优化的核心抓手。
+
+---
+
+## 系列完结：你走过的路
+
+恭喜，你已经读完了「SQL 从入门到专家」全系列五篇。回顾这条路线：
+
+- **[Part 1 · 入门指南](/posts/sql/sql-beginner-guide)** —— 建立 SQL 的心智模型，学会写正确的查询。
+- **[Part 2 · 实战练习（一）](/posts/sql/sql-exercises)** 与 **[Part 3 · 实战练习（二）](/posts/sql/sql-practice-lab)** —— 把语法变成肌肉记忆，覆盖从单表到报表的真实场景。
+- **[Part 4 · 进阶优化](/posts/sql/sql-advanced-performance)** —— 理解执行计划、索引原理、JOIN 算法与并发，建立**数据库中立**的优化方法论。
+- **Part 5 · PostgreSQL 深度实战（本文）** —— 把所有原理落到一个生产级数据库，能独立做架构设计与运维调优。
+
+你现在具备的能力：不只是"会查数据"，而是能**设计数据模型、写出高效查询、用执行计划定位瓶颈、在生产环境排查性能问题**——这正是从 SQL 入门到专家的完整跨越。
+
+接下来如果想继续深入，可以选择某个专项扎进去：复制与高可用、逻辑解码与 CDC、连接池与中间件、PostGIS 地理信息、TimescaleDB 时序、或针对你所用数据库（MySQL / Oracle / SQL Server）的方言与运维细节。底层逻辑你已经掌握，剩下的都是把同一套原理映射到不同实现。

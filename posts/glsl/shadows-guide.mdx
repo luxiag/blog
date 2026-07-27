@@ -1,0 +1,198 @@
+---
+title: '光影的另一半：深入理解 3D 阴影技术'
+date: '2024-11-6'
+description: '没有阴影，物体就是飘浮的。本文将揭示实时渲染中生成阴影的三大核心技术：Shadow Mapping（阴影映射）、PCF（软阴影处理）以及 AO（环境光遮蔽），带你补全光影拼图的最后一块。'
+tags: ['WebGL', 'Shadows', 'Rendering', 'Advanced']
+---
+
+# 光影的另一半：深入理解 3D 阴影技术
+
+如果说光照让物体被**看见**，那么阴影则让物体**落地**。
+在现实世界中，阴影是自然而然存在的。但在计算机图形学中，阴影必须通过复杂的计算"伪造"出来。
+
+为什么？因为光栅化渲染（Rasterization）默认是**不处理遮挡**的。当你画地板时，GPU 根本不知道上面悬浮着一个球体挡住了光。
+
+今天，我们将深入探讨三种主流的阴影技术。
+
+## 一、 Shadow Mapping：光辉的记忆
+
+这是目前游戏和 WebGL 中最常用的实时阴影技术。
+它的核心思想非常天才：**如果光源是一台摄像机，那么它看不见的地方，就是阴影。**
+
+### 1. 算法步骤
+这个过程需要两个 Pass（渲染两遍）：
+
+*   **Pass 1: 阴影图生成 (Shadow Map Pass)**
+    *   把摄像机移到**光源的位置**。
+    *   看向场景。
+    *   我们不渲染颜色，只渲染**深度 (Depth)**。
+    *   结果存入一张纹理，叫 **Shadow Map**。这张图记录了：*从光源看去，每个方向上离光源最近的物体有多远。*
+
+*   **Pass 2: 场景渲染 (Scene Pass)**
+    *   把摄像机移回玩家的视角。
+    *   渲染地板上的一个点 `P`。
+    *   **关键判断**：
+        1.  计算 `P` 离光源的距离 `Distance_Real`。
+        2.  去查 Shadow Map，看看光源在这个方向上能看到的最近距离 `Distance_Light`。
+        3.  如果 `Distance_Real > Distance_Light`，说明 `P` 被挡住了！它在阴影里。
+
+### 2. 阴影失真 (Shadow Acne)
+你可能会发现阴影表面有奇怪的条纹。
+这是因为 Shadow Map 的分辨率有限，深度精度不够。
+**解决方法**：**Shadow Bias**（给距离加一个微小的偏移量）。
+
+<ShaderPreview title="Shadow Logic Simulation" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 简单的 Ray Marching 阴影
+// 原理与 Shadow Mapping 类似：检测光线路径上是否有遮挡
+
+float sdSphere(vec3 p, float r) {
+    return length(p) - r;
+}
+
+float map(vec3 p) {
+    // 一个上下浮动的球
+    vec3 spherePos = vec3(0.0, sin(uTime) * 0.5 + 0.5, 0.0);
+    return sdSphere(p - spherePos, 0.5);
+}
+
+// 核心：软阴影计算函数
+float calcShadow(vec3 ro, vec3 rd) {
+    float t = 0.02; // 起始距离 (Bias)
+    float res = 1.0;
+    
+    // 沿着光的方向走一段距离
+    for(int i=0; i<32; i++) {
+        float h = map(ro + rd*t);
+        if(h < 0.001) return 0.0; // 撞到了物体，说明被遮挡 -> 阴影 (0.0)
+        t += h;
+        if(t > 5.0) break;
+    }
+    return 1.0; // 没撞到 -> 亮部 (1.0)
+}
+
+void main() {
+    // 模拟地板视角
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    // 地板上的点的位置 (假设我们在俯视)
+    vec3 pos = vec3(uv.x * 2.0, 0.0, uv.y * 2.0); // y=0 是地板
+    
+    // 光源位置
+    vec3 lightPos = vec3(2.0, 4.0, 2.0);
+    vec3 lightDir = normalize(lightPos - pos);
+    
+    // 计算阴影
+    float shadow = calcShadow(pos, lightDir);
+    
+    // 绘制地板
+    vec3 color = vec3(0.5) * shadow; // 阴影处变黑
+    
+    // 简单的网格
+    float grid = step(0.95, fract(uv.x * 5.0)) + step(0.95, fract(uv.y * 5.0));
+    color += vec3(grid * 0.2);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 二、 PCF (Percentage-Closer Filtering)：告别锯齿
+
+基本的 Shadow Mapping 产生的阴影边缘非常硬，而且有像素锯齿（因为 Shadow Map 本质上是一张像素图）。
+
+现实中的阴影边缘通常是模糊的（半影区）。为了模拟这个，我们引入了 **PCF**。
+
+### 原理
+当我们判断一个点是否在阴影里时，不要只查 Shadow Map 上的那一个像素。
+**我们要查它周围的 9 个（或更多）像素。**
+
+*   如果 9 个点都挡住了 -> 全黑 (1.0)
+*   如果 9 个点都没挡住 -> 全亮 (0.0)
+*   如果 5 个挡住，4 个没挡住 -> 灰色 (0.55)
+
+**结果**：阴影边缘变成了平滑的渐变，锯齿消失了。这就是 **软阴影 (Soft Shadow)** 的基础。
+
+## 三、 AO (Ambient Occlusion)：角落的呼吸
+
+Shadow Mapping 解决的是"直射光"的遮挡。
+但即使没有直射光，墙角、皱纹深处、物体接触缝隙也应该比表面更暗。因为环境光很难钻进这些缝隙里。
+
+这就是 **AO (环境光遮蔽)**。它能极大地增强场景的**体积感**和**重量感**。
+
+### SSAO (Screen Space Ambient Occlusion)
+在实时渲染中，我们通常使用 **SSAO**。
+这是一种后期处理技术。
+
+**原理**：
+1.  对于屏幕上的每个像素，我们获取它的**深度**和**法线**。
+2.  在这个像素周围的 3D 空间里，随机撒一把点（采样核）。
+3.  看看这些采样点中有多少是被其他物体遮挡的（深度值比较）。
+4.  被遮挡的点越多，这个像素就越暗。
+
+*(注：下面的示例模拟了 AO 的视觉效果)*
+
+<ShaderPreview title="AO Simulation" code={`
+varying vec2 vUv;
+
+// 2D 有向距离场：矩形
+float sdBox(vec2 p, vec2 b) {
+    vec2 d = abs(p)-b;
+    return length(max(d,0.0)) + min(max(d.x,d.y),0.0);
+}
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    // 定义两个靠近的物体
+    float d1 = sdBox(uv - vec2(-0.2, 0.0), vec2(0.4));
+    float d2 = sdBox(uv - vec2(0.2, 0.2), vec2(0.3));
+    
+    // 简单的并集
+    float d = min(d1, d2);
+    
+    // 渲染物体 (白色)
+    float shape = 1.0 - step(0.0, d);
+    vec3 color = vec3(shape);
+    
+    // --- 模拟 AO ---
+    // 原理：利用距离场 (SDF) 的特性
+    // 距离物体表面越近，值越小。如果是负数（内部），我们取反。
+    // 在两个物体交界处，距离场的值变化会很剧烈
+    
+    // 这是一个非常 trick 的 2D AO 模拟：
+    // 我们反向利用距离场：离表面越近越黑
+    float ao = smoothstep(0.0, 0.2, abs(d));
+    
+    // 只在物体外部显示 AO 效果
+    // (在 3D SSAO 中，是在角落里变黑)
+    vec3 aoColor = vec3(ao);
+    
+    // 混合：物体是白的，背景是灰的，接触边缘变黑
+    if (shape > 0.5) {
+        color = vec3(0.9);
+    } else {
+        color = vec3(0.5) * aoColor;
+    }
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 总结
+
+1.  **Shadow Mapping**：
+    *   **核心**：光源视角的深度图。
+    *   **作用**：产生主要的投影。
+    *   **问题**：锯齿、Shadow Acne。
+2.  **PCF**：
+    *   **核心**：多重采样平均化。
+    *   **作用**：消除锯齿，软化边缘。
+3.  **AO (SSAO)**：
+    *   **核心**：检测角落遮挡。
+    *   **作用**：增强细节立体感，让物体"沉"在地面上。
+
+在 Three.js 中，开启 `castShadow = true` 就是开启了 Shadow Mapping；设置 `shadow.radius` 就是开启了 PCF 模糊；使用 `SSAOPass` 就是开启了环境光遮蔽。
+
+理解了原理，你就能更好地调整那些复杂的参数了。

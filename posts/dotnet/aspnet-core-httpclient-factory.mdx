@@ -1,0 +1,316 @@
+---
+title: 'ASP.NET Core HttpClientFactory：外部服务调用、重试与超时'
+date: '2026-07-21'
+excerpt: '学习 ASP.NET Core 中使用 IHttpClientFactory 调用外部 HTTP 服务：Named Client、Typed Client、超时、Header、重试、日志和常见误区。'
+tags: ['dotnet', 'aspnetcore', 'httpclient', 'resilience']
+nextPost: 'dotnet/aspnet-core-background-service'
+---
+
+# ASP.NET Core HttpClientFactory：外部服务调用、重试与超时
+
+后端服务经常需要调用外部 HTTP API，例如支付、短信、地图、内部微服务。ASP.NET Core 推荐使用 `IHttpClientFactory` 管理 `HttpClient`，而不是在业务代码里频繁 `new HttpClient()`。
+
+:::tip 阶段三阅读顺序
+建议先掌握 [DI](/posts/dotnet/aspnet-core-dependency-injection)、[Logging](/posts/dotnet/aspnet-core-logging) 和 [异步编程](/posts/dotnet/csharp-async-await)，再学习本文。
+:::
+
+## 为什么需要 IHttpClientFactory
+
+频繁创建和释放 `HttpClient` 可能导致 Socket 耗尽；长期持有单个 `HttpClient` 又可能遇到 DNS 更新问题。
+
+`IHttpClientFactory` 负责管理底层 Handler 生命周期，让你以更安全的方式创建客户端。
+
+### 问题一：Socket 耗尽
+
+每次 `new HttpClient()` 底层会创建一个新的 `HttpMessageHandler`。`HttpClient.Dispose()` 不会立即释放底层 Socket——TCP 连接进入 `TIME_WAIT` 状态，操作系统要等待 2MSL（通常 2-4 分钟）才真正回收：
+
+```csharp
+for (int i = 0; i < 200; i++)
+{
+    using var client = new HttpClient();
+    await client.GetAsync("https://api.example.com/data");
+}
+```
+
+这段代码看似正确（用了 `using`），但短时间内会耗尽可用端口。典型报错：
+
+```text
+SocketException: Only one usage of each socket address (protocol/network address/port) is normally permitted
+```
+
+根本原因：每个 `HttpClient` 对应独立的 `HttpMessageHandler`，`Dispose` 后 TCP 连接不会立即关闭，而是进入 `TIME_WAIT` 状态占用端口。短时间内大量创建就会耗尽临时端口（通常范围 32768-61000，约 28000 个，而每个 `TIME_WAIT` 占一个）。
+
+### 问题二：DNS 更新导致请求失败
+
+反过来，如果只创建一个 `HttpClient` 长期复用：
+
+```csharp
+private static readonly HttpClient _client = new HttpClient();
+```
+
+`HttpMessageHandler` 内部会缓存 DNS 解析结果。当目标服务 IP 变更（如云服务重新部署、蓝绿切换、DNS 负载均衡更新），缓存的 DNS 记录不会刷新，所有请求都打到旧 IP：
+
+```text
+HttpRequestException: Connection refused (old-ip-address:443)
+```
+
+这个问题在 Kubernetes 环境尤其常见：Pod 重建后 IP 变化，但 `HttpClient` 仍连接旧地址。
+
+### IHttpClientFactory 的解决方案
+
+`IHttpClientFactory` 维护一个 `HttpMessageHandler` 池，默认每 2 分钟回收 Handler（`ActiveHandlerTrackingPeriod`）。这样：
+
+- Handler 被池化复用，不会频繁创建导致 Socket 耗尽
+- 定期回收确保 DNS 记录能刷新
+- `HttpClient` 本身是轻量对象，可以频繁创建
+
+## Named Client
+
+注册：
+
+```csharp
+builder.Services.AddHttpClient("WeatherApi", client =>
+{
+    client.BaseAddress = new Uri("https://api.example.com");
+    client.Timeout = TimeSpan.FromSeconds(5);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("ProductApi/1.0");
+});
+```
+
+使用：
+
+```csharp
+public class WeatherService
+{
+    private readonly IHttpClientFactory _httpClientFactory;
+
+    public WeatherService(IHttpClientFactory httpClientFactory)
+    {
+        _httpClientFactory = httpClientFactory;
+    }
+
+    public async Task<string> GetAsync(CancellationToken cancellationToken)
+    {
+        HttpClient client = _httpClientFactory.CreateClient("WeatherApi");
+        return await client.GetStringAsync("/weather", cancellationToken);
+    }
+}
+```
+
+## Typed Client
+
+Typed Client 更适合业务封装。
+
+```csharp
+builder.Services.AddHttpClient<IWeatherClient, WeatherClient>(client =>
+{
+    client.BaseAddress = new Uri("https://api.example.com");
+    client.Timeout = TimeSpan.FromSeconds(5);
+});
+```
+
+实现：
+
+```csharp
+public interface IWeatherClient
+{
+    Task<WeatherDto?> GetWeatherAsync(string city, CancellationToken cancellationToken);
+}
+
+public class WeatherClient : IWeatherClient
+{
+    private readonly HttpClient _httpClient;
+
+    public WeatherClient(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
+
+    public async Task<WeatherDto?> GetWeatherAsync(string city, CancellationToken cancellationToken)
+    {
+        return await _httpClient.GetFromJsonAsync<WeatherDto>(
+            $"/weather?city={Uri.EscapeDataString(city)}",
+            cancellationToken);
+    }
+}
+
+public record WeatherDto(string City, decimal Temperature);
+```
+
+Controller 或 Service 直接注入 `IWeatherClient`。
+
+## 超时和取消
+
+一定要设置超时，并传递 `CancellationToken`。
+
+```csharp
+client.Timeout = TimeSpan.FromSeconds(5);
+```
+
+```csharp
+public async Task<IActionResult> Get(CancellationToken cancellationToken)
+{
+    WeatherDto? weather = await _weatherClient.GetWeatherAsync("Shanghai", cancellationToken);
+    return Ok(weather);
+}
+```
+
+## 错误处理
+
+```csharp
+HttpResponseMessage response = await _httpClient.GetAsync("/weather", cancellationToken);
+
+if (response.StatusCode == HttpStatusCode.NotFound)
+{
+    return null;
+}
+
+response.EnsureSuccessStatusCode();
+
+WeatherDto? result = await response.Content.ReadFromJsonAsync<WeatherDto>(cancellationToken);
+```
+
+不要默认所有非 2xx 都当成服务器异常，要根据业务区分 404、400、429、500 等情况。
+
+## 重试与弹性
+
+`Microsoft.Extensions.Http.Resilience` 是 .NET 8+ 官方推荐的弹性管道库，基于 Polly 构建。
+
+安装：
+
+```bash
+dotnet add package Microsoft.Extensions.Http.Resilience
+```
+
+### 标准弹性管道
+
+一行代码为 HttpClient 添加重试、熔断、超时：
+
+```csharp
+builder.Services.AddHttpClient<IWeatherClient, WeatherClient>(client =>
+{
+    client.BaseAddress = new Uri("https://api.example.com");
+})
+.AddStandardResilienceHandler();
+```
+
+`AddStandardResilienceHandler()` 会按顺序添加：
+
+| 管道阶段 | 作用 |
+|---|---|
+| Total Request Timeout | 请求总超时 |
+| Retry | 重试短暂故障 |
+| Circuit Breaker | 熔断，失败率过高时停止请求 |
+| Attempt Timeout | 单次请求超时 |
+
+### 管道执行流程
+
+请求经过管道的完整流程：
+
+```text
+请求进入
+  │
+  ▼
+┌─────────────────────────┐
+│ Total Request Timeout   │  ← 整个请求（含重试）的最大时间，默认 30s
+│  超时则直接失败，不重试   │
+└──────────┬──────────────┘
+           ▼
+┌─────────────────────────┐
+│ Retry                   │  ← 遇到短暂故障时重试，默认最多 3 次
+│  指数退避 + 随机抖动     │     每次重试回到 Attempt Timeout 入口
+└──────────┬──────────────┘
+           ▼
+┌─────────────────────────┐
+│ Circuit Breaker         │  ← 如果处于 Open 状态，直接拒绝，不发起请求
+│  Closed → 正常通过       │     如果处于 Half-Open，放行一次试探
+│  Open → 直接失败         │
+└──────────┬──────────────┘
+           ▼
+┌─────────────────────────┐
+│ Attempt Timeout         │  ← 单次 HTTP 请求的超时，默认 10s
+│  超时则触发 Retry 重试   │
+└──────────┬──────────────┘
+           ▼
+     实际 HTTP 请求
+```
+
+关键理解：
+
+- **Total Request Timeout 包裹整个流程**：3 次重试的总时间不能超过此值
+- **Attempt Timeout 是单次请求超时**：超时后回到 Retry 层决定是否重试
+- **Circuit Breaker 在 Retry 和实际请求之间**：熔断开启时直接返回错误，不再尝试
+- **执行顺序是外到内**：Total Timeout → Retry → Circuit Breaker → Attempt Timeout → 实际请求
+
+### 自定义重试配置
+
+```csharp
+builder.Services.AddHttpClient<IWeatherClient, WeatherClient>(client =>
+{
+    client.BaseAddress = new Uri("https://api.example.com");
+})
+.AddStandardResilienceHandler(options =>
+{
+    options.Retry.MaxRetryAttempts = 3;
+    options.Retry.BackoffType = DelayBackoffType.Exponential;
+    options.Retry.UseJitter = true;
+
+    options.CircuitBreaker.FailureRatio = 0.5;
+    options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(30);
+    options.CircuitBreaker.MinimumThroughput = 10;
+    options.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(30);
+});
+```
+
+重试策略说明：
+
+| 配置 | 作用 |
+|---|---|
+| `MaxRetryAttempts` | 最大重试次数 |
+| `BackoffType` | 退避方式：固定 / 指数 / 线性 |
+| `UseJitter` | 加入随机抖动，避免重试风暴 |
+
+熔断策略说明：
+
+| 配置 | 作用 |
+|---|---|
+| `FailureRatio` | 失败比例阈值（0-1），超过则熔断 |
+| `SamplingDuration` | 统计窗口时长 |
+| `MinimumThroughput` | 最小请求数，低于此数不熔断 |
+| `BreakDuration` | 熔断持续时间，之后放行一次试探 |
+
+### 熔断是什么
+
+熔断器有三个状态：
+
+```text
+Closed（正常） -> 失败率超阈值 -> Open（熔断，直接拒绝请求）
+Open -> 等待 BreakDuration -> Half-Open（放行一次试探）
+Half-Open -> 试探成功 -> Closed
+Half-Open -> 试探失败 -> Open
+```
+
+熔断的意义：当下游服务不可用时，不要再发请求加重它的负担，直接返回错误或降级响应。
+
+### 重试原则
+
+- 只对短暂故障重试：503、超时、网络抖动。
+- 不要盲目重试非幂等请求（如 POST 创建订单）。
+- 重试要有退避策略，不要密集重试。
+- 外部服务不可用时要有降级或明确错误。
+
+## 日志和追踪
+
+`IHttpClientFactory` 会集成日志。生产环境建议结合 OpenTelemetry 记录外部 HTTP 调用耗时和失败率。
+
+关键指标：
+
+- 请求次数
+- 平均耗时
+- 错误率
+- 超时次数
+- 下游状态码分布
+
+## 总结
+
+外部 HTTP 调用应优先使用 `IHttpClientFactory`。普通场景用 Named Client，业务封装用 Typed Client。生产项目必须考虑超时、取消、错误处理、重试边界和日志追踪。

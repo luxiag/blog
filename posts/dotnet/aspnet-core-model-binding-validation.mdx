@@ -1,0 +1,442 @@
+---
+title: 'ASP.NET Core 参数绑定与模型验证：FromRoute、FromQuery、FromBody'
+date: '2026-07-21'
+excerpt: '掌握 ASP.NET Core 参数绑定和模型验证：Route、Query、Body、Header、Form、DTO、DataAnnotations、ApiController 自动验证和常见问题。'
+tags: ['dotnet', 'aspnetcore', 'model-binding', 'validation', 'webapi']
+nextPost: 'dotnet/aspnet-core-minimal-api'
+---
+
+# ASP.NET Core 参数绑定与模型验证：FromRoute、FromQuery、FromBody
+
+Web API 的输入可能来自 URL、查询字符串、请求体、Header、Form 表单。参数绑定负责把这些 HTTP 数据转换成 C# 参数和对象；模型验证负责在进入业务逻辑前拦截非法输入。
+
+:::tip 阶段一阅读顺序
+建议先读 [Web API Controller](/posts/dotnet/aspnet-core-webapi-controller)，再阅读本文。后续可以继续看 [Minimal API](/posts/dotnet/aspnet-core-minimal-api)。
+:::
+
+## 参数来源
+
+| 来源 | Attribute | 示例 |
+|---|---|---|
+| Route | `[FromRoute]` | `/api/products/{id}` |
+| Query | `[FromQuery]` | `?page=1&pageSize=20` |
+| Body | `[FromBody]` | JSON 请求体 |
+| Header | `[FromHeader]` | `X-Trace-Id` |
+| Form | `[FromForm]` | 表单和文件上传 |
+| Services | `[FromServices]` | 从 DI 容器获取服务 |
+
+## Route 参数绑定
+
+```csharp
+[HttpGet("{id:int}")]
+public IActionResult GetById([FromRoute] int id)
+{
+    return Ok(new { Id = id });
+}
+```
+
+`[FromRoute]` 可以省略，因为简单类型参数名和路由参数名一致时，ASP.NET Core 能自动绑定。
+
+## Query 参数绑定
+
+查询列表、搜索、分页通常使用 Query。
+
+```csharp
+[HttpGet]
+public IActionResult GetProducts(
+    [FromQuery] string? keyword,
+    [FromQuery] int page = 1,
+    [FromQuery] int pageSize = 20)
+{
+    return Ok(new
+    {
+        Keyword = keyword,
+        Page = page,
+        PageSize = pageSize
+    });
+}
+```
+
+请求：
+
+```text
+GET /api/products?keyword=keyboard&page=1&pageSize=10
+```
+
+复杂查询参数也可以绑定到对象。
+
+```csharp
+public class ProductQuery
+{
+    public string? Keyword { get; set; }
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 20;
+}
+
+[HttpGet]
+public IActionResult GetProducts([FromQuery] ProductQuery query)
+{
+    return Ok(query);
+}
+```
+
+## Body 参数绑定
+
+创建和更新资源通常使用 JSON Body。
+
+```csharp
+[HttpPost]
+public IActionResult Create([FromBody] CreateProductRequest request)
+{
+    return Ok(request);
+}
+
+public class CreateProductRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+}
+```
+
+请求：
+
+```http
+POST /api/products
+Content-Type: application/json
+
+{
+  "name": "Keyboard",
+  "price": 199
+}
+```
+
+在 `[ApiController]` 下，复杂类型默认通常会从 Body 绑定，但明确写 `[FromBody]` 更利于阅读。
+
+## Header 参数绑定
+
+```csharp
+[HttpGet]
+public IActionResult Get([FromHeader(Name = "X-Trace-Id")] string? traceId)
+{
+    return Ok(new { TraceId = traceId });
+}
+```
+
+Header 适合放元信息，不适合放业务主体数据。
+
+## Form 和文件绑定
+
+```csharp
+[HttpPost("upload")]
+public async Task<IActionResult> Upload([FromForm] IFormFile file)
+{
+    if (file.Length == 0)
+    {
+        return BadRequest("Empty file");
+    }
+
+    string path = Path.Combine("uploads", file.FileName);
+
+    await using FileStream stream = System.IO.File.Create(path);
+    await file.CopyToAsync(stream);
+
+    return Ok(new { file.FileName, file.Length });
+}
+```
+
+真实项目还要检查文件大小、扩展名、MIME、存储路径和病毒扫描等安全问题。
+
+## 模型验证
+
+使用 DataAnnotations 给请求模型添加验证规则。
+
+```csharp
+using System.ComponentModel.DataAnnotations;
+
+public class CreateProductRequest
+{
+    [Required]
+    [StringLength(100, MinimumLength = 2)]
+    public string Name { get; set; } = string.Empty;
+
+    [Range(0.01, 999999)]
+    public decimal Price { get; set; }
+}
+```
+
+Controller：
+
+```csharp
+[ApiController]
+[Route("api/products")]
+public class ProductsController : ControllerBase
+{
+    [HttpPost]
+    public IActionResult Create(CreateProductRequest request)
+    {
+        return Ok(request);
+    }
+}
+```
+
+加了 `[ApiController]` 后，模型验证失败会自动返回 `400 Bad Request`，Action 通常不会被执行。
+
+### 验证失败的响应格式
+
+`[ApiController]` 默认使用 HTTP Validation Problem Details（RFC 7807）格式返回验证错误：
+
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+  "title": "One or more validation errors occurred.",
+  "status": 400,
+  "errors": {
+    "Name": [
+      "The Name field is required."
+    ],
+    "Price": [
+      "The field Price must be between 0.01 and 999999."
+    ]
+  }
+}
+```
+
+`errors` 是按字段分组的错误消息数组，一个字段可能有多条验证失败信息。
+
+这个格式由 `ProblemDetails` 类生成。如果需要自定义，可以在 `Program.cs` 中配置：
+
+```csharp
+builder.Services.AddControllers()
+    .ConfigureApiBehaviorOptions(options =>
+    {
+        options.InvalidModelStateResponseFactory = context =>
+        {
+            var problemDetails = new ValidationProblemDetails(context.ModelState)
+            {
+                Status = StatusCodes.Status400BadRequest,
+                Title = "Validation Failed",
+                Detail = "请检查请求参数",
+                Instance = context.HttpContext.Request.Path
+            };
+
+            return new BadRequestObjectResult(problemDetails)
+            {
+                ContentTypes = { "application/problem+json" }
+            };
+        };
+    });
+```
+
+## 手动检查 ModelState
+
+如果没有使用 `[ApiController]`，可以手动检查：
+
+```csharp
+if (!ModelState.IsValid)
+{
+    return BadRequest(ModelState);
+}
+```
+
+现代 Web API 项目建议使用 `[ApiController]`，减少重复代码。
+
+## JSON 序列化命名约定
+
+ASP.NET Core 默认使用 `System.Text.Json`，序列化时默认采用 **camelCase** 命名策略。C# 属性 `Name` 序列化后变为 `"name"`，反序列化时也按 camelCase 匹配。
+
+这意味着前端发来的 JSON：
+
+```json
+{
+  "name": "Keyboard",
+  "price": 199
+}
+```
+
+会正确绑定到：
+
+```csharp
+public class CreateProductRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+}
+```
+
+`System.Text.Json` 反序列化默认**区分大小写**（`PropertyNameCaseInsensitive` 默认 `false`），但 ASP.NET Core 的 Web API 模板在 `AddControllers()` 中已经设置了 `JsonSerializerOptions.PropertyNameCaseInsensitive = true`，所以 `"Name"` 和 `"name"` 都能绑定到 `Name` 属性。
+
+如果需要改为 PascalCase，可以修改序列化选项：
+
+```csharp
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.PropertyNamingPolicy = null;
+    });
+```
+
+`PropertyNamingPolicy = null` 表示不转换命名，保持 C# 原始属性名。
+
+## 自定义验证
+
+### IValidatableObject
+
+当验证逻辑涉及多个字段的关联关系时，DataAnnotations 的单属性验证不够用。`IValidatableObject` 允许在类级别编写验证逻辑：
+
+```csharp
+public class CreateOrderRequest : IValidatableObject
+{
+    [Required]
+    public string ProductName { get; set; } = string.Empty;
+
+    public int Quantity { get; set; }
+
+    public DateTime? StartDate { get; set; }
+
+    public DateTime? EndDate { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (Quantity <= 0)
+        {
+            yield return new ValidationResult(
+                "Quantity must be greater than 0.",
+                new[] { nameof(Quantity) });
+        }
+
+        if (StartDate.HasValue && EndDate.HasValue && StartDate >= EndDate)
+        {
+            yield return new ValidationResult(
+                "EndDate must be later than StartDate.",
+                new[] { nameof(EndDate) });
+        }
+    }
+}
+```
+
+`Validate` 在所有 DataAnnotations 验证通过之后执行。`ValidationResult` 可以关联到一个或多个字段名，这些字段名会出现在 ProblemDetails 的 `errors` 中。
+
+### 自定义 ValidationAttribute
+
+如果某个验证规则会在多个模型中复用，可以编写自定义 `ValidationAttribute`：
+
+```csharp
+public class FutureDateAttribute : ValidationAttribute
+{
+    public FutureDateAttribute()
+    {
+        ErrorMessage = "The date must be in the future.";
+    }
+
+    public override bool IsValid(object? value)
+    {
+        if (value is null)
+        {
+            return true;
+        }
+
+        if (value is DateTime date)
+        {
+            return date > DateTime.UtcNow;
+        }
+
+        return false;
+    }
+}
+
+public class CreateEventRequest
+{
+    [Required]
+    public string Title { get; set; } = string.Empty;
+
+    [FutureDate]
+    public DateTime EventDate { get; set; }
+}
+```
+
+如果验证逻辑需要访问其他属性或服务，重写 `IsValid(object, ValidationContext)`：
+
+```csharp
+public class MinValueIfAttribute : ValidationAttribute
+{
+    private readonly int _minValue;
+    private readonly string _dependentProperty;
+
+    public MinValueIfAttribute(int minValue, string dependentProperty)
+    {
+        _minValue = minValue;
+        _dependentProperty = dependentProperty;
+    }
+
+    protected override ValidationResult? IsValid(object? value, ValidationContext validationContext)
+    {
+        if (value is not int intValue)
+        {
+            return ValidationResult.Success;
+        }
+
+        var property = validationContext.ObjectType.GetProperty(_dependentProperty);
+        if (property is null)
+        {
+            return ValidationResult.Success;
+        }
+
+        var dependentValue = property.GetValue(validationContext.ObjectInstance);
+
+        if (dependentValue is true && intValue < _minValue)
+        {
+            return new ValidationResult(
+                $"{validationContext.MemberName} must be at least {_minValue}.",
+                new[] { validationContext.MemberName! });
+        }
+
+        return ValidationResult.Success;
+    }
+}
+```
+
+## DTO 设计建议
+
+请求 DTO 和响应 DTO 分开。
+
+```csharp
+public class CreateProductRequest
+{
+    [Required]
+    public string Name { get; set; } = string.Empty;
+
+    [Range(0.01, 999999)]
+    public decimal Price { get; set; }
+}
+
+public record ProductDto(int Id, string Name, decimal Price);
+```
+
+不要直接复用数据库实体作为请求模型。实体面向持久化，请求 DTO 面向 API 契约，二者职责不同。
+
+## 常见问题
+
+### Body 只能读一次
+
+请求 Body 是流，默认只能读一次。一个 Action 中通常只能有一个 `[FromBody]` 参数。
+
+```csharp
+// 不推荐
+public IActionResult Create([FromBody] ProductRequest product, [FromBody] AuditRequest audit)
+```
+
+应该组合成一个请求对象。
+
+### 简单类型默认来源
+
+简单类型通常从 Route 或 Query 绑定，复杂类型通常从 Body 绑定。为了避免误解，公开 API 中建议显式标注来源。
+
+### 验证不是业务规则的全部
+
+DataAnnotations 适合基础输入验证，例如必填、长度、范围。复杂业务规则应该放在业务服务中，例如“商品名称不能重复”。
+
+## 总结
+
+参数绑定解决“HTTP 数据如何变成 C# 对象”，模型验证解决“非法输入如何在进入业务前被拦截”。
+
+掌握 Route、Query、Body、Header、Form、DataAnnotations 验证、IValidatableObject 多字段验证、自定义 ValidationAttribute 复用验证规则，以及 JSON 命名约定的绑定行为后，你的 API 输入层就基本完整了。

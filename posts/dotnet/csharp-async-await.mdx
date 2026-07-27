@@ -1,0 +1,382 @@
+---
+title: 'C# async/await 异步编程从原理到实践'
+date: '2026-07-14'
+excerpt: '系统理解 C# 异步编程：Task、async/await、取消、异常、并发控制，以及在 ASP.NET Core 中使用异步代码的边界。'
+tags: ['dotnet', 'csharp', 'async', 'task', 'concurrency']
+nextPost: 'dotnet/csharp-file-resource-management'
+---
+
+# C# async/await 异步编程从原理到实践
+
+:::tip C# 语言系列阅读顺序
+本文属于 C# 语言核心系列。建议先读 [C# 语言核心知识路线](/posts/dotnet/csharp-language-roadmap)，前置文章包括 [基础语法](/posts/dotnet/csharp-basic-syntax)、[面向对象基础](/posts/dotnet/csharp-object-oriented-basics)、[集合与异常处理](/posts/dotnet/csharp-collections-exceptions)、[C# 泛型](/posts/dotnet/csharp-generics)、[委托、事件与 Lambda](/posts/dotnet/csharp-delegate-event-lambda) 和 [LINQ](/posts/dotnet/csharp-linq)。读完本文后，可以继续看 [反射与 Attribute](/posts/dotnet/csharp-reflection-attribute) 与 [C# 现代语法](/posts/dotnet/csharp-modern-syntax)。
+:::
+
+异步编程是现代 .NET 开发的基础能力。Web API 调数据库、调用外部 HTTP 接口、读写文件、处理消息队列，几乎都会遇到 `Task`、`async` 和 `await`。
+
+很多人一开始会把异步理解成“开一个新线程”，这并不准确。C# 的异步编程更核心的价值是：当代码在等待 I/O 结果时，不阻塞当前线程，让线程可以去处理别的工作。
+
+这篇文章按一条完整链路展开：先理解同步代码的问题，再理解 `Task`、`async/await`，最后讲取消、异常、并发控制和常见误区。
+
+## 为什么需要异步
+
+同步代码在等待 I/O 时会阻塞线程。假设一个 Web API 需要调用数据库，数据库响应需要 200ms，如果使用同步等待，这 200ms 内请求线程基本处于空等状态。
+
+```csharp
+using System;
+using System.Threading;
+
+public class Program
+{
+    public static void Main()
+    {
+        Console.WriteLine("开始读取数据");
+
+        // 模拟同步 I/O：当前线程会被阻塞 2 秒
+        Thread.Sleep(2000);
+
+        Console.WriteLine("读取完成");
+    }
+}
+```
+
+异步版本不是让数据库变快，而是让线程在等待期间释放出来。
+
+```csharp
+using System;
+using System.Threading.Tasks;
+
+public class Program
+{
+    public static async Task Main()
+    {
+        Console.WriteLine("开始读取数据");
+
+        // 模拟异步 I/O：等待期间不会阻塞当前线程
+        await Task.Delay(2000);
+
+        Console.WriteLine("读取完成");
+    }
+}
+```
+
+:::info
+`Task.Delay` 只是演示用法。真实项目中常见的异步 I/O 包括 `HttpClient.GetAsync`、EF Core 的 `ToListAsync`、文件流的 `ReadAsync` 等。
+:::
+
+## Task 是什么
+
+`Task` 表示一个将来会完成的操作。这个操作可能成功、失败，也可能被取消。
+
+`Task` 不返回结果，`Task<T>` 返回一个 `T` 类型结果。
+
+```csharp
+using System;
+using System.Threading.Tasks;
+
+public class Program
+{
+    public static async Task Main()
+    {
+        Task work = SaveLogAsync();
+        await work;
+
+        Task<int> countTask = GetOrderCountAsync();
+        int count = await countTask;
+
+        Console.WriteLine($"订单数量：{count}");
+    }
+
+    static async Task SaveLogAsync()
+    {
+        await Task.Delay(300);
+        Console.WriteLine("日志保存完成");
+    }
+
+    static async Task<int> GetOrderCountAsync()
+    {
+        await Task.Delay(300);
+        return 42;
+    }
+}
+```
+
+`Task` 有几个重要状态：
+
+- `WaitingForActivation`：等待异步操作完成
+- `RanToCompletion`：成功完成
+- `Faulted`：执行过程中抛出异常
+- `Canceled`：操作被取消
+
+日常开发中通常不需要手动检查这些状态，直接 `await` 即可。
+
+## async 和 await 做了什么
+
+`async` 标记一个方法内部可以使用 `await`。`await` 会把方法拆成两段：等待之前的代码先执行，等待完成后再继续执行后面的代码。
+
+```csharp
+using System;
+using System.Threading.Tasks;
+
+public class Program
+{
+    public static async Task Main()
+    {
+        Console.WriteLine("1. 调用前");
+        string name = await GetNameAsync();
+        Console.WriteLine($"3. 调用后：{name}");
+    }
+
+    static async Task<string> GetNameAsync()
+    {
+        Console.WriteLine("2. 开始等待");
+        await Task.Delay(1000);
+        return "Alice";
+    }
+}
+```
+
+编译器会把 `async` 方法转换成状态机。你不需要手写状态机，但要理解：`await` 后面的代码不是立刻执行，而是等任务完成后继续执行。
+
+## 异步不是一定创建新线程
+
+这是最常见的误解。对于 I/O 异步，等待期间通常不需要一个线程一直挂在那里。
+
+```csharp
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+
+public class Program
+{
+    public static async Task Main()
+    {
+        Console.WriteLine($"开始线程：{Environment.CurrentManagedThreadId}");
+
+        await Task.Delay(500);
+
+        Console.WriteLine($"恢复线程：{Environment.CurrentManagedThreadId}");
+    }
+}
+```
+
+在控制台程序里，`await` 之后可能恢复到不同线程；在 ASP.NET Core 中没有传统 ASP.NET 的请求同步上下文，通常不需要为了避免死锁而到处写 `ConfigureAwait(false)`。
+
+## 顺序等待与并发等待
+
+如果多个异步操作互不依赖，应该先启动，再统一等待。
+
+```csharp
+using System;
+using System.Diagnostics;
+using System.Threading.Tasks;
+
+public class Program
+{
+    public static async Task Main()
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        Task<string> userTask = GetUserAsync();
+        Task<string> orderTask = GetOrderAsync();
+        Task<string> messageTask = GetMessageAsync();
+
+        string[] results = await Task.WhenAll(userTask, orderTask, messageTask);
+
+        Console.WriteLine(string.Join(", ", results));
+        Console.WriteLine($"耗时：{stopwatch.ElapsedMilliseconds}ms");
+    }
+
+    static async Task<string> GetUserAsync()
+    {
+        await Task.Delay(1000);
+        return "用户";
+    }
+
+    static async Task<string> GetOrderAsync()
+    {
+        await Task.Delay(1000);
+        return "订单";
+    }
+
+    static async Task<string> GetMessageAsync()
+    {
+        await Task.Delay(1000);
+        return "消息";
+    }
+}
+```
+
+如果写成连续 `await`，总耗时接近 3 秒；使用 `Task.WhenAll`，总耗时接近 1 秒。
+
+## 异常处理
+
+异步方法内部抛出的异常会存储在 `Task` 中，`await` 时重新抛出。
+
+```csharp
+using System;
+using System.Threading.Tasks;
+
+public class Program
+{
+    public static async Task Main()
+    {
+        try
+        {
+            await PayAsync();
+        }
+        catch (InvalidOperationException ex)
+        {
+            Console.WriteLine($"支付失败：{ex.Message}");
+        }
+    }
+
+    static async Task PayAsync()
+    {
+        await Task.Delay(300);
+        throw new InvalidOperationException("余额不足");
+    }
+}
+```
+
+不要用 `Task.Wait()` 或 `.Result` 去拿异步结果，它们会把异常包进 `AggregateException`，也可能造成线程阻塞。
+
+```csharp
+// 不推荐
+var result = GetDataAsync().Result;
+
+// 推荐
+var result = await GetDataAsync();
+```
+
+## 取消异步操作
+
+取消不是强制杀死任务，而是通过 `CancellationToken` 协作式通知。
+
+```csharp
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+
+public class Program
+{
+    public static async Task Main()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(1200);
+
+        try
+        {
+            await DownloadAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("下载已取消");
+        }
+    }
+
+    static async Task DownloadAsync(CancellationToken cancellationToken)
+    {
+        for (int i = 1; i <= 10; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Delay(500, cancellationToken);
+            Console.WriteLine($"下载进度：{i * 10}%");
+        }
+    }
+}
+```
+
+ASP.NET Core 的 Action 可以直接接收 `CancellationToken`，客户端断开连接时框架会触发取消。
+
+```csharp
+[HttpGet("orders")]
+public async Task<IActionResult> GetOrders(CancellationToken cancellationToken)
+{
+    var orders = await _dbContext.Orders
+        .AsNoTracking()
+        .ToListAsync(cancellationToken);
+
+    return Ok(orders);
+}
+```
+
+## 控制并发数量
+
+并发不是越多越好。比如同时调用 1000 个外部接口，可能把自己或对方服务打挂。可以用 `SemaphoreSlim` 限制并发数。
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+
+public class Program
+{
+    public static async Task Main()
+    {
+        var ids = Enumerable.Range(1, 10);
+        using var semaphore = new SemaphoreSlim(3);
+
+        List<Task> tasks = ids.Select(async id =>
+        {
+            await semaphore.WaitAsync();
+            try
+            {
+                await ProcessAsync(id);
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        }).ToList();
+
+        await Task.WhenAll(tasks);
+    }
+
+    static async Task ProcessAsync(int id)
+    {
+        Console.WriteLine($"开始处理 {id}");
+        await Task.Delay(800);
+        Console.WriteLine($"完成处理 {id}");
+    }
+}
+```
+
+## async void 只用于事件处理
+
+普通异步方法不要返回 `void`。`async void` 的异常无法被调用方通过 `await` 捕获，也无法组合等待。
+
+```csharp
+// 不推荐
+public async void SaveAsync()
+{
+    await Task.Delay(100);
+}
+
+// 推荐
+public async Task SaveAsync()
+{
+    await Task.Delay(100);
+}
+```
+
+`async void` 的主要合理场景是 UI 事件处理器，因为事件委托签名通常要求返回 `void`。
+
+## ASP.NET Core 中的建议
+
+在 ASP.NET Core 项目中，异步代码通常遵循这些规则：
+
+- Controller、Minimal API、Service、Repository 尽量一路异步到底
+- EF Core 查询使用 `ToListAsync`、`FirstOrDefaultAsync`、`SaveChangesAsync`
+- HTTP 调用使用 `HttpClient` 的异步方法
+- 不要用 `.Result`、`.Wait()` 阻塞异步调用
+- 能传 `CancellationToken` 就传下去
+- 并发调用外部资源时限制并发数量
+
+## 总结
+
+`async/await` 解决的是等待 I/O 时的线程占用问题，不是让单个操作本身变快。理解它的关键是：`Task` 表示未来完成的操作，`await` 表示等待这个操作并在完成后继续执行。
+
+掌握异步编程后，你才能更稳地理解 ASP.NET Core、EF Core、HttpClient、后台服务和微服务调用这些更上层的内容。

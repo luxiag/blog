@@ -1,0 +1,316 @@
+---
+title: 'Three.js 交互系统详解：让 3D 世界活起来'
+date: '2026-01-16'
+description: '从点击拾取 (Raycaster) 到复杂的手势控制，再到 UI 与 3D 的完美融合。系统讲解 Three.js 交互开发的方方面面。'
+tags: ['Three.js', 'WebGL', 'Interaction', 'Raycaster', 'UI']
+---
+
+# Three.js 交互系统详解：让 3D 世界活起来
+
+一个只能看不能摸的 3D 场景只是屏保。真正的 Web 3D 应用，核心在于**交互**。
+
+Three.js 的交互系统比传统的 DOM 交互要复杂得多。在 2D 网页里，浏览器帮你处理了“鼠标点到了哪个 div”。但在 3D 世界里，鼠标点在屏幕上的一个点，其实是一条射向深处的**射线 (Ray)**。我们需要计算这条射线穿过了哪些物体。
+
+本文将深入浅出地讲解这一套从底层数学到上层设计的交互逻辑。
+
+---
+
+## 一、 拾取与命中 (Raycasting)
+
+**Raycaster (光线投射)** 是 Three.js 交互的基石。
+
+### 1. 原理图解
+当你点击屏幕 `(x, y)` 时：
+1.  将屏幕坐标归一化到 `[-1, 1]` 区间。
+2.  从相机位置发出一条射线，穿过这个点。
+3.  检测这条射线与场景中所有物体的**包围盒 (Bounding Box)** 或**三角形面**是否相交。
+4.  返回一个按距离排序的相交列表。
+
+### 2. R3F 的优雅封装
+原生 Raycaster 写起来很啰嗦，React Three Fiber 把这一套逻辑封装进了简单的事件回调中：`onClick`, `onPointerOver`, `onPointerOut`。
+
+### 3. 常见问题：遮挡与透明
+*   **遮挡**: 默认情况下，事件会冒泡。如果两个物体重叠，射线会先击中前面的。如果你不想让后面的物体触发事件，可以在前面的物体事件中调用 `e.stopPropagation()`。
+*   **透明物体**: Raycaster 默认也会检测透明物体。如果你想让鼠标“穿透”玻璃点到里面的东西，可以将玻璃 Mesh 的 `raycast` 属性设为 `null`，或者在 CSS 中设置 `pointer-events: none`（对于 DOM 层）。
+
+<CodePenDemo title="Interaction & Occlusion" code={`
+function InteractionScene() {
+  const [log, setLog] = useState("尝试点击方块...")
+
+  return (
+    <>
+      {/* 前面的方块 */}
+      <mesh 
+        position={[0, 0, 1]} 
+        onClick={(e) => {
+          e.stopPropagation() // 阻止事件传给后面的方块
+          setLog("点击了前面的红色方块")
+        }}
+        onPointerOver={(e) => document.body.style.cursor = 'pointer'}
+        onPointerOut={(e) => document.body.style.cursor = 'auto'}
+      >
+        <boxGeometry />
+        <meshStandardMaterial color="red" />
+      </mesh>
+
+      {/* 后面的方块 (被部分遮挡) */}
+      <mesh 
+        position={[0.5, 0.5, -1]} 
+        scale={2}
+        onClick={() => setLog("点击了后面的蓝色方块")}
+        onPointerOver={(e) => document.body.style.cursor = 'pointer'}
+        onPointerOut={(e) => document.body.style.cursor = 'auto'}
+      >
+        <boxGeometry />
+        <meshStandardMaterial color="blue" />
+      </mesh>
+      
+      <Html position={[0, -2, 0]} center>
+        <div className="bg-black/80 text-white px-3 py-1 rounded whitespace-nowrap">
+          {log}
+        </div>
+      </Html>
+
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[5, 5, 5]} />
+      <OrbitControls />
+    </>
+  )
+}
+
+render(
+  <Canvas>
+    <InteractionScene />
+  </Canvas>
+)
+`} />
+
+---
+
+## 二、 输入体系：鼠标、触控与手势
+
+在移动端，我们不仅需要点击，还需要**拖拽 (Drag)**、**缩放 (Pinch)** 等手势。
+
+`@use-gesture/react` 是处理这些复杂输入的最佳伴侣，它能完美配合 R3F。
+
+### 实战：拖拽物体
+这个 Demo 展示了如何让一个物体跟随鼠标/手指拖拽移动。我们结合了 `useThree` 来获取视口信息，将屏幕移动量转换为 3D 空间位移。
+
+<CodePenDemo title="Draggable Object" code={`
+import { useThree } from '@react-three/fiber'
+import { useDrag } from '@use-gesture/react'
+import { animated, useSpring } from '@react-spring/three'
+
+function DraggableBox() {
+  const { size, viewport } = useThree()
+  // 计算屏幕像素与 3D 单位的比例
+  const aspect = size.width / viewport.width
+
+  // 使用 react-spring 处理平滑动画
+  const [spring, api] = useSpring(() => ({ 
+    position: [0, 0, 0], 
+    scale: 1, 
+    config: { friction: 10 } 
+  }))
+
+  // 绑定拖拽手势
+  const bind = useDrag(({ offset: [x, y], active }) => {
+    // 将像素偏移转换为 3D 坐标
+    // 注意：y 轴方向是反的
+    api.start({ 
+      position: [x / aspect, -y / aspect, 0], 
+      scale: active ? 1.2 : 1,
+      rotation: [y / aspect, x / aspect, 0] // 拖拽时稍微旋转一下，增加动感
+    })
+  })
+
+  return (
+    <animated.mesh {...spring} {...bind()}>
+      <dodecahedronGeometry args={[1]} />
+      <meshStandardMaterial color="hotpink" />
+    </animated.mesh>
+  )
+}
+
+render(
+  <Canvas>
+    <DraggableBox />
+    <ambientLight intensity={0.5} />
+    <pointLight position={[10, 10, 10]} />
+  </Canvas>
+)
+`} />
+
+---
+
+## 三、 交互状态机
+
+当交互变复杂时（比如：普通状态 -> 悬停状态 -> 选中状态 -> 禁用状态），单纯用 `useState` 会让代码变成一团乱麻。
+我们需要引入**状态机**思维。
+
+### 状态定义
+*   **Idle**: 默认状态。
+*   **Hover**: 鼠标悬停。通常高亮边缘或改变颜色。
+*   **Selected**: 点击选中。通常弹出 UI 面板或相机聚焦。
+*   **Disabled**: 不可交互。
+
+### 优先级与互斥
+通常我们需要**互斥 (Mutually Exclusive)** 逻辑：同一时间只能选中一个物体。这需要一个全局的状态管理器（如 Zustand）来协调。
+
+---
+
+## 四、 相机运镜：电影级体验
+
+交互不仅仅是“点物体”，更是“看物体”。当用户选中一个物体时，相机应该**平滑地**飞过去，给它一个特写。
+
+### 1. lookAt 与 lerp
+最基础的运镜。每一帧让相机位置和朝向插值逼近目标。
+
+### 2. Camera Controls (高级)
+`OrbitControls` 很难实现精确的运镜（比如限制只能在某个路径上移动）。
+推荐使用 `CameraControls`（来自 `drei`），它提供了 `setLookAt(x, y, z, tx, ty, tz, true)` 这样强大的 API，直接支持平滑过渡。
+
+<CodePenDemo title="Camera Transitions" code={`
+import { CameraControls } from '@react-three/drei'
+
+function Scene() {
+  const controlsRef = useRef()
+  
+  const focusObject = (position) => {
+    // 这里的 true 表示开启平滑过渡
+    // setLookAt(eyeX, eyeY, eyeZ, targetX, targetY, targetZ, enableTransition)
+    controlsRef.current?.setLookAt(
+      position[0] + 3, position[1] + 3, position[2] + 3, // 相机新位置 (在该物体侧上方)
+      position[0], position[1], position[2],             // 相机看哪里 (看物体中心)
+      true 
+    )
+  }
+
+  return (
+    <>
+      <CameraControls ref={controlsRef} />
+      
+      <mesh position={[-2, 0, 0]} onClick={(e) => { e.stopPropagation(); focusObject([-2, 0, 0]) }}>
+        <boxGeometry />
+        <meshStandardMaterial color="orange" />
+      </mesh>
+      
+      <mesh position={[2, 0, 0]} onClick={(e) => { e.stopPropagation(); focusObject([2, 0, 0]) }}>
+        <sphereGeometry args={[0.7]} />
+        <meshStandardMaterial color="cyan" />
+      </mesh>
+      
+      <mesh position={[0, 0, 0]} onClick={(e) => { e.stopPropagation(); controlsRef.current?.reset(true) }}>
+        <planeGeometry args={[10, 10]} rotation={[-Math.PI/2, 0, 0]} />
+        <meshStandardMaterial color="#333" />
+      </mesh>
+      
+      <Html position={[0, 2, 0]} center>
+        <div className="bg-black/50 text-white px-2 py-1 rounded pointer-events-none">
+          点击物体聚焦，点击地面复位
+        </div>
+      </Html>
+
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[5, 5, 5]} />
+    </>
+  )
+}
+
+render(
+  <Canvas>
+    <Scene />
+  </Canvas>
+)
+`} />
+
+---
+
+## 五、 2D UI 与 3D 融合
+
+Web 3D 最大的优势就是能混合 HTML/CSS UI。
+
+### 1. Html 组件 (DOM Overlay)
+`@react-three/drei` 的 `Html` 组件可以将 DOM 元素“粘”在 3D 物体上。它会自动处理坐标转换，让 DOM 元素跟随物体移动，甚至能处理遮挡（occlude）。
+
+### 2. CSS2D / CSS3D
+*   **CSS2DRenderer**: 类似 `Html` 组件，标签永远面朝屏幕（Billboarding）。适合做名字标签、血条。
+*   **CSS3DRenderer**: 将 DOM 元素通过 CSS 3D transform 变换，使其真正地“贴”在 3D 平面上（比如在 3D 电脑屏幕里显示一个 iframe 网页）。
+
+### 3. 事件穿透 (Pointer Events)
+这是一个常见坑：全屏的 Canvas 会挡住下面的 HTML 按钮。
+*   **解法**: 给 Canvas 容器设置 `pointer-events: none`，然后给需要交互的 3D 物体（通过 Raycaster）和 UI 按钮设置 `pointer-events: auto`。
+*   或者使用 R3F 的 `eventSource` 属性，将事件监听绑定到父级容器上。
+
+<CodePenDemo title="3D Annotations">
+
+```jsx
+function Annotation({ children, ...props }) {
+  const [occluded, setOccluded] = useState(false)
+  
+  return (
+    <Html 
+      {...props}
+      transform // 开启 transform 模式，让 UI 随距离缩放
+      occlude   // 开启遮挡检测
+      onOcclude={setOccluded} // 遮挡状态回调
+      style={{ 
+        transition: 'all 0.2s',
+        opacity: occluded ? 0 : 1, // 被遮挡时隐藏
+        transform: `scale(${occluded ? 0.5 : 1})` 
+      }}
+    >
+      <div className="bg-black/70 text-white p-2 rounded border border-white/20 text-xs backdrop-blur-md select-none">
+        {children}
+      </div>
+    </Html>
+  )
+}
+
+function AnnotatedScene() {
+  return (
+    <>
+      <group rotation={[0, Math.PI / 4, 0]}>
+        <mesh position={[1, 0.5, 0]}>
+          <boxGeometry />
+          <meshStandardMaterial color="orange" />
+          <Annotation position={[0.5, 0.5, 0.5]}>
+            Engine Node
+            <br/>
+            <span className="text-gray-400">Status: OK</span>
+          </Annotation>
+        </mesh>
+        
+        <mesh position={[-1, -0.5, 0]}>
+          <sphereGeometry args={[0.6]} />
+          <meshStandardMaterial color="teal" />
+          <Annotation position={[0, 0.6, 0]}>
+            Sensor Array
+          </Annotation>
+        </mesh>
+      </group>
+
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[10, 10, 5]} />
+      <OrbitControls autoRotate autoRotateSpeed={0.5} />
+    </>
+  )
+}
+
+render(
+  <Canvas camera={{ position: [0, 0, 5] }}>
+    <AnnotatedScene />
+  </Canvas>
+)
+```
+</CodePenDemo>
+
+## 总结
+
+Three.js 的交互系统是连接用户与 3D 世界的桥梁。
+*   **Raycaster** 是基础，R3F 的事件封装让它变得简单。
+*   **Use-gesture** 赋予了物体被拖拽和触摸的能力。
+*   **CameraControls** 实现了导演级的运镜切换。
+*   **Html 组件** 实现了信息的高效展示，打破了 2D 与 3D 的界限。
+
+掌握了这些，你就能创造出既有 3D 沉浸感，又有 2D 操作便捷性的优秀应用。

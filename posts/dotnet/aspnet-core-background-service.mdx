@@ -1,0 +1,494 @@
+---
+title: 'ASP.NET Core BackgroundService：后台任务、定时任务与队列消费'
+date: '2026-07-21'
+excerpt: '掌握 ASP.NET Core 后台服务：IHostedService、BackgroundService、CancellationToken、Scoped 服务、定时任务、队列消费和异常处理。'
+tags: ['dotnet', 'aspnetcore', 'backgroundservice', 'hostedservice']
+nextPost: 'dotnet/aspnet-core-file-upload-download'
+---
+
+# ASP.NET Core BackgroundService：后台任务、定时任务与队列消费
+
+不是所有工作都应该在 HTTP 请求中同步完成。发送邮件、处理消息、清理文件、同步数据、Outbox 发布等任务，更适合放到后台服务中。
+
+ASP.NET Core 提供 `IHostedService` 和 `BackgroundService` 来运行后台任务。
+
+:::tip 阶段三阅读顺序
+建议先掌握 [DI](/posts/dotnet/aspnet-core-dependency-injection)、[Logging](/posts/dotnet/aspnet-core-logging)、[异常处理](/posts/dotnet/aspnet-core-exception-handling) 和 [异步编程](/posts/dotnet/csharp-async-await)。
+:::
+
+## IHostedService 接口
+
+`BackgroundService` 是对 `IHostedService` 的封装。理解接口本身有助于知道底层机制：
+
+```csharp
+public interface IHostedService
+{
+    Task StartAsync(CancellationToken cancellationToken);
+    Task StopAsync(CancellationToken cancellationToken);
+}
+```
+
+- `StartAsync`：Host 启动后调用，应尽快返回，长时间工作需在此启动后台循环。
+- `StopAsync`：Host 关闭时调用，此时 `cancellationToken` 已触发取消。
+
+直接实现 `IHostedService` 需要自己管理后台 `Task` 的生命周期。`BackgroundService` 把这些封装好了——只需要实现 `ExecuteAsync`，基类负责在 `StartAsync` 中启动、在 `StopAsync` 中传递取消信号。
+
+```csharp
+public abstract class BackgroundService : IHostedService
+{
+    protected abstract Task ExecuteAsync(CancellationToken stoppingToken);
+
+    public virtual Task StartAsync(CancellationToken cancellationToken)
+    {
+        _executingTask = ExecuteAsync(_stoppingCts.Token);
+        return _executingTask.IsCompleted ? _executingTask : Task.CompletedTask;
+    }
+
+    public virtual async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _stoppingCts.Cancel();
+        await _executingTask;
+    }
+}
+```
+
+绝大多数场景直接继承 `BackgroundService` 即可。只有需要精细控制启动/停止时机（例如启动顺序依赖、优雅关闭需要额外逻辑）时，才直接实现 `IHostedService`。
+
+## BackgroundService 基础
+
+```csharp
+public class CleanupWorker : BackgroundService
+{
+    private readonly ILogger<CleanupWorker> _logger;
+
+    public CleanupWorker(ILogger<CleanupWorker> logger)
+    {
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            _logger.LogInformation("Cleanup running at {Time}", DateTimeOffset.Now);
+
+            await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+        }
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddHostedService<CleanupWorker>();
+```
+
+`BackgroundService` 本身是 Singleton。
+
+## 支持 CancellationToken
+
+后台任务必须尊重 `stoppingToken`。
+
+```csharp
+while (!stoppingToken.IsCancellationRequested)
+{
+    await DoWorkAsync(stoppingToken);
+    await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+}
+```
+
+应用关闭时，Host 会触发取消，后台任务应尽快退出。
+
+## 使用 Scoped 服务
+
+后台服务是 Singleton，不能直接依赖 Scoped 服务，例如 `DbContext`。需要创建 Scope。
+
+```csharp
+public class OutboxWorker : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<OutboxWorker> _logger;
+
+    public OutboxWorker(IServiceScopeFactory scopeFactory, ILogger<OutboxWorker> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            using IServiceScope scope = _scopeFactory.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var publisher = scope.ServiceProvider.GetRequiredService<IEventPublisher>();
+
+            var messages = await dbContext.OutboxMessages
+                .Where(m => !m.IsPublished)
+                .OrderBy(m => m.CreatedAt)
+                .Take(50)
+                .ToListAsync(stoppingToken);
+
+            foreach (var msg in messages)
+            {
+                await publisher.PublishAsync(msg.Topic, msg.Payload, stoppingToken);
+                msg.IsPublished = true;
+                msg.PublishedAt = DateTimeOffset.UtcNow;
+            }
+
+            await dbContext.SaveChangesAsync(stoppingToken);
+
+            if (messages.Count == 0)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            }
+        }
+    }
+}
+```
+
+:::important Scope 的生命周期
+每次循环创建一个新的 Scope，而不是复用。原因：
+
+- `DbContext` 等 Scoped 服务不是线程安全的，长时间持有会导致跟踪实体膨胀和内存泄漏。
+- 新 Scope 确保每次循环拿到干净的 `DbContext`，变更追踪从零开始。
+- Scope 在 `using` 结束时 dispose，会自动释放 `DbContext` 的数据库连接。
+
+不要把 `CreateScope()` 移到循环外面——那样整个生命周期只有一个 Scope，等于把 Scoped 变成了 Singleton，会引发连接泄漏和并发问题。
+:::
+
+## 异常处理
+
+后台循环中不要让异常直接终止整个服务。
+
+```csharp
+protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+{
+    while (!stoppingToken.IsCancellationRequested)
+    {
+        try
+        {
+            await ProcessAsync(stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // normal shutdown
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Background task failed");
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+    }
+}
+```
+
+异常要记录日志，并根据业务决定是否继续、退避或停止。
+
+### 退避策略与最大重试
+
+简单 catch 后 continue 会在错误持续时无间隔地反复重试，浪费资源且可能加剧问题（例如数据库连接断开时高频重试）。生产环境应该加入退避（backoff）和重试上限：
+
+```csharp
+public class OutboxWorker : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<OutboxWorker> _logger;
+    private const int MaxRetryCount = 5;
+
+    public OutboxWorker(IServiceScopeFactory scopeFactory, ILogger<OutboxWorker> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        int retryCount = 0;
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                using IServiceScope scope = _scopeFactory.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var publisher = scope.ServiceProvider.GetRequiredService<IEventPublisher>();
+
+                var messages = await dbContext.OutboxMessages
+                    .Where(m => !m.IsPublished)
+                    .OrderBy(m => m.CreatedAt)
+                    .Take(50)
+                    .ToListAsync(stoppingToken);
+
+                foreach (var msg in messages)
+                {
+                    await publisher.PublishAsync(msg.Topic, msg.Payload, stoppingToken);
+                    msg.IsPublished = true;
+                    msg.PublishedAt = DateTimeOffset.UtcNow;
+                }
+
+                await dbContext.SaveChangesAsync(stoppingToken);
+                retryCount = 0;
+
+                if (messages.Count == 0)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                }
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                // normal shutdown
+            }
+            catch (Exception ex)
+            {
+                retryCount++;
+                _logger.LogError(ex, "Outbox processing failed (attempt {RetryCount}/{MaxRetry})",
+                    retryCount, MaxRetryCount);
+
+                if (retryCount >= MaxRetryCount)
+                {
+                    _logger.LogCritical("Max retry count reached, stopping worker");
+                    return;
+                }
+
+                var delay = TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, retryCount)));
+                await Task.Delay(delay, stoppingToken);
+            }
+        }
+    }
+}
+```
+
+退避逻辑要点：
+
+- **指数退避**：`2^retryCount` 秒，第 1 次等 2 秒，第 2 次等 4 秒，依次递增，给外部系统恢复时间。
+- **上限封顶**：`Math.Min(30, ...)` 避免间隔无限增长，30 秒已经足够长。
+- **成功后归零**：`retryCount = 0` 确保偶发失败不会累积。
+- **达到上限后停止**：`return` 让 `ExecuteAsync` 正常退出，服务不再重试。也可以选择用 `IHostApplicationLifetime.StopApplication()` 关闭整个应用。
+
+## 定时任务
+
+.NET 6+ 可以使用 `PeriodicTimer`。
+
+```csharp
+protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+{
+    using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
+
+    while (await timer.WaitForNextTickAsync(stoppingToken))
+    {
+        await ProcessAsync(stoppingToken);
+    }
+}
+```
+
+复杂定时任务建议使用 Quartz.NET 或 Hangfire。
+
+### PeriodicTimer vs Task.Delay
+
+`Task.Delay` 在循环中的实际间隔是 **执行时间 + 延迟时间**，会产生漂移：
+
+```csharp
+// 每 10 秒执行一次？不是。实际间隔 = ProcessAsync 耗时 + 10s
+while (!stoppingToken.IsCancellationRequested)
+{
+    await ProcessAsync(stoppingToken);
+    await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+}
+```
+
+如果 `ProcessAsync` 耗时 3 秒，实际周期就是 13 秒。久而久之误差会不断累积。
+
+`PeriodicTimer` 修正了这个问题——它基于时间戳计算下一次 tick 的时刻，不受执行耗时影响：
+
+```csharp
+using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+
+while (await timer.WaitForNextTickAsync(stoppingToken))
+{
+    await ProcessAsync(stoppingToken); // 耗时 3 秒，下次 tick 只等 7 秒
+}
+```
+
+| 特性 | `Task.Delay` | `PeriodicTimer` |
+|---|---|---|
+| 间隔精度 | 执行时间 + 延迟 | 固定周期，自动补偿 |
+| 漂移 | 逐步累积 | 无漂移 |
+| 取消支持 | 通过 CancellationToken | 通过 CancellationToken |
+| 最低 .NET 版本 | 全部 | .NET 6+ |
+
+如果执行时间超过一个周期，`PeriodicTimer` 的下一个 tick 会立即可用——不会跳过，但也不会排队堆积。这意味着如果处理持续变慢，你仍然会接近"连续执行"状态。如果需要严格限制并发，可以在 handler 中加入自己的节流逻辑。
+
+## 队列消费
+
+简单进程内队列可以用 `Channel<T>`。它比 `BlockingCollection<T>` 更高效——基于 `ValueTask` 实现异步，不会阻塞线程。
+
+### Channel 基础
+
+`Channel<T>` 分两种模式：
+
+- `Channel.CreateBounded<T>(capacity)`：有界通道，写满后生产者 await 等待消费者腾出空间，起到背压作用。
+- `Channel.CreateUnbounded<T>()`：无界通道，生产者永远可以写入，适合生产速度远低于消费速度的场景。
+
+```csharp
+var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(1000)
+{
+    FullMode = BoundedChannelFullMode.Wait,
+    SingleReader = true,
+    SingleWriter = false,
+});
+```
+
+`BoundedChannelOptions` 关键设置：
+
+- `FullMode`：`Wait`（写满时 await 等待）、`DropNewest`（丢弃最新）、`DropOldest`（丢弃最旧）。
+- `SingleReader = true`：只有一个消费者时启用优化，减少锁竞争。
+- `SingleWriter = true`：只有一个生产者时同理。
+
+### 完整实现：ITaskQueue + ChannelTaskQueue
+
+```csharp
+public interface ITaskQueue
+{
+    ValueTask QueueAsync(string message, CancellationToken cancellationToken);
+    ValueTask<string> DequeueAsync(CancellationToken cancellationToken);
+}
+
+public class ChannelTaskQueue : ITaskQueue
+{
+    private readonly Channel<string> _channel;
+
+    public ChannelTaskQueue(int capacity = 1000)
+    {
+        _channel = Channel.CreateBounded<string>(new BoundedChannelOptions(capacity)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+        });
+    }
+
+    public async ValueTask QueueAsync(string message, CancellationToken cancellationToken)
+    {
+        await _channel.Writer.WriteAsync(message, cancellationToken);
+    }
+
+    public async ValueTask<string> DequeueAsync(CancellationToken cancellationToken)
+    {
+        return await _channel.Reader.ReadAsync(cancellationToken);
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddSingleton<ITaskQueue, ChannelTaskQueue>();
+```
+
+### 消费者 Worker
+
+```csharp
+public class QueueWorker : BackgroundService
+{
+    private readonly ITaskQueue _queue;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<QueueWorker> _logger;
+
+    public QueueWorker(
+        ITaskQueue queue,
+        IServiceScopeFactory scopeFactory,
+        ILogger<QueueWorker> logger)
+    {
+        _queue = queue;
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var message = await _queue.DequeueAsync(stoppingToken);
+
+            using IServiceScope scope = _scopeFactory.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            await ProcessMessageAsync(dbContext, message, stoppingToken);
+        }
+    }
+
+    private async Task ProcessMessageAsync(
+        AppDbContext dbContext, string message, CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("Processing: {Message}", message);
+
+        var entity = new ProcessedMessage { Content = message, ProcessedAt = DateTimeOffset.UtcNow };
+        dbContext.ProcessedMessages.Add(entity);
+        await dbContext.SaveChangesAsync(stoppingToken);
+    }
+}
+```
+
+`DequeueAsync` 在没有消息时异步等待，有消息时立即返回，不需要 `Task.Delay` 轮询。
+
+### 生产者
+
+任何 Singleton 服务都可以注入 `ITaskQueue` 来投递消息：
+
+```csharp
+[ApiController]
+[Route("api/tasks")]
+public class TaskController : ControllerBase
+{
+    private readonly ITaskQueue _queue;
+
+    public TaskController(ITaskQueue queue)
+    {
+        _queue = queue;
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Enqueue([FromBody] string message)
+    {
+        await _queue.QueueAsync(message, HttpContext.RequestAborted);
+        return Accepted();
+    }
+}
+```
+
+### 多消费者
+
+默认 `SingleReader = true` 只允许一个消费者。如果需要多个消费者并行处理，去掉 `SingleReader` 并启动多个 Worker：
+
+```csharp
+builder.Services.AddSingleton<ITaskQueue, ChannelTaskQueue>();
+builder.Services.AddHostedService<QueueWorker>();
+builder.Services.AddHostedService<QueueWorker>();
+```
+
+`Channel.Reader` 是线程安全的，多个消费者竞争读取，每条消息只被一个消费者处理。
+
+:::warning 内存队列的局限
+`Channel<T>` 是进程内队列，应用重启后未消费的消息会丢失。真实生产场景通常使用 RabbitMQ、Kafka、Azure Service Bus、Redis Stream 等外部队列，保证消息持久化和跨实例消费。
+:::
+
+## 使用建议
+
+- 后台任务必须支持取消。
+- 不要直接注入 Scoped 服务，使用 `IServiceScopeFactory`。
+- 循环内部要处理异常。
+- 任务耗时、失败次数要记录日志和指标。
+- 重要任务不要只放内存队列，避免进程退出丢失。
+- 多实例部署要考虑任务是否会重复执行。
+
+## 总结
+
+`BackgroundService` 是 `IHostedService` 的高层封装，适合运行后台循环、定时任务和消息消费。它和 Web 请求共享同一个 Host 和 DI 容器，但生命周期不同，因此要特别注意：
+
+- **取消**：必须尊重 `stoppingToken`，让循环能快速退出。
+- **Scoped 服务**：每次循环创建新 Scope，不要把 Scope 移到循环外面。
+- **异常**：catch 后不能无脑 continue，要加入指数退避和重试上限。
+- **定时精度**：`PeriodicTimer` 比 `Task.Delay` 更精准，不会漂移。
+- **队列**：`Channel<T>` 适合进程内生产者-消费者模式，重要任务应使用外部队列持久化。

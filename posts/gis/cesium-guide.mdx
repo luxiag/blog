@@ -1,0 +1,614 @@
+---
+title: 'CesiumJS 深度实战：从入门到精通'
+date: '2026-01-31'
+tags: ['GIS', 'Cesium', '3D', 'WebGL', '可视化']
+summary: '一篇真正可交互的 Cesium 教程。包含相机控制、实体绘制、3D Tiles、粒子系统等10+个实时运行的 3D 地球示例，带你领略 WebGL 的强大魅力。'
+---
+
+# CesiumJS 深度实战：从入门到精通
+
+CesiumJS 是一个开源的 JavaScript 库，用于创建世界级的 3D 地球和地图。它基于 WebGL，无需插件即可运行。
+
+本文通过一系列**实时可交互**的代码示例，带你全面掌握 Cesium 的核心开发技巧。
+
+> **提示**：所有示例均可直接运行。点击右上角的 **Code** 按钮可以查看和修改源代码。
+
+---
+
+## 1. Hello World：你好，地球
+
+这是最基础的 Cesium 应用。我们初始化一个 `Viewer`，并配置基础控件。为了避免 AccessToken 问题，我们在这个示例中关闭了地形和部分需要认证的服务。
+
+<CodePenDemo
+  title="Cesium 基础地球"
+  height="500px"
+  code={`const HelloWorld = () => {
+  const containerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    // 初始化 Viewer
+    const viewer = new Cesium.Viewer(containerRef.current, {
+      terrainProvider: undefined, // 不加载 Ion 地形
+      timeline: false,            // 隐藏时间轴
+      animation: false,           // 隐藏动画控件
+      baseLayerPicker: false,     // 隐藏图层选择器
+      geocoder: false,            // 隐藏搜索框
+      homeButton: false,
+      navigationHelpButton: false,
+      sceneModePicker: false
+    });
+    
+    // 隐藏版权控件（仅用于演示，生产环境请保留）
+    viewer._cesiumWidget._creditContainer.style.display = 'none';
+
+    return () => viewer.destroy();
+  }, []);
+
+  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
+};
+
+render(<HelloWorld />);`}
+/>
+
+---
+
+## 2. 相机控制：飞向世界
+
+Cesium 提供了极其强大的相机控制 API。最常用的是 `flyTo`（平滑飞行）和 `setView`（瞬间跳转）。
+
+<CodePenDemo
+  title="相机控制与视角"
+  height="500px"
+  code={`const CameraControl = () => {
+  const containerRef = React.useRef(null);
+  const viewerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const viewer = new Cesium.Viewer(containerRef.current, {
+      timeline: false,
+      animation: false,
+      baseLayerPicker: false,
+      selectionIndicator: false,
+      infoBox: false
+    });
+    viewer._cesiumWidget._creditContainer.style.display = 'none';
+    viewerRef.current = viewer;
+
+    return () => viewer.destroy();
+  }, []);
+
+  // 飞向北京
+  const flyToBeijing = () => {
+    viewerRef.current.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(116.4074, 39.9042, 20000), // 经度, 纬度, 高度
+      orientation: {
+        heading: Cesium.Math.toRadians(0.0), // 航向（正北）
+        pitch: Cesium.Math.toRadians(-90.0), // 俯仰（垂直向下）
+        roll: 0.0
+      },
+      duration: 3 // 飞行时间（秒）
+    });
+  };
+
+  // 飞向珠穆朗玛峰（倾斜视角）
+  const flyToEverest = () => {
+    viewerRef.current.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(86.9250, 27.9881, 8000),
+      orientation: {
+        heading: Cesium.Math.toRadians(0.0),
+        pitch: Cesium.Math.toRadians(-15.0), // 微微向下看
+        roll: 0.0
+      }
+    });
+  };
+
+  // 瞬间跳转到纽约
+  const jumpToNYC = () => {
+    viewerRef.current.camera.setView({
+      destination: Cesium.Cartesian3.fromDegrees(-74.0060, 40.7128, 50000)
+    });
+  };
+
+  return (
+    <div className="relative w-full h-full">
+      <div ref={containerRef} className="w-full h-full" />
+      <div className="absolute top-4 left-4 flex flex-col gap-2">
+        <button className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 pointer-events-auto" onClick={flyToBeijing}>
+          🛫 飞向北京
+        </button>
+        <button className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 pointer-events-auto" onClick={flyToEverest}>
+          🏔️ 珠峰视角
+        </button>
+        <button className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 pointer-events-auto" onClick={jumpToNYC}>
+          🗽 纽约(瞬间)
+        </button>
+      </div>
+    </div>
+  );
+};
+
+render(<CameraControl />);`}
+/>
+
+---
+
+## 3. Entity API：强大的实体绘制
+
+`Entity` 是 Cesium 中最高级的绘图 API，它将几何位置、可视化图形和属性封装在一起。支持点、线、面、模型、标签等多种类型。
+
+### 3.1 绘制基础图形
+
+<CodePenDemo
+  title="绘制点、线、面"
+  height="600px"
+  code={`const EntityBasics = () => {
+  const containerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const viewer = new Cesium.Viewer(containerRef.current, {
+      timeline: false,
+      animation: false,
+      baseLayerPicker: false
+    });
+    viewer._cesiumWidget._creditContainer.style.display = 'none';
+
+    // 1. 添加一个点和标签
+    viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(105.0, 35.0),
+      point: {
+        pixelSize: 10,
+        color: Cesium.Color.RED
+      },
+      label: {
+        text: '中国中心',
+        font: '16pt sans-serif',
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        outlineWidth: 2,
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        pixelOffset: new Cesium.Cartesian2(0, -9)
+      }
+    });
+
+    // 2. 绘制一条跨国航线 (Polyline)
+    viewer.entities.add({
+      polyline: {
+        positions: Cesium.Cartesian3.fromDegreesArray([
+          116.4074, 39.9042, // 北京
+          -122.4194, 37.7749 // 旧金山
+        ]),
+        width: 5,
+        material: new Cesium.PolylineGlowMaterialProperty({
+          glowPower: 0.2,
+          color: Cesium.Color.CYAN
+        }),
+        arcType: Cesium.ArcType.GEODESIC // 大圆航线
+      }
+    });
+
+    // 3. 绘制一个多边形区域 (Polygon)
+    viewer.entities.add({
+      polygon: {
+        hierarchy: Cesium.Cartesian3.fromDegreesArray([
+          110.0, 30.0,
+          120.0, 30.0,
+          120.0, 40.0,
+          110.0, 40.0
+        ]),
+        material: Cesium.Color.ORANGE.withAlpha(0.5),
+        outline: true,
+        outlineColor: Cesium.Color.BLACK
+      }
+    });
+
+    // 4. 绘制一个 3D 盒子 (Box)
+    viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(115.0, 25.0, 100000.0),
+      box: {
+        dimensions: new Cesium.Cartesian3(200000.0, 200000.0, 200000.0),
+        material: Cesium.Color.PURPLE
+      }
+    });
+
+    // 自动定位到中国区域
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(110.0, 35.0, 5000000)
+    });
+
+    return () => viewer.destroy();
+  }, []);
+
+  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
+};
+
+render(<EntityBasics />);`}
+/>
+
+### 3.2 动态轨迹回放
+
+Cesium 的核心优势之一是处理**时间动态数据**。结合 `SampledPositionProperty`，我们可以轻松实现平滑的轨迹动画。
+
+<CodePenDemo
+  title="飞机轨迹回放"
+  height="600px"
+  code={`const FlightTracker = () => {
+  const containerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const viewer = new Cesium.Viewer(containerRef.current, {
+      shouldAnimate: true, // 开启自动播放
+      timeline: true,      // 显示时间轴
+      animation: true,     // 显示动画控件
+      baseLayerPicker: false
+    });
+    viewer._cesiumWidget._creditContainer.style.display = 'none';
+
+    // 1. 设置模拟时间范围
+    const start = Cesium.JulianDate.fromDate(new Date());
+    const stop = Cesium.JulianDate.addSeconds(start, 360, new Cesium.JulianDate());
+
+    viewer.clock.startTime = start.clone();
+    viewer.clock.stopTime = stop.clone();
+    viewer.clock.currentTime = start.clone();
+    viewer.clock.clockRange = Cesium.ClockRange.LOOP_STOP;
+    viewer.clock.multiplier = 10; // 10倍速
+
+    // 2. 生成飞行路径数据 (使用 SampledPositionProperty 插值)
+    const positionProperty = new Cesium.SampledPositionProperty();
+    for (let i = 0; i <= 360; i += 30) {
+      const time = Cesium.JulianDate.addSeconds(start, i, new Cesium.JulianDate());
+      const lon = 114.0 + (i / 360.0) * 5.0; // 经度变化
+      const lat = 30.0 + Math.sin(i / 60.0); // 纬度做正弦运动
+      const height = 5000 + Math.random() * 500;
+      
+      positionProperty.addSample(time, Cesium.Cartesian3.fromDegrees(lon, lat, height));
+    }
+
+    // 3. 创建飞机实体
+    const airplane = viewer.entities.add({
+      // 可用时间段
+      availability: new Cesium.TimeIntervalCollection([
+        new Cesium.TimeInterval({ start: start, stop: stop })
+      ]),
+      // 位置绑定
+      position: positionProperty,
+      // 自动计算朝向 (基于速度矢量)
+      orientation: new Cesium.VelocityOrientationProperty(positionProperty),
+      // 模型
+      model: {
+        uri: 'https://cesium.com/downloads/cesiumjs/releases/1.82/Build/Cesium/Assets/Textures/maki/airfield.png', // 暂时用图标替代，真实场景用 glb
+        minimumPixelSize: 64
+      },
+      // 路径轨迹
+      path: {
+        resolution: 1,
+        material: new Cesium.PolylineGlowMaterialProperty({
+          glowPower: 0.1,
+          color: Cesium.Color.YELLOW
+        }),
+        width: 10,
+        leadTime: 0,
+        trailTime: 60 // 显示过去60秒的轨迹
+      },
+      // 图标替代模型 (因为没加载外部GLB)
+      billboard: {
+        image: 'https://raw.githubusercontent.com/CesiumGS/cesium/main/Apps/Sandcastle/images/Cesium_Logo_overlay.png',
+        scale: 0.1,
+      }
+    });
+
+    // 相机追踪
+    viewer.trackedEntity = airplane;
+
+    return () => viewer.destroy();
+  }, []);
+
+  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
+};
+
+render(<FlightTracker />);`}
+/>
+
+---
+
+## 4. 材质系统：动态雷达波
+
+Cesium 的材质系统非常强大，不仅支持颜色和图片，还支持程序化纹理（Procedural Textures）。下面展示如何创建一个动态扫描的雷达效果。
+
+<CodePenDemo
+  title="动态雷达扫描"
+  height="600px"
+  code={`const RadarScan = () => {
+  const containerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const viewer = new Cesium.Viewer(containerRef.current, {
+      timeline: false,
+      animation: false,
+      baseLayerPicker: false
+    });
+    viewer._cesiumWidget._creditContainer.style.display = 'none';
+
+    // 定义中心点
+    const lat = 40.0;
+    const lon = -100.0;
+    const radius = 300000.0;
+
+    // 创建一个椭圆
+    viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, lat),
+      ellipse: {
+        semiMinorAxis: radius,
+        semiMajorAxis: radius,
+        // 使用 Stripe 材质模拟扫描效果
+        material: new Cesium.StripeMaterialProperty({
+          evenColor: Cesium.Color.BLUE.withAlpha(0.5),
+          oddColor: Cesium.Color.BLUE.withAlpha(0.1),
+          repeat: 30.0,
+          offset: new Cesium.CallbackProperty((time) => {
+            // 动态改变 offset 实现动画
+            return (performance.now() / 1000.0) % 1;
+          }, false)
+        })
+      }
+    });
+
+    // 添加中心点
+    viewer.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(lon, lat),
+        point: { pixelSize: 15, color: Cesium.Color.RED }
+    });
+
+    viewer.zoomTo(viewer.entities);
+
+    return () => viewer.destroy();
+  }, []);
+
+  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
+};
+
+render(<RadarScan />);`}
+/>
+
+**关键点：** `Cesium.CallbackProperty` 是实现动态属性的神器。它允许你传入一个回调函数，每一帧都会重新计算属性值。
+
+---
+
+## 5. Primitive API：高性能绘图
+
+当你需要绘制**成千上万**个几何体时，`Entity API` 可能会有性能瓶颈。这时应使用更底层的 `Primitive API`。
+
+<CodePenDemo
+  title="海量几何体 (Primitive)"
+  height="600px"
+  code={`const HugeAmountInstances = () => {
+  const containerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const viewer = new Cesium.Viewer(containerRef.current, {
+      timeline: false,
+      animation: false,
+      baseLayerPicker: false
+    });
+    viewer._cesiumWidget._creditContainer.style.display = 'none';
+
+    // 创建几何体实例集合
+    const instances = [];
+    const gridSize = 30; // 30x30 = 900个柱体
+    
+    for (let x = 0; x < gridSize; x++) {
+      for (let y = 0; y < gridSize; y++) {
+        const lon = -105.0 + x * 0.1;
+        const lat = 40.0 + y * 0.1;
+        const height = 5000 + Math.random() * 20000; // 随机高度
+
+        // 创建几何体
+        const geometry = new Cesium.CylinderGeometry({
+            length: height,
+            topRadius: 2000.0,
+            bottomRadius: 2000.0,
+            vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT
+        });
+
+        // 绑定位置和模型矩阵
+        const position = Cesium.Cartesian3.fromDegrees(lon, lat, height / 2.0);
+        const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(position);
+
+        instances.push(new Cesium.GeometryInstance({
+            geometry: geometry,
+            modelMatrix: modelMatrix,
+            attributes: {
+                color: Cesium.ColorGeometryInstanceAttribute.fromColor(
+                    Cesium.Color.fromRandom({ alpha: 1.0 })
+                )
+            }
+        }));
+      }
+    }
+
+    // 将所有实例合并为一个 Primitive 提交给 GPU
+    const primitive = new Cesium.Primitive({
+        geometryInstances: instances,
+        appearance: new Cesium.PerInstanceColorAppearance({
+            translucent: false,
+            closed: true
+        })
+    });
+
+    viewer.scene.primitives.add(primitive);
+
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(-103.5, 41.5, 500000)
+    });
+
+    return () => viewer.destroy();
+  }, []);
+
+  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
+};
+
+render(<HugeAmountInstances />);`}
+/>
+
+---
+
+## 6. 交互与 picking：鼠标拾取
+
+Cesium 没有像 DOM 那样的 `onclick` 事件，而是使用 `ScreenSpaceEventHandler` 来处理交互。
+
+<CodePenDemo
+  title="鼠标交互与拾取"
+  height="500px"
+  code={`const InteractionDemo = () => {
+  const containerRef = React.useRef(null);
+  const [info, setInfo] = React.useState('请点击地球或实体...');
+
+  React.useEffect(() => {
+    const viewer = new Cesium.Viewer(containerRef.current, {
+      timeline: false,
+      animation: false,
+      baseLayerPicker: false,
+      selectionIndicator: false,
+      infoBox: false
+    });
+    viewer._cesiumWidget._creditContainer.style.display = 'none';
+
+    // 添加一些测试实体
+    viewer.entities.add({
+      id: 'red-box',
+      position: Cesium.Cartesian3.fromDegrees(-100.0, 40.0, 100000.0),
+      box: { dimensions: new Cesium.Cartesian3(100000, 100000, 100000), material: Cesium.Color.RED }
+    });
+    
+    viewer.camera.setView({
+      destination: Cesium.Cartesian3.fromDegrees(-100.0, 40.0, 5000000)
+    });
+
+    // 创建事件处理器
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+
+    // 监听左键点击
+    handler.setInputAction((movement) => {
+      // 1. 拾取实体 (Pick)
+      const pickedObject = viewer.scene.pick(movement.position);
+      
+      if (Cesium.defined(pickedObject) && pickedObject.id) {
+        setInfo(\`选中实体: \${pickedObject.id.id || '未知'}\`);
+        return;
+      }
+
+      // 2. 拾取地球坐标 (Raycast)
+      const cartesian = viewer.camera.pickEllipsoid(movement.position, viewer.scene.globe.ellipsoid);
+      
+      if (cartesian) {
+        const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+        const lon = Cesium.Math.toDegrees(cartographic.longitude).toFixed(2);
+        const lat = Cesium.Math.toDegrees(cartographic.latitude).toFixed(2);
+        setInfo(\`点击地球: [\${lon}, \${lat}]\`);
+      } else {
+        setInfo('点击了外太空');
+      }
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    // 监听鼠标移动（设置光标样式）
+    handler.setInputAction((movement) => {
+        const hit = viewer.scene.pick(movement.endPosition);
+        if (hit) {
+            viewer.canvas.style.cursor = 'pointer';
+        } else {
+            viewer.canvas.style.cursor = 'default';
+        }
+    }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+    return () => {
+        handler.destroy();
+        viewer.destroy();
+    };
+  }, []);
+
+  return (
+    <div className="relative w-full h-full">
+      <div ref={containerRef} className="w-full h-full" />
+      <div className="absolute top-4 left-0 right-0 flex justify-center pointer-events-none">
+        <div className="bg-black/70 text-white px-6 py-2 rounded-full text-lg font-mono backdrop-blur-md border border-white/20 shadow-lg">
+          {info}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+render(<InteractionDemo />);`}
+/>
+
+---
+
+## 7. 粒子系统：火焰特效
+
+Cesium 内置了强大的粒子系统，可以模拟火焰、烟雾、雨雪等。
+
+<CodePenDemo
+  title="火焰粒子效果"
+  height="600px"
+  code={`const ParticleFire = () => {
+  const containerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const viewer = new Cesium.Viewer(containerRef.current, {
+      timeline: false,
+      animation: false,
+      baseLayerPicker: false
+    });
+    viewer._cesiumWidget._creditContainer.style.display = 'none';
+
+    // 定位
+    const position = Cesium.Cartesian3.fromDegrees(-75.15, 39.95);
+    const entity = viewer.entities.add({ position });
+    viewer.zoomTo(entity);
+
+    // 创建粒子系统
+    const particleSystem = new Cesium.ParticleSystem({
+      image: 'https://cesium.com/downloads/cesiumjs/releases/1.82/Build/Cesium/Assets/Textures/waterNormals.jpg', // 使用内置纹理模拟
+      startColor: Cesium.Color.RED.withAlpha(0.7),
+      endColor: Cesium.Color.YELLOW.withAlpha(0.3),
+      startScale: 1.0,
+      endScale: 5.0,
+      minimumParticleLife: 1.2,
+      maximumParticleLife: 1.2,
+      minimumSpeed: 1.0,
+      maximumSpeed: 4.0,
+      imageSize: new Cesium.Cartesian2(20, 20),
+      emissionRate: 15.0, // 发射率
+      bursts: [
+        // 间歇性爆发
+        new Cesium.ParticleBurst({ time: 5.0, minimum: 10, maximum: 100 }),
+        new Cesium.ParticleBurst({ time: 10.0, minimum: 50, maximum: 100 }),
+        new Cesium.ParticleBurst({ time: 15.0, minimum: 200, maximum: 300 })
+      ],
+      lifetime: 16.0,
+      emitter: new Cesium.CircleEmitter(2.0), // 发射器形状
+      modelMatrix: Cesium.Transforms.eastNorthUpToFixedFrame(position)
+    });
+
+    viewer.scene.primitives.add(particleSystem);
+
+    return () => viewer.destroy();
+  }, []);
+
+  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
+};
+
+render(<ParticleFire />);`}
+/>
+
+---
+
+## 结语
+
+通过这 7 个可交互的示例，我们展示了 Cesium 从基础的地球展示、相机控制，到高级的轨迹回放、海量数据渲染和粒子特效。
+
+CesiumJS 的功能远不止于此，它还支持：
+- **3D Tiles**：流式加载 TB 级的城市模型（本教程受限于 Token 未展示）。
+- **地形分析**：可视域分析、淹没分析。
+- **VR/AR**：支持 WebXR。
+
+希望这篇指南能帮助你开启 3D GIS 开发的大门！

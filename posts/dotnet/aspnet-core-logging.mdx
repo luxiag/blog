@@ -1,0 +1,465 @@
+---
+title: 'ASP.NET Core Logging：ILogger、结构化日志与日志配置'
+date: '2026-07-21'
+excerpt: '掌握 ASP.NET Core 日志系统：ILogger、日志级别、结构化日志、Log Scopes 请求级关联、Category 分类过滤机制、配置过滤、请求日志、敏感信息和生产建议。'
+tags: ['dotnet', 'aspnetcore', 'logging', 'ilogger']
+nextPost: 'dotnet/aspnet-core-exception-handling'
+---
+
+# ASP.NET Core Logging：ILogger、结构化日志与日志配置
+
+日志是生产系统排查问题的第一入口。ASP.NET Core 内置日志抽象 `ILogger<T>`，可以把应用日志输出到 Console、Debug、EventSource，也可以接入 Serilog、OpenTelemetry、Loki、ELK 等系统。
+
+:::tip 阶段二阅读顺序
+建议先读 [Dependency Injection](/posts/dotnet/aspnet-core-dependency-injection)，再阅读本文。后续继续学习 [异常处理](/posts/dotnet/aspnet-core-exception-handling)、[Authentication](/posts/dotnet/aspnet-core-authentication) 和 [Authorization](/posts/dotnet/aspnet-core-authorization)。
+:::
+
+## 使用 ILogger
+
+```csharp
+public class ProductService
+{
+    private readonly ILogger<ProductService> _logger;
+
+    public ProductService(ILogger<ProductService> logger)
+    {
+        _logger = logger;
+    }
+
+    public void Create(string name)
+    {
+        _logger.LogInformation("Creating product {ProductName}", name);
+    }
+}
+```
+
+`ILogger<T>` 中的 `T` 是日志分类，通常使用当前类类型。
+
+### Category 的内部机制
+
+`ILogger<T>` 在创建时，会取 `typeof(T).FullName` 作为 Category 字符串。例如：
+
+- `ILogger<ProductService>` → Category = `"MyApp.Services.ProductService"`
+- `ILogger<OrdersController>` → Category = `"MyApp.Controllers.OrdersController"`
+- `ILoggerFactory.CreateLogger("RequestLog")` → Category = `"RequestLog"`
+
+每条日志在输出时都携带这个 Category，日志系统用它做过滤。配置中的 key 就是按 Category 前缀匹配的：
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "MyApp.Services": "Debug",
+      "MyApp.Services.ProductService": "Trace",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  }
+}
+```
+
+匹配规则：
+
+- 配置 key 是 Category 的前缀匹配。`"MyApp.Services"` 匹配所有以 `MyApp.Services` 开头的 Category，包括 `MyApp.Services.ProductService`、`MyApp.Services.OrderService` 等。
+- 更长的 key 优先级更高。`MyApp.Services.ProductService: Trace` 比 `MyApp.Services: Debug` 更具体，所以 `ProductService` 的最低级别是 `Trace`。
+- `Default` 是兜底规则，当没有任何前缀匹配时使用。
+
+这意味着你可以精确控制某个类或某个命名空间的日志级别，而不影响其他类：
+
+```csharp
+// 只打开 EF Core 的 SQL 日志，不影响其他 Microsoft 前缀的日志
+// "Microsoft.EntityFrameworkCore.Database.Command": "Information"
+```
+
+在 DI 中，`ILogger<T>` 会自动注入对应 Category 的 logger。如果你不需要按类分类，也可以直接注入 `ILoggerFactory` 手动创建：
+
+```csharp
+public class BulkImportService
+{
+    private readonly ILogger _logger;
+
+    public BulkImportService(ILoggerFactory loggerFactory)
+    {
+        _logger = loggerFactory.CreateLogger("BulkImport");
+    }
+
+    public void Import()
+    {
+        _logger.LogInformation("Starting bulk import");
+    }
+}
+```
+
+手动创建的 Category 不依赖类名，适合跨类别的日志分组。
+
+## 日志级别
+
+| 级别 | 用途 |
+|---|---|
+| `Trace` | 最详细诊断信息 |
+| `Debug` | 开发调试信息 |
+| `Information` | 关键业务流程 |
+| `Warning` | 可恢复异常或风险 |
+| `Error` | 当前操作失败 |
+| `Critical` | 应用级严重故障 |
+
+示例：
+
+```csharp
+_logger.LogDebug("Loading product {ProductId}", productId);
+_logger.LogInformation("Product {ProductId} created", productId);
+_logger.LogWarning("Product {ProductId} stock is low", productId);
+_logger.LogError(exception, "Failed to create product {ProductName}", name);
+```
+
+## 结构化日志
+
+推荐使用模板参数，而不是字符串拼接。
+
+```csharp
+// 推荐
+_logger.LogInformation("Order {OrderId} paid by user {UserId}", orderId, userId);
+
+// 不推荐
+_logger.LogInformation($"Order {orderId} paid by user {userId}");
+```
+
+结构化日志能让日志系统把 `OrderId`、`UserId` 当成字段索引，方便查询和聚合。
+
+## Log Scopes（BeginScope）
+
+结构化日志解决了单条日志的字段索引问题，但一个请求往往会产生多条日志——中间件记录入口、业务层记录操作、数据层记录 SQL——这些日志之间如何关联？
+
+Log Scope 就是为了解决这个问题。`BeginScope` 在一段代码范围内附加一组属性，这个范围内所有日志都会自动携带这些属性：
+
+```csharp
+public class OrderService
+{
+    private readonly ILogger<OrderService> _logger;
+
+    public OrderService(ILogger<OrderService> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task ProcessOrderAsync(int orderId, int userId)
+    {
+        using var scope = _logger.BeginScope("Order {OrderId} User {UserId}", orderId, userId);
+
+        _logger.LogInformation("Processing started");
+
+        await ValidateOrderAsync(orderId);
+
+        _logger.LogInformation("Payment processing");
+
+        await ChargePaymentAsync(orderId);
+
+        _logger.LogInformation("Processing completed");
+    }
+
+    private async Task ValidateOrderAsync(int orderId)
+    {
+        _logger.LogDebug("Validating order {OrderId}", orderId);
+        await Task.CompletedTask;
+    }
+
+    private async Task ChargePaymentAsync(int orderId)
+    {
+        _logger.LogDebug("Charging payment for order {OrderId}", orderId);
+        await Task.CompletedTask;
+    }
+}
+```
+
+`using var scope` 确保作用域在方法结束时自动释放。在这个 `using` 块内，所有通过 `_logger` 写出的日志都会附带 `OrderId` 和 `UserId`。
+
+在 Console 输出中，Scope 的效果不明显。但在 Serilog、Seq、Elasticsearch 等结构化日志后端中，Scope 内的属性会作为字段附加到每条日志记录上，这样你可以用一条查询找出某个订单的所有日志：
+
+```
+OrderId = 1234
+```
+
+### 请求级 Scope 中间件
+
+在 ASP.NET Core 应用中，最典型的 Scope 用法是在中间件中为整个请求创建 Scope，附加 RequestId、TraceId、UserId 等属性。这样请求链路上的所有日志都自动关联：
+
+```csharp
+app.Use(async (context, next) =>
+{
+    var logger = context.RequestServices
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("RequestScope");
+
+    using var scope = logger.BeginScope(
+        "RequestId {RequestId} TraceId {TraceId} Path {Path}",
+        context.TraceIdentifier,
+        context.TraceIdentifier,
+        context.Request.Path);
+
+    await next();
+});
+```
+
+这段中间件应该尽早注册（在 `app.UseRouting()` 之前），这样后续所有中间件和业务代码的日志都在 Scope 范围内。
+
+如果用户已认证，可以把 UserId 也加入 Scope：
+
+```csharp
+app.Use(async (context, next) =>
+{
+    var userId = context.User?.FindFirst("sub")?.Value ?? "anonymous";
+
+    var logger = context.RequestServices
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("RequestScope");
+
+    using var scope = logger.BeginScope(
+        "RequestId {RequestId} UserId {UserId} Path {Path}",
+        context.TraceIdentifier,
+        userId,
+        context.Request.Path);
+
+    await next();
+});
+```
+
+### Scope 嵌套
+
+Scope 支持嵌套，内层 Scope 的属性会和外层合并。如果内外层有同名属性，内层覆盖外层：
+
+```csharp
+using var requestScope = _logger.BeginScope("RequestId {RequestId}", requestId);
+_logger.LogInformation("Request started");
+
+using var dbScope = _logger.BeginScope("ConnectionId {ConnectionId}", connectionId);
+_logger.LogInformation("Executing query"); // 同时携带 RequestId 和 ConnectionId
+```
+
+### Serilog 的 LogContext
+
+Serilog 的 `LogContext` 是 `BeginScope` 的增强版。通过 `Enrich.FromLogContext()` 配置后，`LogContext.PushProperty` 添加的属性会自动附加到日志：
+
+```csharp
+using Serilog.Context;
+
+app.Use(async (context, next) =>
+{
+    using (LogContext.PushProperty("RequestId", context.TraceIdentifier))
+    using (LogContext.PushProperty("UserId", context.User?.FindFirst("sub")?.Value ?? "anonymous"))
+    {
+        await next();
+    }
+});
+```
+
+`LogContext.PushProperty` 相比 `BeginScope` 的优势是可以逐个推送属性，不用拼模板字符串，属性名和值更清晰。
+
+## 日志配置
+
+`appsettings.json` 中可以配置日志级别。
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "Microsoft.EntityFrameworkCore.Database.Command": "Warning"
+    }
+  }
+}
+```
+
+含义：
+
+- 默认输出 `Information` 及以上日志。
+- ASP.NET Core 框架日志只输出 `Warning` 及以上。
+- EF Core SQL 命令日志只输出 `Warning` 及以上。
+
+## 请求日志
+
+可以用中间件记录请求耗时。
+
+```csharp
+app.Use(async (context, next) =>
+{
+    var logger = context.RequestServices
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("RequestLog");
+
+    var start = DateTimeOffset.UtcNow;
+
+    await next();
+
+    var elapsed = DateTimeOffset.UtcNow - start;
+
+    logger.LogInformation(
+        "{Method} {Path} responded {StatusCode} in {Elapsed}ms",
+        context.Request.Method,
+        context.Request.Path,
+        context.Response.StatusCode,
+        elapsed.TotalMilliseconds);
+});
+```
+
+生产项目通常使用 Serilog Request Logging 或 OpenTelemetry 采集更完整的请求信息。
+
+## 日志 Provider
+
+ASP.NET Core 内置多个日志 Provider，默认注册了 Console 和 Debug。可以在 `appsettings.json` 或代码中配置：
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information"
+    },
+    "Console": {
+      "LogLevel": {
+        "Default": "Information"
+      }
+    },
+    "Debug": {
+      "LogLevel": {
+        "Default": "Debug"
+      }
+    },
+    "EventSource": {
+      "LogLevel": {
+        "Default": "Warning"
+      }
+    }
+  }
+}
+```
+
+| Provider | 作用 |
+|---|---|
+| Console | 控制台输出，开发环境常用 |
+| Debug | `System.Diagnostics.Debug` 输出 |
+| EventSource | Windows ETW / dotnet-trace 采集 |
+| EventLog | Windows 事件日志 |
+| AzureAppServicesFile / Blob | Azure 日志集成 |
+
+## Serilog 接入
+
+Serilog 是 .NET 最流行的结构化日志库，支持丰富的 Sink（输出目标）。
+
+安装：
+
+```bash
+dotnet add package Serilog.AspNetCore
+dotnet add package Serilog.Sinks.Console
+dotnet add package Serilog.Sinks.File
+```
+
+配置：
+
+```csharp
+using Serilog;
+
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .Enrich.WithMachineName()
+    .Enrich.WithThreadId()
+    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+    .WriteTo.File(
+        path: "logs/app-.log",
+        rollingInterval: RollingInterval.Day,
+        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+    .CreateLogger();
+
+builder.Host.UseSerilog();
+```
+
+`appsettings.json` 中也可以配置：
+
+```json
+{
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft.AspNetCore": "Warning",
+        "Microsoft.EntityFrameworkCore": "Warning"
+      }
+    }
+  }
+}
+```
+
+代码中使用方式和内置 `ILogger<T>` 一样，Serilog 会接管所有日志输出。
+
+Serilog 的优势：
+
+- 结构化日志输出为 JSON，方便日志平台索引。
+- Enricher 自动附加 MachineName、ThreadId、Environment 等上下文。
+- 支持 Seq、Elasticsearch、Loki、Datadog 等多种 Sink。
+- `Serilog.AspNetCore` 自带请求日志中间件，替代手写请求日志。
+
+请求日志中间件：
+
+```csharp
+app.UseSerilogRequestLogging(options =>
+{
+    options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.000} ms";
+});
+```
+
+## 异常日志
+
+记录异常时，要把异常对象作为第一个参数传入。
+
+```csharp
+try
+{
+    // business logic
+}
+catch (Exception ex)
+{
+    _logger.LogError(ex, "Failed to process order {OrderId}", orderId);
+    throw;
+}
+```
+
+不要只记录 `ex.Message`，否则会丢失堆栈信息。
+
+## 不要记录敏感信息
+
+日志中不要记录：
+
+- 密码
+- Access Token / Refresh Token
+- 身份证号
+- 银行卡号
+- 完整连接字符串
+- 用户隐私数据
+
+如果必须记录业务标识，优先记录 ID、TraceId、脱敏后的数据。
+
+## TraceId 和关联排查
+
+ASP.NET Core 每个请求都有 TraceIdentifier。
+
+```csharp
+string traceId = HttpContext.TraceIdentifier;
+_logger.LogInformation("Current TraceId: {TraceId}", traceId);
+```
+
+在统一异常响应中返回 TraceId，可以帮助用户反馈问题后定位日志。
+
+## 生产建议
+
+生产环境建议：
+
+- 使用结构化日志。
+- 配置合理日志级别，避免 Debug 日志刷爆磁盘。
+- 统一收集到日志平台。
+- 日志中带上 TraceId、UserId、TenantId 等诊断字段。
+- 异常日志保留堆栈。
+- 敏感信息脱敏。
+
+## 总结
+
+`ILogger<T>` 是 ASP.NET Core 日志入口。真正有价值的日志不是“打印了很多”，而是结构化、可检索、能关联请求、能定位异常，并且不泄露敏感信息。

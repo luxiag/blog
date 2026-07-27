@@ -1,0 +1,331 @@
+---
+title: 'C# 委托、事件与 Lambda 表达式完全指南'
+date: '2026-07-14'
+excerpt: '从方法作为参数开始，系统理解 C# delegate、Action、Func、event、Lambda 表达式，以及它们在 .NET 框架中的常见用法。'
+tags: ['dotnet', 'csharp', 'delegate', 'event', 'lambda']
+nextPost: 'dotnet/csharp-linq'
+---
+
+# C# 委托、事件与 Lambda 表达式完全指南
+
+:::tip C# 语言系列阅读顺序
+本文属于 C# 语言核心系列。建议先读 [C# 语言核心知识路线](/posts/dotnet/csharp-language-roadmap)、[基础语法](/posts/dotnet/csharp-basic-syntax)、[面向对象基础](/posts/dotnet/csharp-object-oriented-basics)、[集合与异常处理](/posts/dotnet/csharp-collections-exceptions) 和 [C# 泛型](/posts/dotnet/csharp-generics)。读完本文后，再继续看 [LINQ](/posts/dotnet/csharp-linq)、[异步编程](/posts/dotnet/csharp-async-await)、[反射与 Attribute](/posts/dotnet/csharp-reflection-attribute) 和 [C# 现代语法](/posts/dotnet/csharp-modern-syntax)。
+:::
+
+委托、事件和 Lambda 是 C# 语言里非常核心的一组能力。LINQ、ASP.NET Core 中间件、事件通知、回调函数、依赖注入扩展方法，背后都能看到它们的影子。
+
+理解这组概念的关键不是死记语法，而是建立一个心智模型：**方法也可以像变量一样被传递**。
+
+## 从方法作为参数开始
+
+假设有一个订单处理流程，不同场景下处理完成后的通知方式不同。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        ProcessOrder(SendEmail);
+        ProcessOrder(SendSms);
+    }
+
+    static void ProcessOrder(Action notify)
+    {
+        Console.WriteLine("订单处理完成");
+        notify();
+    }
+
+    static void SendEmail()
+    {
+        Console.WriteLine("发送邮件通知");
+    }
+
+    static void SendSms()
+    {
+        Console.WriteLine("发送短信通知");
+    }
+}
+```
+
+这里的 `Action` 就是一种内置委托类型。`ProcessOrder` 不关心具体通知逻辑，只要求调用方传入一个没有参数、没有返回值的方法。
+
+## delegate 是什么
+
+委托是一种类型，它描述了“可以引用什么样的方法”。方法签名匹配，就可以赋值给这个委托。
+
+```csharp
+using System;
+
+public delegate decimal DiscountRule(decimal amount);
+
+public class Program
+{
+    public static void Main()
+    {
+        DiscountRule rule = TenPercentOff;
+        decimal finalAmount = ApplyDiscount(200m, rule);
+
+        Console.WriteLine($"最终金额：{finalAmount}");
+    }
+
+    static decimal ApplyDiscount(decimal amount, DiscountRule rule)
+    {
+        return rule(amount);
+    }
+
+    static decimal TenPercentOff(decimal amount)
+    {
+        return amount * 0.9m;
+    }
+}
+```
+
+`DiscountRule` 要求接收一个 `decimal`，返回一个 `decimal`。只要方法签名一致，就可以赋值。
+
+## Action 与 Func
+
+实际开发中很少手写 `delegate`，因为 .NET 已经提供了常用泛型委托。
+
+`Action` 表示没有返回值的方法。
+
+```csharp
+Action<string> log = message => Console.WriteLine($"日志：{message}");
+log("订单创建成功");
+```
+
+`Func` 表示有返回值的方法，最后一个泛型参数是返回值类型。
+
+```csharp
+Func<decimal, decimal> discount = amount => amount * 0.8m;
+decimal result = discount(100m);
+
+Console.WriteLine(result);
+```
+
+完整示例：
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        Action<string> logger = message => Console.WriteLine($"[LOG] {message}");
+        Func<decimal, decimal> discount = amount => amount >= 100 ? amount - 20 : amount;
+
+        decimal price = 120m;
+        decimal finalPrice = discount(price);
+
+        logger($"原价：{price}，优惠后：{finalPrice}");
+    }
+}
+```
+
+## Lambda 表达式
+
+Lambda 表达式是创建委托实例的简洁写法。
+
+```csharp
+Func<int, int> square = x => x * x;
+Console.WriteLine(square(5));
+```
+
+如果逻辑超过一行，可以使用语句体 Lambda。
+
+```csharp
+Func<int, string> describe = score =>
+{
+    if (score >= 60)
+    {
+        return "及格";
+    }
+
+    return "不及格";
+};
+```
+
+Lambda 最常见的场景是 LINQ。
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public class Program
+{
+    public static void Main()
+    {
+        var products = new List<Product>
+        {
+            new("键盘", 199),
+            new("显示器", 1299),
+            new("鼠标", 99)
+        };
+
+        var expensiveProducts = products
+            .Where(product => product.Price >= 200)
+            .Select(product => product.Name)
+            .ToList();
+
+        Console.WriteLine(string.Join(", ", expensiveProducts));
+    }
+}
+
+public record Product(string Name, decimal Price);
+```
+
+## 闭包
+
+Lambda 可以访问外部变量，这叫闭包。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        decimal threshold = 100m;
+
+        Func<decimal, bool> isExpensive = price => price >= threshold;
+
+        Console.WriteLine(isExpensive(120m));
+
+        threshold = 200m;
+        Console.WriteLine(isExpensive(120m));
+    }
+}
+```
+
+注意，闭包捕获的是变量本身，不是当时的值。因此外部变量变化后，Lambda 内部看到的值也会变化。
+
+## 多播委托
+
+委托可以组合，调用时按顺序执行。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        Action handlers = SendEmail;
+        handlers += SendSms;
+        handlers += WriteLog;
+
+        handlers();
+    }
+
+    static void SendEmail() => Console.WriteLine("发送邮件");
+    static void SendSms() => Console.WriteLine("发送短信");
+    static void WriteLog() => Console.WriteLine("写入日志");
+}
+```
+
+如果多播委托有返回值，最终只能拿到最后一个方法的返回值。因此多播委托更适合 `void` 场景。
+
+## event 是什么
+
+事件是对委托的一层限制。它允许外部订阅和取消订阅，但不允许外部直接触发事件。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        var orderService = new OrderService();
+
+        orderService.OrderCreated += (_, orderNo) =>
+        {
+            Console.WriteLine($"收到订单创建事件：{orderNo}");
+        };
+
+        orderService.Create("NO-001");
+    }
+}
+
+public class OrderService
+{
+    public event EventHandler<string>? OrderCreated;
+
+    public void Create(string orderNo)
+    {
+        Console.WriteLine($"创建订单：{orderNo}");
+
+        // 只有类内部可以触发事件
+        OrderCreated?.Invoke(this, orderNo);
+    }
+}
+```
+
+`event` 的价值在于封装。外部代码只能 `+=` 或 `-=`，不能把事件清空，也不能直接调用事件。
+
+## 自定义事件参数
+
+复杂场景建议定义自己的 `EventArgs`。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        var publisher = new OrderPublisher();
+        publisher.OrderPaid += OnOrderPaid;
+
+        publisher.Pay("NO-1001", 299m);
+    }
+
+    static void OnOrderPaid(object? sender, OrderPaidEventArgs e)
+    {
+        Console.WriteLine($"订单 {e.OrderNo} 已支付，金额 {e.Amount}");
+    }
+}
+
+public class OrderPublisher
+{
+    public event EventHandler<OrderPaidEventArgs>? OrderPaid;
+
+    public void Pay(string orderNo, decimal amount)
+    {
+        OrderPaid?.Invoke(this, new OrderPaidEventArgs(orderNo, amount));
+    }
+}
+
+public class OrderPaidEventArgs : EventArgs
+{
+    public OrderPaidEventArgs(string orderNo, decimal amount)
+    {
+        OrderNo = orderNo;
+        Amount = amount;
+    }
+
+    public string OrderNo { get; }
+    public decimal Amount { get; }
+}
+```
+
+## 委托、事件和接口怎么选
+
+如果只是传入一小段行为，用 `Func` 或 `Action` 最简单。如果需要多个订阅者响应状态变化，用 `event`。如果行为复杂、有多个方法、需要清晰建模，优先使用接口。
+
+```csharp
+public interface IPaymentGateway
+{
+    Task<PaymentResult> PayAsync(PaymentRequest request, CancellationToken cancellationToken);
+    Task RefundAsync(string paymentId, CancellationToken cancellationToken);
+}
+```
+
+不要为了少写一个接口，把复杂业务都塞进委托里。委托适合表达单个动作，接口适合表达一组能力。
+
+## 总结
+
+委托让方法可以被传递，Lambda 让委托写法更简洁，事件让发布订阅关系更安全。理解这三者后，再看 LINQ、中间件、回调、领域事件等 .NET 代码，会清晰很多。

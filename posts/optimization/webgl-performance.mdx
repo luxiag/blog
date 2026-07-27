@@ -1,0 +1,135 @@
+---
+title: '榨干 GPU 性能：WebGL 渲染优化指南'
+date: '2026-01-16'
+description: '为什么你的 Demo 只有 10 帧？本文将从 Draw Calls 瓶颈、GPU 实例化技术，到纹理压缩与 Mipmaps，为你揭开高性能渲染的秘密。'
+tags: ['WebGL', 'Optimization', 'Performance', 'Three.js']
+---
+
+# 榨干 GPU 性能：WebGL 渲染优化指南
+
+很多初学者会发现：在屏幕上画 1 个立方体很流畅，但画 1000 个立方体时，帧率就直接掉到了个位数。
+明明 GPU 的算力每秒能处理几亿个三角形，为什么区区几千个立方体就卡了？
+
+答案通常不在 GPU，而在 **CPU 与 GPU 的通信**上。
+
+本文将系统讲解 WebGL 性能优化的三大核心战场：**Draw Calls**、**实例化**与**纹理管理**。
+
+## 一、 Draw Calls：沉默的性能杀手
+
+### 1. 什么是 Draw Call？
+每次你告诉 GPU "画这个模型"（调用 `gl.drawArrays` 或 `gl.drawElements`），就是一次 **Draw Call**。
+
+### 2. 为什么它很慢？
+想象你要搬 1000 块砖。
+*   **低效做法**：每次搬 1 块，跑 1000 趟。
+*   **高效做法**：用卡车一次装 1000 块，跑 1 趟。
+
+Draw Call 的开销在于 **CPU**。每次调用，CPU 都要检查状态、绑定纹理、上传数据。如果 Draw Call 太多（比如 > 1000 次/帧），CPU 就会忙不过来，导致 GPU 没事干（饥饿）。
+
+### 3. 优化策略：合并 (Merging)
+如果你有 100 棵静态的树，不要创建 100 个 Mesh。
+**把它们的几何体合并成一个大的 Geometry**，然后只用 1 个 Draw Call 画出来。
+
+## 二、 实例化 (Instancing)：一次画万物
+
+如果树是动态的（比如随风摆动），或者树太多了（10万棵），合并几何体会导致内存爆炸。
+这时我们需要 **GPU Instancing**。
+
+### 1. 原理
+你告诉 GPU："把这个几何体画 10000 次，但每次画的时候，使用不同的位置、缩放和颜色。"
+*   **Mesh**: 1 个（复用）
+*   **Draw Call**: 1 次
+*   **数据**: 只需要传一个额外的 Attribute 数组（每个实例的变换矩阵）。
+
+### 实战：Instancing 演示
+下面的示例模拟了实例化渲染。虽然 ShaderPreview 本身不支持真正的 Instancing API 调用，但我们可以通过 Shader 模拟这个过程：根据 `Instance ID` 计算偏移。
+
+<ShaderPreview title="Grid Simulation" vertexCode={`
+varying vec2 vUv;
+varying vec3 vColor;
+uniform float uTime;
+
+float random(float n) { return fract(sin(n) * 43758.5453123); }
+
+void main() {
+    vUv = uv;
+    
+    // 1. 获取网格 ID：将 UV 分成 10x10 的整数格子
+    vec2 gridId = floor(uv * 10.0);
+    float id = gridId.x + gridId.y * 10.0;
+    
+    vec3 pos = position;
+    
+    // 2. 模拟动画：每个格子基于 ID 有不同的偏移
+    // 注意：在单个 Plane 上做模拟，我们其实是在“扭曲”整个平面
+    // 如果想要 100 个独立的点，通常需要真正的 InstancedBufferGeometry
+    pos.y += sin(uTime + id) * 0.1;
+    
+    // 生成随机颜色传给 Fragment
+    vColor = vec3(random(id), random(id + 1.0), random(id + 2.0));
+    
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+}
+`} code={`
+varying vec2 vUv;
+varying vec3 vColor;
+
+void main() {
+    // 1. 在每个格子内部建立 0.0 - 1.0 的本地坐标
+    vec2 localUv = fract(vUv * 10.0);
+    
+    // 2. 画圆：计算到格子中心的距离
+    float dist = length(localUv - 0.5);
+    
+    // 3. 边缘平滑处理 (比 discard 效果更好)
+    float mask = smoothstep(0.4, 0.38, dist);
+    
+    if (mask < 0.1) discard;
+    
+    gl_FragColor = vec4(vColor * mask, 1.0);
+}
+`} />
+## 三、 纹理压缩：JPG 的谎言
+
+你有一张 1024x1024 的 JPG 图片，文件大小只有 100KB。你觉得它占多少显存？
+**答案：4MB (甚至更多)。**
+
+### 1. 为什么？
+GPU 无法直接读取 JPG。它必须把 JPG 解压成原始的 RGB 数据才能读取。
+`1024 * 1024 * 4 bytes (RGBA) = 4MB`。
+如果你有 100 张这样的贴图，显存瞬间就被吃光了。
+
+### 2. 解决方案：显存压缩纹理 (Compressed Textures)
+使用专门为 GPU 设计的格式，如 **.ktx2 (Basis Universal)** 或 **.dds**。
+*   **特点**：GPU **不用解压**就能直接读取。
+*   **优势**：显存占用减少 4-8 倍，带宽占用大幅降低。
+
+## 四、 Mipmaps：远处的马赛克
+
+当一个物体离得很远，在屏幕上只占 1 个像素时，如果它的纹理是 1024x1024 的，GPU 该选哪个像素？
+它会随机选一个。结果就是：**物体移动时，纹理疯狂闪烁 (摩尔纹)**。
+
+### 1. 什么是 Mipmaps？
+GPU 会预先生成一系列缩小版的纹理：
+*   Level 0: 1024x1024
+*   Level 1: 512x512
+*   Level 2: 256x256
+*   ...
+*   Level 10: 1x1
+
+### 2. 原理
+*   **近处**：采样 Level 0。
+*   **远处**：采样 Level 5。
+*   **中间**：在 Level 0 和 Level 1 之间插值 (Trilinear Filtering)。
+
+**代价**：内存占用增加 33%（级数求和），但换来了完美的平滑度和缓存性能。
+
+## 总结
+
+性能优化不是魔法，是**算账**。
+
+1.  **CPU 瓶颈**：Draw Call 太多 -> **合并 Mesh** 或 **Instancing**。
+2.  **显存瓶颈**：纹理太大 -> 使用 **KTX2 压缩纹理**。
+3.  **画质/带宽瓶颈**：远处闪烁 -> 开启 **Mipmaps**。
+
+记住：**最快的渲染，就是不渲染 (Culling)。第二快的渲染，就是一次性渲染 (Instancing)。**

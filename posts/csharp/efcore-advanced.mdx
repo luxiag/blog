@@ -1,0 +1,1009 @@
+---
+title: 'EF Core 进阶：LINQ 高级查询、并发控制与性能优化'
+date: '2025-02-09'
+excerpt: '深入探索 Entity Framework Core 的高级特性：掌握复杂 LINQ 查询、处理并发冲突、优化数据库性能。从理论到实践，让你的应用更快、更稳定。'
+tags: ['efcore', 'linq', 'performance', 'concurrency']
+---
+
+# EF Core 进阶：LINQ 高级查询、并发控制与性能优化
+
+## 第一部分：LINQ 高级查询
+
+### 1. 复杂条件查询
+
+#### 动态查询构建
+
+```csharp
+public class ProductSearchCriteria
+{
+    public string Name { get; set; }
+    public decimal? MinPrice { get; set; }
+    public decimal? MaxPrice { get; set; }
+    public string Category { get; set; }
+    public bool? InStock { get; set; }
+}
+
+public async Task<List<Product>> SearchProducts(ProductSearchCriteria criteria)
+{
+    var query = context.Products.AsQueryable();
+    
+    // 动态添加条件
+    if (!string.IsNullOrEmpty(criteria.Name))
+    {
+        query = query.Where(p => p.Name.Contains(criteria.Name));
+    }
+    
+    if (criteria.MinPrice.HasValue)
+    {
+        query = query.Where(p => p.Price >= criteria.MinPrice.Value);
+    }
+    
+    if (criteria.MaxPrice.HasValue)
+    {
+        query = query.Where(p => p.Price <= criteria.MaxPrice.Value);
+    }
+    
+    if (!string.IsNullOrEmpty(criteria.Category))
+    {
+        query = query.Where(p => p.Category == criteria.Category);
+    }
+    
+    if (criteria.InStock.HasValue)
+    {
+        query = query.Where(p => p.Stock > 0 == criteria.InStock.Value);
+    }
+    
+    return await query.ToListAsync();
+}
+```
+
+#### 使用表达式树构建动态查询
+
+```csharp
+using System.Linq.Expressions;
+
+public class ExpressionBuilder
+{
+    // 构建 AND 条件
+    public static Expression<Func<T, bool>> And<T>(
+        Expression<Func<T, bool>> expr1,
+        Expression<Func<T, bool>> expr2)
+    {
+        var parameter = Expression.Parameter(typeof(T));
+        
+        var leftVisitor = new ReplaceExpressionVisitor(expr1.Parameters[0], parameter);
+        var left = leftVisitor.Visit(expr1.Body);
+        
+        var rightVisitor = new ReplaceExpressionVisitor(expr2.Parameters[0], parameter);
+        var right = rightVisitor.Visit(expr2.Body);
+        
+        return Expression.Lambda<Func<T, bool>>(
+            Expression.AndAlso(left, right), parameter);
+    }
+    
+    // 构建 OR 条件
+    public static Expression<Func<T, bool>> Or<T>(
+        Expression<Func<T, bool>> expr1,
+        Expression<Func<T, bool>> expr2)
+    {
+        var parameter = Expression.Parameter(typeof(T));
+        
+        var leftVisitor = new ReplaceExpressionVisitor(expr1.Parameters[0], parameter);
+        var left = leftVisitor.Visit(expr1.Body);
+        
+        var rightVisitor = new ReplaceExpressionVisitor(expr2.Parameters[0], parameter);
+        var right = rightVisitor.Visit(expr2.Body);
+        
+        return Expression.Lambda<Func<T, bool>>(
+            Expression.OrElse(left, right), parameter);
+    }
+}
+
+class ReplaceExpressionVisitor : ExpressionVisitor
+{
+    private readonly Expression oldValue;
+    private readonly Expression newValue;
+    
+    public ReplaceExpressionVisitor(Expression oldValue, Expression newValue)
+    {
+        this.oldValue = oldValue;
+        this.newValue = newValue;
+    }
+    
+    public override Expression Visit(Expression node)
+    {
+        return node == oldValue ? newValue : base.Visit(node);
+    }
+}
+
+// 使用
+Expression<Func<Product, bool>> nameFilter = p => p.Name.Contains("手机");
+Expression<Func<Product, bool>> priceFilter = p => p.Price > 1000;
+
+var combinedFilter = ExpressionBuilder.And(nameFilter, priceFilter);
+var products = await context.Products.Where(combinedFilter).ToListAsync();
+```
+
+### 2. 分组与聚合
+
+#### 基础分组
+
+```csharp
+// 按类别分组，统计每个类别的产品数量
+var categoryStats = await context.Products
+    .GroupBy(p => p.Category)
+    .Select(g => new
+    {
+        Category = g.Key,
+        Count = g.Count(),
+        AveragePrice = g.Average(p => p.Price),
+        TotalValue = g.Sum(p => p.Price * p.Stock),
+        MinPrice = g.Min(p => p.Price),
+        MaxPrice = g.Max(p => p.Price)
+    })
+    .ToListAsync();
+```
+
+#### 多级分组
+
+```csharp
+// 按类别和品牌分组
+var stats = await context.Products
+    .GroupBy(p => new { p.Category, p.Brand })
+    .Select(g => new
+    {
+        g.Key.Category,
+        g.Key.Brand,
+        Count = g.Count(),
+        AveragePrice = g.Average(p => p.Price)
+    })
+    .ToListAsync();
+```
+
+#### Having 子句
+
+```csharp
+// 查找产品数量超过 10 的类别
+var popularCategories = await context.Products
+    .GroupBy(p => p.Category)
+    .Where(g => g.Count() > 10)  // HAVING 子句
+    .Select(g => new
+    {
+        Category = g.Key,
+        Count = g.Count()
+    })
+    .ToListAsync();
+```
+
+### 3. 连接查询（Join）
+
+#### 内连接（Inner Join）
+
+```csharp
+// 方式 1：使用 Join 方法
+var result = await context.Orders
+    .Join(
+        context.Customers,
+        order => order.CustomerId,
+        customer => customer.Id,
+        (order, customer) => new
+        {
+            OrderId = order.Id,
+            CustomerName = customer.Name,
+            OrderTotal = order.Total
+        })
+    .ToListAsync();
+
+// 方式 2：使用 LINQ 查询语法
+var result = await (from order in context.Orders
+                    join customer in context.Customers
+                        on order.CustomerId equals customer.Id
+                    select new
+                    {
+                        OrderId = order.Id,
+                        CustomerName = customer.Name,
+                        OrderTotal = order.Total
+                    }).ToListAsync();
+
+// 方式 3：使用导航属性（推荐）
+var result = await context.Orders
+    .Include(o => o.Customer)
+    .Select(o => new
+    {
+        OrderId = o.Id,
+        CustomerName = o.Customer.Name,
+        OrderTotal = o.Total
+    })
+    .ToListAsync();
+```
+
+#### 左连接（Left Join）
+
+```csharp
+// 查询所有客户及其订单（包括没有订单的客户）
+var result = await (from customer in context.Customers
+                    join order in context.Orders
+                        on customer.Id equals order.CustomerId into orders
+                    from o in orders.DefaultIfEmpty()
+                    select new
+                    {
+                        CustomerName = customer.Name,
+                        OrderId = o != null ? o.Id : (int?)null,
+                        OrderTotal = o != null ? o.Total : (decimal?)null
+                    }).ToListAsync();
+```
+
+#### 多表连接
+
+```csharp
+var result = await (from order in context.Orders
+                    join customer in context.Customers
+                        on order.CustomerId equals customer.Id
+                    join product in context.Products
+                        on order.ProductId equals product.Id
+                    select new
+                    {
+                        OrderId = order.Id,
+                        CustomerName = customer.Name,
+                        ProductName = product.Name,
+                        Total = order.Total
+                    }).ToListAsync();
+```
+
+### 4. 子查询
+
+#### 标量子查询
+
+```csharp
+// 查询每个客户及其订单总数
+var customers = await context.Customers
+    .Select(c => new
+    {
+        c.Id,
+        c.Name,
+        OrderCount = context.Orders.Count(o => o.CustomerId == c.Id),
+        TotalSpent = context.Orders
+            .Where(o => o.CustomerId == c.Id)
+            .Sum(o => o.Total)
+    })
+    .ToListAsync();
+```
+
+#### 相关子查询
+
+```csharp
+// 查询价格高于平均价格的产品
+var expensiveProducts = await context.Products
+    .Where(p => p.Price > context.Products.Average(x => x.Price))
+    .ToListAsync();
+
+// 查询每个类别中价格最高的产品
+var topProducts = await context.Products
+    .Where(p => p.Price == context.Products
+        .Where(x => x.Category == p.Category)
+        .Max(x => x.Price))
+    .ToListAsync();
+```
+
+#### EXISTS 子查询
+
+```csharp
+// 查询有订单的客户
+var customersWithOrders = await context.Customers
+    .Where(c => context.Orders.Any(o => o.CustomerId == c.Id))
+    .ToListAsync();
+
+// 查询没有订单的客户
+var customersWithoutOrders = await context.Customers
+    .Where(c => !context.Orders.Any(o => o.CustomerId == c.Id))
+    .ToListAsync();
+```
+
+### 5. 窗口函数（EF Core 6+）
+
+```csharp
+// 按类别排名
+var rankedProducts = await context.Products
+    .Select(p => new
+    {
+        p.Id,
+        p.Name,
+        p.Category,
+        p.Price,
+        Rank = EF.Functions.RowNumber(
+            EF.Functions.OrderBy(p.Price, true),
+            EF.Functions.PartitionBy(p.Category))
+    })
+    .ToListAsync();
+```
+
+### 6. 递归查询（层级数据）
+
+```csharp
+// 实体定义
+public class Category
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public int? ParentId { get; set; }
+    
+    public Category Parent { get; set; }
+    public List<Category> Children { get; set; }
+}
+
+// 获取所有子类别（递归）
+public async Task<List<Category>> GetAllDescendants(int categoryId)
+{
+    var descendants = new List<Category>();
+    var queue = new Queue<int>();
+    queue.Enqueue(categoryId);
+    
+    while (queue.Count > 0)
+    {
+        var currentId = queue.Dequeue();
+        var children = await context.Categories
+            .Where(c => c.ParentId == currentId)
+            .ToListAsync();
+            
+        descendants.AddRange(children);
+        
+        foreach (var child in children)
+        {
+            queue.Enqueue(child.Id);
+        }
+    }
+    
+    return descendants;
+}
+
+// 使用原始 SQL（更高效）
+var descendants = await context.Categories
+    .FromSqlRaw(@"
+        WITH RECURSIVE CategoryTree AS (
+            SELECT * FROM Categories WHERE Id = {0}
+            UNION ALL
+            SELECT c.* FROM Categories c
+            INNER JOIN CategoryTree ct ON c.ParentId = ct.Id
+        )
+        SELECT * FROM CategoryTree WHERE Id != {0}", categoryId)
+    .ToListAsync();
+```
+
+---
+
+## 第二部分：并发控制
+
+### 1. 并发冲突的场景
+
+```csharp
+// 场景：两个用户同时修改同一条记录
+// 用户 A 读取产品，库存 = 100
+var productA = await context.Products.FindAsync(1);
+// Stock = 100
+
+// 用户 B 也读取同一产品
+var productB = await context.Products.FindAsync(1);
+// Stock = 100
+
+// 用户 A 卖出 10 件
+productA.Stock -= 10;
+await context.SaveChangesAsync();
+// Stock = 90
+
+// 用户 B 卖出 20 件（基于旧值 100）
+productB.Stock -= 20;
+await context.SaveChangesAsync();
+// Stock = 80（错误！应该是 70）
+```
+
+### 2. 乐观并发控制（Optimistic Concurrency）
+
+#### 使用 RowVersion
+
+```csharp
+public class Product
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public int Stock { get; set; }
+    
+    // 并发令牌
+    [Timestamp]
+    public byte[] RowVersion { get; set; }
+}
+
+// 配置
+modelBuilder.Entity<Product>()
+    .Property(p => p.RowVersion)
+    .IsRowVersion();
+
+// 使用
+try
+{
+    var product = await context.Products.FindAsync(1);
+    product.Stock -= 10;
+    await context.SaveChangesAsync();
+}
+catch (DbUpdateConcurrencyException ex)
+{
+    // 并发冲突处理
+    var entry = ex.Entries.Single();
+    var databaseValues = await entry.GetDatabaseValuesAsync();
+    
+    if (databaseValues == null)
+    {
+        // 记录已被删除
+        Console.WriteLine("产品已被删除");
+    }
+    else
+    {
+        // 记录已被修改
+        var databaseProduct = (Product)databaseValues.ToObject();
+        Console.WriteLine($"数据库中的库存：{databaseProduct.Stock}");
+        Console.WriteLine($"你的修改：{((Product)entry.Entity).Stock}");
+        
+        // 选择处理策略
+        // 1. 使用数据库值
+        entry.OriginalValues.SetValues(databaseValues);
+        
+        // 2. 使用客户端值（覆盖）
+        // entry.OriginalValues.SetValues(entry.GetDatabaseValues());
+        
+        // 3. 合并值
+        var clientProduct = (Product)entry.Entity;
+        clientProduct.Stock = databaseProduct.Stock - 10;
+        entry.OriginalValues.SetValues(databaseValues);
+        
+        // 重试保存
+        await context.SaveChangesAsync();
+    }
+}
+```
+
+#### 使用 ConcurrencyCheck
+
+```csharp
+public class Product
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    
+    [ConcurrencyCheck]
+    public int Stock { get; set; }
+    
+    [ConcurrencyCheck]
+    public decimal Price { get; set; }
+}
+
+// 配置
+modelBuilder.Entity<Product>()
+    .Property(p => p.Stock)
+    .IsConcurrencyToken();
+```
+
+### 3. 悲观并发控制（Pessimistic Concurrency）
+
+#### 使用事务锁
+
+```csharp
+// 行级锁（SQL Server）
+using (var transaction = await context.Database.BeginTransactionAsync())
+{
+    try
+    {
+        // 使用 UPDLOCK 锁定行
+        var product = await context.Products
+            .FromSqlRaw("SELECT * FROM Products WITH (UPDLOCK) WHERE Id = {0}", productId)
+            .FirstOrDefaultAsync();
+            
+        if (product != null)
+        {
+            product.Stock -= quantity;
+            await context.SaveChangesAsync();
+        }
+        
+        await transaction.CommitAsync();
+    }
+    catch
+    {
+        await transaction.RollbackAsync();
+        throw;
+    }
+}
+```
+
+### 4. 并发控制最佳实践
+
+```csharp
+public class ConcurrencyHandler
+{
+    private readonly AppDbContext context;
+    private readonly ILogger<ConcurrencyHandler> logger;
+    
+    public ConcurrencyHandler(AppDbContext context, ILogger<ConcurrencyHandler> logger)
+    {
+        this.context = context;
+        this.logger = logger;
+    }
+    
+    public async Task<bool> UpdateWithRetry<T>(
+        T entity,
+        Action<T> updateAction,
+        int maxRetries = 3) where T : class
+    {
+        for (int i = 0; i < maxRetries; i++)
+        {
+            try
+            {
+                updateAction(entity);
+                await context.SaveChangesAsync();
+                return true;
+            }
+            catch (DbUpdateConcurrencyException ex)
+            {
+                logger.LogWarning($"并发冲突，重试 {i + 1}/{maxRetries}");
+                
+                if (i == maxRetries - 1)
+                {
+                    throw;
+                }
+                
+                // 刷新实体
+                var entry = ex.Entries.Single();
+                await entry.ReloadAsync();
+            }
+        }
+        
+        return false;
+    }
+}
+
+// 使用
+await concurrencyHandler.UpdateWithRetry(
+    product,
+    p => p.Stock -= 10,
+    maxRetries: 5
+);
+```
+
+---
+
+## 第三部分：查询优化
+
+### 1. 查询性能分析
+
+#### 启用查询日志
+
+```csharp
+// Program.cs
+builder.Services.AddDbContext<AppDbContext>(options =>
+{
+    options.UseSqlServer(connectionString)
+           .LogTo(Console.WriteLine, LogLevel.Information)
+           .EnableSensitiveDataLogging()
+           .EnableDetailedErrors();
+});
+```
+
+#### 查看生成的 SQL
+
+```csharp
+var query = context.Products
+    .Where(p => p.Price > 100)
+    .OrderBy(p => p.Name);
+
+// 查看 SQL
+var sql = query.ToQueryString();
+Console.WriteLine(sql);
+```
+
+### 2. N+1 查询问题
+
+#### 问题示例
+
+```csharp
+// ❌ 错误：N+1 查询问题
+var blogs = await context.Blogs.ToListAsync();  // 1 次查询
+
+foreach (var blog in blogs)
+{
+    // 每个博客都会触发一次查询！
+    var posts = blog.Posts.ToList();  // N 次查询
+}
+// 总共：1 + N 次查询
+```
+
+#### 解决方案
+
+```csharp
+// ✅ 正确：使用 Include
+var blogs = await context.Blogs
+    .Include(b => b.Posts)  // 一次查询加载所有数据
+    .ToListAsync();
+
+foreach (var blog in blogs)
+{
+    var posts = blog.Posts;  // 不会触发查询
+}
+```
+
+### 3. 投影优化
+
+```csharp
+// ❌ 低效：加载整个实体
+var products = await context.Products
+    .Include(p => p.Category)
+    .Include(p => p.Supplier)
+    .ToListAsync();
+
+// ✅ 高效：只选择需要的字段
+var products = await context.Products
+    .Select(p => new ProductDto
+    {
+        Id = p.Id,
+        Name = p.Name,
+        Price = p.Price,
+        CategoryName = p.Category.Name,
+        SupplierName = p.Supplier.Name
+    })
+    .ToListAsync();
+```
+
+### 4. AsNoTracking 优化
+
+```csharp
+// ❌ 默认：启用变更追踪（消耗内存）
+var products = await context.Products.ToListAsync();
+
+// ✅ 只读查询：禁用变更追踪
+var products = await context.Products
+    .AsNoTracking()
+    .ToListAsync();
+
+// 全局禁用追踪
+builder.Services.AddDbContext<AppDbContext>(options =>
+{
+    options.UseSqlServer(connectionString)
+           .UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);
+});
+```
+
+### 5. 分页优化
+
+```csharp
+// ❌ 低效：加载所有数据再分页
+var allProducts = await context.Products.ToListAsync();
+var page = allProducts.Skip(20).Take(10).ToList();
+
+// ✅ 高效：数据库层面分页
+var page = await context.Products
+    .OrderBy(p => p.Id)
+    .Skip(20)
+    .Take(10)
+    .ToListAsync();
+
+// 分页辅助类
+public class PagedResult<T>
+{
+    public List<T> Items { get; set; }
+    public int TotalCount { get; set; }
+    public int PageNumber { get; set; }
+    public int PageSize { get; set; }
+    public int TotalPages => (int)Math.Ceiling(TotalCount / (double)PageSize);
+}
+
+public async Task<PagedResult<T>> GetPagedAsync<T>(
+    IQueryable<T> query,
+    int pageNumber,
+    int pageSize)
+{
+    var totalCount = await query.CountAsync();
+    
+    var items = await query
+        .Skip((pageNumber - 1) * pageSize)
+        .Take(pageSize)
+        .ToListAsync();
+    
+    return new PagedResult<T>
+    {
+        Items = items,
+        TotalCount = totalCount,
+        PageNumber = pageNumber,
+        PageSize = pageSize
+    };
+}
+```
+
+### 6. 批量操作优化
+
+```csharp
+// ❌ 低效：逐个保存
+foreach (var product in products)
+{
+    context.Products.Add(product);
+    await context.SaveChangesAsync();  // 每次都访问数据库
+}
+
+// ✅ 高效：批量保存
+context.Products.AddRange(products);
+await context.SaveChangesAsync();  // 一次性保存
+
+// 批量更新（EF Core 7+）
+await context.Products
+    .Where(p => p.Category == "Electronics")
+    .ExecuteUpdateAsync(setters => setters
+        .SetProperty(p => p.Price, p => p.Price * 0.9m));
+
+// 批量删除（EF Core 7+）
+await context.Products
+    .Where(p => p.Stock == 0)
+    .ExecuteDeleteAsync();
+```
+
+### 7. 编译查询
+
+```csharp
+// 预编译查询，提高重复查询性能
+private static readonly Func<AppDbContext, int, Task<Product>> GetProductById =
+    EF.CompileAsyncQuery((AppDbContext context, int id) =>
+        context.Products.FirstOrDefault(p => p.Id == id));
+
+private static readonly Func<AppDbContext, string, IAsyncEnumerable<Product>> GetProductsByCategory =
+    EF.CompileAsyncQuery((AppDbContext context, string category) =>
+        context.Products.Where(p => p.Category == category));
+
+// 使用
+var product = await GetProductById(context, 1);
+await foreach (var product in GetProductsByCategory(context, "Electronics"))
+{
+    Console.WriteLine(product.Name);
+}
+```
+
+### 8. 索引优化
+
+```csharp
+// 创建索引
+modelBuilder.Entity<Product>()
+    .HasIndex(p => p.Name);
+
+// 复合索引
+modelBuilder.Entity<Product>()
+    .HasIndex(p => new { p.Category, p.Price });
+
+// 唯一索引
+modelBuilder.Entity<User>()
+    .HasIndex(u => u.Email)
+    .IsUnique();
+
+// 过滤索引
+modelBuilder.Entity<Product>()
+    .HasIndex(p => p.Price)
+    .HasFilter("[Stock] > 0");
+```
+
+### 9. 查询拆分
+
+```csharp
+// ❌ 可能导致笛卡尔积
+var blogs = await context.Blogs
+    .Include(b => b.Posts)
+    .Include(b => b.Comments)
+    .ToListAsync();
+
+// ✅ 拆分查询
+var blogs = await context.Blogs
+    .Include(b => b.Posts)
+    .Include(b => b.Comments)
+    .AsSplitQuery()  // 拆分为多个查询
+    .ToListAsync();
+```
+
+### 10. 缓存策略
+
+```csharp
+public class CachedRepository<T> where T : class
+{
+    private readonly AppDbContext context;
+    private readonly IMemoryCache cache;
+    
+    public CachedRepository(AppDbContext context, IMemoryCache cache)
+    {
+        this.context = context;
+        this.cache = cache;
+    }
+    
+    public async Task<T> GetByIdAsync(int id)
+    {
+        string cacheKey = $"{typeof(T).Name}_{id}";
+        
+        if (!cache.TryGetValue(cacheKey, out T entity))
+        {
+            entity = await context.Set<T>().FindAsync(id);
+            
+            if (entity != null)
+            {
+                cache.Set(cacheKey, entity, TimeSpan.FromMinutes(10));
+            }
+        }
+        
+        return entity;
+    }
+    
+    public async Task UpdateAsync(T entity)
+    {
+        context.Set<T>().Update(entity);
+        await context.SaveChangesAsync();
+        
+        // 清除缓存
+        var id = context.Entry(entity).Property("Id").CurrentValue;
+        string cacheKey = $"{typeof(T).Name}_{id}";
+        cache.Remove(cacheKey);
+    }
+}
+```
+
+---
+
+## 实战：性能优化案例
+
+### 案例 1：电商产品列表优化
+
+```csharp
+// ❌ 优化前
+public async Task<List<ProductViewModel>> GetProductsOld(string category, int page)
+{
+    var products = await context.Products
+        .Include(p => p.Category)
+        .Include(p => p.Supplier)
+        .Include(p => p.Reviews)
+        .Where(p => p.Category.Name == category)
+        .ToListAsync();
+    
+    return products
+        .Skip((page - 1) * 20)
+        .Take(20)
+        .Select(p => new ProductViewModel
+        {
+            Id = p.Id,
+            Name = p.Name,
+            Price = p.Price,
+            CategoryName = p.Category.Name,
+            SupplierName = p.Supplier.Name,
+            AverageRating = p.Reviews.Average(r => r.Rating)
+        })
+        .ToList();
+}
+
+// ✅ 优化后
+public async Task<PagedResult<ProductViewModel>> GetProductsOptimized(
+    string category, int page, int pageSize = 20)
+{
+    var query = context.Products
+        .AsNoTracking()  // 禁用追踪
+        .Where(p => p.Category.Name == category);
+    
+    var totalCount = await query.CountAsync();
+    
+    var products = await query
+        .OrderBy(p => p.Id)
+        .Skip((page - 1) * pageSize)
+        .Take(pageSize)
+        .Select(p => new ProductViewModel  // 投影
+        {
+            Id = p.Id,
+            Name = p.Name,
+            Price = p.Price,
+            CategoryName = p.Category.Name,
+            SupplierName = p.Supplier.Name,
+            AverageRating = p.Reviews.Average(r => (double?)r.Rating) ?? 0
+        })
+        .ToListAsync();
+    
+    return new PagedResult<ProductViewModel>
+    {
+        Items = products,
+        TotalCount = totalCount,
+        PageNumber = page,
+        PageSize = pageSize
+    };
+}
+```
+
+### 案例 2：订单统计优化
+
+```csharp
+// ❌ 优化前
+public async Task<OrderStatistics> GetOrderStatsOld(DateTime startDate, DateTime endDate)
+{
+    var orders = await context.Orders
+        .Include(o => o.Items)
+        .Where(o => o.OrderDate >= startDate && o.OrderDate <= endDate)
+        .ToListAsync();
+    
+    return new OrderStatistics
+    {
+        TotalOrders = orders.Count,
+        TotalRevenue = orders.Sum(o => o.Total),
+        AverageOrderValue = orders.Average(o => o.Total),
+        TotalItems = orders.Sum(o => o.Items.Count)
+    };
+}
+
+// ✅ 优化后
+public async Task<OrderStatistics> GetOrderStatsOptimized(
+    DateTime startDate, DateTime endDate)
+{
+    var stats = await context.Orders
+        .Where(o => o.OrderDate >= startDate && o.OrderDate <= endDate)
+        .GroupBy(o => 1)  // 分组技巧
+        .Select(g => new OrderStatistics
+        {
+            TotalOrders = g.Count(),
+            TotalRevenue = g.Sum(o => o.Total),
+            AverageOrderValue = g.Average(o => o.Total),
+            TotalItems = g.Sum(o => o.Items.Count)
+        })
+        .FirstOrDefaultAsync();
+    
+    return stats ?? new OrderStatistics();
+}
+```
+
+---
+
+## 性能优化检查清单
+
+### 查询优化
+- [ ] 使用 `AsNoTracking()` 进行只读查询
+- [ ] 使用投影（`Select`）只获取需要的字段
+- [ ] 避免 N+1 查询问题（使用 `Include`）
+- [ ] 在数据库层面进行分页（`Skip` + `Take`）
+- [ ] 使用编译查询提高重复查询性能
+- [ ] 合理使用 `AsSplitQuery()` 避免笛卡尔积
+
+### 索引优化
+- [ ] 为常用查询字段创建索引
+- [ ] 为外键创建索引
+- [ ] 使用复合索引优化多字段查询
+- [ ] 定期分析和优化索引
+
+### 批量操作
+- [ ] 使用 `AddRange` 而不是多次 `Add`
+- [ ] 使用 `ExecuteUpdate` 和 `ExecuteDelete` 进行批量操作
+- [ ] 合理使用事务
+
+### 并发控制
+- [ ] 为关键数据添加并发令牌
+- [ ] 实现并发冲突处理逻辑
+- [ ] 使用重试机制处理临时失败
+
+### 缓存策略
+- [ ] 缓存不经常变化的数据
+- [ ] 实现缓存失效策略
+- [ ] 使用分布式缓存（Redis）
+
+---
+
+## 总结
+
+通过本教程，你已经掌握了 EF Core 的高级技能：
+
+✅ **LINQ 高级查询**：动态查询、分组聚合、连接、子查询、窗口函数  
+✅ **并发控制**：乐观锁、悲观锁、并发冲突处理  
+✅ **查询优化**：N+1 问题、投影、AsNoTracking、分页、批量操作、编译查询、索引  
+✅ **实战案例**：真实场景的性能优化  
+
+**关键要点：**
+- 🎯 始终关注生成的 SQL
+- 📊 使用性能分析工具
+- 🔍 避免过早优化，先测量再优化
+- 💾 合理使用缓存
+- 🔒 正确处理并发
+
+掌握这些技能，你就能构建高性能、可靠的数据访问层！
+
+**推荐资源：**
+- [EF Core 性能优化](https://docs.microsoft.com/zh-cn/ef/core/performance/)
+- [LINQ 查询优化](https://docs.microsoft.com/zh-cn/dotnet/csharp/programming-guide/concepts/linq/)
+- [SQL Server 性能调优](https://docs.microsoft.com/zh-cn/sql/relational-databases/performance/performance-tuning)

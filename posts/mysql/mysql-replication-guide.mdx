@@ -1,0 +1,628 @@
+---
+title: 'MySQL 复制与高可用：原理、搭建、切换与监控'
+date: '2026-04-02'
+excerpt: '系统讲解 MySQL 主从复制：为什么做、原理是什么、怎么搭建、故障怎么切换、读写分离注意什么、怎么监控排错。从概念到实操一篇覆盖。'
+tags: ['mysql', 'replication', 'master-slave', 'failover', 'high-availability', 'database']
+---
+
+# MySQL 复制与高可用：原理、搭建、切换与监控
+
+复制是 MySQL 扩展的基石——一份数据变多份，解决读压力、提升可用性、支撑备份与报表。
+
+一句话定位：
+
+> 复制是"横向复制同样的数据"，目标是读扩展 + 高可用。
+
+---
+
+## 一、什么时候需要复制
+
+1. 查询太多，主库读压力高
+2. 希望有从库做备份、报表、离线分析
+3. 想提升可用性，主库故障能切换
+
+优先顺序建议：
+
+1. SQL 和索引优化
+2. 缓存优化
+3. 复制 + 读写分离
+4. 最后再分片（见 [MySQL 分片实战指南](/posts/mysql/mysql-sharding-guide)）
+
+---
+
+## 二、复制原理
+
+MySQL 复制流程：
+
+1. 主库把变更写入 Binlog
+2. 从库 I/O 线程拉取 Binlog 到 Relay Log
+3. 从库 SQL 线程回放 Relay Log
+
+核心特点：
+
+- 默认是异步复制
+- 主从会有延迟（秒级到分钟级，异常时更高）
+
+---
+
+## 三、复制模式
+
+### 3.1 异步复制
+
+性能好，主库提交不等从库确认。默认模式。
+
+### 3.2 半同步复制
+
+主库至少等一个从库确认收到 Binlog 再返回客户端，可靠性更强。
+
+启用方式：
+
+```sql
+INSTALL PLUGIN rpl_semi_sync_master SONAME 'semisync_master.so';
+SET GLOBAL rpl_semi_sync_master_enabled = 1;
+SET GLOBAL rpl_semi_sync_master_timeout = 1000;
+```
+
+```sql
+INSTALL PLUGIN rpl_semi_sync_slave SONAME 'semisync_slave.so';
+SET GLOBAL rpl_semi_sync_slave_enabled = 1;
+```
+
+建议关键业务至少使用半同步。
+
+### 3.3 组复制（Group Replication）
+
+基于 Paxos 的多主一致性复制，复杂度更高，适合对一致性要求极高的场景。
+
+---
+
+## 四、复制拓扑
+
+1. **一主一从**：简单，容灾能力有限
+2. **一主多从**：最常见，读扩展好
+3. **级联复制**：跨地域降低主库压力（A→B→C）
+
+---
+
+## 五、主从搭建实操
+
+### 5.1 Docker Compose 一主一从实验环境
+
+用 Docker Compose 可以在本地几分钟搭起完整的主从环境：
+
+```yaml
+version: '3.8'
+services:
+  mysql-master:
+    image: mysql:8.0
+    container_name: mysql-master
+    ports:
+      - '3306:3306'
+    environment:
+      MYSQL_ROOT_PASSWORD: Root@123456
+    command: >
+      --server-id=1
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --binlog-row-image=FULL
+      --sync-binlog=1
+      --innodb-flush-log-at-trx-commit=1
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_0900_ai_ci
+
+  mysql-slave:
+    image: mysql:8.0
+    container_name: mysql-slave
+    ports:
+      - '3307:3306'
+    environment:
+      MYSQL_ROOT_PASSWORD: Root@123456
+    command: >
+      --server-id=2
+      --relay-log=relay-bin
+      --read-only=1
+      --super-read-only=1
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_0900_ai_ci
+    depends_on:
+      - mysql-master
+```
+
+启动：
+
+```bash
+docker compose up -d
+```
+
+### 5.2 主库：创建复制账号与记录位点
+
+等容器启动完成后（约 30 秒），在主库执行：
+
+```bash
+docker exec -it mysql-master mysql -u root -pRoot@123456
+```
+
+```sql
+CREATE USER 'repl'@'%' IDENTIFIED BY 'Repl@123456';
+GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'repl'@'%';
+FLUSH PRIVILEGES;
+
+SHOW MASTER STATUS;
+```
+
+记下输出中的 `File` 和 `Position`，例如：
+
+```text
++------------------+----------+--------------+------------------+
+| File             | Position | Binlog_Do_DB | Binlog_Ignore_DB |
++------------------+----------+--------------+------------------+
+| mysql-bin.000001 |      874 |              |                  |
++------------------+----------+--------------+------------------+
+```
+
+### 5.3 从库：连接主库并启动复制
+
+在从库执行：
+
+```bash
+docker exec -it mysql-slave mysql -u root -pRoot@123456
+```
+
+```sql
+CHANGE REPLICATION SOURCE TO
+  SOURCE_HOST = 'mysql-master',
+  SOURCE_PORT = 3306,
+  SOURCE_USER = 'repl',
+  SOURCE_PASSWORD = 'Repl@123456',
+  SOURCE_LOG_FILE = 'mysql-bin.000001',
+  SOURCE_LOG_POS = 874;
+
+START REPLICA;
+```
+
+> Docker 网络中主库主机名用容器名 `mysql-master`。生产环境用实际 IP。
+
+### 5.4 验证复制是否成功
+
+在从库执行：
+
+```sql
+SHOW REPLICA STATUS\G
+```
+
+确认三个关键字段：
+
+```text
+Replica_IO_Running: Yes
+Replica_SQL_Running: Yes
+Seconds_Behind_Source: 0
+```
+
+做数据验证——在主库写入，在从库查询：
+
+```sql
+-- 主库
+CREATE DATABASE test_rep;
+USE test_rep;
+CREATE TABLE demo (id INT PRIMARY KEY, msg VARCHAR(50));
+INSERT INTO demo VALUES (1, 'hello replication');
+```
+
+```sql
+-- 从库（几秒后）
+USE test_rep;
+SELECT * FROM demo;
+-- 应该看到 (1, 'hello replication')
+```
+
+### 5.5 非空库的初始化同步（生产常用）
+
+生产中从库往往不是空库，需要先做数据同步再启动复制。
+
+**方法一：mysqldump（中小库推荐）**
+
+```bash
+mysqldump -h 主库IP -u root -p \
+  --single-transaction \
+  --master-data=2 \
+  --routines --triggers --events \
+  your_db > your_db.sql
+```
+
+`--master-data=2` 会在导出文件头部注释里记录 binlog 位点：
+
+```text
+-- CHANGE MASTER TO MASTER_LOG_FILE='mysql-bin.000003', MASTER_LOG_POS=58942;
+```
+
+导入从库并从该位点启动复制：
+
+```bash
+mysql -h 从库IP -u root -p your_db < your_db.sql
+```
+
+```sql
+CHANGE REPLICATION SOURCE TO
+  SOURCE_HOST = '主库IP',
+  SOURCE_PORT = 3306,
+  SOURCE_USER = 'repl',
+  SOURCE_PASSWORD = 'Repl@123456',
+  SOURCE_LOG_FILE = 'mysql-bin.000003',
+  SOURCE_LOG_POS = 58942;
+START REPLICA;
+```
+
+**方法二：XtraBackup（大库推荐）**
+
+```bash
+xtrabackup --backup --target-dir=/data/backup -u root -p
+xtrabackup --prepare --target-dir=/data/backup
+xtrabackup --copy-back --target-dir=/data/backup
+```
+
+备份目录下的 `xtrabackup_binlog_info` 文件记录了 binlog 位点，用法同上。
+
+---
+
+## 六、主库故障切换
+
+### 6.1 手动切换实操
+
+假设主库不可用，以下是在从库上执行的完整切换流程：
+
+```sql
+-- 1. 确认从库已追平
+SHOW REPLICA STATUS\G
+-- 看 Seconds_Behind_Source 是否接近 0
+
+-- 2. 停止复制并清除从库配置
+STOP REPLICA;
+RESET REPLICA ALL;
+
+-- 3. 关闭只读，提升为新主库
+SET GLOBAL read_only = 0;
+SET GLOBAL super_read_only = 0;
+
+-- 4. 确认新主库可写
+CREATE DATABASE failover_test;
+DROP DATABASE failover_test;
+```
+
+切换后，应用层需要把写流量指向新主库。如果使用 ProxySQL 等中间件，只需修改后端配置。
+
+### 6.2 原主库恢复后回配为从库
+
+原主库恢复后，以新主库为源重新配置复制：
+
+```sql
+-- 在原主库（现从库）上执行
+CHANGE REPLICATION SOURCE TO
+  SOURCE_HOST = '新主库IP',
+  SOURCE_PORT = 3306,
+  SOURCE_USER = 'repl',
+  SOURCE_PASSWORD = 'Repl@123456',
+  SOURCE_LOG_FILE = 'mysql-bin.000001',
+  SOURCE_LOG_POS = 4;
+START REPLICA;
+```
+
+### 6.3 故障切换演练脚本
+
+建议写成可重复执行的脚本：
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+SLAVE_HOST="10.0.0.12"
+SLAVE_PORT="3306"
+SLAVE_USER="root"
+SLAVE_PASS="Root@123456"
+
+echo "=== Step 1: 检查从库复制状态 ==="
+SLAVE_STATUS=$(mysql -h "$SLAVE_HOST" -P "$SLAVE_PORT" -u "$SLAVE_USER" -p"$SLAVE_PASS" \
+  -e "SHOW REPLICA STATUS\G" 2>/dev/null)
+
+IO_RUNNING=$(echo "$SLAVE_STATUS" | grep "Replica_IO_Running" | awk '{print $2}')
+SQL_RUNNING=$(echo "$SLAVE_STATUS" | grep "Replica_SQL_Running" | awk '{print $2}')
+BEHIND=$(echo "$SLAVE_STATUS" | grep "Seconds_Behind_Source" | awk '{print $2}')
+
+echo "IO_Running: $IO_RUNNING"
+echo "SQL_Running: $SQL_RUNNING"
+echo "Seconds_Behind: $BEHIND"
+
+if [[ "$IO_RUNNING" != "Yes" || "$SQL_RUNNING" != "Yes" ]]; then
+  echo "ERROR: 复制线程未正常运行，不能切换"
+  exit 1
+fi
+
+if [[ "$BEHIND" -gt 10 ]]; then
+  echo "WARN: 延迟 ${BEHIND}s，继续切换可能丢失数据"
+  read -p "是否继续？(y/N) " CONFIRM
+  [[ "$CONFIRM" != "y" ]] && exit 0
+fi
+
+echo "=== Step 2: 提升从库为主库 ==="
+mysql -h "$SLAVE_HOST" -P "$SLAVE_PORT" -u "$SLAVE_USER" -p"$SLAVE_PASS" <<EOF
+STOP REPLICA;
+RESET REPLICA ALL;
+SET GLOBAL read_only = 0;
+SET GLOBAL super_read_only = 0;
+EOF
+
+echo "=== Step 3: 验证新主库可写 ==="
+mysql -h "$SLAVE_HOST" -P "$SLAVE_PORT" -u "$SLAVE_USER" -p"$SLAVE_PASS" \
+  -e "CREATE DATABASE IF NOT EXISTS failover_check; DROP DATABASE failover_check;"
+
+echo "切换完成！请更新应用写路由到 $SLAVE_HOST"
+```
+
+### 6.4 自动化高可用组件
+
+手动切换有窗口期，生产环境建议引入自动化：
+
+| 组件 | 特点 |
+|------|------|
+| **MHA** | 成熟稳定，Perl 实现，适合传统架构 |
+| **Orchestrator** | Go 实现，支持拓扑可视化与自动恢复 |
+| **MySQL InnoDB Cluster** | 官方方案，基于 Group Replication + MySQL Shell + Router |
+
+---
+
+## 七、读写分离
+
+主从搭好后常做读写分离，但要注意：
+
+### 7.1 核心规则
+
+- 写请求走主库
+- 读请求走从库
+- 强一致读（刚写后立即读）走主库
+
+### 7.2 "刚写就读"不一致问题
+
+常见解决方案：
+
+1. 关键读强制走主库
+2. 写后短时间内读主库（会话级策略）
+3. 业务接受短暂最终一致
+
+### 7.3 ProxySQL 读写分离配置示例
+
+ProxySQL 是最常用的 MySQL 代理，可自动实现读写分离：
+
+```sql
+-- 添加后端 MySQL 节点
+INSERT INTO mysql_servers (hostgroup_id, hostname, port, weight)
+VALUES
+  (0, '10.0.0.11', 3306, 1),   -- 写组：主库
+  (1, '10.0.0.12', 3306, 1),   -- 读组：从库1
+  (1, '10.0.0.13', 3306, 1);   -- 读组：从库2
+
+-- 配置读写分离规则
+INSERT INTO mysql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply)
+VALUES
+  (1, 1, '^SELECT.*FOR UPDATE', 0, 1),  -- SELECT FOR UPDATE 走主库
+  (2, 1, '^SELECT', 1, 1);              -- 普通 SELECT 走从库
+
+LOAD MYSQL SERVERS TO RUNTIME;
+LOAD MYSQL QUERY RULES TO RUNTIME;
+SAVE MYSQL SERVERS TO DISK;
+SAVE MYSQL QUERY RULES TO DISK;
+```
+
+应用连接 ProxySQL（默认端口 6033）即可自动读写分离。
+
+---
+
+## 八、监控与告警
+
+### 8.1 必须监控的指标
+
+1. 复制线程状态（IO/SQL Running）
+2. 主从延迟（`Seconds_Behind_Source`）
+3. 复制错误码
+4. Binlog 磁盘占用
+5. Binlog/Relay Log 积压
+
+### 8.2 告警规则
+
+1. `Replica_IO_Running != Yes` → 立即告警
+2. `Replica_SQL_Running != Yes` → 立即告警
+3. `Seconds_Behind_Source > 30` → 延迟告警
+
+### 8.3 Prometheus 监控采集
+
+使用 `mysqld_exporter` 采集 MySQL 指标：
+
+```yaml
+scrape_configs:
+  - job_name: 'mysql'
+    static_configs:
+      - targets:
+        - '10.0.0.11:9104'
+        - '10.0.0.12:9104'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+```
+
+关键复制指标：
+
+| Prometheus 指标 | 含义 |
+|----------------|------|
+| `mysql_slave_status_slave_io_running` | IO 线程状态（1=Yes） |
+| `mysql_slave_status_slave_sql_running` | SQL 线程状态（1=Yes） |
+| `mysql_slave_status_seconds_behind_master` | 复制延迟秒数 |
+
+Grafana 告警规则示例：
+
+```yaml
+- alert: MySQLReplicationBroken
+  expr: mysql_slave_status_slave_io_running == 0 OR mysql_slave_status_slave_sql_running == 0
+  for: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: "MySQL 复制中断 {{ $labels.instance }}"
+
+- alert: MySQLReplicationLag
+  expr: mysql_slave_status_seconds_behind_master > 30
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "MySQL 复制延迟 {{ $value }}s {{ $labels.instance }}"
+```
+
+---
+
+## 九、常见故障排查
+
+### 9.1 复制线程不启动
+
+检查：
+
+1. 账号权限是否正确
+2. 网络/防火墙是否放通
+3. 主库 binlog 是否开启
+
+快速诊断：
+
+```sql
+-- 从库上检查连接
+SELECT 1;
+
+-- 检查能否用复制账号连主库
+mysql -h 主库IP -u repl -pRepl@123456 -e "SHOW GRANTS";
+```
+
+### 9.2 SQL 线程报错停止
+
+常见原因：
+
+1. 主从数据不一致
+2. DDL 冲突
+
+处理思路：
+
+```sql
+-- 1. 查看具体错误
+SHOW REPLICA STATUS\G
+-- 看 Last_SQL_Error 和 Last_SQL_Errno
+
+-- 2. 查看出错的 binlog 事件
+SHOW RELAYLOG EVENTS IN 'relay-bin.000005'
+  FROM 987 LIMIT 5;
+
+-- 3. 如果确定可跳过（慎用！仅用于确定无害的 DDL 冲突）
+SET GLOBAL sql_replica_skip_counter = 1;
+START REPLICA;
+
+-- 4. 如果是数据错误，先修复数据再启动
+-- 修复后：
+START REPLICA;
+```
+
+> 不建议长期依赖 `sql_replica_skip_counter`，跳过错误可能导致数据不一致。
+
+### 9.3 延迟持续升高
+
+常见原因：
+
+1. 主库大事务
+2. 从库硬件性能不足
+3. 从库上跑了重查询
+
+诊断步骤：
+
+```sql
+-- 从库上查看当前正在执行的 SQL
+SHOW PROCESSLIST;
+
+-- 查看是否有长查询阻塞 SQL 线程
+SELECT * FROM information_schema.processlist
+WHERE command = 'Query' AND time > 10;
+
+-- 主库上检查是否有大事务
+SELECT * FROM information_schema.innodb_trx
+ORDER BY trx_started ASC;
+```
+
+缓解方法：
+
+1. 从库上的报表查询移到专用从库
+2. 主库拆分大事务为小批次
+3. 考虑多线程复制（MySQL 8.0 支持 `replica_parallel_workers`）
+
+```sql
+-- 从库开启多线程复制
+STOP REPLICA;
+SET GLOBAL replica_parallel_workers = 4;
+SET GLOBAL replica_parallel_type = 'LOGICAL_CLOCK';
+START REPLICA;
+```
+
+### 9.4 主从数据不一致
+
+检查方法：
+
+```sql
+-- 在主从分别执行
+CHECKSUM TABLE your_table;
+```
+
+如果校验和不一致，定位差异行：
+
+```sql
+-- 在主从分别执行，按主键范围对比
+SELECT id, MD5(GROUP_CONCAT(
+  id, name, status, created_at
+  ORDER BY id
+)) AS chunk_hash
+FROM your_table
+WHERE id BETWEEN 1 AND 10000;
+```
+
+逐段比对，缩小不一致范围后修复。
+
+---
+
+## 十、生产实践建议
+
+1. 复制模式优先考虑半同步（关键业务）
+2. 从库也要做备份，不要只备份主库
+3. 演练切换至少每季度一次
+4. 切换流程写成 Runbook 并固化
+5. 结合高可用组件实现自动化切换
+6. 开启多线程复制减少从库延迟
+7. Binlog 保留至少 7 天（用于回溯和 CDC）
+
+---
+
+## 十一、上线检查清单
+
+上线前逐项确认：
+
+1. 主从配置参数正确
+2. 复制账号权限最小化
+3. 复制状态双 `Yes`
+4. 延迟在可接受范围
+5. 故障切换演练通过
+6. 应用层切主流程已验证
+7. 监控告警已配置
+8. Binlog 清理策略已设置（`expire_logs_days` / `binlog_expire_logs_seconds`）
+
+---
+
+## 总结
+
+MySQL 主从复制本身不复杂，难点在"长期稳定 + 故障切换"。
+
+你只要把三件事做扎实：
+
+1. 配置正确
+2. 监控到位
+3. 切换常演练
+
+主从体系就能真正成为可用性保障，而不只是"看起来有从库"。

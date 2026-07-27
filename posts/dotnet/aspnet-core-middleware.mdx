@@ -1,0 +1,271 @@
+---
+title: 'ASP.NET Core Middleware：请求管道与中间件顺序'
+date: '2026-07-21'
+excerpt: '系统理解 ASP.NET Core Middleware 请求管道：Use、Run、Map、自定义中间件、短路、顺序问题和常见中间件位置。'
+tags: ['dotnet', 'aspnetcore', 'middleware', 'pipeline']
+nextPost: 'dotnet/aspnet-core-routing-endpoint'
+---
+
+# ASP.NET Core Middleware：请求管道与中间件顺序
+
+Middleware 是 ASP.NET Core 最核心的概念。一个 HTTP 请求进入应用后，不会直接到 Controller，而是先经过一条中间件管道。
+
+理解 Middleware，你才能理解异常处理、HTTPS、静态文件、CORS、认证、授权、路由为什么要按特定顺序配置。
+
+:::tip 阶段一阅读顺序
+建议先读 [启动模型](/posts/dotnet/aspnet-core-startup-model)，再阅读本文。后续继续看 [Routing 与 Endpoint](/posts/dotnet/aspnet-core-routing-endpoint)、[Controller](/posts/dotnet/aspnet-core-webapi-controller) 和 [参数绑定与模型验证](/posts/dotnet/aspnet-core-model-binding-validation)。
+:::
+
+## 什么是 Middleware
+
+Middleware 是请求管道中的一个处理环节。它可以：
+
+- 在请求进入后执行逻辑
+- 调用下一个中间件
+- 在响应返回前执行逻辑
+- 直接返回响应，短路后续管道
+
+请求流程可以理解为：
+
+```text
+Request
+ -> Middleware A
+ -> Middleware B
+ -> Middleware C
+ -> Endpoint
+ <- Middleware C
+ <- Middleware B
+ <- Middleware A
+Response
+```
+
+## app.Use
+
+`app.Use` 可以在调用下一个中间件前后执行逻辑。
+
+```csharp
+app.Use(async (context, next) =>
+{
+    Console.WriteLine("请求进入");
+
+    await next();
+
+    Console.WriteLine("响应返回");
+});
+```
+
+`next()` 表示继续执行后面的管道。如果不调用 `next()`，后续中间件不会执行。
+
+## app.Run
+
+`app.Run` 会终止管道，通常用于最后处理请求。
+
+```csharp
+app.Run(async context =>
+{
+    await context.Response.WriteAsync("Hello from Run");
+});
+```
+
+如果 `Run` 放在前面，后面的中间件和 Endpoint 都不会执行。
+
+```csharp
+app.Run(async context =>
+{
+    await context.Response.WriteAsync("Stopped");
+});
+
+// 这里不会执行
+app.MapGet("/api/hello", () => "hello");
+```
+
+## app.Map
+
+`app.Map` 用于根据路径创建分支管道。
+
+```csharp
+app.Map("/admin", adminApp =>
+{
+    adminApp.Run(async context =>
+    {
+        await context.Response.WriteAsync("Admin Area");
+    });
+});
+
+app.Run(async context =>
+{
+    await context.Response.WriteAsync("Default Area");
+});
+```
+
+访问 `/admin` 会进入分支管道，其他路径走默认管道。
+
+## 自定义中间件类
+
+复杂逻辑建议写成独立中间件类。
+
+```csharp
+public class RequestTimingMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly ILogger<RequestTimingMiddleware> _logger;
+
+    public RequestTimingMiddleware(
+        RequestDelegate next,
+        ILogger<RequestTimingMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        var start = DateTimeOffset.UtcNow;
+
+        await _next(context);
+
+        var elapsed = DateTimeOffset.UtcNow - start;
+        _logger.LogInformation(
+            "Request {Method} {Path} completed in {Elapsed}ms",
+            context.Request.Method,
+            context.Request.Path,
+            elapsed.TotalMilliseconds);
+    }
+}
+```
+
+注册：
+
+```csharp
+app.UseMiddleware<RequestTimingMiddleware>();
+```
+
+## 短路请求
+
+中间件可以不调用 `_next`，直接返回响应。
+
+```csharp
+app.Use(async (context, next) =>
+{
+    if (!context.Request.Headers.ContainsKey("X-App-Id"))
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await context.Response.WriteAsync("Missing X-App-Id");
+        return;
+    }
+
+    await next();
+});
+```
+
+这叫短路，常用于简单拦截、健康检查、权限预处理等场景。
+
+## 中间件顺序为什么重要
+
+中间件按注册顺序执行。顺序错了，功能可能直接失效。
+
+常见顺序：
+
+```csharp
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseExceptionHandler();
+
+app.UseHttpsRedirection();
+
+app.UseRouting();
+app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
+```
+
+每条规则背后都有明确的原因：
+
+**异常处理必须最前面**：异常处理中间件用 try-catch 包裹后续管道。如果它不在最前面，前面注册的中间件抛出的异常就没人捕获。请求到达异常处理中间件之前如果就已经出错了，这个错误就会直接返回原始 500 页面，没有友好的错误格式。
+
+**UseRouting 在认证授权之前**：Endpoint Routing 分两阶段工作——先匹配路由确定 Endpoint，再执行中间件和 Endpoint。认证授权中间件需要读取已匹配 Endpoint 上的元数据（如 `[Authorize]` 特性）才能工作。路由还没匹配，授权中间件就不知道当前请求需要什么权限。
+
+**UseAuthentication 必须在 UseAuthorization 前面**：授权（Authorization）的前提是知道"你是谁"，这正是认证（Authentication）做的事。认证中间件解析 Token / Cookie，把用户身份写入 `HttpContext.User`。授权中间件读取 `HttpContext.User` 来判断权限。顺序反了，授权看到的是未认证用户，所有需要权限的请求都会被拒绝。
+
+**CORS 在认证授权之前**：浏览器在跨域请求时会先发 OPTIONS 预检请求。如果 CORS 中间件在认证之后，预检请求可能被认证拦截（401），浏览器连 CORS 协商都完不成。
+
+**MapControllers 在最后**：`Map...` 注册的是 Endpoint 终点，不是中间件。它应该在所有管道环节配置完成后注册，确保请求到达 Endpoint 之前所有中间件都已就位。
+
+### app.Map 分支 vs app.MapGet 终点
+
+`app.Map` 和 `app.MapGet` 都叫 "Map"，但语义完全不同：
+
+```csharp
+app.Map("/admin", adminApp =>
+{
+    adminApp.Use(async (context, next) =>
+    {
+        Console.WriteLine("Admin branch");
+        await next();
+    });
+
+    adminApp.MapGet("/dashboard", () => "Admin Dashboard");
+});
+```
+
+```csharp
+app.MapGet("/api/hello", () => "Hello");
+```
+
+| 对比 | `app.Map("/path", ...)` | `app.MapGet("/path", ...)` |
+|---|---|---|
+| 作用 | 创建分支管道 | 注册 Endpoint 终点 |
+| 参数 | 路径前缀 + 分支管道配置委托 | 路由模板 + 请求处理委托 |
+| 语义 | "匹配这个路径前缀的请求走这条独立的管道" | "这个路径和 Method 对应这个处理函数" |
+| 是否短路 | 分支内如果不调用后续中间件则短路 | 直接返回响应，是管道终点 |
+
+初学者常混淆这两个方法。记住：`app.Map` 是管道分支，`app.MapGet` / `app.MapPost` 是 Endpoint 注册。
+
+## Middleware 和 Filter 的区别
+
+Middleware 面向整个 HTTP 请求管道，Filter 面向 MVC / Controller 执行过程。
+
+| 对比 | Middleware | Filter |
+|---|---|---|
+| 作用范围 | 整个请求管道 | MVC / Controller |
+| 执行位置 | 路由前后都可以 | Action 前后 |
+| 适合场景 | 异常、日志、CORS、认证、租户识别 | Action 日志、参数检查、结果处理 |
+
+阶段一先掌握 Middleware。Filter 会在应用基础设施阶段进一步展开。
+
+## 一个完整示例
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+
+var app = builder.Build();
+
+app.Use(async (context, next) =>
+{
+    Console.WriteLine($"Before: {context.Request.Method} {context.Request.Path}");
+    await next();
+    Console.WriteLine($"After: {context.Response.StatusCode}");
+});
+
+app.MapGet("/api/hello", () => "Hello Middleware");
+
+app.MapControllers();
+
+app.Run();
+```
+
+访问 `/api/hello` 时，可以看到请求前后日志。
+
+## 总结
+
+Middleware 是 ASP.NET Core 的请求处理骨架。你可以把它理解成一条可组合的流水线：每个中间件处理一部分横切逻辑，然后决定是否继续交给后面的环节。
+
+掌握 `Use`、`Run`、`Map`、短路和顺序之后，再学习 Routing、Controller、认证授权、异常处理会更自然。

@@ -1,0 +1,173 @@
+---
+title: '后期魔法：让画面从"能看"变"电影感"'
+date: '2024-11-19'
+description: '为什么 3A 大作的画面看起来那么"高级"？秘密往往不在模型，而在后期。本文将揭秘 Bloom (辉光)、DOF (景深) 和 AA (抗锯齿) 的实现原理，带你领略图形学的"美颜滤镜"。'
+tags: ['WebGL', 'Post-Processing', 'Graphics', 'Effects']
+---
+
+# 后期魔法：让画面从"能看"变"电影感"
+
+在电影制作中，摄影师拍完片子后，还需要经过调色、特效合成等漫长的后期工序。
+在实时渲染中，我们也有同样的流程，叫做 **后期处理 (Post-Processing)**。
+
+它的原理很简单：**先渲染整个场景到一张纹理 (Render Target)**，然后写一个 Shader，把这张纹理当成图片来处理，最后再显示到屏幕上。
+
+今天，我们来解剖三个最能提升画面"电影感"的特效。
+
+## 一、 Bloom (辉光)：光的溢出
+
+现实世界中，极亮的光源（如太阳、霓虹灯）看起来不仅是白色的，它们周围还会有一圈光晕。
+这是因为镜头的光学散射或人眼的衍射。Bloom 就是模拟这种"光线溢出"的效果。
+
+### 1. 原理步骤
+1.  **提取高亮 (Threshold)**：遍历原图，把亮度超过 0.9 的像素提取出来，其他像素涂黑。
+2.  **高斯模糊 (Blur)**：把这张只有亮点的图进行模糊处理（通常横向纵向各模糊一次）。
+3.  **叠加 (Add)**：把模糊后的"光晕图"叠加回"原图"上。
+
+### 2. 视觉效果
+Bloom 能让霓虹灯看起来真的在"发光"，而不是一块白色的板子。它能极大地增强画面的对比度和氛围感。
+
+<ShaderPreview title="Bloom Simulation" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 模拟场景渲染结果
+vec3 getScene(vec2 uv) {
+    // 一个发光的圆
+    vec2 p = uv * 2.0 - 1.0;
+    p.x += sin(uTime); // 移动
+    float d = length(p);
+    
+    // 核心亮部 (极亮，超过 1.0)
+    float core = 1.0 - smoothstep(0.2, 0.25, d);
+    vec3 color = vec3(2.0, 0.5, 0.1) * core; // 橙色超亮光
+    
+    // 背景网格
+    float grid = step(0.95, fract(uv.x * 10.0)) * 0.2;
+    return color + vec3(grid);
+}
+
+// 简单的高斯模糊模拟 (为了性能，这里简化了)
+vec3 getBlur(vec2 uv) {
+    vec3 sum = vec3(0.0);
+    // 采样周围 9 个点
+    for(float x = -1.0; x <= 1.0; x++) {
+        for(float y = -1.0; y <= 1.0; y++) {
+            vec2 offset = vec2(x, y) * 0.02; // 模糊半径
+            // 提取高亮部分进行模糊
+            vec3 col = getScene(uv + offset);
+            // 简单的阈值检测 (Threshold)
+            float brightness = dot(col, vec3(0.33));
+            if(brightness > 0.8) {
+                sum += col;
+            }
+        }
+    }
+    return sum / 9.0;
+}
+
+void main() {
+    vec2 uv = vUv;
+    
+    // 1. 原图
+    vec3 original = getScene(uv);
+    
+    // 2. 辉光图 (Blur)
+    vec3 bloom = getBlur(uv);
+    
+    // 3. 叠加
+    // 辉光强度 2.0
+    gl_FragColor = vec4(original + bloom * 2.0, 1.0);
+}
+`} />
+
+## 二、 DOF (Depth of Field)：景深
+
+拿起单反相机，大光圈拍摄时，焦点清晰，背景虚化。这就是景深。
+在 3D 渲染中，默认是"无限远景深"（所有东西都清晰）。为了模拟电影感，我们需要手动制造虚化。
+
+### 原理
+我们需要一张 **深度图 (Depth Map)**，它记录了每个像素离相机的距离。
+
+1.  **确定焦平面**：假设我们对焦在距离 5.0 的地方。
+2.  **计算模糊度 (CoC)**：对于每个像素，算一下它的深度离 5.0 有多远。
+    *   距离越远，模糊度越高。
+    *   距离越近，模糊度越低（清晰）。
+3.  **动态模糊**：根据模糊度，对当前像素进行不同程度的模糊处理。
+
+## 三、 Anti-aliasing (抗锯齿)：消除锯齿
+
+3D 渲染本质上是用方块像素去逼近几何边缘，所以斜线一定会有锯齿 (Jaggies)。
+抗锯齿技术就是为了抹平这些棱角。
+
+### 1. MSAA (Multisample AA)
+**原理**：在光栅化阶段，每个像素采样 4 次（硬件层面）。
+*   **优点**：质量最好。
+*   **缺点**：显存和计算量 x4。在延迟渲染 (Deferred Rendering) 中很难用。
+
+### 2. FXAA (Fast Approximate AA)
+**原理**：后期处理滤镜。
+它像 Photoshop 的"查找边缘"滤镜一样，找到画面中对比度剧烈的边缘，然后顺着边缘方向进行模糊。
+*   **优点**：极快！几乎不掉帧。
+*   **缺点**：会把不需要模糊的地方（如文字）也弄模糊。
+
+### 3. TAA (Temporal AA)
+**原理**：利用时间。
+这一帧的像素，复用上一帧（微小偏移后）的像素结果。
+*   **优点**：效果极佳，甚至能修补断裂的线。
+*   **缺点**：快速移动时会有**鬼影 (Ghosting)**。
+
+<ShaderPreview title="Anti-aliasing Logic" code={`
+varying vec2 vUv;
+
+// 绘制一个带锯齿的圆形
+float getShape(vec2 uv) {
+    float d = length(uv - 0.5);
+    // 硬切 (step) 会产生锯齿
+    return step(d, 0.3);
+}
+
+void main() {
+    vec2 uv = vUv;
+    
+    // 1. 无抗锯齿 (Aliased)
+    float shape = getShape(uv);
+    
+    // 2. 模拟 FXAA 逻辑 (边缘检测 + 混合)
+    // 采样周围像素
+    float d = 0.01; // 像素偏移
+    float top = getShape(uv + vec2(0.0, d));
+    float bottom = getShape(uv - vec2(0.0, d));
+    float left = getShape(uv - vec2(d, 0.0));
+    float right = getShape(uv + vec2(d, 0.0));
+    
+    // 如果周围像素和自己不一样，说明在边缘
+    float edge = abs(top - shape) + abs(bottom - shape) + 
+                 abs(left - shape) + abs(right - shape);
+    
+    vec3 color = vec3(shape);
+    
+    // 可视化：左边是原始锯齿，右边是简单的边缘平滑
+    if (uv.x > 0.5) {
+        // 简单的平滑逻辑：如果在边缘，就取周围平均值
+        if (edge > 0.1) {
+            color = vec3((top + bottom + left + right + shape) / 5.0);
+        }
+    }
+    
+    // 分割线
+    if (abs(uv.x - 0.5) < 0.002) color = vec3(1.0, 0.0, 0.0);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 总结
+
+后期处理是渲染管线的最后一道工序，也是性价比最高的工序。
+
+1.  **Bloom**：通过提取高亮+模糊，让光有了"温度"。
+2.  **DOF**：通过深度图控制模糊，引导观众的视线焦点。
+3.  **AA**：通过多重采样或后期模糊，消除数字图像的粗糙感。
+
+在 Three.js 中，使用 `EffectComposer` 可以轻松串联这些特效。但请记住：**特效虽好，不要贪杯**。过多的后期处理会严重拖慢帧率（尤其是移动端）。

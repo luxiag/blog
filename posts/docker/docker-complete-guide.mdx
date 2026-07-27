@@ -1,0 +1,583 @@
+---
+title: 'Docker 完全指南：从入门到实战'
+date: '2026-02-08'
+excerpt: 'Docker 彻底改变了软件开发和部署的方式。本文将带你从零开始理解容器化技术，掌握 Docker 的核心概念、常用命令、镜像构建以及实战应用，让你轻松驾驭现代化的应用部署。'
+tags: ['docker', 'container', 'devops', 'linux']
+---
+
+# Docker 完全指南：从入门到实战
+
+"在我的机器上能跑啊！" —— 这可能是开发者最常说的一句话。但有了 Docker，这个问题将成为历史。
+
+Docker 不仅仅是一个工具，它代表了一种全新的软件交付方式。从开发到测试，从测试到生产，Docker 让应用程序的迁移变得如同复制粘贴一样简单。
+
+## 1. 什么是 Docker？
+
+### 传统部署的痛点
+
+想象一下这个场景：
+
+你开发了一个 Web 应用，它需要：
+- Node.js 18.x
+- MongoDB 6.0
+- Redis 7.0
+- 特定的系统库
+
+在你的开发机器上一切正常。但当你把代码交给测试团队时：
+- 测试环境的 Node.js 是 16.x
+- MongoDB 版本不对
+- 缺少某个系统依赖
+
+结果？应用跑不起来。
+
+### Docker 的解决方案
+
+**Docker** 是一个开源的容器化平台，它将应用程序及其所有依赖打包到一个**容器**中。
+
+> **容器**就像一个轻量级的虚拟机，但它不包含完整的操作系统，而是共享宿主机的内核，因此启动速度极快，资源占用极少。
+
+### Docker vs 虚拟机
+
+| 特性 | Docker 容器 | 虚拟机 |
+| :--- | :--- | :--- |
+| **启动速度** | 秒级 | 分钟级 |
+| **资源占用** | MB 级别 | GB 级别 |
+| **性能** | 接近原生 | 有性能损耗 |
+| **隔离性** | 进程级隔离 | 完全隔离 |
+| **可移植性** | 极高 | 较低 |
+
+---
+
+## 2. Docker 核心概念
+
+理解 Docker，需要掌握三个核心概念：
+
+### 2.1 镜像（Image）
+
+**镜像**是一个只读的模板，包含了运行应用所需的一切：代码、运行时、库、环境变量、配置文件。
+
+可以把镜像想象成：
+- **软件安装包**：就像 Windows 的 `.exe` 安装程序
+- **蛋糕模具**：可以用它制作无数个相同的蛋糕（容器）
+
+```bash
+# 查看本地镜像
+docker images
+
+# 拉取镜像
+docker pull nginx:latest
+docker pull node:18-alpine
+```
+
+### 2.2 容器（Container）
+
+**容器**是镜像的运行实例。一个镜像可以创建多个容器。
+
+```bash
+# 运行一个容器
+docker run -d -p 8080:80 nginx
+
+# 查看运行中的容器
+docker ps
+
+# 查看所有容器（包括停止的）
+docker ps -a
+```
+
+**关键点**：
+- 容器是**可写的**（镜像是只读的）
+- 容器停止后，数据会丢失（除非使用数据卷）
+- 容器之间相互隔离
+
+### 2.3 仓库（Registry）
+
+**仓库**是存储和分发镜像的地方，类似于 GitHub 之于代码。
+
+- **Docker Hub**：官方公共仓库（hub.docker.com）
+- **私有仓库**：企业内部使用
+
+```bash
+# 从 Docker Hub 拉取镜像
+docker pull ubuntu:22.04
+
+# 推送镜像到仓库
+docker push myusername/myapp:v1.0
+```
+
+---
+
+## 3. Docker 安装与基础命令
+
+### 3.1 安装 Docker
+
+**Ubuntu/Debian**：
+```bash
+# 更新包索引
+sudo apt update
+
+# 安装依赖
+sudo apt install apt-transport-https ca-certificates curl software-properties-common
+
+# 添加 Docker 官方 GPG 密钥
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+# 添加 Docker 仓库
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# 安装 Docker
+sudo apt update
+sudo apt install docker-ce docker-ce-cli containerd.io
+
+# 验证安装
+docker --version
+```
+
+**macOS/Windows**：
+下载并安装 Docker Desktop（图形化界面）
+
+### 3.2 容器生命周期管理
+
+```bash
+# 创建并启动容器
+docker run -d --name my-nginx -p 8080:80 nginx
+
+# 参数说明：
+# -d: 后台运行
+# --name: 给容器命名
+# -p 8080:80: 端口映射（宿主机:容器）
+
+# 停止容器
+docker stop my-nginx
+
+# 启动已停止的容器
+docker start my-nginx
+
+# 重启容器
+docker restart my-nginx
+
+# 删除容器
+docker rm my-nginx
+
+# 强制删除运行中的容器
+docker rm -f my-nginx
+```
+
+### 3.3 查看容器信息
+
+```bash
+# 查看容器日志
+docker logs my-nginx
+docker logs -f my-nginx  # 实时查看
+
+# 进入容器内部
+docker exec -it my-nginx bash
+
+# 查看容器详细信息
+docker inspect my-nginx
+
+# 查看容器资源占用
+docker stats
+```
+
+---
+
+## 4. Dockerfile：构建自己的镜像
+
+**Dockerfile** 是一个文本文件，包含了构建镜像的所有指令。
+
+### 4.1 基础示例：Node.js 应用
+
+假设你有一个简单的 Node.js 应用：
+
+**app.js**：
+```javascript
+const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => {
+  res.send('Hello from Docker!');
+});
+
+app.listen(3000, () => {
+  console.log('Server running on port 3000');
+});
+```
+
+**package.json**：
+```json
+{
+  "name": "docker-demo",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.18.0"
+  },
+  "scripts": {
+    "start": "node app.js"
+  }
+}
+```
+
+**Dockerfile**：
+```dockerfile
+# 1. 选择基础镜像
+FROM node:18-alpine
+
+# 2. 设置工作目录
+WORKDIR /app
+
+# 3. 复制 package.json 和 package-lock.json
+COPY package*.json ./
+
+# 4. 安装依赖
+RUN npm install --production
+
+# 5. 复制应用代码
+COPY . .
+
+# 6. 暴露端口
+EXPOSE 3000
+
+# 7. 启动命令
+CMD ["npm", "start"]
+```
+
+### 4.2 构建和运行
+
+```bash
+# 构建镜像
+docker build -t my-node-app:v1.0 .
+
+# 运行容器
+docker run -d -p 3000:3000 --name node-app my-node-app:v1.0
+
+# 测试
+curl http://localhost:3000
+```
+
+### 4.3 Dockerfile 常用指令
+
+| 指令 | 说明 | 示例 |
+| :--- | :--- | :--- |
+| `FROM` | 指定基础镜像 | `FROM ubuntu:22.04` |
+| `WORKDIR` | 设置工作目录 | `WORKDIR /app` |
+| `COPY` | 复制文件到镜像 | `COPY . /app` |
+| `RUN` | 执行命令（构建时） | `RUN npm install` |
+| `CMD` | 容器启动命令 | `CMD ["node", "app.js"]` |
+| `EXPOSE` | 声明端口 | `EXPOSE 3000` |
+| `ENV` | 设置环境变量 | `ENV NODE_ENV=production` |
+| `VOLUME` | 定义数据卷 | `VOLUME /data` |
+
+### 4.4 多阶段构建（优化镜像大小）
+
+```dockerfile
+# 阶段 1：构建
+FROM node:18 AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+# 阶段 2：运行
+FROM node:18-alpine
+WORKDIR /app
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+EXPOSE 3000
+CMD ["node", "dist/index.js"]
+```
+
+---
+
+## 5. 数据持久化：Volume
+
+容器删除后，数据会丢失。**Volume（数据卷）**解决了这个问题。
+
+### 5.1 创建和使用 Volume
+
+```bash
+# 创建数据卷
+docker volume create my-data
+
+# 使用数据卷运行容器
+docker run -d \
+  --name mysql-db \
+  -v my-data:/var/lib/mysql \
+  -e MYSQL_ROOT_PASSWORD=secret \
+  mysql:8.0
+
+# 查看数据卷
+docker volume ls
+
+# 查看数据卷详情
+docker volume inspect my-data
+```
+
+### 5.2 绑定挂载（Bind Mount）
+
+将宿主机的目录挂载到容器：
+
+```bash
+docker run -d \
+  --name web-server \
+  -v /home/user/website:/usr/share/nginx/html \
+  -p 8080:80 \
+  nginx
+```
+
+---
+
+## 6. 网络：容器间通信
+
+### 6.1 默认网络
+
+Docker 创建三种网络：
+- **bridge**（默认）：容器间可通过 IP 通信
+- **host**：容器使用宿主机网络
+- **none**：无网络
+
+```bash
+# 查看网络
+docker network ls
+
+# 创建自定义网络
+docker network create my-network
+
+# 在自定义网络中运行容器
+docker run -d --name app1 --network my-network nginx
+docker run -d --name app2 --network my-network nginx
+
+# 容器间可通过容器名通信
+docker exec app1 ping app2
+```
+
+---
+
+## 7. Docker Compose：多容器编排
+
+当应用由多个容器组成时（如前端 + 后端 + 数据库），手动管理很麻烦。**Docker Compose** 让你用一个配置文件管理所有容器。
+
+### 7.1 示例：完整的 Web 应用栈
+
+**docker-compose.yml**：
+```yaml
+version: '3.8'
+
+services:
+  # 前端
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - API_URL=http://backend:5000
+
+  # 后端
+  backend:
+    build: ./backend
+    ports:
+      - "5000:5000"
+    depends_on:
+      - database
+      - redis
+    environment:
+      - DB_HOST=database
+      - REDIS_HOST=redis
+
+  # 数据库
+  database:
+    image: postgres:15
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=secret
+      - POSTGRES_DB=myapp
+
+  # 缓存
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+
+volumes:
+  db-data:
+  redis-data:
+```
+
+### 7.2 Compose 命令
+
+```bash
+# 启动所有服务
+docker-compose up -d
+
+# 查看服务状态
+docker-compose ps
+
+# 查看日志
+docker-compose logs -f backend
+
+# 停止所有服务
+docker-compose down
+
+# 停止并删除数据卷
+docker-compose down -v
+```
+
+---
+
+## 8. 实战案例：部署 WordPress
+
+```yaml
+version: '3.8'
+
+services:
+  wordpress:
+    image: wordpress:latest
+    ports:
+      - "8080:80"
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: secret
+      WORDPRESS_DB_NAME: wordpress
+    volumes:
+      - wordpress-data:/var/www/html
+
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: secret
+      MYSQL_ROOT_PASSWORD: rootsecret
+    volumes:
+      - db-data:/var/lib/mysql
+
+volumes:
+  wordpress-data:
+  db-data:
+```
+
+运行：
+```bash
+docker-compose up -d
+```
+
+访问 `http://localhost:8080`，WordPress 就运行起来了！
+
+---
+
+## 9. 最佳实践
+
+### 9.1 镜像优化
+
+1. **使用轻量级基础镜像**：
+   ```dockerfile
+   # ❌ 体积大
+   FROM ubuntu:22.04
+   
+   # ✅ 体积小
+   FROM alpine:3.18
+   ```
+
+2. **合并 RUN 指令**：
+   ```dockerfile
+   # ❌ 创建多层
+   RUN apt-get update
+   RUN apt-get install -y curl
+   RUN apt-get clean
+   
+   # ✅ 单层
+   RUN apt-get update && \
+       apt-get install -y curl && \
+       apt-get clean && \
+       rm -rf /var/lib/apt/lists/*
+   ```
+
+3. **利用构建缓存**：
+   ```dockerfile
+   # 先复制依赖文件，利用缓存
+   COPY package.json package-lock.json ./
+   RUN npm install
+   
+   # 再复制代码（代码变化频繁）
+   COPY . .
+   ```
+
+### 9.2 安全建议
+
+1. **不要使用 root 用户**：
+   ```dockerfile
+   RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+   USER appuser
+   ```
+
+2. **扫描镜像漏洞**：
+   ```bash
+   docker scan my-image:latest
+   ```
+
+3. **使用 .dockerignore**：
+   ```
+   node_modules
+   .git
+   .env
+   *.log
+   ```
+
+---
+
+## 10. 常见问题排查
+
+### 容器无法启动
+
+```bash
+# 查看详细日志
+docker logs <container-id>
+
+# 查看容器退出原因
+docker inspect <container-id> | grep -A 10 State
+```
+
+### 端口冲突
+
+```bash
+# 查看端口占用
+netstat -tuln | grep 8080
+
+# 使用不同端口
+docker run -p 8081:80 nginx
+```
+
+### 清理资源
+
+```bash
+# 删除所有停止的容器
+docker container prune
+
+# 删除未使用的镜像
+docker image prune -a
+
+# 删除未使用的数据卷
+docker volume prune
+
+# 一键清理（慎用）
+docker system prune -a --volumes
+```
+
+---
+
+## 总结
+
+Docker 改变了软件开发的游戏规则：
+
+- ✅ **环境一致性**："在我的机器上能跑"不再是借口
+- ✅ **快速部署**：从开发到生产，几秒钟完成
+- ✅ **资源高效**：一台服务器运行数百个容器
+- ✅ **微服务友好**：每个服务独立打包、独立扩展
+
+从简单的 `docker run`，到复杂的 `docker-compose` 编排，再到 Kubernetes 集群管理，Docker 是现代 DevOps 的基石。
+
+现在，打开你的终端，运行 `docker run hello-world`，开始你的容器化之旅吧！

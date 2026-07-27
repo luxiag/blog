@@ -1,0 +1,360 @@
+---
+title: 'C# 反射与 Attribute：框架扩展能力的基础'
+date: '2026-07-14'
+excerpt: '理解 C# 反射和 Attribute 的实际用途：读取类型信息、动态创建对象、扫描特性、实现简单验证器，并了解性能与边界。'
+tags: ['dotnet', 'csharp', 'reflection', 'attribute', 'metadata']
+nextPost: 'dotnet/csharp-nullable-reference-types'
+---
+
+# C# 反射与 Attribute：框架扩展能力的基础
+
+:::tip C# 语言系列阅读顺序
+本文属于 C# 语言核心系列。建议先读 [C# 语言核心知识路线](/posts/dotnet/csharp-language-roadmap)，并具备 [基础语法](/posts/dotnet/csharp-basic-syntax)、[面向对象基础](/posts/dotnet/csharp-object-oriented-basics)、[集合与异常处理](/posts/dotnet/csharp-collections-exceptions)、[泛型](/posts/dotnet/csharp-generics)、[委托与 Lambda](/posts/dotnet/csharp-delegate-event-lambda)、[LINQ](/posts/dotnet/csharp-linq) 和 [异步编程](/posts/dotnet/csharp-async-await) 的基础。后续可以继续阅读 [C# 现代语法](/posts/dotnet/csharp-modern-syntax)。
+:::
+
+反射和 Attribute 是很多 .NET 框架能力的底层基础。ASP.NET Core 路由、模型验证、依赖注入扫描、ORM 映射、序列化库，都大量依赖元数据。
+
+这篇文章不追求把所有 API 列完，而是讲清楚它们解决什么问题、怎么用、适合用在哪里，以及什么时候不要用。
+
+## 什么是反射
+
+反射允许程序在运行时读取类型信息，并在必要时动态调用成员。
+
+```csharp
+using System;
+using System.Reflection;
+
+public class Program
+{
+    public static void Main()
+    {
+        Type type = typeof(Product);
+
+        Console.WriteLine($"类型名：{type.Name}");
+
+        foreach (PropertyInfo property in type.GetProperties())
+        {
+            Console.WriteLine($"属性：{property.Name}，类型：{property.PropertyType.Name}");
+        }
+    }
+}
+
+public class Product
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+}
+```
+
+普通代码是在编译期确定调用哪个成员；反射则是在运行时根据 `Type`、`PropertyInfo`、`MethodInfo` 等元数据处理对象。
+
+## 获取 Type 的几种方式
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        Type type1 = typeof(Order);
+        Type type2 = new Order().GetType();
+        Type? type3 = Type.GetType("Order");
+
+        Console.WriteLine(type1.FullName);
+        Console.WriteLine(type2.FullName);
+        Console.WriteLine(type3?.FullName ?? "未找到类型");
+    }
+}
+
+public class Order
+{
+    public string OrderNo { get; set; } = string.Empty;
+}
+```
+
+常用方式是 `typeof(T)` 和 `obj.GetType()`。`Type.GetType(string)` 对类型名格式要求更高，跨程序集时通常需要包含程序集名称。
+
+## 读取和设置属性
+
+反射可以动态读取或修改属性值。
+
+```csharp
+using System;
+using System.Reflection;
+
+public class Program
+{
+    public static void Main()
+    {
+        var product = new Product { Id = 1, Name = "键盘", Price = 199m };
+
+        PropertyInfo? property = typeof(Product).GetProperty("Price");
+        object? value = property?.GetValue(product);
+
+        Console.WriteLine($"修改前价格：{value}");
+
+        property?.SetValue(product, 159m);
+
+        Console.WriteLine($"修改后价格：{product.Price}");
+    }
+}
+
+public class Product
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+}
+```
+
+这种能力很强，但也更容易出错：属性名写错不会在编译期报错，只能运行时发现。
+
+## 动态创建对象
+
+`Activator.CreateInstance` 可以通过类型动态创建对象。
+
+```csharp
+using System;
+
+public class Program
+{
+    public static void Main()
+    {
+        Type type = typeof(Product);
+
+        var product = (Product?)Activator.CreateInstance(type);
+
+        if (product is null)
+        {
+            return;
+        }
+
+        product.Name = "鼠标";
+        Console.WriteLine(product.Name);
+    }
+}
+
+public class Product
+{
+    public string Name { get; set; } = string.Empty;
+}
+```
+
+依赖注入容器、插件系统、对象映射器都可能用到类似机制。但生产级 DI 容器不会每次都用最原始的反射调用，通常会做表达式树、委托缓存等优化。
+
+## 什么是 Attribute
+
+Attribute 是附加在代码元素上的元数据。它本身不直接改变代码行为，真正改变行为的是读取这些元数据的框架或代码。
+
+```csharp
+using System;
+using System.Reflection;
+
+public class Program
+{
+    public static void Main()
+    {
+        Type type = typeof(Product);
+        TableAttribute? table = type.GetCustomAttribute<TableAttribute>();
+
+        Console.WriteLine($"表名：{table?.Name}");
+    }
+}
+
+[Table("products")]
+public class Product
+{
+    public int Id { get; set; }
+}
+
+[AttributeUsage(AttributeTargets.Class)]
+public class TableAttribute : Attribute
+{
+    public TableAttribute(string name)
+    {
+        Name = name;
+    }
+
+    public string Name { get; }
+}
+```
+
+这里 `[Table("products")]` 只是元数据。只有当代码通过反射读取它时，它才会产生实际效果。
+
+## 自定义验证 Attribute
+
+下面实现一个最小验证器，演示 Attribute 和反射如何配合。
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+
+public class Program
+{
+    public static void Main()
+    {
+        var user = new RegisterRequest
+        {
+            UserName = "tom",
+            Password = "123"
+        };
+
+        List<string> errors = Validator.Validate(user);
+
+        Console.WriteLine(errors.Count == 0
+            ? "验证通过"
+            : string.Join(Environment.NewLine, errors));
+    }
+}
+
+public class RegisterRequest
+{
+    [Required]
+    public string UserName { get; set; } = string.Empty;
+
+    [MinLength(6)]
+    public string Password { get; set; } = string.Empty;
+}
+
+[AttributeUsage(AttributeTargets.Property)]
+public class RequiredAttribute : Attribute
+{
+}
+
+[AttributeUsage(AttributeTargets.Property)]
+public class MinLengthAttribute : Attribute
+{
+    public MinLengthAttribute(int length)
+    {
+        Length = length;
+    }
+
+    public int Length { get; }
+}
+
+public static class Validator
+{
+    public static List<string> Validate(object instance)
+    {
+        var errors = new List<string>();
+        Type type = instance.GetType();
+
+        foreach (PropertyInfo property in type.GetProperties())
+        {
+            object? value = property.GetValue(instance);
+
+            if (property.GetCustomAttribute<RequiredAttribute>() is not null &&
+                string.IsNullOrWhiteSpace(value?.ToString()))
+            {
+                errors.Add($"{property.Name} 不能为空");
+            }
+
+            MinLengthAttribute? minLength = property.GetCustomAttribute<MinLengthAttribute>();
+            if (minLength is not null && value?.ToString()?.Length < minLength.Length)
+            {
+                errors.Add($"{property.Name} 长度不能小于 {minLength.Length}");
+            }
+        }
+
+        return errors;
+    }
+}
+```
+
+ASP.NET Core 的模型验证比这个复杂得多，但核心思想类似：读取模型属性上的验证元数据，然后执行对应规则。
+
+## 扫描程序集
+
+框架经常需要扫描某个程序集里的类型，比如找到所有实现了某个接口的类。
+
+```csharp
+using System;
+using System.Linq;
+using System.Reflection;
+
+public class Program
+{
+    public static void Main()
+    {
+        Assembly assembly = Assembly.GetExecutingAssembly();
+
+        var handlers = assembly.GetTypes()
+            .Where(type => typeof<IEventHandler).IsAssignableFrom(type))
+            .Where(type => type is { IsInterface: false, IsAbstract: false })
+            .ToList();
+
+        foreach (Type handler in handlers)
+        {
+            Console.WriteLine(handler.Name);
+        }
+    }
+}
+
+public interface IEventHandler
+{
+    void Handle();
+}
+
+public class OrderCreatedHandler : IEventHandler
+{
+    public void Handle() => Console.WriteLine("处理订单创建事件");
+}
+
+public class OrderPaidHandler : IEventHandler
+{
+    public void Handle() => Console.WriteLine("处理订单支付事件");
+}
+```
+
+这类代码常用于自动注册服务、插件发现、消息处理器扫描等场景。
+
+## 反射的成本与边界
+
+反射比直接调用更灵活，但也有代价：
+
+- 编译期类型检查变弱，很多错误延迟到运行时
+- 性能通常低于直接调用，频繁路径需要缓存元数据或委托
+- 代码可读性可能下降，调试成本更高
+- 在 Native AOT、裁剪发布等场景中需要额外注意元数据保留问题
+
+常见优化方式是缓存反射结果。
+
+```csharp
+using System;
+using System.Collections.Concurrent;
+using System.Reflection;
+
+public static class PropertyCache
+{
+    private static readonly ConcurrentDictionary<Type, PropertyInfo[]> Cache = new();
+
+    public static PropertyInfo[] GetProperties(Type type)
+    {
+        return Cache.GetOrAdd(type, static t => t.GetProperties());
+    }
+}
+```
+
+## 什么时候应该使用反射
+
+适合使用反射的场景：
+
+- 框架或基础设施代码，例如 DI、ORM、序列化、验证器
+- 插件系统，需要运行时发现类型
+- 通用工具，需要处理未知类型
+- 读取 Attribute 元数据，驱动框架行为
+
+不适合使用反射的场景：
+
+- 普通业务逻辑可以直接调用时
+- 只是为了少写几行类型明确的代码
+- 高频性能敏感路径且没有缓存或编译优化
+
+## 总结
+
+反射让程序可以在运行时理解类型，Attribute 让代码可以携带额外元数据。二者结合，是 .NET 框架扩展能力的重要基础。
+
+业务代码里应谨慎使用反射；框架代码里使用反射时，要注意缓存、错误处理和发布模式兼容性。

@@ -1,0 +1,884 @@
+---
+title: '深入理解依赖注入（DI）与控制反转（IoC）'
+date: '2025-02-06'
+excerpt: '依赖注入和控制反转是现代软件开发的核心设计原则。本文用通俗易懂的方式，从零开始带你理解这些概念，并掌握在 C# 中的实际应用。'
+tags: ['csharp', 'dotnet', 'design-pattern', 'dependency-injection']
+---
+
+# 深入理解依赖注入与控制反转
+
+## 什么是依赖？
+
+在讲依赖注入之前，我们先理解什么是"依赖"。
+
+### 一个简单的例子
+
+假设你要做一杯咖啡：
+
+```csharp
+class CoffeeMaker
+{
+    public void MakeCoffee()
+    {
+        // 直接创建咖啡豆
+        CoffeeBeans beans = new CoffeeBeans();
+        
+        // 研磨
+        beans.Grind();
+        
+        // 冲泡
+        Console.WriteLine("咖啡做好了！");
+    }
+}
+
+class CoffeeBeans
+{
+    public void Grind()
+    {
+        Console.WriteLine("研磨咖啡豆...");
+    }
+}
+```
+
+在这个例子中，`CoffeeMaker` **依赖** `CoffeeBeans`。问题在哪？
+
+**问题 1：紧耦合**
+- 如果我想用不同的咖啡豆（比如有机咖啡豆），必须修改 `CoffeeMaker` 的代码
+
+**问题 2：难以测试**
+- 测试 `CoffeeMaker` 时，必须使用真实的 `CoffeeBeans`，无法使用模拟对象
+
+**问题 3：不灵活**
+- 无法在运行时切换不同的咖啡豆
+
+---
+
+## 控制反转（IoC）：转变思维方式
+
+**控制反转**是一种设计原则：**不要自己创建依赖，而是让别人给你**。
+
+### 传统方式 vs IoC
+
+```csharp
+// ❌ 传统方式：我自己创建依赖
+class CoffeeMaker
+{
+    private CoffeeBeans beans;
+    
+    public CoffeeMaker()
+    {
+        // 我控制了 beans 的创建
+        this.beans = new CoffeeBeans();
+    }
+}
+
+// ✅ IoC 方式：依赖由外部提供
+class CoffeeMaker
+{
+    private ICoffeeBeans beans;
+    
+    public CoffeeMaker(ICoffeeBeans beans)
+    {
+        // 我不控制 beans 的创建，由外部传入
+        this.beans = beans;
+    }
+}
+```
+
+**关键变化：**
+- **控制权反转**：从"我创建依赖"变成"依赖被注入给我"
+- **面向接口**：依赖 `ICoffeeBeans` 接口，而不是具体的 `CoffeeBeans` 类
+
+---
+
+## 依赖注入（DI）：IoC 的实现方式
+
+**依赖注入**是实现控制反转的一种具体技术。有三种主要方式：
+
+### 1. 构造函数注入（最常用）
+
+```csharp
+interface ICoffeeBeans
+{
+    void Grind();
+}
+
+class ArabicaBeans : ICoffeeBeans
+{
+    public void Grind()
+    {
+        Console.WriteLine("研磨阿拉比卡咖啡豆...");
+    }
+}
+
+class RobustaBeans : ICoffeeBeans
+{
+    public void Grind()
+    {
+        Console.WriteLine("研磨罗布斯塔咖啡豆...");
+    }
+}
+
+class CoffeeMaker
+{
+    private readonly ICoffeeBeans beans;
+    
+    // 通过构造函数注入依赖
+    public CoffeeMaker(ICoffeeBeans beans)
+    {
+        this.beans = beans;
+    }
+    
+    public void MakeCoffee()
+    {
+        beans.Grind();
+        Console.WriteLine("咖啡做好了！");
+    }
+}
+
+// 使用
+ICoffeeBeans arabica = new ArabicaBeans();
+CoffeeMaker maker1 = new CoffeeMaker(arabica);
+maker1.MakeCoffee();  // 使用阿拉比卡豆
+
+ICoffeeBeans robusta = new RobustaBeans();
+CoffeeMaker maker2 = new CoffeeMaker(robusta);
+maker2.MakeCoffee();  // 使用罗布斯塔豆
+```
+
+**优点：**
+- ✅ 依赖明确（从构造函数就能看出需要什么）
+- ✅ 依赖不可变（使用 `readonly`）
+- ✅ 强制提供依赖（没有依赖就无法创建对象）
+
+### 2. 属性注入
+
+```csharp
+class CoffeeMaker
+{
+    // 通过属性注入依赖
+    public ICoffeeBeans Beans { get; set; }
+    
+    public void MakeCoffee()
+    {
+        if (Beans == null)
+            throw new InvalidOperationException("请先设置咖啡豆");
+            
+        Beans.Grind();
+        Console.WriteLine("咖啡做好了！");
+    }
+}
+
+// 使用
+CoffeeMaker maker = new CoffeeMaker();
+maker.Beans = new ArabicaBeans();  // 通过属性注入
+maker.MakeCoffee();
+```
+
+**缺点：**
+- ❌ 依赖可能为 null
+- ❌ 依赖不明确
+
+### 3. 方法注入
+
+```csharp
+class CoffeeMaker
+{
+    // 通过方法参数注入依赖
+    public void MakeCoffee(ICoffeeBeans beans)
+    {
+        beans.Grind();
+        Console.WriteLine("咖啡做好了！");
+    }
+}
+
+// 使用
+CoffeeMaker maker = new CoffeeMaker();
+maker.MakeCoffee(new ArabicaBeans());
+```
+
+**适用场景：**
+- 依赖每次调用都可能不同
+
+---
+
+## 依赖注入容器（DI Container）
+
+手动注入依赖很麻烦，特别是依赖关系复杂时。**DI 容器**帮我们自动管理依赖。
+
+### 没有 DI 容器的困境
+
+```csharp
+// 复杂的依赖关系
+class Database { }
+
+class UserRepository
+{
+    public UserRepository(Database db) { }
+}
+
+class EmailService
+{
+    public EmailService() { }
+}
+
+class UserService
+{
+    public UserService(UserRepository repo, EmailService email) { }
+}
+
+class UserController
+{
+    public UserController(UserService service) { }
+}
+
+// 手动创建对象，太麻烦了！
+Database db = new Database();
+UserRepository repo = new UserRepository(db);
+EmailService email = new EmailService();
+UserService service = new UserService(repo, email);
+UserController controller = new UserController(service);
+```
+
+### 使用 DI 容器（以 Microsoft.Extensions.DependencyInjection 为例）
+
+```csharp
+using Microsoft.Extensions.DependencyInjection;
+
+// 1. 创建服务容器
+var services = new ServiceCollection();
+
+// 2. 注册服务
+services.AddSingleton<Database>();
+services.AddScoped<UserRepository>();
+services.AddTransient<EmailService>();
+services.AddTransient<UserService>();
+services.AddTransient<UserController>();
+
+// 3. 构建服务提供者
+var serviceProvider = services.BuildServiceProvider();
+
+// 4. 获取服务（容器自动解析所有依赖）
+var controller = serviceProvider.GetService<UserController>();
+```
+
+**DI 容器自动做了什么？**
+1. 创建 `Database`
+2. 用 `Database` 创建 `UserRepository`
+3. 创建 `EmailService`
+4. 用 `UserRepository` 和 `EmailService` 创建 `UserService`
+5. 用 `UserService` 创建 `UserController`
+
+---
+
+## 服务生命周期
+
+DI 容器管理对象的生命周期，有三种主要类型：
+
+### 1. Transient（瞬时）
+
+每次请求都创建新实例。
+
+```csharp
+services.AddTransient<IEmailService, EmailService>();
+
+// 每次获取都是新对象
+var email1 = serviceProvider.GetService<IEmailService>();
+var email2 = serviceProvider.GetService<IEmailService>();
+// email1 != email2
+```
+
+**适用场景：**
+- 轻量级、无状态的服务
+- 不需要共享状态
+
+### 2. Scoped（作用域）
+
+在同一个作用域内是同一个实例，不同作用域是不同实例。
+
+```csharp
+services.AddScoped<IUserRepository, UserRepository>();
+
+using (var scope1 = serviceProvider.CreateScope())
+{
+    var repo1 = scope1.ServiceProvider.GetService<IUserRepository>();
+    var repo2 = scope1.ServiceProvider.GetService<IUserRepository>();
+    // repo1 == repo2（同一作用域）
+}
+
+using (var scope2 = serviceProvider.CreateScope())
+{
+    var repo3 = scope2.ServiceProvider.GetService<IUserRepository>();
+    // repo3 != repo1（不同作用域）
+}
+```
+
+**适用场景：**
+- Web 应用中的每个 HTTP 请求
+- 需要在请求期间共享状态
+
+### 3. Singleton（单例）
+
+整个应用程序生命周期内只有一个实例。
+
+```csharp
+services.AddSingleton<IDatabase, Database>();
+
+var db1 = serviceProvider.GetService<IDatabase>();
+var db2 = serviceProvider.GetService<IDatabase>();
+// db1 == db2（始终是同一个对象）
+```
+
+**适用场景：**
+- 配置对象
+- 缓存
+- 日志服务
+- 数据库连接池
+
+### 生命周期对比
+
+```csharp
+class LifetimeDemo
+{
+    public static void Demo()
+    {
+        var services = new ServiceCollection();
+        
+        services.AddTransient<TransientService>();
+        services.AddScoped<ScopedService>();
+        services.AddSingleton<SingletonService>();
+        
+        var provider = services.BuildServiceProvider();
+        
+        Console.WriteLine("=== 第一次获取 ===");
+        using (var scope1 = provider.CreateScope())
+        {
+            var t1 = scope1.ServiceProvider.GetService<TransientService>();
+            var t2 = scope1.ServiceProvider.GetService<TransientService>();
+            Console.WriteLine($"Transient: {t1.Id} vs {t2.Id}");  // 不同
+            
+            var sc1 = scope1.ServiceProvider.GetService<ScopedService>();
+            var sc2 = scope1.ServiceProvider.GetService<ScopedService>();
+            Console.WriteLine($"Scoped: {sc1.Id} vs {sc2.Id}");  // 相同
+            
+            var si1 = scope1.ServiceProvider.GetService<SingletonService>();
+            var si2 = scope1.ServiceProvider.GetService<SingletonService>();
+            Console.WriteLine($"Singleton: {si1.Id} vs {si2.Id}");  // 相同
+        }
+        
+        Console.WriteLine("\n=== 第二次获取（新作用域）===");
+        using (var scope2 = provider.CreateScope())
+        {
+            var t3 = scope2.ServiceProvider.GetService<TransientService>();
+            var sc3 = scope2.ServiceProvider.GetService<ScopedService>();
+            var si3 = scope2.ServiceProvider.GetService<SingletonService>();
+            
+            Console.WriteLine($"Transient: 新对象");
+            Console.WriteLine($"Scoped: 新对象");
+            Console.WriteLine($"Singleton: 与之前相同");
+        }
+    }
+}
+
+class TransientService
+{
+    public Guid Id { get; } = Guid.NewGuid();
+}
+
+class ScopedService
+{
+    public Guid Id { get; } = Guid.NewGuid();
+}
+
+class SingletonService
+{
+    public Guid Id { get; } = Guid.NewGuid();
+}
+```
+
+---
+
+## 实战：构建一个博客系统
+
+让我们用 DI 构建一个完整的博客系统。
+
+### 1. 定义接口
+
+```csharp
+// 数据访问接口
+interface IPostRepository
+{
+    Post GetById(int id);
+    List<Post> GetAll();
+    void Add(Post post);
+    void Update(Post post);
+    void Delete(int id);
+}
+
+// 缓存接口
+interface ICacheService
+{
+    T Get<T>(string key);
+    void Set<T>(string key, T value, TimeSpan expiration);
+    void Remove(string key);
+}
+
+// 日志接口
+interface ILogger
+{
+    void Info(string message);
+    void Error(string message, Exception ex);
+}
+
+// 邮件接口
+interface IEmailService
+{
+    void SendEmail(string to, string subject, string body);
+}
+```
+
+### 2. 实现具体类
+
+```csharp
+// 文章实体
+class Post
+{
+    public int Id { get; set; }
+    public string Title { get; set; }
+    public string Content { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+// 数据仓储实现
+class PostRepository : IPostRepository
+{
+    private readonly ILogger logger;
+    private List<Post> posts = new List<Post>();
+    
+    public PostRepository(ILogger logger)
+    {
+        this.logger = logger;
+    }
+    
+    public Post GetById(int id)
+    {
+        logger.Info($"获取文章 {id}");
+        return posts.FirstOrDefault(p => p.Id == id);
+    }
+    
+    public List<Post> GetAll()
+    {
+        logger.Info("获取所有文章");
+        return posts;
+    }
+    
+    public void Add(Post post)
+    {
+        post.Id = posts.Count + 1;
+        post.CreatedAt = DateTime.Now;
+        posts.Add(post);
+        logger.Info($"添加文章：{post.Title}");
+    }
+    
+    public void Update(Post post)
+    {
+        var existing = GetById(post.Id);
+        if (existing != null)
+        {
+            existing.Title = post.Title;
+            existing.Content = post.Content;
+            logger.Info($"更新文章 {post.Id}");
+        }
+    }
+    
+    public void Delete(int id)
+    {
+        var post = GetById(id);
+        if (post != null)
+        {
+            posts.Remove(post);
+            logger.Info($"删除文章 {id}");
+        }
+    }
+}
+
+// 内存缓存实现
+class MemoryCacheService : ICacheService
+{
+    private Dictionary<string, (object Value, DateTime Expiration)> cache 
+        = new Dictionary<string, (object, DateTime)>();
+    
+    public T Get<T>(string key)
+    {
+        if (cache.ContainsKey(key))
+        {
+            var item = cache[key];
+            if (item.Expiration > DateTime.Now)
+                return (T)item.Value;
+            else
+                cache.Remove(key);
+        }
+        return default(T);
+    }
+    
+    public void Set<T>(string key, T value, TimeSpan expiration)
+    {
+        cache[key] = (value, DateTime.Now.Add(expiration));
+    }
+    
+    public void Remove(string key)
+    {
+        cache.Remove(key);
+    }
+}
+
+// 控制台日志实现
+class ConsoleLogger : ILogger
+{
+    public void Info(string message)
+    {
+        Console.WriteLine($"[INFO] {DateTime.Now:HH:mm:ss} - {message}");
+    }
+    
+    public void Error(string message, Exception ex)
+    {
+        Console.WriteLine($"[ERROR] {DateTime.Now:HH:mm:ss} - {message}");
+        Console.WriteLine($"异常：{ex.Message}");
+    }
+}
+
+// 邮件服务实现
+class EmailService : IEmailService
+{
+    private readonly ILogger logger;
+    
+    public EmailService(ILogger logger)
+    {
+        this.logger = logger;
+    }
+    
+    public void SendEmail(string to, string subject, string body)
+    {
+        logger.Info($"发送邮件到 {to}：{subject}");
+        // 实际发送邮件的逻辑
+    }
+}
+```
+
+### 3. 业务逻辑层
+
+```csharp
+class PostService
+{
+    private readonly IPostRepository repository;
+    private readonly ICacheService cache;
+    private readonly ILogger logger;
+    private readonly IEmailService emailService;
+    
+    // 构造函数注入所有依赖
+    public PostService(
+        IPostRepository repository,
+        ICacheService cache,
+        ILogger logger,
+        IEmailService emailService)
+    {
+        this.repository = repository;
+        this.cache = cache;
+        this.logger = logger;
+        this.emailService = emailService;
+    }
+    
+    public Post GetPost(int id)
+    {
+        // 先从缓存获取
+        string cacheKey = $"post_{id}";
+        var cachedPost = cache.Get<Post>(cacheKey);
+        
+        if (cachedPost != null)
+        {
+            logger.Info($"从缓存获取文章 {id}");
+            return cachedPost;
+        }
+        
+        // 缓存未命中，从数据库获取
+        var post = repository.GetById(id);
+        
+        if (post != null)
+        {
+            // 存入缓存
+            cache.Set(cacheKey, post, TimeSpan.FromMinutes(10));
+        }
+        
+        return post;
+    }
+    
+    public void CreatePost(Post post, string authorEmail)
+    {
+        try
+        {
+            repository.Add(post);
+            
+            // 发送通知邮件
+            emailService.SendEmail(
+                authorEmail,
+                "文章发布成功",
+                $"您的文章《{post.Title}》已成功发布"
+            );
+        }
+        catch (Exception ex)
+        {
+            logger.Error("创建文章失败", ex);
+            throw;
+        }
+    }
+    
+    public void UpdatePost(Post post)
+    {
+        repository.Update(post);
+        
+        // 清除缓存
+        cache.Remove($"post_{post.Id}");
+    }
+    
+    public void DeletePost(int id)
+    {
+        repository.Delete(id);
+        cache.Remove($"post_{id}");
+    }
+    
+    public List<Post> GetAllPosts()
+    {
+        return repository.GetAll();
+    }
+}
+```
+
+### 4. 配置 DI 容器
+
+```csharp
+class Program
+{
+    static void Main()
+    {
+        // 1. 创建服务容器
+        var services = new ServiceCollection();
+        
+        // 2. 注册服务
+        services.AddSingleton<ILogger, ConsoleLogger>();
+        services.AddSingleton<ICacheService, MemoryCacheService>();
+        services.AddScoped<IPostRepository, PostRepository>();
+        services.AddTransient<IEmailService, EmailService>();
+        services.AddTransient<PostService>();
+        
+        // 3. 构建服务提供者
+        var serviceProvider = services.BuildServiceProvider();
+        
+        // 4. 使用服务
+        using (var scope = serviceProvider.CreateScope())
+        {
+            var postService = scope.ServiceProvider.GetService<PostService>();
+            
+            // 创建文章
+            var post = new Post
+            {
+                Title = "依赖注入入门",
+                Content = "这是一篇关于依赖注入的文章..."
+            };
+            
+            postService.CreatePost(post, "author@example.com");
+            
+            // 获取文章（第一次从数据库）
+            var retrieved1 = postService.GetPost(1);
+            Console.WriteLine($"文章：{retrieved1.Title}");
+            
+            // 再次获取（从缓存）
+            var retrieved2 = postService.GetPost(1);
+            
+            // 获取所有文章
+            var allPosts = postService.GetAllPosts();
+            Console.WriteLine($"共有 {allPosts.Count} 篇文章");
+        }
+    }
+}
+```
+
+---
+
+## DI 的优势
+
+### 1. 松耦合
+
+```csharp
+// ❌ 紧耦合：难以替换实现
+class OrderService
+{
+    private SqlServerDatabase db = new SqlServerDatabase();
+    // 如果要换成 MySQL，必须修改代码
+}
+
+// ✅ 松耦合：轻松替换实现
+class OrderService
+{
+    private readonly IDatabase db;
+    
+    public OrderService(IDatabase db)
+    {
+        this.db = db;
+        // 可以注入任何实现了 IDatabase 的类
+    }
+}
+```
+
+### 2. 易于测试
+
+```csharp
+// 测试时使用模拟对象
+class MockEmailService : IEmailService
+{
+    public List<string> SentEmails { get; } = new List<string>();
+    
+    public void SendEmail(string to, string subject, string body)
+    {
+        SentEmails.Add($"{to}: {subject}");
+    }
+}
+
+// 单元测试
+[Test]
+public void CreatePost_ShouldSendEmail()
+{
+    // Arrange
+    var mockEmail = new MockEmailService();
+    var mockRepo = new MockPostRepository();
+    var mockCache = new MockCacheService();
+    var mockLogger = new MockLogger();
+    
+    var service = new PostService(mockRepo, mockCache, mockLogger, mockEmail);
+    
+    // Act
+    service.CreatePost(new Post { Title = "Test" }, "test@example.com");
+    
+    // Assert
+    Assert.AreEqual(1, mockEmail.SentEmails.Count);
+}
+```
+
+### 3. 易于维护
+
+```csharp
+// 需求变更：从文件日志改为数据库日志
+// 只需要：
+// 1. 创建新的实现
+class DatabaseLogger : ILogger
+{
+    public void Info(string message) { /* 写入数据库 */ }
+    public void Error(string message, Exception ex) { /* 写入数据库 */ }
+}
+
+// 2. 修改注册
+services.AddSingleton<ILogger, DatabaseLogger>();  // 改这一行即可
+
+// 所有使用 ILogger 的地方自动使用新实现，无需修改业务代码！
+```
+
+### 4. 单一职责
+
+```csharp
+// 每个类只负责一件事
+class UserService
+{
+    // 只负责用户业务逻辑
+    // 不关心数据如何存储（IUserRepository 负责）
+    // 不关心邮件如何发送（IEmailService 负责）
+    // 不关心日志如何记录（ILogger 负责）
+}
+```
+
+---
+
+## 常见陷阱与最佳实践
+
+### 陷阱 1：循环依赖
+
+```csharp
+// ❌ 错误：A 依赖 B，B 依赖 A
+class ServiceA
+{
+    public ServiceA(ServiceB b) { }
+}
+
+class ServiceB
+{
+    public ServiceB(ServiceA a) { }  // 循环依赖！
+}
+
+// ✅ 解决方案：重新设计，提取公共接口
+interface ISharedService { }
+
+class ServiceA
+{
+    public ServiceA(ISharedService shared) { }
+}
+
+class ServiceB
+{
+    public ServiceB(ISharedService shared) { }
+}
+```
+
+### 陷阱 2：生命周期不匹配
+
+```csharp
+// ❌ 错误：Singleton 依赖 Scoped
+services.AddSingleton<SingletonService>();  // 生命周期长
+services.AddScoped<ScopedService>();        // 生命周期短
+
+class SingletonService
+{
+    // 危险！Singleton 会一直持有第一次创建的 ScopedService
+    public SingletonService(ScopedService scoped) { }
+}
+
+// ✅ 正确：短生命周期依赖长生命周期
+class ScopedService
+{
+    public ScopedService(SingletonService singleton) { }  // OK
+}
+```
+
+### 最佳实践
+
+1. **优先使用构造函数注入**
+2. **依赖接口而非具体类**
+3. **避免服务定位器模式**（直接从容器获取服务）
+4. **合理选择生命周期**
+5. **保持依赖关系简单**
+
+---
+
+## 总结
+
+**控制反转（IoC）**：
+- 设计原则：不要自己创建依赖，让依赖被注入
+
+**依赖注入（DI）**：
+- 实现 IoC 的技术手段
+- 三种方式：构造函数、属性、方法
+
+**DI 容器**：
+- 自动管理依赖关系
+- 三种生命周期：Transient、Scoped、Singleton
+
+**优势**：
+- ✅ 松耦合
+- ✅ 易于测试
+- ✅ 易于维护
+- ✅ 单一职责
+
+**下一步学习：**
+- 📚 深入学习 ASP.NET Core 中的 DI
+- 🧪 学习单元测试与模拟对象
+- 🏗️ 研究其他 DI 容器（Autofac、Ninject）
+- 📖 学习 SOLID 设计原则
+
+依赖注入是现代软件开发的基石，掌握它将让你的代码更加优雅和专业！

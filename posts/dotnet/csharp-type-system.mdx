@@ -1,0 +1,257 @@
+---
+title: 'C# 类型系统：值类型、引用类型、enum、struct 与装箱拆箱'
+date: '2026-07-14'
+excerpt: '系统理解 C# 类型系统基础：值类型与引用类型、class 与 struct、enum、Nullable<T>、装箱拆箱和参数传递。'
+tags: ['dotnet', 'csharp', 'type-system', 'struct', 'enum']
+nextPost: 'dotnet/csharp-generics'
+---
+
+# C# 类型系统：值类型、引用类型、enum、struct 与装箱拆箱
+
+C# 是强类型语言。变量、参数、属性、集合元素都必须有明确类型。理解类型系统，才能真正理解为什么 `int`、`string`、`class`、`struct`、`enum`、`List<T>` 的行为不一样。
+
+:::tip C# 语言系列阅读顺序
+建议先读 [C# 语言核心知识路线](/posts/dotnet/csharp-language-roadmap)、[基础语法](/posts/dotnet/csharp-basic-syntax)、[面向对象基础](/posts/dotnet/csharp-object-oriented-basics) 和 [集合与异常处理](/posts/dotnet/csharp-collections-exceptions)。本文之后可以继续阅读 [泛型](/posts/dotnet/csharp-generics)、[扩展方法与迭代器](/posts/dotnet/csharp-extension-methods-iterators) 和 [LINQ](/posts/dotnet/csharp-linq)。
+:::
+
+## 值类型和引用类型
+
+C# 类型大体分为值类型和引用类型。
+
+值类型变量通常直接保存值本身，例如 `int`、`decimal`、`bool`、`DateTime`、`enum`、`struct`。
+
+引用类型变量保存的是对象引用，例如 `class`、`string`、数组、接口、委托。
+
+```csharp
+int a = 10;
+int b = a;
+b = 20;
+
+Console.WriteLine(a); // 10
+Console.WriteLine(b); // 20
+
+var p1 = new Person { Name = "Alice" };
+var p2 = p1;
+p2.Name = "Bob";
+
+Console.WriteLine(p1.Name); // Bob
+
+public class Person
+{
+    public string Name { get; set; } = string.Empty;
+}
+```
+
+`int` 赋值会复制值；`Person` 赋值复制的是引用，两个变量指向同一个对象。
+
+## class 与 struct
+
+`class` 是引用类型，`struct` 是值类型。
+
+```csharp
+public class UserClass
+{
+    public string Name { get; set; } = string.Empty;
+}
+
+public struct Money
+{
+    public decimal Amount { get; set; }
+    public string Currency { get; set; }
+}
+
+var user1 = new UserClass { Name = "Alice" };
+var user2 = user1;
+user2.Name = "Bob";
+
+var money1 = new Money { Amount = 100m, Currency = "CNY" };
+var money2 = money1;
+money2.Amount = 200m;
+
+Console.WriteLine(user1.Name);     // Bob
+Console.WriteLine(money1.Amount);  // 100
+```
+
+一般建议：
+
+- 有身份、生命周期、可变状态的业务对象，用 `class`
+- 小型、不可变、表达一个值的对象，可以考虑 `readonly struct` 或 `record struct`
+- 不要为了性能随意把业务对象改成 `struct`
+
+## enum：表达有限状态
+
+`enum` 适合表达一组有限、固定的状态或选项。
+
+```csharp
+public enum OrderStatus
+{
+    Pending = 0,
+    Paid = 1,
+    Shipped = 2,
+    Canceled = 3
+}
+
+OrderStatus status = OrderStatus.Paid;
+
+string text = status switch
+{
+    OrderStatus.Pending => "待支付",
+    OrderStatus.Paid => "已支付",
+    OrderStatus.Shipped => "已发货",
+    OrderStatus.Canceled => "已取消",
+    _ => "未知状态"
+};
+
+Console.WriteLine(text);
+```
+
+不要用魔法字符串散落表达状态：
+
+```csharp
+// 不推荐
+if (status == "paid") { }
+
+// 推荐
+if (status == OrderStatus.Paid) { }
+```
+
+## Flags 枚举
+
+当多个选项可以组合时，可以使用 `[Flags]`。
+
+```csharp
+[Flags]
+public enum Permission
+{
+    None = 0,
+    Read = 1,
+    Write = 2,
+    Delete = 4
+}
+
+Permission permission = Permission.Read | Permission.Write;
+
+Console.WriteLine(permission.HasFlag(Permission.Read));
+Console.WriteLine(permission.HasFlag(Permission.Delete));
+```
+
+标志枚举的值通常使用 1、2、4、8 这样的 2 的幂，方便按位组合。
+
+## Nullable<T> 与可空值类型
+
+值类型默认不能为 `null`。如果值类型需要表达“没有值”，可以使用 `Nullable<T>`，简写为 `T?`。
+
+```csharp
+int? age = null;
+
+if (age.HasValue)
+{
+    Console.WriteLine(age.Value);
+}
+else
+{
+    Console.WriteLine("年龄未知");
+}
+
+DateTime? paidAt = null;
+Console.WriteLine(paidAt?.ToString("yyyy-MM-dd") ?? "未支付");
+```
+
+注意这里的 `int?` 是 `Nullable<int>`，和可空引用类型里的 `string?` 不是同一种机制。
+
+## 装箱和拆箱
+
+装箱是把值类型转换成 `object` 或接口类型；拆箱是从 `object` 转回具体值类型。
+
+```csharp
+int number = 42;
+
+object boxed = number;       // 装箱
+int unboxed = (int)boxed;    // 拆箱
+
+Console.WriteLine(unboxed);
+```
+
+装箱会产生额外分配，拆箱类型不匹配会抛异常。
+
+```csharp
+object value = 42;
+
+// long wrong = (long)value; // InvalidCastException
+int right = (int)value;
+```
+
+泛型集合 `List<int>` 比 `ArrayList` 更安全也更高效，一个原因就是它避免了频繁装箱拆箱。
+
+## 参数传递：值复制和引用复制
+
+C# 默认按值传递参数。对于引用类型，复制的是引用本身。
+
+```csharp
+void Rename(Person person)
+{
+    person.Name = "Bob";
+}
+
+var person = new Person { Name = "Alice" };
+Rename(person);
+
+Console.WriteLine(person.Name); // Bob
+```
+
+如果在方法内部把参数重新指向新对象，不会改变调用方变量本身。
+
+```csharp
+void Replace(Person person)
+{
+    person = new Person { Name = "Cindy" };
+}
+
+var person = new Person { Name = "Alice" };
+Replace(person);
+
+Console.WriteLine(person.Name); // Alice
+```
+
+需要改变调用方变量指向时，可以使用 `ref`，但业务代码中应谨慎使用。
+
+```csharp
+void Replace(ref Person person)
+{
+    person = new Person { Name = "Cindy" };
+}
+
+var person = new Person { Name = "Alice" };
+Replace(ref person);
+
+Console.WriteLine(person.Name); // Cindy
+```
+
+## 类型转换
+
+隐式转换不会丢失信息，显式转换需要强制写出。
+
+```csharp
+int count = 10;
+long bigCount = count;       // 隐式转换
+
+double price = 19.9;
+int rounded = (int)price;    // 显式转换，小数部分被截断
+
+Console.WriteLine(rounded);  // 19
+```
+
+字符串转换优先使用 `TryParse`，不要用异常控制正常输入流程。
+
+```csharp
+string input = "123";
+
+if (int.TryParse(input, out int result))
+{
+    Console.WriteLine(result);
+}
+```
+
+## 总结
+
+类型系统决定了数据如何被保存、复制、比较和传递。掌握值类型、引用类型、`class`、`struct`、`enum`、可空值类型和装箱拆箱后，再看泛型、集合、LINQ、EF Core 实体建模，会更容易理解它们的边界。

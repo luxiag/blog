@@ -1,0 +1,315 @@
+---
+title: '读懂《The Book of Shaders》：给前端开发者的图形学启蒙'
+date: '2024-11-01'
+description: '《The Book of Shaders》被誉为 Shader 编程的圣经。本文不仅是它的精华导读，更结合现代 WebGL 开发经验，深入剖析了造型函数、噪声算法、颜色混合、矩阵变换等核心概念，并提供了大量可交互的 GLSL 示例。'
+tags: ['WebGL', 'GLSL', 'Book Review', 'Graphics', 'Math']
+---
+
+# 读懂《The Book of Shaders》：给前端开发者的图形学启蒙
+
+如果你想学习 Fragment Shader（片元着色器），[The Book of Shaders](https://thebookofshaders.com/) 是绕不开的一座丰碑。它不像传统的计算机图形学教材那样堆砌线性代数公式，而是像一本"魔法书"，教会你如何用数学公式在屏幕上"无中生有"。
+
+本文将梳理书中的核心脉络，并结合现代前端开发（React Three Fiber）的视角，对重点知识进行扩展和实战演示。
+
+## 第一部分：算法绘画 (Algorithmic Drawing)
+
+Shader 编程的核心思想是：**摒弃 Canvas 2D 的"画笔"思维，拥抱"函数"思维。**
+
+在 Canvas 中，你可能会说："移动到 (10,10)，画一个半径为 5 的圆"。
+但在 Shader 中，你必须问："当前像素 (x,y) 是否在圆内？如果是，涂白色；否则，涂黑色"。
+
+### 1. 造型函数 (Shaping Functions)
+
+这是全书最精彩的章节之一。如何不用 `if` 语句，只用数学函数画出各种形状？
+
+#### 核心工具箱
+*   `step(edge, x)`: 阶梯函数。`x < edge` 返回 0.0，否则返回 1.0。是 `if` 的高效替代品。
+*   `smoothstep(edge0, edge1, x)`: 平滑阶梯。在两个边缘之间进行 Hermite 插值。是制作"抗锯齿"和"柔和过渡"的神器。
+*   `fract(x)`: 取小数部分。用于制造重复图案。
+
+#### 实战：用数学"雕刻"线条
+
+让我们看看如何仅用 `smoothstep` 画出一条发光的线。
+
+<ShaderPreview title="Glowing Line" code={`
+varying vec2 vUv;
+
+// 绘制线条的函数
+// pos: 当前像素位置
+// point: 线条中心位置
+// width: 线条宽度
+float plot(vec2 pos, float point, float width) {
+  // 左边缘：从 0 平滑过渡到 1
+  float left = smoothstep(point - width, point, pos.y);
+  
+  // 右边缘：从 1 平滑过渡到 0
+  float right = 1.0 - smoothstep(point, point + width, pos.y);
+  
+  return left * right;
+}
+
+void main() {
+  vec2 st = vUv;
+  
+  // 定义一条曲线 y = x^5
+  float y = pow(st.x, 5.0);
+  
+  // 绘制这条线
+  // 我们检测当前像素的 y 坐标是否接近计算出的 y 值
+  float pct = plot(st, y, 0.02);
+  
+  // 加上背景色
+  vec3 color = vec3(y); // 背景也是渐变
+  color = (1.0 - pct) * color + pct * vec3(0.0, 1.0, 0.0); // 绿色线条
+  
+  gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+### 2. 颜色 (Colors)
+
+在 Shader 中，颜色不仅仅是装饰，它就是**数据**。
+
+#### 颜色混合
+*   `mix(a, b, t)`: 线性插值。Shader 中最常用的函数之一。
+*   **HSB vs RGB**: 书中强调了使用极坐标系下的 HSB (色相、饱和度、亮度) 来制作彩虹、色轮等效果，这比直觉上的 RGB 混合更符合人类的色彩感知。
+
+下面的示例展示了如何制作一个极坐标色轮：
+
+<ShaderPreview title="Color Wheel" code={`
+#define TWO_PI 6.28318530718
+varying vec2 vUv;
+
+// HSB 转 RGB 的辅助函数
+vec3 hsb2rgb(in vec3 c){
+    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0),
+                             6.0) - 3.0) - 1.0,
+                     0.0,
+                     1.0);
+    rgb = rgb * rgb * (3.0 - 2.0 * rgb);
+    return c.z * mix(vec3(1.0), rgb, c.y);
+}
+
+void main(){
+    vec2 st = vUv - 0.5;
+    vec2 toCenter = st;
+    float angle = atan(toCenter.y,toCenter.x);
+    float radius = length(toCenter) * 2.0;
+
+    // 将角度映射到 0-1 范围作为色相 (Hue)
+    // 加上 radius 制造螺旋效果
+    float hue = (angle / TWO_PI) + 0.5;
+    
+    // 饱和度 (Saturation) 随半径变化
+    float sat = radius;
+    
+    // 亮度 (Brightness) 设为 1.0
+    vec3 color = hsb2rgb(vec3(hue, sat, 1.0));
+
+    gl_FragColor = vec4(color,1.0);
+}
+`} />
+
+### 3. 形状 (Shapes)
+
+学会了画线，接下来是画图形。书中的核心思想是**距离场 (Distance Field)**。
+
+对于矩形，我们可以分别计算 x 轴和 y 轴的边缘，然后把它们乘起来。
+
+<ShaderPreview title="Rectangle" code={`
+varying vec2 vUv;
+
+void main() {
+    vec2 st = vUv;
+    vec3 color = vec3(0.0);
+
+    // 底部和左侧边缘 (step 函数)
+    vec2 bl = step(vec2(0.1), st);
+    
+    // 顶部和右侧边缘 (1.0 - step)
+    vec2 tr = step(vec2(0.1), 1.0 - st);
+    
+    // 四个边缘相乘：只有都在内部时才为 1.0
+    float pct = bl.x * bl.y * tr.x * tr.y;
+
+    color = vec3(pct);
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+**知识扩展：SDF (有向距离场)**
+
+书中提到的距离场概念，在现代渲染中进化为 SDF (Signed Distance Function)。SDF 极其强大，它不仅知道你在形状内还是外，还知道你**距离边界有多远**。
+
+这使得我们可以轻松实现：
+*   **描边**：`abs(dist) < 0.01`
+*   **外发光**：`exp(-dist * 10.0)`
+*   **形状融合**：`smin(dist1, dist2)` (平滑最小值)
+
+### 4. 矩阵与变换 (Matrices)
+
+如果你想移动、旋转或缩放一个形状，千万不要去修改形状的公式。**相反，你应该移动整个坐标系。**
+
+*   **平移**: `st += vec2(0.5)`
+*   **缩放**: `st *= 2.0`
+*   **旋转**: 需要乘以一个旋转矩阵。
+
+```glsl
+mat2 rotate2d(float _angle){
+    return mat2(cos(_angle),-sin(_angle),
+                sin(_angle),cos(_angle));
+}
+```
+
+<ShaderPreview title="Rotating Cross" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+mat2 rotate2d(float _angle){
+    return mat2(cos(_angle),-sin(_angle),
+                sin(_angle),cos(_angle));
+}
+
+float box(in vec2 _st, in vec2 _size){
+    _size = vec2(0.5) - _size*0.5;
+    vec2 uv = smoothstep(_size,
+                        _size+vec2(0.001),
+                        _st);
+    uv *= smoothstep(_size,
+                    _size+vec2(0.001),
+                    vec2(1.0)-_st);
+    return uv.x*uv.y;
+}
+
+void main(){
+    vec2 st = vUv;
+    vec3 color = vec3(0.0);
+
+    // 1. 移动坐标系原点到中心
+    st -= vec2(0.5);
+    
+    // 2. 旋转坐标系 (随时间)
+    st = rotate2d( sin(uTime)*3.14 ) * st;
+    
+    // 3. 移回原点
+    st += vec2(0.5);
+
+    // 绘制十字
+    color += vec3(box(st,vec2(0.7,0.2)));
+    color += vec3(box(st,vec2(0.2,0.7)));
+
+    gl_FragColor = vec4(color,1.0);
+}
+`} />
+
+### 5. 图案 (Patterns)
+
+利用 `fract()` 函数，我们可以把连续的坐标空间切碎，变成无数个小的重复空间。这是制作瓷砖、网格纹理的基础。
+
+`vec2 gridSt = fract(st * 10.0); // 将空间分割成 10x10 的网格`
+
+## 第二部分：生成式设计 (Generative Designs)
+
+一旦掌握了形状，下一步就是让它们动起来，或者变得"随机"但有序。
+
+### 1. 随机 (Random)
+
+在 Shader 中，并没有 `Math.random()`。我们需要利用数学上的**混沌 (Chaos)** 来制造伪随机。
+最经典的单行随机函数：
+
+```glsl
+float random (vec2 st) {
+    return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+}
+```
+
+它的原理是：取一个正弦波，把频率调得极高，然后只取小数部分。这就得到了一片看似杂乱无章的噪点。
+
+<ShaderPreview title="TV Static (Noise)" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+float random (vec2 st) {
+    return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+}
+
+void main() {
+    // 加上时间让噪点动起来
+    float rnd = random(vUv + uTime);
+    
+    gl_FragColor = vec4(vec3(rnd), 1.0);
+}
+`} />
+
+### 2. 噪声 (Noise)
+
+"随机"太刺眼了，自然界中没有这种完全不连续的随机。云彩、山脉、水波，它们都是**平滑的随机**。
+这就引出了图形学最重要的概念之一：**Perlin Noise** 或 **Value Noise**。
+
+它的核心思想是：在网格点上生成随机数，然后在点与点之间进行平滑插值。
+
+<ShaderPreview title="Value Noise" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 基础随机
+float random (vec2 st) {
+    return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+}
+
+// 2D 噪声函数
+float noise (in vec2 st) {
+    vec2 i = floor(st); // 整数部分（网格索引）
+    vec2 f = fract(st); // 小数部分（网格内坐标）
+
+    // 四个角的随机值
+    float a = random(i);
+    float b = random(i + vec2(1.0, 0.0));
+    float c = random(i + vec2(0.0, 1.0));
+    float d = random(i + vec2(1.0, 1.0));
+
+    // 平滑插值曲线 (Hermite Curve)
+    // f * f * (3.0 - 2.0 * f)
+    vec2 u = f * f * (3.0 - 2.0 * f);
+
+    // 双线性插值
+    return mix(a, b, u.x) +
+            (c - a)* u.y * (1.0 - u.x) +
+            (d - b) * u.x * u.y;
+}
+
+void main() {
+    vec2 st = vUv * 5.0; // 放大坐标系，看清网格
+    
+    // 加上时间流动
+    float n = noise(st + vec2(uTime * 0.5));
+    
+    gl_FragColor = vec4(vec3(n), 1.0);
+}
+`} />
+
+### 3. 分形布朗运动 (fBM)
+
+如果我们把不同频率、不同振幅的噪声叠加起来，会发生什么？
+这就像是把大的山脉轮廓、中等的岩石起伏、小的沙砾纹理叠加在一起。这就构成了**分形 (Fractal)**。
+
+公式：`fBM = noise(x) + 0.5 * noise(2x) + 0.25 * noise(4x) + ...`
+
+这正是生成云层、地形、火焰的基础。
+
+## 知识扩展：Shader 还能做什么？
+
+《The Book of Shaders》主要聚焦于 2D 图案。但在现代 WebGL 开发中，这些知识可以无缝迁移到更多领域：
+
+1.  **顶点位移 (Vertex Displacement)**: 使用噪声函数去修改 `Vertex Shader` 中的顶点位置。比如，做一个随风飘动的旗帜，或者起伏的海面。
+2.  **后期处理 (Post-processing)**: 将整个渲染好的 3D 场景作为一张图片（纹理）传给 Fragment Shader。你可以在这里实现景深、辉光 (Bloom)、色差 (Chromatic Aberration) 等电影级特效。
+3.  **光线步进 (Ray Marching)**: 这是一种纯粹用数学公式渲染 3D 场景的技术（无需模型文件）。ShaderToy 上那些惊艳的 3D 作品大多基于此。
+
+## 总结
+
+学习 Shader 就像学习一种新的思维方式。你不再是控制一个个具体的物体，而是在定义空间的规则。
+
+**《The Book of Shaders》教会了我们规则，而想象力将决定我们能构建出怎样的世界。**
+
+建议在阅读本书时，配合在线编辑器多动手调试。把 `0.0` 改成 `1.0`，把 `sin` 改成 `cos`，你会发现很多意外的惊喜。

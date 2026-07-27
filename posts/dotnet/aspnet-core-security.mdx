@@ -1,0 +1,425 @@
+---
+title: 'ASP.NET Core 安全基础：CORS、CSRF、限流与安全响应头'
+date: '2026-07-24'
+excerpt: '掌握 ASP.NET Core 生产安全基础：HTTPS 与 HSTS、CORS 配置、CSRF 防护、XSS 防护、SQL 注入防护、Rate Limiting、安全响应头、敏感配置管理和密码哈希。'
+tags: ['dotnet', 'aspnetcore', 'security', 'cors', 'rate-limiting']
+nextPost: 'dotnet/aspnet-core-deployment'
+---
+
+# ASP.NET Core 安全基础：CORS、CSRF、限流与安全响应头
+
+安全不是上线前加的补丁，而是系统设计的一部分。这篇文章覆盖 ASP.NET Core 生产项目最常见的安全问题：HTTPS、CORS、CSRF、XSS、SQL 注入、限流、安全响应头、敏感配置和密码哈希。
+
+:::tip 阶段三阅读顺序
+本文属于生产项目常用能力阶段。建议先掌握 [Authentication](/posts/dotnet/aspnet-core-authentication)、[Authorization](/posts/dotnet/aspnet-core-authorization)、[文件上传下载](/posts/dotnet/aspnet-core-file-upload-download) 和 [Configuration](/posts/dotnet/aspnet-core-configuration)。
+:::
+
+## HTTPS 与 HSTS
+
+生产环境必须启用 HTTPS：
+
+```csharp
+app.UseHttpsRedirection();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+}
+```
+
+- `UseHttpsRedirection`：HTTP 请求自动重定向到 HTTPS。
+- `UseHsts()`：告诉浏览器在未来一段时间内只使用 HTTPS 访问本站。
+
+HSTS 头示例：
+
+```http
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+```
+
+开发环境不要启用 HSTS，浏览器缓存后很难清除。
+
+## CORS 配置
+
+前后端分离项目必须正确配置 CORS：
+
+```csharp
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowApp", policy =>
+    {
+        policy.WithOrigins("https://app.example.com")
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
+    });
+});
+
+app.UseCors("AllowApp");
+```
+
+常见错误：
+
+- `AllowAnyOrigin()` + `AllowCredentials()` 同时使用，浏览器会拒绝。
+- 生产环境不要用 `AllowAnyOrigin()`，必须明确指定源。
+- `UseCors()` 放在 `UseRouting()` 之后、`UseAuthentication()` 之前。
+
+## CSRF 防护
+
+CSRF（跨站请求伪造）：恶意网站冒充已登录用户向目标网站发送请求。
+
+Cookie 认证场景需要防护 CSRF。ASP.NET Core 提供了 Antiforgery：
+
+```csharp
+builder.Services.AddAntiforgery();
+
+app.UseAntiforgery();
+```
+
+### 表单场景（Razor Pages / MVC）
+
+表单页面中，`@Html.AntiForgeryToken()` 或 `<form asp-antiforgery="true">` 会自动生成隐藏字段和 Cookie：
+
+```html
+<form method="post" action="/api/order">
+    @Html.AntiForgeryToken()
+    <button type="submit">Submit</button>
+</form>
+```
+
+服务端用 `[ValidateAntiForgeryToken]` 验证：
+
+```csharp
+[HttpPost]
+[ValidateAntiForgeryToken]
+public IActionResult CreateOrder(OrderRequest request)
+{
+    return Ok();
+}
+```
+
+### API 场景（SPA / 前后端分离）
+
+API 不用表单提交，Token 需要通过 Cookie + Header 双重验证。完整流程：
+
+1. 服务端配置 Header 名称，并提供获取 Token 的接口：
+
+```csharp
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = "X-XSRF-TOKEN";
+    options.Cookie.Name = "XSRF-TOKEN";
+    options.Cookie.HttpOnly = false;
+    options.Cookie.SameSite = SameSiteMode.Strict;
+});
+```
+
+`Cookie.HttpOnly = false` 是关键：前端 JS 需要读取这个 Cookie 值放入请求 Header。
+
+2. 提供接口让前端获取 Token：
+
+```csharp
+app.MapGet("/api/antiforgery-token", (IAntiforgery antiforgery, HttpContext context) =>
+{
+    AntiforgeryTokenSet tokens = antiforgery.GetAndStoreTokens(context);
+    return Results.Ok(new { requestToken = tokens.RequestToken });
+});
+```
+
+此接口调用后，响应会自动设置 `XSRF-TOKEN` Cookie。
+
+3. 前端发送请求时从 Cookie 读取 Token 放入 Header：
+
+```javascript
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+  return match ? match[2] : null;
+}
+
+fetch('/api/order', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-XSRF-TOKEN': getCookie('XSRF-TOKEN'),
+  },
+  body: JSON.stringify({ productId: 1 }),
+});
+```
+
+4. 服务端自动验证 `[ValidateAntiForgeryToken]` 或全局 filter：
+
+```csharp
+builder.Services.AddControllersWithViews(options =>
+{
+    options.Filters.Add<AutoValidateAntiforgeryTokenAttribute>();
+});
+```
+
+`AutoValidateAntiforgeryTokenAttribute` 只对不安全方法（POST/PUT/DELETE/PATCH）验证，GET/HEAD/OPTIONS 不验证。
+
+JWT Bearer 认证天然防 CSRF，因为 Token 不会由浏览器自动携带。
+
+## XSS 基础防护
+
+XSS（跨站脚本攻击）：恶意脚本注入到页面中执行。
+
+防护措施：
+
+- **输出编码**：不要把用户输入直接拼接进 HTML。Razor 默认会编码输出。
+- **Content-Security-Policy**：限制页面能加载哪些资源。
+
+```csharp
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'");
+    await next();
+});
+```
+
+CSP 各指令含义：
+
+| 指令 | 值 | 含义 |
+|---|---|---|
+| `default-src` | `'self'` | 所有资源类型的默认策略：只允许同源 |
+| `script-src` | `'self'` | JavaScript 只允许同源加载，禁止内联脚本和 eval |
+| `style-src` | `'self' 'unsafe-inline'` | CSS 只允许同源，`unsafe-inline` 允许内联样式（部分框架需要） |
+| `img-src` | `'self' data:` | 图片允许同源和 data URI |
+| `connect-src` | `'self'` | AJAX / WebSocket 只允许连接同源 |
+| `font-src` | `'self'` | 字体只允许同源 |
+| `frame-src` | `'none'` | 不允许任何 iframe 嵌入 |
+| `object-src` | `'none'` | 不允许 Flash / Java 插件 |
+| `base-uri` | `'self'` | 限制 `<base>` 标签的 URL，防止劫持相对路径 |
+
+更严格的生产配置示例：
+
+```csharp
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append("Content-Security-Policy",
+        "default-src 'self'; " +
+        "script-src 'self'; " +
+        "style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data: https:; " +
+        "font-src 'self'; " +
+        "connect-src 'self' https://api.example.com; " +
+        "frame-src 'none'; " +
+        "object-src 'none'; " +
+        "base-uri 'self'; " +
+        "form-action 'self'");
+    await next();
+});
+```
+
+- `form-action 'self'` 限制表单只能提交到同源，防止 XSS 窃取表单数据
+- `connect-src` 需要包含前端实际调用的 API 域名，否则 AJAX 请求会被浏览器拦截
+- CSP 策略建议先用 `Content-Security-Policy-Report-Only` 观察违规报告，确认无误后再正式启用
+
+- JSON API 返回 `Content-Type: application/json`，浏览器不会当作 HTML 执行。
+- 不要把用户输入直接 `Html.Raw()` 输出。
+
+## SQL 注入防护
+
+EF Core 使用参数化查询，默认防止 SQL 注入：
+
+```csharp
+// 安全，EF Core 生成参数化 SQL
+var product = await _dbContext.Products
+    .Where(p => p.Name == userInput)
+    .FirstOrDefaultAsync();
+```
+
+危险写法是拼接原始 SQL：
+
+```csharp
+// 危险！SQL 注入风险
+var sql = $"SELECT * FROM Products WHERE Name = '{userInput}'";
+await _dbContext.Database.ExecuteSqlRawAsync(sql);
+```
+
+如果必须写原始 SQL，使用参数：
+
+```csharp
+await _dbContext.Database.ExecuteSqlRawAsync(
+    "SELECT * FROM Products WHERE Name = {0}", userInput);
+```
+
+## Rate Limiting
+
+ASP.NET Core 7+ 内置限流中间件，防止接口被恶意高频调用。
+
+```csharp
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("Fixed", opt =>
+    {
+        opt.PermitLimit = 100;
+        opt.Window = TimeSpan.FromMinutes(1);
+        opt.QueueLimit = 0;
+    });
+
+    options.AddSlidingWindowLimiter("Sliding", opt =>
+    {
+        opt.PermitLimit = 100;
+        opt.Window = TimeSpan.FromMinutes(1);
+        opt.SegmentsPerWindow = 4;
+    });
+
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+});
+
+app.UseRateLimiter();
+```
+
+在 Controller 或 Endpoint 上使用：
+
+```csharp
+[EnableRateLimiting("Fixed")]
+[HttpGet]
+public IActionResult GetProducts()
+{
+    return Ok();
+}
+```
+
+| 算法 | 特点 |
+|---|---|
+| 固定窗口 | 简单，窗口边界有突发问题 |
+| 滑动窗口 | 更平滑，按段滑动 |
+| 令牌桶 | 允许短时突发，适合 API |
+| 并发限流 | 限制同时进行请求数 |
+
+429 状态码表示"请求过多"，客户端应实现退避重试。
+
+## 安全响应头
+
+推荐添加的安全响应头：
+
+```csharp
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+    context.Response.Headers.Append("X-Frame-Options", "DENY");
+    context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
+    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+    await next();
+});
+```
+
+| Header | 作用 |
+|---|---|
+| `X-Content-Type-Options: nosniff` | 阻止浏览器猜测 MIME 类型 |
+| `X-Frame-Options: DENY` | 阻止页面被 iframe 嵌入，防点击劫持 |
+| `X-XSS-Protection` | 启用浏览器 XSS 过滤器 |
+| `Referrer-Policy` | 控制 Referer 头泄露范围 |
+
+也可以使用 `NetEscapades.AspNetCore.SecurityHeaders` 包简化配置。
+
+## 敏感配置管理
+
+- 连接字符串、API Key、JWT 密钥不要写进代码或 `appsettings.json`。
+- 使用环境变量、User Secrets（开发）、Azure Key Vault / Consul（生产）。
+- 日志中不要打印完整连接字符串和密钥。
+- 配置变更后验证是否生效，启动时校验必填配置。
+
+```csharp
+builder.Services.AddOptions<JwtOptions>()
+    .BindConfiguration(JwtOptions.SectionName)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+```
+
+## Data Protection
+
+ASP.NET Core 内置 Data Protection API，用于加密和解密敏感数据：
+
+```csharp
+public class SensitiveService
+{
+    private readonly IDataProtector _protector;
+
+    public SensitiveService(IDataProtectionProvider provider)
+    {
+        _protector = provider.CreateProtector("User.PII");
+    }
+
+    public string Protect(string plaintext) => _protector.Protect(plaintext);
+    public string Unprotect(string protectedData) => _protector.Unprotect(protectedData);
+}
+```
+
+用途：加密 Cookie、加密查询字符串参数、保护配置中的敏感字段。
+
+多实例部署时需要配置共享密钥环，否则 A 实例加密的数据 B 实例无法解密：
+
+```csharp
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo("/shared-keys/"))
+    .SetApplicationName("ProductApi");
+```
+
+### 密钥轮换
+
+Data Protection 自动管理密钥生命周期。默认 90 天生成新密钥，旧密钥仍可解密但不再用于加密。可在配置中调整：
+
+```csharp
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo("/shared-keys/"))
+    .SetApplicationName("ProductApi")
+    .SetDefaultKeyLifetime(TimeSpan.FromDays(30));
+```
+
+密钥文件存储在指定目录下，文件名包含创建日期。手动删除旧密钥文件会导致对应密文无法解密——**务必保留足够的旧密钥**。
+
+### 多应用共享密钥
+
+多个应用需要共享加解密能力时（如 SSO Cookie、分布式会话），必须满足：
+
+1. 相同的 `ApplicationName`
+2. 相同的密钥存储路径
+3. 相同的密钥保护方式（默认使用机器级 DPAPI，Linux 上需额外配置）
+
+```csharp
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo("/shared-keys/"))
+    .SetApplicationName("SharedAuthApps")
+    .ProtectKeysWithCertificate(new X509Certificate2("/certs/dp-cert.pfx", "cert-password"));
+```
+
+`ProtectKeysWithCertificate` 用证书加密密钥文件，适合跨机器共享场景。在 Linux 上不配置密钥保护时，默认使用文件权限保护。
+
+## 密码哈希
+
+永远不要用 MD5、SHA1、SHA256 直接哈希密码。应使用专门的密码哈希算法：
+
+```csharp
+using Microsoft.AspNetCore.Identity;
+
+string hashed = _hasher.HashPassword(user, "plain-password");
+var result = _hasher.VerifyHashedPassword(user, hashed, "plain-password");
+```
+
+`PasswordHasher<T>` 是 ASP.NET Core Identity 内置的密码哈希器，使用 PBKDF2。
+
+如果不用 Identity，可以使用 BCrypt：
+
+```bash
+dotnet add package BCrypt.Net-Next
+```
+
+```csharp
+string hashed = BCrypt.HashPassword("plain-password");
+bool valid = BCrypt.Verify("plain-password", hashed);
+```
+
+密码哈希要点：
+
+- 每次哈希结果不同（内置随机盐）。
+- 不可逆，无法从哈希还原密码。
+- 工作因子越高越安全，但越慢。默认 10-12 即可。
+
+## 总结
+
+ASP.NET Core 安全不是单一配置，而是一系列措施的叠加：HTTPS 保护传输、CORS 控制跨域、CSRF Token 防伪造、限流防滥用、安全响应头防注入、参数化查询防 SQL 注入、Data Protection 加密敏感数据、密码哈希不用明文。
+
+安全要作为系统设计的一部分，而不是上线前的补丁。

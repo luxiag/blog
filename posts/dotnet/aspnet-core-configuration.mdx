@@ -1,0 +1,370 @@
+---
+title: 'ASP.NET Core Configuration：配置系统与环境变量'
+date: '2026-07-21'
+excerpt: '理解 ASP.NET Core 配置系统：appsettings.json、环境配置、环境变量、命令行参数、配置优先级、User Secrets 和生产配置建议。'
+tags: ['dotnet', 'aspnetcore', 'configuration', 'appsettings']
+nextPost: 'dotnet/aspnet-core-options'
+---
+
+# ASP.NET Core Configuration：配置系统与环境变量
+
+配置系统解决的问题是：**应用在不同环境下如何读取不同配置，而不是把数据库连接、第三方地址、开关参数写死在代码里。**
+
+ASP.NET Core 的配置系统是分层的。它会从多个来源读取配置，并按优先级覆盖。
+
+:::tip 阶段二阅读顺序
+本文属于 ASP.NET Core 应用基础设施阶段。建议先掌握 [阶段一入门主线](/posts/dotnet/aspnet-core-roadmap)，再按顺序学习 Configuration -> [Options](/posts/dotnet/aspnet-core-options) -> [Dependency Injection](/posts/dotnet/aspnet-core-dependency-injection) -> [Logging](/posts/dotnet/aspnet-core-logging)。
+:::
+
+## 默认配置来源
+
+`WebApplication.CreateBuilder(args)` 会默认加载常见配置来源：
+
+- `appsettings.json`
+- `appsettings.{Environment}.json`
+- User Secrets（开发环境，项目启用后）
+- 环境变量
+- 命令行参数
+
+### 完整 Provider 注册顺序
+
+`CreateBuilder` 按以下顺序注册配置 Provider（后注册的优先级更高）：
+
+| 顺序 | Provider | 说明 |
+|---|---|---|
+| 1 | `appsettings.json` | 基础配置，总是加载 |
+| 2 | `appsettings.{Environment}.json` | 环境覆盖，如 `appsettings.Development.json` |
+| 3 | User Secrets | 仅 Development 环境，存储在用户目录下 |
+| 4 | 环境变量 | `ASPNETCORE_*` 前缀自动映射，其他键用 `__` 分隔层级 |
+| 5 | 命令行参数 | `--Key:SubKey=Value` 格式，优先级最高 |
+
+后加载的 Provider 会覆盖先加载的同名键。所以命令行参数 > 环境变量 > User Secrets > 环境配置文件 > 基础配置文件。
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+string? appName = builder.Configuration["App:Name"];
+string? connectionString = builder.Configuration.GetConnectionString("Default");
+```
+
+## appsettings.json
+
+配置通常从 `appsettings.json` 开始。
+
+```json
+{
+  "App": {
+    "Name": "Product API",
+    "PageSize": 20
+  },
+  "ConnectionStrings": {
+    "Default": "Server=.;Database=ProductDb;Trusted_Connection=True;TrustServerCertificate=True"
+  }
+}
+```
+
+读取嵌套配置用冒号：
+
+```csharp
+string? name = builder.Configuration["App:Name"];
+int pageSize = builder.Configuration.GetValue<int>("App:PageSize");
+```
+
+连接字符串有专门方法：
+
+```csharp
+string? connectionString = builder.Configuration.GetConnectionString("Default");
+```
+
+## 环境配置
+
+不同环境可以使用不同配置文件：
+
+```text
+appsettings.json
+appsettings.Development.json
+appsettings.Production.json
+```
+
+如果当前环境是 `Development`，后加载的 `appsettings.Development.json` 会覆盖 `appsettings.json` 中同名配置。
+
+环境名由 `ASPNETCORE_ENVIRONMENT` 或 `DOTNET_ENVIRONMENT` 决定。
+
+```csharp
+if (builder.Environment.IsDevelopment())
+{
+    Console.WriteLine("Development environment");
+}
+```
+
+## 配置优先级
+
+后加载的配置源优先级更高。默认情况下，环境变量和命令行参数可以覆盖 JSON 文件配置。
+
+例如 JSON 中：
+
+```json
+{
+  "App": {
+    "Name": "Product API"
+  }
+}
+```
+
+环境变量可以覆盖：
+
+```text
+App__Name=Product API From Env
+```
+
+在环境变量中，层级分隔通常使用双下划线 `__`。
+
+## 命令行参数
+
+运行应用时可以传入参数：
+
+```bash
+dotnet run --App:Name="Product API From Command"
+```
+
+读取方式不变：
+
+```csharp
+string? name = builder.Configuration["App:Name"];
+```
+
+命令行参数适合临时覆盖配置，不适合保存敏感信息。
+
+## User Secrets
+
+开发环境不要把密码、连接字符串、Token 提交到 Git。可以使用 User Secrets。
+
+初始化：
+
+```bash
+dotnet user-secrets init
+```
+
+设置配置：
+
+```bash
+dotnet user-secrets set "ConnectionStrings:Default" "Server=.;Database=ProductDb;Trusted_Connection=True;TrustServerCertificate=True"
+```
+
+代码读取方式仍然一样：
+
+```csharp
+string? connectionString = builder.Configuration.GetConnectionString("Default");
+```
+
+User Secrets 只适合本地开发，不是生产密钥管理方案。
+
+## 自定义配置节
+
+可以读取整个配置节：
+
+```json
+{
+  "Smtp": {
+    "Host": "smtp.example.com",
+    "Port": 587,
+    "UserName": "noreply@example.com"
+  }
+}
+```
+
+```csharp
+IConfigurationSection smtpSection = builder.Configuration.GetSection("Smtp");
+
+string? host = smtpSection["Host"];
+int port = smtpSection.GetValue<int>("Port");
+```
+
+如果配置会被多个服务使用，建议不要到处注入 `IConfiguration`，而是使用强类型 Options。
+
+## IConfiguration 接口
+
+`IConfiguration` 是配置系统的核心接口。理解它的树状结构有助于正确读取配置。
+
+配置数据本质是一棵树，JSON 的层级关系对应配置键的冒号分隔：
+
+```text
+Smtp
+├── Host     → Smtp:Host
+├── Port     → Smtp:Port
+└── Auth
+    ├── UserName  → Smtp:Auth:UserName
+    └── Password  → Smtp:Auth:Password
+```
+
+`IConfiguration` 的主要方法：
+
+| 方法 | 作用 |
+|---|---|
+| `this["Key"]` | 按键读取字符串值 |
+| `GetSection("Key")` | 获取子节点，返回 `IConfigurationSection` |
+| `GetChildren()` | 获取所有直接子节点 |
+| `GetValue<T>("Key")` | 读取并转换为指定类型 |
+| `Get<T>()` | 将整个节绑定到对象 |
+
+```csharp
+IConfigurationSection smtpSection = builder.Configuration.GetSection("Smtp");
+
+string? host = smtpSection["Host"];
+int port = smtpSection.GetValue<int>("Port");
+
+foreach (IConfigurationSection child in smtpSection.GetChildren())
+{
+    Console.WriteLine($"{child.Key} = {child.Value}");
+}
+
+IConfigurationSection? authSection = smtpSection.GetSection("Auth");
+string? userName = authSection?["UserName"];
+```
+
+`GetSection` 返回的 `IConfigurationSection` 本身也是 `IConfiguration`，可以继续调用 `GetSection` 和 `GetChildren`，实现树的逐层遍历。
+
+`Get<T>()` 可以直接将整个配置节绑定到对象：
+
+```csharp
+SmtpOptions smtp = builder.Configuration.GetSection("Smtp").Get<SmtpOptions>()
+    ?? throw new InvalidOperationException("Smtp configuration is missing");
+```
+
+## 配置热更新
+
+文件类型的配置 Provider（`appsettings.json` 等）默认启用了 `reloadOnChange: true`。当文件内容变化时，配置会自动重新加载。
+
+```csharp
+builder.Configuration.AddJsonFile("appsettings.json",
+    optional: false,
+    reloadOnChange: true);
+```
+
+`CreateBuilder` 注册的 JSON Provider 默认就是 `reloadOnChange: true`，不需要手动配置。
+
+热更新的读取方式取决于你使用 `IConfiguration` 还是 Options：
+
+```csharp
+app.MapGet("/config", (IConfiguration config) =>
+{
+    return new { Host = config["Smtp:Host"] };
+});
+```
+
+直接从 `IConfiguration` 读取，每次请求都能拿到最新值。如果使用 Options，需要选择 `IOptionsSnapshot<T>` 或 `IOptionsMonitor<T>` 才能获取更新后的值，`IOptions<T>` 是启动时快照，不会更新。详见 [Options 模式](/posts/dotnet/aspnet-core-options)。
+
+热更新适用于调整日志级别、功能开关等运行时参数。数据库连接字符串、服务地址等配置变更后通常需要重启才能生效，不要依赖热更新。
+
+## 外部配置源
+
+生产项目可能需要从密钥管理服务读取配置，例如 Azure Key Vault、Consul、AWS Parameter Store 等。
+
+### Azure Key Vault
+
+```bash
+dotnet add package Azure.Extensions.AspNetCore.Configuration.Secrets
+dotnet add package Azure.Identity
+```
+
+```csharp
+builder.Configuration.AddAzureKeyVault(
+    new Uri("https://my-vault.vault.azure.net/"),
+    new DefaultAzureCredential());
+```
+
+Key Vault 中的 Secret 会被当作配置键读取，例如 Secret 名 `ConnectionStrings--Default` 对应 `ConnectionStrings:Default`。
+
+### Consul 配置中心
+
+```bash
+dotnet add package Consul
+```
+
+```csharp
+builder.Configuration.AddConsul("product-api/config", options =>
+{
+    options.Consul = new ConsulClient(config =>
+    {
+        config.Address = new Uri("http://consul:8500");
+    });
+    options.Optional = false;
+    options.ReloadOnChange = true;
+});
+```
+
+Consul 支持配置热更新，适合微服务场景。
+
+### 自定义配置源
+
+如果现有 Provider 不满足需求，可以实现 `IConfigurationSource` 和 `ConfigurationProvider`：
+
+```csharp
+public class DatabaseConfigurationSource : IConfigurationSource
+{
+    public string ConnectionString { get; set; } = string.Empty;
+
+    public IConfigurationProvider Build(IConfigurationBuilder builder)
+    {
+        return new DatabaseConfigurationProvider(ConnectionString);
+    }
+}
+
+public class DatabaseConfigurationProvider : ConfigurationProvider
+{
+    private readonly string _connectionString;
+
+    public DatabaseConfigurationProvider(string connectionString)
+    {
+        _connectionString = connectionString;
+    }
+
+    public override void Load()
+    {
+        using var connection = new SqlConnection(_connectionString);
+        var command = connection.CreateCommand();
+        command.CommandText = "SELECT [Key], [Value] FROM Configuration";
+
+        connection.Open();
+        using var reader = command.ExecuteReader();
+
+        while (reader.Read())
+        {
+            Set(reader.GetString(0), reader.GetString(1));
+        }
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Configuration.Add(new DatabaseConfigurationSource
+{
+    ConnectionString = builder.Configuration.GetConnectionString("Default")!
+});
+```
+
+自定义配置源的优先级取决于注册顺序，后注册的覆盖先注册的。
+
+## 生产配置建议
+
+生产环境配置建议：
+
+- 不把敏感信息写进仓库。
+- 用环境变量、密钥管理服务或部署平台注入配置。
+- `appsettings.Production.json` 不保存真实密码。
+- 启动时验证关键配置是否存在。
+- 日志中不要打印完整连接字符串和密钥。
+
+容器环境中常用环境变量覆盖：
+
+```yaml
+environment:
+  ASPNETCORE_ENVIRONMENT: Production
+  ConnectionStrings__Default: Server=db;Database=ProductDb;User Id=app;Password=***
+```
+
+## 总结
+
+ASP.NET Core 配置系统的核心是多来源、分层覆盖和统一读取。理解 Provider 注册顺序决定优先级、文件 Provider 默认支持热更新、`IConfiguration` 的树状结构访问方式，再结合 Options 模式把配置绑定成强类型对象。

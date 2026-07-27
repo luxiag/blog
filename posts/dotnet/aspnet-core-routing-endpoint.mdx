@@ -1,0 +1,422 @@
+---
+title: 'ASP.NET Core Routing：路由与 Endpoint 机制'
+date: '2026-07-21'
+excerpt: '理解 ASP.NET Core 路由系统：Endpoint Routing、Attribute Routing、路由参数、约束、路由模板、MapControllers 和 MapGet。'
+tags: ['dotnet', 'aspnetcore', 'routing', 'endpoint']
+nextPost: 'dotnet/aspnet-core-webapi-controller'
+---
+
+# ASP.NET Core Routing：路由与 Endpoint 机制
+
+Routing 解决的问题是：**一个 HTTP 请求应该交给哪段代码处理。**
+
+请求进入 ASP.NET Core 后，Middleware 管道会把请求交给路由系统，路由系统根据 URL、HTTP Method、路由模板等信息匹配 Endpoint，最终执行 Controller Action 或 Minimal API Handler。
+
+:::tip 阶段一阅读顺序
+建议先读 [Middleware 请求管道](/posts/dotnet/aspnet-core-middleware)，再阅读本文。后续继续看 [Web API Controller](/posts/dotnet/aspnet-core-webapi-controller)、[参数绑定与模型验证](/posts/dotnet/aspnet-core-model-binding-validation) 和 [Minimal API](/posts/dotnet/aspnet-core-minimal-api)。
+:::
+
+## Endpoint 是什么
+
+Endpoint 是 ASP.NET Core 中“最终可以执行的请求处理目标”。
+
+下面这些都可以是 Endpoint：
+
+- Controller Action
+- Minimal API Handler
+- Razor Page
+- SignalR Hub
+- gRPC Service
+- Health Check Endpoint
+
+示例：
+
+```csharp
+app.MapGet("/api/hello", () => "Hello");
+
+app.MapControllers();
+```
+
+`MapGet` 注册一个 Minimal API Endpoint，`MapControllers` 注册 Controller 中的 Action Endpoint。
+
+## Endpoint Routing 两阶段模型
+
+Endpoint Routing 相对经典路由最核心的架构差异是：它把路由拆成了两个阶段——**匹配阶段**和**执行阶段**。
+
+```text
+匹配阶段：根据 URL 和 Method 确定 Endpoint
+  ↓
+执行阶段：中间件管道继续处理，最终执行 Endpoint
+```
+
+在匹配阶段，路由系统遍历所有已注册的 Endpoint，找到匹配的那一个，把它附加到 `HttpContext` 上。这个阶段不执行任何业务逻辑。
+
+在执行阶段，后续中间件可以读取已匹配的 Endpoint 及其元数据。这就是为什么 `UseAuthorization` 放在 `UseRouting` 后面就能工作——它检查已匹配 Endpoint 上的 `[Authorize]` 特性，而不是盲目地拦截所有请求。
+
+经典路由（ASP.NET Core 2.x 及更早）没有这个分离，路由匹配和请求处理耦合在一起，导致授权中间件无法在路由匹配前获取 Endpoint 信息，必须在路由内部处理权限。两阶段模型让中间件可以在路由匹配后、Endpoint 执行前统一处理横切逻辑。
+
+在最小托管模型中，`UseRouting()` 被隐式调用，你不需要显式写出来。但理解两阶段模型依然重要——它解释了为什么中间件顺序必须遵循特定规则。
+
+## Endpoint Routing 的基本流程
+
+现代 ASP.NET Core 使用 Endpoint Routing。大致流程：
+
+```text
+HTTP Request
+  -> Middleware Pipeline
+  -> [匹配阶段] Routing 匹配 Endpoint
+  -> [执行阶段] Authentication / Authorization 等中间件读取 Endpoint 元数据
+  -> 执行 Endpoint
+```
+
+在传统写法中你可能会看到：
+
+```csharp
+app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+```
+
+在最小托管模型里，`MapControllers()` 会注册 Endpoint。理解重点是：路由不仅匹配 URL，也会携带 Endpoint 元数据，例如 `[Authorize]`。
+
+## Attribute Routing
+
+Controller 项目最常用 Attribute Routing。
+
+```csharp
+[ApiController]
+[Route("api/products")]
+public class ProductsController : ControllerBase
+{
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        return Ok();
+    }
+
+    [HttpGet("{id:int}")]
+    public IActionResult GetById(int id)
+    {
+        return Ok(new { Id = id });
+    }
+}
+```
+
+最终路由：
+
+```text
+GET /api/products
+GET /api/products/1
+```
+
+## 路由参数
+
+路由模板中的 `{id}` 会绑定到 Action 参数。
+
+```csharp
+[HttpGet("{id}")]
+public IActionResult GetById(int id)
+{
+    return Ok(id);
+}
+```
+
+请求：
+
+```text
+GET /api/products/100
+```
+
+`id` 的值就是 `100`。
+
+### 可选参数、默认值与捕获全部
+
+路由模板支持三种常用语法：
+
+**可选参数** `{id?}`：参数可以不传，不传时 Action 接收默认值。
+
+```csharp
+[HttpGet("{id?}")]
+public IActionResult Get(int? id)
+{
+    if (id is null)
+    {
+        return Ok("List all");
+    }
+
+    return Ok(new { Id = id });
+}
+```
+
+```text
+GET /api/products       -> id = null，返回列表
+GET /api/products/100   -> id = 100，返回单个
+```
+
+**默认值** `{id=1}`：参数不传时使用指定默认值。
+
+```csharp
+[HttpGet("{id:int=1}")]
+public IActionResult GetById(int id)
+{
+    return Ok(new { Id = id });
+}
+```
+
+```text
+GET /api/products       -> id = 1
+GET /api/products/100   -> id = 100
+```
+
+**捕获全部** `{**path}`：匹配剩余所有路径段，值中包含 `/`。常用于代理、文件路径等场景。
+
+```csharp
+[HttpGet("files/{**filePath}")]
+public IActionResult GetFile(string filePath)
+{
+    return Ok(new { Path = filePath });
+}
+```
+
+```text
+GET /api/files/docs/2026/report.pdf   -> filePath = "docs/2026/report.pdf"
+```
+
+三种语法对比：
+
+| 语法 | 示例 | 匹配行为 |
+|---|---|---|
+| `{id?}` | `/api/products/{id?}` | 可选，不传则参数为 null |
+| `{id=1}` | `/api/products/{id:int=1}` | 可选，不传则使用默认值 1 |
+| `{**path}` | `/files/{**filePath}` | 捕获全部剩余路径，包含 `/` |
+
+## 路由约束
+
+路由约束可以限制参数格式。
+
+```csharp
+[HttpGet("{id:int}")]
+public IActionResult GetById(int id)
+{
+    return Ok(id);
+}
+
+[HttpGet("by-slug/{slug}")]
+public IActionResult GetBySlug(string slug)
+{
+    return Ok(slug);
+}
+```
+
+常见约束：
+
+| 约束 | 示例 |
+|---|---|
+| `int` | `{id:int}` |
+| `long` | `{id:long}` |
+| `guid` | `{id:guid}` |
+| `bool` | `{value:bool}` |
+| `datetime` | `{date:datetime}` |
+| `min` | `{id:min(1)}` |
+| `maxlength` | `{name:maxlength(20)}` |
+
+路由约束不应该替代业务验证，它主要用于路由匹配。
+
+## Token Replacement
+
+Controller 路由中常用 `[controller]` 和 `[action]`。
+
+```csharp
+[ApiController]
+[Route("api/[controller]")]
+public class ProductsController : ControllerBase
+{
+    [HttpGet]
+    public IActionResult Get()
+    {
+        return Ok();
+    }
+}
+```
+
+`[controller]` 会替换为控制器名去掉 `Controller` 后的部分：`Products`。
+
+最终路径：
+
+```text
+GET /api/products
+```
+
+团队项目中可以使用这种约定，但对外公开 API 建议明确设计路径，避免重命名类时影响路由。
+
+## Minimal API 路由
+
+Minimal API 直接在 `Program.cs` 注册路由。
+
+```csharp
+app.MapGet("/api/products", () =>
+{
+    return Results.Ok(new[] { "Keyboard", "Mouse" });
+});
+
+app.MapGet("/api/products/{id:int}", (int id) =>
+{
+    return Results.Ok(new { Id = id });
+});
+```
+
+Minimal API 的路由同样支持参数和约束。
+
+## Route Group
+
+Minimal API 可以使用 Route Group 组织一组相关接口。
+
+```csharp
+var products = app.MapGroup("/api/products");
+
+products.MapGet("/", () => Results.Ok());
+products.MapGet("/{id:int}", (int id) => Results.Ok(new { Id = id }));
+products.MapPost("/", (CreateProductRequest request) => Results.Created());
+
+public record CreateProductRequest(string Name, decimal Price);
+```
+
+Route Group 适合给一组接口统一添加前缀、授权、过滤器等。
+
+## URL 生成
+
+路由不只是匹配 URL，还可以根据路由模板反向生成 URL。这在返回 `Location` Header 或做内部跳转时很有用。
+
+### Controller 中使用 Url.Action
+
+```csharp
+[HttpPost]
+public IActionResult Create(CreateProductRequest request)
+{
+    int id = 101;
+
+    string? url = Url.Action(nameof(GetById), new { id });
+
+    return Created(url!, new { Id = id });
+}
+```
+
+`Url.Action` 根据当前路由模板生成 URL，例如 `/api/products/101`。
+
+### Controller 中使用 CreatedAtAction
+
+更常见的写法：
+
+```csharp
+[HttpPost]
+public ActionResult<ProductDto> Create(CreateProductRequest request)
+{
+    int id = 101;
+
+    return CreatedAtAction(nameof(GetById), new { id }, new { Id = id });
+}
+```
+
+`CreatedAtAction` 会自动生成 `Location` 响应头：
+
+```http
+HTTP/1.1 201 Created
+Location: /api/products/101
+```
+
+### 使用 LinkGenerator
+
+`LinkGenerator` 是 ASP.NET Core 提供的路由 URL 生成服务，不依赖 `ControllerBase`：
+
+```csharp
+public class OrderService
+{
+    private readonly LinkGenerator _linkGenerator;
+
+    public OrderService(LinkGenerator linkGenerator)
+    {
+        _linkGenerator = linkGenerator;
+    }
+
+    public string GetOrderUrl(HttpContext httpContext, long orderId)
+    {
+        return _linkGenerator.GetPathByAction(
+            httpContext,
+            "GetById",
+            "Orders",
+            new { id = orderId }) ?? string.Empty;
+    }
+}
+```
+
+注册不需要额外代码，`LinkGenerator` 已内置在 DI 中。
+
+### Minimal API 中生成 URL
+
+```csharp
+app.MapPost("/api/products", (CreateProductRequest request, LinkGenerator linker) =>
+{
+    int id = 101;
+
+    string? url = linker.GetPathByName("GetProductById", new { id });
+
+    return TypedResults.Created(url, new { Id = id });
+});
+
+app.MapGet("/api/products/{id:int}", (int id) => Results.Ok(new { Id = id }))
+    .WithName("GetProductById");
+```
+
+Minimal API 需要 `WithName` 给 Endpoint 命名，才能通过名称生成 URL。
+
+## 路由设计建议
+
+建议：
+
+- 路由围绕资源设计，而不是围绕方法名设计。
+- 用复数名词表达集合资源，例如 `/api/products`。
+- 资源 ID 放在 Route，筛选分页放在 Query。
+- 不要在 URL 中堆太多动词。
+
+示例：
+
+```text
+GET    /api/products
+GET    /api/products/{id}
+POST   /api/products
+PUT    /api/products/{id}
+DELETE /api/products/{id}
+```
+
+## 常见问题
+
+### 路由匹配不到
+
+检查：
+
+- HTTP Method 是否一致
+- Controller 是否加了 `[ApiController]` 和 `[Route]`
+- 是否调用了 `builder.Services.AddControllers()`
+- 是否调用了 `app.MapControllers()`
+- 路由约束是否导致不匹配
+
+### 路由冲突
+
+两个 Endpoint 如果 Method 和路由模板都能匹配同一个请求，可能产生冲突。
+
+```csharp
+[HttpGet("{value}")]
+public IActionResult GetByValue(string value) => Ok();
+
+[HttpGet("{id:int}")]
+public IActionResult GetById(int id) => Ok();
+```
+
+这种情况下要明确约束和路径，避免模糊匹配。
+
+## 总结
+
+Routing 把 URL 和 HTTP Method 匹配到 Endpoint。Controller 用 Attribute Routing 组织路由，Minimal API 用 `MapGet`、`MapPost` 等方法直接注册 Endpoint。
+
+掌握路由后，就可以继续理解 Controller 如何处理请求，以及参数如何从 Route、Query、Body 中绑定出来。

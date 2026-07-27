@@ -1,0 +1,609 @@
+---
+title: '向量即箭头：图形学数学的第二层基石'
+date: '2026-07-17'
+description: '向量不是一堆数字，而是有方向的箭头。本文从"箭头"的直觉出发，带你理解加减法、点积、叉积、归一化的几何意义——看到 dot 就想到投影，看到 cross 就想到法线，看到 normalize 就想到方向。'
+tags: ['Math', 'Vector', 'Graphics', 'GLSL']
+---
+
+# 向量即箭头：图形学数学的第二层基石
+
+在第一层，我们学会了把函数当成图形——每条曲线对应一种视觉效果。现在往上走一层：**函数处理的是单个数，向量处理的是一组数。**
+
+但如果你只是把向量当成 `[x, y, z]` 三个数字，那你永远学不会图形学。向量的灵魂不在数字里，在**箭头**里。
+
+一个向量就是一根箭头：有长度、有方向。位置、速度、光线、颜色——全都是箭头。当你能用"箭头"的方式思考向量时，这一层就算入门了。
+
+---
+
+## 一、 向量与点：箭头 vs 钉子
+
+`vec3(1, 2, 3)` 既可以表示"空间中的位置"，也可以表示"往某个方向走的位移"。代码长得一模一样，但含义天差地别。
+
+- **点**：钉在坐标系上的一颗钉子。"北京在东经 116°，北纬 40°"。
+- **向量**：一根箭头，只有长度和方向，没有固定位置。"向北走 100 米"——你从哪儿出发都行，箭头都一样。
+
+**四种基本关系**：
+
+| 操作 | 含义 | 例子 |
+|------|------|------|
+| 点 - 点 = 向量 | 两颗钉子之间的箭头 | `B - A`：从 A 指向 B |
+| 点 + 向量 = 点 | 沿箭头移动到新位置 | `A + direction`：走到新位置 |
+| 向量 + 向量 = 向量 | 两根箭头首尾相连 | 先向北走再向东走 = 向东北走 |
+| 点 + 点 = ? | **无意义** | 除非是求中点等特殊情况 |
+
+<ShaderPreview title="向量 vs 点" code={`
+varying vec2 vUv;
+
+void main() {
+    vec2 uv = vUv;
+    
+    vec2 A = vec2(0.25, 0.3);
+    vec2 B = vec2(0.75, 0.7);
+    
+    vec2 V = B - A;
+    
+    float dotA = 1.0 - step(0.02, length(uv - A));
+    float dotB = 1.0 - step(0.02, length(uv - B));
+    
+    vec2 dir = normalize(V);
+    float along = dot(uv - A, dir);
+    float perp = length((uv - A) - along * dir);
+    float line = smoothstep(0.008, 0.003, perp) * step(0.0, along) * step(along, length(V));
+    
+    float tip = 1.0 - step(0.025, length(uv - B));
+    
+    vec3 color = vec3(0.06, 0.06, 0.1);
+    color = mix(color, vec3(0.9, 0.3, 0.3), dotA);
+    color = mix(color, vec3(0.3, 0.5, 0.9), dotB);
+    color = mix(color, vec3(0.2, 0.8, 0.4), line * 0.8);
+    color = mix(color, vec3(0.2, 0.8, 0.4), tip);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+:::tip 核心直觉
+在 GLSL 里，你不需要区分点和向量——它们都是 `vec3`。但在脑子里，你要时刻知道：**这个 `vec3` 是一颗钉子还是一根箭头？** 钉子告诉你"在哪儿"，箭头告诉你"往哪走"。
+:::
+
+---
+
+## 二、 基础运算：箭头的组合
+
+### 1. 加法：首尾相连
+
+$\vec{a} + \vec{b}$：把 $\vec{b}$ 的尾巴接到 $\vec{a}$ 的头上，从 $\vec{a}$ 的尾巴到 $\vec{b}$ 的头就是结果。
+
+这就是"先向北走，再向东走，等于向东北走"——位移的合成。
+
+<ShaderPreview title="向量加法：首尾相连" code={`
+varying vec2 vUv;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    vec2 a = vec2(0.4, 0.3);
+    vec2 b = vec2(-0.2, 0.5);
+    vec2 sum = a + b;
+    
+    float dA = 1.0 - step(0.025, length(uv - a));
+    float dB = 1.0 - step(0.025, length(uv - (a + b)));
+    float dO = 1.0 - step(0.025, length(uv));
+    
+    vec2 dirA = normalize(a);
+    float alongA = dot(uv, dirA);
+    float perpA = length(uv - alongA * dirA);
+    float lineA = smoothstep(0.01, 0.003, perpA) * step(0.0, alongA) * step(alongA, length(a));
+    
+    vec2 startB = a;
+    vec2 dirB = normalize(b);
+    float alongB = dot(uv - startB, dirB);
+    float perpB = length((uv - startB) - alongB * dirB);
+    float lineB = smoothstep(0.01, 0.003, perpB) * step(0.0, alongB) * step(alongB, length(b));
+    
+    vec2 dirS = normalize(sum);
+    float alongS = dot(uv, dirS);
+    float perpS = length(uv - alongS * dirS);
+    float lineS = smoothstep(0.01, 0.003, perpS) * step(0.0, alongS) * step(alongS, length(sum));
+    
+    vec3 color = vec3(0.06, 0.06, 0.1);
+    color = mix(color, vec3(0.9, 0.3, 0.3), lineA);
+    color = mix(color, vec3(0.3, 0.5, 0.9), lineB);
+    color = mix(color, vec3(0.2, 0.85, 0.3), lineS * 0.9);
+    color = mix(color, vec3(0.9, 0.3, 0.3), dA);
+    color = mix(color, vec3(0.3, 0.5, 0.9), dB);
+    color = mix(color, vec3(0.2, 0.85, 0.3), dO);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+**GLSL 中的典型用途**：
+
+```glsl
+vec3 newPos = pos + velocity * deltaTime;
+```
+
+### 2. 减法：指向被减数
+
+$\vec{a} - \vec{b}$：一根**从 $\vec{b}$ 的头指向 $\vec{a}$ 的头**的箭头。
+
+**口诀**：**终点 - 起点**。想求从 A 到 B 的方向？就是 `B - A`。
+
+这是图形学中最频繁的操作——每次你计算"从物体 A 到物体 B 的方向"时，都在做减法。
+
+```glsl
+vec3 viewDir = normalize(targetPos - cameraPos);
+vec3 lightDir = normalize(surfacePos - lightPos);
+```
+
+### 3. 数乘：拉长与反转
+
+- $2 \cdot \vec{v}$：箭头方向不变，长度变成 2 倍。
+- $-1 \cdot \vec{v}$：箭头长度不变，方向反转 180°。
+- $0.5 \cdot \vec{v}$：箭头缩短到一半。
+
+<ShaderPreview title="数乘：缩放与反转" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    vec2 v = vec2(0.5, 0.3);
+    vec2 v2 = v * 2.0;
+    vec2 v05 = v * 0.5;
+    vec2 vNeg = -v;
+    
+    float d0 = 1.0 - step(0.025, length(uv - v));
+    float d2 = 1.0 - step(0.025, length(uv - v2));
+    float d05 = 1.0 - step(0.025, length(uv - v05));
+    float dN = 1.0 - step(0.025, length(uv - vNeg));
+    float dO = 1.0 - step(0.02, length(uv));
+    
+    vec3 color = vec3(0.06, 0.06, 0.1);
+    
+    float lineV = smoothstep(0.008, 0.002, length(uv - clamp(dot(uv, normalize(v)), 0.0, length(v)) * normalize(v)));
+    float lineV2 = smoothstep(0.008, 0.002, length(uv - clamp(dot(uv, normalize(v2)), 0.0, length(v2)) * normalize(v2)));
+    float lineV05 = smoothstep(0.008, 0.002, length(uv - clamp(dot(uv, normalize(v05)), 0.0, length(v05)) * normalize(v05)));
+    float lineVNeg = smoothstep(0.008, 0.002, length(uv - clamp(dot(uv, normalize(vNeg)), 0.0, length(vNeg)) * normalize(vNeg)));
+    
+    color = mix(color, vec3(0.8), lineV * 0.5);
+    color = mix(color, vec3(0.2, 0.85, 0.3), lineV2 * 0.7);
+    color = mix(color, vec3(0.3, 0.5, 0.9), lineV05 * 0.7);
+    color = mix(color, vec3(0.9, 0.3, 0.3), lineVNeg * 0.7);
+    
+    color = mix(color, vec3(0.8), d0);
+    color = mix(color, vec3(0.2, 0.85, 0.3), d2);
+    color = mix(color, vec3(0.3, 0.5, 0.9), d05);
+    color = mix(color, vec3(0.9, 0.3, 0.3), dN);
+    color = mix(color, vec3(1.0), dO);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+**数乘最常见的场景**：
+
+- `velocity * deltaTime`：速度乘以时间 = 位移
+- `-lightDir`：反转光线方向
+- `normal * offset`：沿法线方向偏移（顶点挤出、轮廓线）
+
+---
+
+## 三、 长度与归一化：距离与方向
+
+### 1. 长度（magnitude / length）
+
+一根箭头有多长？勾股定理：
+
+$$ \|\vec{v}\| = \sqrt{x^2 + y^2 + z^2} $$
+
+GLSL：`length(v)`。
+
+**这就是两点之间的距离**——`length(B - A)` 就是 A 到 B 的距离。
+
+<ShaderPreview title="长度 = 距离" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    vec2 A = vec2(-0.5, -0.3);
+    vec2 B = vec2(0.6, 0.4 + sin(uTime) * 0.3);
+    
+    float dA = length(uv - A);
+    float rings = smoothstep(0.02, 0.01, abs(fract(dA * 3.0) - 0.5));
+    
+    float dotA = 1.0 - step(0.03, length(uv - A));
+    float dotB = 1.0 - step(0.03, length(uv - B));
+    
+    vec2 dir = normalize(B - A);
+    float along = dot(uv - A, dir);
+    float perp = length((uv - A) - along * dir);
+    float line = smoothstep(0.008, 0.002, perp) * step(0.0, along) * step(along, length(B - A));
+    
+    vec3 color = vec3(0.06, 0.06, 0.1);
+    color = mix(color, vec3(0.2, 0.3, 0.15), rings * 0.3);
+    color = mix(color, vec3(0.9, 0.7, 0.2), line * 0.6);
+    color = mix(color, vec3(0.9, 0.3, 0.3), dotA);
+    color = mix(color, vec3(0.3, 0.5, 0.9), dotB);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+**典型用途**：
+
+- `length(fragCoord - center)`：像素到某点的距离 → 画圆、画球
+- `length(uv - 0.5)`：到画布中心的距离 → 径向渐变
+- SDF（有符号距离场）的核心：一切形状的本质都是距离函数
+
+### 2. 归一化（normalize）：只留方向
+
+**把箭头缩成单位长度，方向不变。**
+
+$$ \hat{v} = \frac{\vec{v}}{\|\vec{v}\|} $$
+
+GLSL：`normalize(v)`。
+
+为什么这么重要？因为**光照计算只关心方向，不关心距离**。一根长度为 5 的法线和长度为 1 的法线，方向一样，但如果带着长度去做点积，结果会差 5 倍。
+
+```glsl
+vec3 N = normalize(normal);
+vec3 L = normalize(lightPos - surfacePos);
+float diffuse = max(dot(N, L), 0.0);
+```
+
+:::warning 永远不要归一化零向量
+`normalize(vec3(0, 0, 0))` 会产生 `NaN`（除以零）。在归一化之前，先判断长度是否为 0。
+:::
+
+---
+
+## 四、 点积：方向的一致性
+
+点积是图形学中**使用频率最高**的向量运算，没有之一。
+
+公式：$\vec{a} \cdot \vec{b} = \|\vec{a}\| \|\vec{b}\| \cos\theta$
+
+如果两个向量都已经归一化，则：$\hat{a} \cdot \hat{b} = \cos\theta$
+
+**三种直觉**：
+
+| 点积值 | 夹角 | 几何意义 |
+|--------|------|----------|
+| **1** | 0° | 方向完全相同 |
+| **0** | 90° | **垂直**——判断垂直的最快方法 |
+| **-1** | 180° | 方向完全相反 |
+
+### 1. 判断朝向（光照）
+
+`dot(N, L)` 是光照的基石：
+
+- `dot(N, L) > 0`：光在正面，物体被照亮
+- `dot(N, L) = 0`：光与表面平行，刚好不照
+- `dot(N, L) < 0`：光在背面，物体暗面
+
+<ShaderPreview title="点积 = 光照强度" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    vec2 N = vec2(0.0, 1.0);
+    vec2 L = normalize(vec2(cos(uTime * 0.8), sin(uTime * 0.8)));
+    
+    float d = dot(N, L);
+    
+    float lineN = smoothstep(0.008, 0.002, length(uv - clamp(dot(uv, N), 0.0, 1.0) * N));
+    float lineL = smoothstep(0.008, 0.002, length(uv - clamp(dot(uv, L), 0.0, 1.0) * L));
+    
+    vec3 warm = vec3(1.0, 0.9, 0.6);
+    vec3 cool = vec3(0.1, 0.1, 0.3);
+    vec3 bgColor = mix(cool, warm, clamp(d, 0.0, 1.0));
+    
+    vec3 color = bgColor * 0.5;
+    color = mix(color, vec3(1.0), lineN * 0.8);
+    color = mix(color, vec3(1.0, 0.8, 0.2), lineL * 0.8);
+    
+    float dotO = 1.0 - step(0.025, length(uv));
+    color = mix(color, vec3(1.0), dotO);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+### 2. 投影（分解向量）
+
+点积可以把一个向量**投影**到另一个向量上。就像物理中把力分解为"平行于斜面的分力"和"垂直于斜面的分力"。
+
+$$ \text{proj}_{\hat{n}}\vec{v} = (\vec{v} \cdot \hat{n})\hat{n} $$
+
+<ShaderPreview title="点积 = 投影" code={`
+varying vec2 vUv;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    vec2 n = normalize(vec2(1.0, 0.5));
+    vec2 v = vec2(0.3, 0.6);
+    
+    float projLen = dot(v, n);
+    vec2 proj = projLen * n;
+    vec2 perp = v - proj;
+    
+    float lineV = smoothstep(0.008, 0.002, length(uv - clamp(dot(uv, normalize(v)), 0.0, length(v)) * normalize(v)));
+    float lineP = smoothstep(0.008, 0.002, length(uv - clamp(dot(uv, n), 0.0, projLen) * n));
+    float linePerp = smoothstep(0.008, 0.002, length(uv - proj - clamp(dot(uv - proj, normalize(perp)), 0.0, length(perp)) * normalize(perp)));
+    float lineN = smoothstep(0.006, 0.002, length(uv - dot(uv, n) * n));
+    
+    float dv = 1.0 - step(0.025, length(uv - v));
+    float dp = 1.0 - step(0.025, length(uv - proj));
+    
+    vec3 color = vec3(0.06, 0.06, 0.1);
+    color = mix(color, vec3(0.15, 0.2, 0.15), lineN * 0.3);
+    color = mix(color, vec3(0.9, 0.3, 0.3), lineV);
+    color = mix(color, vec3(0.2, 0.8, 0.3), lineP);
+    color = mix(color, vec3(0.3, 0.5, 0.9), linePerp);
+    color = mix(color, vec3(0.9, 0.3, 0.3), dv);
+    color = mix(color, vec3(0.2, 0.8, 0.3), dp);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+**投影的典型用途**：
+
+- **分解速度**：碰撞时，把速度分解为法线方向（反弹）和切线方向（滑动）
+- **阴影映射**：把顶点投影到光源方向，判断是否在阴影中
+- **菲涅尔效果**：`1.0 - dot(V, N)` —— 视角越平，反射越强
+
+### 3. 点积速查表
+
+| 场景 | 代码 | 含义 |
+|------|------|------|
+| 光照强度 | `max(dot(N, L), 0.0)` | 法线与光线的夹角余弦 |
+| 高光 | `pow(max(dot(R, V), 0.0), shininess)` | 反射光与视线的夹角 |
+| 菲涅尔 | `pow(1.0 - dot(V, N), 5.0)` | 视角越平，反射越强 |
+| 背面剔除 | `dot(viewDir, normal) < 0.0` | 法线背对摄像机 → 背面 |
+| 距离估计 | `dot(offset, offset)` | 比 `length(offset)` 更快（省 sqrt） |
+
+:::important 为什么用 `dot(v, v)` 代替 `length(v)`？
+`length(v) = sqrt(dot(v, v))`。如果你只需要比较距离大小（"谁更近？"），直接比较 `dot(v, v)` 就够了，省掉开方运算。Shader 里每省一次 `sqrt`，性能就多一点。
+:::
+
+---
+
+## 五、 叉积：寻找垂直方向
+
+叉积只存在于 3D 空间。它接受两个向量，吐出一根**同时垂直于两者**的新箭头。
+
+$$ \vec{c} = \vec{a} \times \vec{b} $$
+
+叉积的方向由**右手定则**决定：右手四指从 $\vec{a}$ 弯向 $\vec{b}$，大拇指的方向就是叉积方向。
+
+叉积的长度：$\|\vec{a} \times \vec{b}\| = \|\vec{a}\| \|\vec{b}\| \sin\theta$，正好是 $\vec{a}$ 和 $\vec{b}$ 张成的平行四边形面积。
+
+### 1. 求法线
+
+这是叉积**最核心的用途**。三角形的法线怎么算？
+
+```glsl
+vec3 edge1 = B - A;
+vec3 edge2 = C - A;
+vec3 normal = normalize(cross(edge1, edge2));
+```
+
+两根边做叉积，得到垂直于三角形面的法线。就这么简单——所有 3D 引擎里的法线，底层都是叉积。
+
+### 2. 判断左右 / 内外
+
+叉积的正负告诉你"在左边还是右边"：
+
+- `cross(edge, toPoint)` 为正 → 点在边的左侧
+- `cross(edge, toPoint)` 为负 → 点在边的右侧
+
+这个性质可以判断一个点是否在三角形内：如果对三条边都在同一侧，就在三角形内。
+
+<ShaderPreview title="叉积判断左右" code={`
+varying vec2 vUv;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    vec2 A = vec2(-0.6, -0.3);
+    vec2 B = vec2(0.6, 0.3);
+    vec2 edge = B - A;
+    
+    vec2 toPoint = uv - A;
+    float crossZ = edge.x * toPoint.y - edge.y * toPoint.x;
+    
+    vec3 warm = vec3(0.8, 0.3, 0.2);
+    vec3 cool = vec3(0.2, 0.3, 0.8);
+    vec3 bgColor = mix(cool, warm, smoothstep(-0.05, 0.05, crossZ));
+    
+    vec2 dir = normalize(edge);
+    float along = dot(uv - A, dir);
+    float perp = length((uv - A) - along * dir);
+    float line = smoothstep(0.01, 0.003, perp) * step(0.0, along) * step(along, length(edge));
+    
+    vec3 color = bgColor * 0.3;
+    color = mix(color, vec3(1.0), line);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+### 3. 构建坐标系
+
+已知一个法线向量 $\vec{N}$，怎么知道"右边"和"前方"在哪？用叉积连续制造垂直向量：
+
+1. 已知：$\vec{N}$（法线 / 上方向）
+2. 假设一个临时方向 $\vec{T}$（比如世界坐标的 `vec3(0,0,1)`）
+3. 右方：$\vec{B} = \text{normalize}(\text{cross}(\vec{T}, \vec{N}))$
+4. 前方：$\vec{T'} = \text{cross}(\vec{N}, \vec{B})$
+
+现在 $\vec{N}, \vec{B}, \vec{T'}$ 三轴互相垂直——这就是 **TBN 切线空间**的基础，也是 `lookAt` 矩阵的原理。
+
+:::warning 叉积的两个陷阱
+1. **$\vec{a} \times \vec{b} \neq \vec{b} \times \vec{a}$**：叉积不满足交换律！交换顺序，结果方向相反。`cross(a, b) = -cross(b, a)`。
+2. **两个平行向量的叉积为零向量**：$\vec{a} \times \vec{a} = \vec{0}$。用叉积求法线时，两条边不能平行。
+:::
+
+---
+
+## 六、 反射与折射：光的弹跳
+
+### 1. 反射（reflect）
+
+光线撞到镜子弹开。公式：
+
+$$ \vec{R} = \vec{I} - 2(\vec{I} \cdot \vec{N})\vec{N} $$
+
+GLSL：`reflect(I, N)`。
+
+- $\vec{I}$：入射方向（**必须指向表面**）
+- $\vec{N}$：法线（**必须归一化**）
+
+<ShaderPreview title="反射向量" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    vec2 N = vec2(0.0, 1.0);
+    vec2 I = normalize(vec2(sin(uTime * 0.7), -1.0));
+    vec2 R = reflect(I, N);
+    
+    float mirror = smoothstep(0.02, 0.0, abs(uv.y));
+    
+    vec2 dirI = normalize(I);
+    float alongI = dot(uv, dirI);
+    float perpI = length(uv - alongI * dirI);
+    float lineI = smoothstep(0.008, 0.002, perpI) * step(0.0, alongI) * step(uv.y, 0.0) * step(alongI, 0.8);
+    
+    vec2 dirR = normalize(R);
+    float alongR = dot(uv, dirR);
+    float perpR = length(uv - alongR * dirR);
+    float lineR = smoothstep(0.008, 0.002, perpR) * step(0.0, alongR) * step(0.0, uv.y) * step(alongR, 0.8);
+    
+    float lineN = smoothstep(0.006, 0.002, abs(uv.x)) * step(0.0, uv.y) * step(uv.y, 0.5);
+    
+    vec3 color = vec3(0.06, 0.06, 0.1);
+    color = mix(color, vec3(0.5), mirror * 0.3);
+    color = mix(color, vec3(1.0, 0.9, 0.3), lineI);
+    color = mix(color, vec3(0.3, 0.9, 1.0), lineR);
+    color = mix(color, vec3(0.6), lineN * 0.5);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+**典型用途**：
+
+- 镜面高光（Specular）：`pow(max(dot(reflect(-L, N), V), 0.0), shininess)`
+- 环境映射（Environment Map）：`reflect(-viewDir, normal)` 作为采样方向
+- 弹球/粒子碰撞：碰撞后速度的反射
+
+### 2. 折射（refract）
+
+光线穿过水面偏折。遵循斯涅尔定律。GLSL：`refract(I, N, eta)`。
+
+- `eta`：折射率比 $\frac{n_1}{n_2}$。空气→水：`1.0 / 1.33`。
+
+```glsl
+vec3 refracted = refract(normalize(viewDir), normalize(normal), 1.0 / 1.5);
+```
+
+### 3. faceforward：确保法线朝前
+
+`faceforward(N, I, Nref)`：如果法线背对着入射方向，就把法线翻转。
+
+```glsl
+vec3 N = faceforward(normal, viewDir, normal);
+```
+
+---
+
+## 七、 GLSL 向量技巧速查
+
+| 技巧 | 代码 | 用途 |
+|------|------|------|
+| 分量访问 | `v.x`, `v.yz`, `v.xxx` | swizzle 灵活重组 |
+| 距离比较 | `dot(a-b, a-b)` | 比 `length(a-b)` 快（省 sqrt） |
+| 快速归一化近似 | `v * inverseSqrt(dot(v,v))` | 底层与 normalize 相同 |
+| 向量夹角 | `acos(dot(normalize(a), normalize(b)))` | 两向量间的角度 |
+| 拒绝（投影的反面） | `v - dot(v,n)*n` | 去掉 v 在 n 方向的分量 |
+| 2D 叉积 | `a.x*b.y - a.y*b.x` | 判断旋转方向/面积 |
+
+:::tip Swizzle 是 GLSL 的超能力
+GLSL 允许你用 `.xyzw`、`.rgba`、`.stpq` 任意重组向量分量：
+
+```glsl
+vec4 v = vec4(1.0, 2.0, 3.0, 4.0);
+v.xz      // vec2(1.0, 3.0)
+v.yyy     // vec3(2.0, 2.0, 2.0)
+v.wzyx    // vec4(4.0, 3.0, 2.0, 1.0)
+v.rgb     // vec3(1.0, 2.0, 3.0)
+```
+
+这是 GPU 硬件原生支持的操作，零开销。
+:::
+
+---
+
+## 八、 齐次坐标：4D 向量的妙用
+
+为什么 3D 图形学到处都是 `vec4` 而不是 `vec3`？因为**平移不是线性变换**——用 3×3 矩阵无法表示平移，但用 4×4 矩阵加齐次坐标就可以。
+
+`vec4(x, y, z, w)` 中 `w` 的含义：
+
+| w 值 | 含义 | 用途 |
+|------|------|------|
+| **1** | 这是一个**点**（位置） | `vec4(pos, 1.0)` — 平移会生效 |
+| **0** | 这是一个**方向**（向量） | `vec4(dir, 0.0)` — 平移被忽略 |
+
+```glsl
+vec4 worldPos = modelMatrix * vec4(localPos, 1.0);
+vec4 worldDir = modelMatrix * vec4(localDir, 0.0);
+```
+
+`w ≠ 1` 的情况出现在**透视投影**之后，需要做透视除法：`vec3 ndc = projected.xyz / projected.w`。这是投影矩阵的话题，详见后续层级。
+
+---
+
+## 向量速查表
+
+| 操作 | 公式 | GLSL | 一句话直觉 |
+|------|------|------|-----------|
+| 加法 | $\vec{a}+\vec{b}$ | `a + b` | 首尾相连 |
+| 减法 | $\vec{a}-\vec{b}$ | `a - b` | 从 b 指向 a |
+| 数乘 | $k\vec{v}$ | `v * k` | 拉长/反转 |
+| 长度 | $\sqrt{x^2+y^2+z^2}$ | `length(v)` | 箭头多长 |
+| 归一化 | $\vec{v}/\|\vec{v}\|$ | `normalize(v)` | 只留方向 |
+| 点积 | $\|\vec{a}\|\|\vec{b}\|\cos\theta$ | `dot(a,b)` | 方向一致性 |
+| 叉积 | $\vec{a}\times\vec{b}$ | `cross(a,b)` | 垂直方向 |
+| 反射 | $\vec{I}-2(\vec{I}\cdot\vec{N})\vec{N}$ | `reflect(I,N)` | 弹开 |
+| 投影 | $(\vec{v}\cdot\hat{n})\hat{n}$ | `dot(v,n)*n` | 沿 n 方向的分量 |
+| 拒绝 | $\vec{v} - (\vec{v}\cdot\hat{n})\hat{n}$ | `v - dot(v,n)*n` | 去掉 n 方向分量 |
+
+> **自检**：遮住右边，看到 `dot(N, L)` 你能立刻说它的几何含义吗？看到 `cross(edge1, edge2)` 你知道它产生的是什么方向吗？`reflect(I, N)` 中 I 和 N 分别该指向哪个方向？如果犹豫了，回头再看对应章节。
+
+---
+
+## 小结
+
+向量是图形学的**原子**。一切运算都建立在向量之上。
+
+关键只有五件事：
+1. **加减**：位移合成与方向计算
+2. **归一化**：只看方向不看长短——光照计算的前提
+3. **点积**：方向一致性 → 光照强度、投影、朝向判断
+4. **叉积**：垂直方向 → 法线、左右判定、构建坐标系
+5. **反射/折射**：光的行为 → 镜面高光、环境映射、水面
+
+当你看到 `dot` 就想到"夹角和投影"，看到 `cross` 就想到"法线和左右"，看到 `normalize` 就想到"方向"，这一层就算通关了。下一层，我们要让向量"动"起来——那就是矩阵的世界。

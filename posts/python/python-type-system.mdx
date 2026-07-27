@@ -1,0 +1,1060 @@
+---
+title: 'Python 类型系统与 mypy：从类型注解到静态检查实践'
+date: '2026-07-19'
+excerpt: '系统讲解 Python 类型注解与静态类型检查。覆盖类型注解语法、内置类型与泛型、typing 模块核心工具、Protocol 与结构化类型、类型收窄、函数重载、mypy 配置与实战、常见问题与最佳实践，最后用完整的类型化项目串联所有知识点。'
+tags: ['python', 'mypy', 'typing', 'type-hints', 'static-analysis']
+---
+
+# Python 类型系统与 mypy：从类型注解到静态检查实践
+
+Python 是动态类型语言，但自 3.5 引入类型注解以来，类型系统已成为工程化不可或缺的一部分。本文系统讲解类型注解语法、`typing` 模块核心工具、结构化类型、类型收窄、函数重载，以及如何用 mypy 进行静态检查。
+
+适合读者：已掌握 Python 基础语法，想系统学习类型系统的开发者。如果你读过 [Python 系统教程](/posts/python/python-complete-guide)，本文是其中"mypy 类型检查"的完整展开。
+
+---
+
+## 一、为什么需要类型注解
+
+类型注解的价值：
+
+- **可检查的文档**：注释会过时，类型注解可以被 mypy 验证
+- **IDE 自动补全**：PyCharm、VS Code 能根据类型提供精准补全
+- **运行前捕获错误**：mypy 阶段发现的 bug 不需要跑到生产环境
+- **安全重构**：改了函数签名，mypy 立刻报告所有不匹配的调用点
+
+Python 采用**渐进类型化（gradual typing）**：你可以逐步添加注解，没有注解的代码默认为 `Any`。这与 TypeScript 思路一致，但有一个关键区别——TypeScript 编译时擦除类型，而 Python 的注解在运行时默认仍然存在（可通过 `__annotations__` 访问），只是不被执行。
+
+```python
+def greet(name: str) -> str:
+    return f"Hello, {name}"
+
+print(greet("Alice"))
+print(greet(42))
+```
+
+第二行传入 `int`，Python 运行时不报错，但 mypy 会标记类型不匹配。
+
+---
+
+## 二、类型注解基础
+
+### 变量与函数注解
+
+```python
+x: int = 42
+name: str = "Alice"
+prices: list[float] = [9.99, 19.99]
+```
+
+只注解不赋值也是合法的（声明类型但不创建变量）：
+
+```python
+count: int
+```
+
+函数注解包括参数类型和返回类型：
+
+```python
+def add(a: int, b: int) -> int:
+    return a + b
+
+def log_message(msg: str) -> None:
+    print(msg)
+```
+
+`-> None` 表示函数不返回有意义的值。
+
+### 注解只是元数据
+
+Python 运行时**不会强制执行**类型注解。注解存储在 `__annotations__` 中：
+
+```python
+def add(a: int, b: int) -> int:
+    return a + b
+
+print(add.__annotations__)
+print(add("hello ", "world"))
+```
+
+输出：
+
+```
+{'a': <class 'int'>, 'b': <class 'int'>, 'return': <class 'int'>}
+hello world
+```
+
+### `from __future__ import annotations`
+
+PEP 563 让所有注解以字符串形式存储，不在定义时求值。解决前向引用问题：
+
+```python
+from __future__ import annotations
+
+class Node:
+    def __init__(self, value: int, next: Node | None = None) -> None:
+        self.value = value
+        self.next = next
+```
+
+没有 `from __future__ import annotations`，上面的代码会报 `NameError: name 'Node' is not defined`。
+
+:::tip 推荐
+在 Python 3.10 以下的项目中，始终在文件头部添加 `from __future__ import annotations`。它解决了前向引用问题，也消除了注解的运行时开销。
+:::
+
+### `typing.get_type_hints()`
+
+运行时获取已解析的类型注解（将字符串形式还原为实际类型对象）：
+
+```python
+from typing import get_type_hints
+
+def process(data: list[int], verbose: bool = False) -> str:
+    return str(data)
+
+hints = get_type_hints(process)
+print(hints)
+```
+
+输出：
+
+```
+{'data': list[int], 'verbose': <class 'bool'>, 'return': <class 'str'>}
+```
+
+`get_type_hints()` 会解析字符串注解，而 `__annotations__` 不会。
+
+---
+
+## 三、内置类型与泛型
+
+### 基本类型与集合
+
+```python
+age: int = 25
+price: float = 9.99
+name: str = "Alice"
+active: bool = True
+data: bytes = b"hello"
+nothing: None = None
+
+names: list[str] = ["Alice", "Bob"]
+scores: dict[str, int] = {"Alice": 95, "Bob": 87}
+unique_ids: set[int] = {1, 2, 3}
+point: tuple[int, int] = (10, 20)
+record: tuple[int, str, float] = (1, "Alice", 3.14)
+numbers: tuple[int, ...] = (1, 2, 3, 4, 5)
+```
+
+`tuple[int, ...]` 表示"元素全是 `int` 的任意长度元组"。`tuple[int, str, float]` 表示固定长度、每位置类型不同的元组。
+
+:::note Python 3.8 及以下
+需要从 `typing` 导入大写版本：`List[int]`、`Dict[str, int]`、`Set[int]`、`Tuple[int, str]`。Python 3.9+ 这些大写别名已废弃，请使用小写内置类型。
+:::
+
+### `type[X]` — 类对象类型
+
+当参数是某个类的**类对象本身**（而非实例）时使用：
+
+```python
+def create_instance(cls: type[Animal], name: str) -> Animal:
+    return cls(name)
+
+class Animal:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+class Dog(Animal):
+    pass
+
+dog = create_instance(Dog, "Buddy")
+```
+
+`type[Animal]` 表示"Animal 类或其子类的类对象"。
+
+### `Any` 与 `NoReturn`
+
+`Any` 表示任意类型，与所有类型兼容，mypy 对它不做检查：
+
+```python
+from typing import Any
+
+def mystery(x: Any) -> Any:
+    return x
+
+mystery(42)
+mystery("hello")
+```
+
+:::warning 谨慎使用 Any
+每写一个 `Any`，就等于在那个位置放弃了类型安全。能用更精确的类型就用更精确的。实在无法确定类型时，`object` 通常是更好的选择（后文会解释区别）。
+:::
+
+`NoReturn` 标记永远不会正常返回的函数：
+
+```python
+from typing import NoReturn
+
+def die(message: str) -> NoReturn:
+    raise SystemExit(message)
+
+def infinite_loop() -> NoReturn:
+    while True:
+        pass
+```
+
+---
+
+## 四、typing 模块核心工具
+
+### `Optional` / `Union` 与 `X | None` / `X | Y`
+
+```python
+from typing import Optional, Union
+
+def find_user(user_id: int) -> Optional[str]:
+    if user_id == 1:
+        return "Alice"
+    return None
+
+def process(value: Union[int, str]) -> str:
+    return str(value)
+```
+
+Python 3.10+ 推荐用 `|` 运算符：
+
+```python
+def find_user(user_id: int) -> str | None:
+    if user_id == 1:
+        return "Alice"
+    return None
+
+def process(value: int | str) -> str:
+    return str(value)
+```
+
+### `Literal` — 约束为特定值
+
+```python
+from typing import Literal
+
+def set_mode(mode: Literal["read", "write", "append"]) -> None:
+    print(f"Mode: {mode}")
+
+set_mode("read")
+set_mode("execute")
+```
+
+mypy 会报第二个调用错误：`execute` 不在允许的值中。也支持数字字面值：`Literal[0, 1, 2]`。
+
+### `Callable` — 函数类型
+
+```python
+from typing import Callable
+
+def apply(func: Callable[[int, str], bool], x: int, y: str) -> bool:
+    return func(x, y)
+
+def checker(num: int, text: str) -> bool:
+    return len(text) > num
+
+result = apply(checker, 3, "hello")
+```
+
+`Callable[[int, str], bool]` 表示"接受 `int` 和 `str` 参数，返回 `bool`"。不指定参数类型时用 `Callable[..., Any]`。
+
+### `TypeVar` 与 `Generic`
+
+`TypeVar` 定义类型变量，让类型在输入和输出之间保持一致：
+
+```python
+from typing import TypeVar
+
+T = TypeVar("T")
+
+def first(items: list[T]) -> T:
+    return items[0]
+
+x: int = first([1, 2, 3])
+y: str = first(["a", "b", "c"])
+```
+
+可以约束类型变量的范围：
+
+```python
+Number = TypeVar("Number", int, float)
+
+def add(a: Number, b: Number) -> Number:
+    return a + b
+
+add(1, 2)
+add(1.5, 2.5)
+add("a", "b")
+```
+
+第三个调用会报错，因为 `str` 不在 `int | float` 的约束范围内。
+
+`Generic` 用于泛型类：
+
+```python
+from typing import TypeVar, Generic
+
+T = TypeVar("T")
+
+class Stack(Generic[T]):
+    def __init__(self) -> None:
+        self._items: list[T] = []
+
+    def push(self, item: T) -> None:
+        self._items.append(item)
+
+    def pop(self) -> T:
+        if not self._items:
+            raise IndexError("stack is empty")
+        return self._items.pop()
+
+    def peek(self) -> T:
+        if not self._items:
+            raise IndexError("stack is empty")
+        return self._items[-1]
+
+int_stack: Stack[int] = Stack()
+int_stack.push(42)
+value: int = int_stack.pop()
+```
+
+泛型类可以有多个类型变量：`class Pair(Generic[K, V]): ...`
+
+### `TypeAlias`、`Final`、`ClassVar`、`Annotated`
+
+```python
+from typing import TypeAlias, Final, ClassVar, Annotated
+
+Vector: TypeAlias = list[float]
+Matrix: TypeAlias = list[Vector]
+
+MAX_SIZE: Final[int] = 100
+
+class Dog:
+    species: ClassVar[str] = "Canis familiaris"
+    count: ClassVar[int] = 0
+
+    def __init__(self, name: str, age: int) -> None:
+        self.name = name
+        self.age = age
+        Dog.count += 1
+
+def greet(
+    name: Annotated[str, "User's display name"],
+    age: Annotated[int, "Must be non-negative"] = 0,
+) -> str:
+    return f"Hello, {name}, age {age}"
+```
+
+- `TypeAlias`：给复杂类型组合命名。Python 3.12+ 可用 `type Vector = list[float]`
+- `Final`：防止重新赋值或子类覆盖
+- `ClassVar`：标记类属性（不属于实例），mypy 不会期望在 `__init__` 中初始化
+- `Annotated[X, metadata]`：在保留类型的同时附加元数据，Pydantic 和 FastAPI 大量使用
+
+:::info
+如果你读过 [FastAPI 完整指南](/posts/python/fastapi-complete-guide)，对 `Annotated` 一定不陌生——FastAPI 用它把参数校验、文档生成、依赖注入全部统一在类型注解中。
+:::
+
+---
+
+## 五、Protocol 与结构化类型
+
+### 名义类型 vs 结构化类型
+
+Python 默认是**名义类型**：类型兼容基于继承。但 Python 的哲学是"鸭子类型"——只要对象有需要的方法就能用。`Protocol` 把鸭子类型带入了静态类型检查。
+
+### 定义与使用 Protocol
+
+```python
+from typing import Protocol
+
+class SupportsRead(Protocol):
+    def read(self) -> str: ...
+
+class SupportsClose(Protocol):
+    def close(self) -> None: ...
+
+class FileLike(SupportsRead, SupportsClose, Protocol):
+    pass
+
+class MyFile:
+    def read(self) -> str:
+        return "data"
+    def close(self) -> None:
+        pass
+
+def process(f: FileLike) -> None:
+    content = f.read()
+    f.close()
+
+process(MyFile())
+```
+
+`MyFile` 没有继承 `FileLike`，但因为实现了 `read()` 和 `close()`，mypy 认为它满足 `FileLike` 协议。这就是结构化类型——只看结构，不看继承链。
+
+### `@runtime_checkable`
+
+默认 `Protocol` 只用于静态检查。加上 `@runtime_checkable` 后可以用 `isinstance()`：
+
+```python
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class HasLen(Protocol):
+    def __len__(self) -> int: ...
+
+class MyContainer:
+    def __len__(self) -> int:
+        return 42
+
+container = MyContainer()
+print(isinstance(container, HasLen))
+```
+
+注意：`@runtime_checkable` 只检查方法是否存在，不检查签名是否匹配。
+
+### Protocol vs ABC
+
+| 场景 | Protocol | ABC |
+|------|----------|-----|
+| 第三方类需要适配 | 天然兼容，无需继承 | 需要显式注册或继承 |
+| 明确"是一个"关系 | 不合适 | 合适 |
+| 定义"能力"（有某方法即可） | 最佳选择 | 需手动注册 |
+
+**原则**：定义"能力"用 `Protocol`，定义"身份"用 `ABC`。
+
+### 内置协议
+
+```python
+from typing import Iterable, Sized, ContextManager
+
+def print_all(items: Iterable[str]) -> None:
+    for item in items:
+        print(item)
+
+def count_items(collection: Sized) -> int:
+    return len(collection)
+```
+
+常用内置协议：`Iterable`、`Iterator`、`ContextManager`、`Sized`、`Container`。
+
+---
+
+## 六、类型收窄（Type Narrowing）
+
+通过条件判断让 mypy 在某个分支中知道更精确的类型。
+
+### `isinstance()` 收窄
+
+```python
+def process(value: int | str) -> str:
+    if isinstance(value, int):
+        return f"Number: {value}"
+    else:
+        return f"String: {value.upper()}"
+```
+
+### `type(x) is Y` 精确类型检查
+
+`isinstance()` 包含子类。`bool` 是 `int` 的子类，所以 `isinstance(True, int)` 为 `True`。要排除子类：
+
+```python
+def describe(x: int | bool) -> str:
+    if type(x) is int:
+        return "exact int"
+    elif type(x) is bool:
+        return "exact bool"
+    return "unknown"
+```
+
+### `None` 检查
+
+```python
+def greet(name: str | None) -> str:
+    if name is not None:
+        return f"Hello, {name.upper()}"
+    return "Hello, stranger"
+```
+
+:::warning
+`if name:` 也能收窄 `None`，但会把 `""`、`0`、`[]` 等假值也排除。如果空字符串是合法输入，必须用 `is not None`。
+:::
+
+### `assert` 收窄
+
+```python
+def process(data: list[int] | None) -> list[int]:
+    assert data is not None, "data must not be None"
+    return data[0:]
+```
+
+注意：生产环境用 `-O` 运行会跳过 assert。更安全的做法是 `if data is None: raise ValueError(...)`。
+
+### `TypeGuard` — 自定义类型守卫
+
+```python
+from typing import TypeGuard
+
+def is_str_list(val: list[object]) -> TypeGuard[list[str]]:
+    return all(isinstance(x, str) for x in val)
+
+def process(items: list[str] | list[int]) -> None:
+    if is_str_list(items):
+        print(items[0].upper())
+    else:
+        print(items[0] + 1)
+```
+
+`TypeGuard` 函数返回 `True` 时，mypy 将参数收窄为泛型参数类型。`False` 分支不收窄。
+
+### `TypeIs`（Python 3.13+）
+
+`TypeIs` 是 `TypeGuard` 的改进版，`False` 分支也会收窄类型（排除匹配的部分），行为更精确：
+
+```python
+from typing import TypeIs
+
+def is_str_list(val: list[str | int]) -> TypeIs[list[str]]:
+    return all(isinstance(x, str) for x in val)
+
+def process(items: list[str | int]) -> None:
+    if is_str_list(items):
+        print(items[0].upper())
+    else:
+        for item in items:
+            if isinstance(item, int):
+                print(item + 1)
+```
+
+---
+
+## 七、函数重载与递归类型
+
+### `@overload` — 多重签名
+
+当一个函数根据参数类型有不同行为时：
+
+```python
+from typing import overload
+
+@overload
+def parse(value: str) -> int: ...
+@overload
+def parse(value: bytes) -> int: ...
+@overload
+def parse(value: None) -> None: ...
+
+def parse(value: str | bytes | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return int(value.decode())
+    return int(value)
+
+a: int = parse("42")
+b: int = parse(b"42")
+c: None = parse(None)
+```
+
+规则：`@overload` 签名只有 `...` 没有实现；最后一个（无 `@overload`）是真实实现；调用方只看到 overload 签名。
+
+**何时需要 overload**：不同参数类型对应不同返回类型时。如果函数只是"接受多种类型做相同的事"，直接用 Union 即可。
+
+### 递归类型
+
+JSON 值的类型是递归的：
+
+```python
+from typing import Union
+
+Json = Union[
+    None,
+    bool,
+    int,
+    float,
+    str,
+    list["Json"],
+    dict[str, "Json"],
+]
+
+def get_depth(value: Json) -> int:
+    if isinstance(value, (list, dict)):
+        if isinstance(value, list):
+            return 1 + max((get_depth(v) for v in value), default=0)
+        return 1 + max((get_depth(v) for v in value.values()), default=0)
+    return 0
+
+data: Json = {"users": [{"name": "Alice"}, {"name": "Bob"}]}
+print(get_depth(data))
+```
+
+`list["Json"]` 中的引号是前向引用。使用 `from __future__ import annotations` 后可去掉。
+
+### `Self` 类型（Python 3.11+）
+
+`Self` 用于方法返回自身类型，常见于方法链和工厂方法：
+
+```python
+from typing import Self
+
+class Builder:
+    def __init__(self) -> None:
+        self._parts: list[str] = []
+
+    def add(self, part: str) -> Self:
+        self._parts.append(part)
+        return self
+
+    def build(self) -> str:
+        return "-".join(self._parts)
+
+result = Builder().add("a").add("b").add("c").build()
+```
+
+在 `Self` 之前，需要用 `TypeVar` 绑定自身来模拟。`Self` 更简洁，继承时也自动正确处理。
+
+---
+
+## 八、mypy 配置与实战
+
+### 安装与运行
+
+```bash
+pip install mypy
+mypy your_script.py
+```
+
+### 配置文件
+
+推荐在 `pyproject.toml` 中配置：
+
+```toml
+[tool.mypy]
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+ignore_missing_imports = false
+```
+
+关键配置项：
+
+| 配置项 | 作用 |
+|--------|------|
+| `strict` | 启用所有严格检查（推荐新项目） |
+| `disallow_untyped_defs` | 禁止没有类型注解的函数定义 |
+| `warn_return_any` | 警告返回 `Any` 的函数 |
+| `disallow_any_generics` | 禁止裸泛型如 `list` 而非 `list[int]` |
+| `ignore_missing_imports` | 忽略没有存根文件的第三方库 |
+
+### 按模块覆盖
+
+第三方库没有类型存根时，按模块忽略：
+
+```toml
+[[tool.mypy.overrides]]
+module = "requests.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "my_legacy_module"
+disallow_untyped_defs = false
+```
+
+### `# type: ignore` 注释
+
+```python
+x = some_untyped_function()  # type: ignore[arg-type]
+```
+
+:::tip
+始终指定具体错误码（如 `[arg-type]`、`[assignment]`、`[attr-defined]`），避免裸 `# type: ignore` 遮蔽未来新增的错误。
+:::
+
+### 存根文件（Stub Packages）
+
+许多第三方库自身不带类型注解，社区维护了 `types-<package>` 格式的存根包：
+
+```bash
+pip install types-requests
+pip install types-pyyaml
+pip install types-python-dateutil
+```
+
+安装后 mypy 自动识别。可用 `stubgen` 为没有存根的库生成：
+
+```bash
+stubgen some_library
+```
+
+### 在 CI 中运行
+
+```yaml
+- name: Run mypy
+  run: |
+    pip install mypy
+    mypy --strict src/
+```
+
+如果你的库提供类型注解，记得在包根目录放一个空的 `py.typed` 文件（PEP 561），否则 mypy 不会读取包内的注解。
+
+---
+
+## 九、常见问题与最佳实践
+
+### `Any` vs `object`
+
+```python
+def accept_any(x: Any) -> Any:
+    return x.length    # mypy 不报错
+
+def accept_object(x: object) -> str:
+    return str(x)      # 只能用 object 上的方法
+```
+
+**原则**：只想表示"接受任何类型"但不做类型不安全操作时用 `object`；需要绕过类型检查时才用 `Any`。
+
+### 循环导入
+
+类型注解引用其他模块的类可能导致循环导入，用 `TYPE_CHECKING` 解决：
+
+```python
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from models import User
+
+class Order:
+    def __init__(self, user: User) -> None:
+        self.user = user
+```
+
+`TYPE_CHECKING` 在运行时为 `False`，所以 `from models import User` 只在类型检查时执行。
+
+### 第三方库没有存根
+
+三个策略（按优先级）：1. 安装社区存根包 `types-xxx`；2. `# type: ignore` 忽略特定调用；3. 自己写 `.pyi` 存根文件放在 `stubs/` 目录，配置 `mypy_path = "stubs"`。
+
+### `cast()` — 类型断言
+
+`cast()` 告诉 mypy "请相信我这个类型"，不做任何运行时转换：
+
+```python
+from typing import cast
+
+timeout = cast(int, get_config()["timeout"])
+```
+
+应该作为最后手段——优先使用 `isinstance()` 检查、`TypeGuard`、或重构代码来避免 `cast`。
+
+### 渐进式采用策略
+
+1. **新代码全部加类型**：`disallow_untyped_defs = true` 保证增量
+2. **公共 API 优先**：函数签名和类接口先注解，内部实现后补
+3. **逐步收紧严格度**：先 `warn_return_any`，再加 `disallow_any_generics`，最后 `strict`
+4. **`# type: ignore` 是临时措施**：每次加 ignore 时加 TODO 注释，计划后续修复
+
+### pyright vs mypy
+
+| 特性 | mypy | pyright |
+|------|------|---------|
+| 维护者 | Python 团队 | Microsoft |
+| 速度 | 较慢（纯 Python） | 快（TypeScript 实现） |
+| VS Code 集成 | 需安装扩展 | 内置（Pylance） |
+
+两者大部分行为一致。用 VS Code 则 pyright 有天然优势；追求与 Python 官方最一致的检查选 mypy。
+
+---
+
+## 十、综合实战：类型化的博客系统
+
+以下是一个完整的博客领域模型，展示类型系统在实际项目中的用法。
+
+```python
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import (
+    Any,
+    ClassVar,
+    Final,
+    Generic,
+    Iterable,
+    Literal,
+    Optional,
+    Protocol,
+    TypeAlias,
+    TypeGuard,
+    TypeVar,
+)
+from datetime import datetime
+
+ID: TypeAlias = int
+Status: TypeAlias = Literal["draft", "published", "archived"]
+
+@dataclass
+class User:
+    id: ID
+    name: str
+    email: str
+    is_active: bool = True
+    MAX_NAME_LENGTH: ClassVar[int] = 100
+
+    def deactivate(self) -> None:
+        self.is_active = False
+
+@dataclass
+class Post:
+    id: ID
+    title: str
+    content: str
+    author_id: ID
+    status: Status = "draft"
+    created_at: datetime = field(default_factory=datetime.now)
+    tags: list[str] = field(default_factory=list)
+    MIN_TITLE_LENGTH: Final[int] = 1
+
+    def publish(self) -> None:
+        if self.status != "draft":
+            raise ValueError("Only draft posts can be published")
+        self.status = "published"
+
+    def archive(self) -> None:
+        self.status = "archived"
+
+@dataclass
+class Comment:
+    id: ID
+    post_id: ID
+    author_name: str
+    content: str
+    created_at: datetime = field(default_factory=datetime.now)
+```
+
+### Protocol：仓库模式
+
+```python
+T = TypeVar("T")
+
+class Repository(Protocol, Generic[T]):
+    def get_by_id(self, id: ID) -> Optional[T]: ...
+    def get_all(self) -> list[T]: ...
+    def save(self, entity: T) -> T: ...
+    def delete(self, id: ID) -> bool: ...
+
+class InMemoryRepository(Generic[T]):
+    def __init__(self) -> None:
+        self._data: dict[ID, T] = {}
+        self._next_id: int = 1
+
+    def get_by_id(self, id: ID) -> Optional[T]:
+        return self._data.get(id)
+
+    def get_all(self) -> list[T]:
+        return list(self._data.values())
+
+    def save(self, entity: T) -> T:
+        if not hasattr(entity, "id") or entity.id == 0:
+            object.__setattr__(entity, "id", self._next_id)
+            self._next_id += 1
+        self._data[entity.id] = entity
+        return entity
+
+    def delete(self, id: ID) -> bool:
+        if id in self._data:
+            del self._data[id]
+            return True
+        return False
+```
+
+### 泛型 Result 类型
+
+```python
+E = TypeVar("E")
+
+@dataclass
+class Ok(Generic[T]):
+    value: T
+
+@dataclass
+class Err(Generic[E]):
+    error: E
+
+Result: TypeAlias = Ok[T] | Err[E]
+
+def ok(value: T) -> Result[T, Any]:
+    return Ok(value)
+
+def err(error: E) -> Result[Any, E]:
+    return Err(error)
+
+def is_ok(result: Result[T, E]) -> TypeGuard[Ok[T]]:
+    return isinstance(result, Ok)
+
+def get_published_posts(
+    repo: Repository[Post],
+) -> Result[list[Post], str]:
+    all_posts = repo.get_all()
+    published = [p for p in all_posts if p.status == "published"]
+    if not published and not all_posts:
+        return err("No posts found")
+    return ok(published)
+```
+
+### TypeGuard：数据验证
+
+```python
+def is_valid_user(data: dict[str, Any]) -> TypeGuard[dict[str, Any]]:
+    required = {"name", "email"}
+    return required.issubset(data.keys()) and isinstance(data["name"], str)
+
+def create_user_from_dict(data: dict[str, Any]) -> Result[User, str]:
+    if not is_valid_user(data):
+        return err("Invalid user data")
+    user = User(id=0, name=data["name"], email=data["email"])
+    return ok(user)
+```
+
+### 服务层与运行示例
+
+```python
+class BlogService:
+    def __init__(
+        self,
+        user_repo: Repository[User],
+        post_repo: Repository[Post],
+        comment_repo: Repository[Comment],
+    ) -> None:
+        self.user_repo = user_repo
+        self.post_repo = post_repo
+        self.comment_repo = comment_repo
+
+    def create_post(
+        self,
+        author_id: ID,
+        title: str,
+        content: str,
+        tags: Iterable[str] = (),
+    ) -> Result[Post, str]:
+        author = self.user_repo.get_by_id(author_id)
+        if author is None:
+            return err(f"User {author_id} not found")
+        if not author.is_active:
+            return err(f"User {author_id} is not active")
+        if len(title) < Post.MIN_TITLE_LENGTH:
+            return err("Title is too short")
+        post = Post(
+            id=0, title=title, content=content,
+            author_id=author_id, tags=list(tags),
+        )
+        return ok(self.post_repo.save(post))
+
+    def add_comment(
+        self, post_id: ID, author_name: str, content: str,
+    ) -> Result[Comment, str]:
+        post = self.post_repo.get_by_id(post_id)
+        if post is None:
+            return err(f"Post {post_id} not found")
+        if post.status != "published":
+            return err("Cannot comment on unpublished posts")
+        comment = Comment(
+            id=0, post_id=post_id,
+            author_name=author_name, content=content,
+        )
+        return ok(self.comment_repo.save(comment))
+
+def main() -> None:
+    user_repo: InMemoryRepository[User] = InMemoryRepository()
+    post_repo: InMemoryRepository[Post] = InMemoryRepository()
+    comment_repo: InMemoryRepository[Comment] = InMemoryRepository()
+    service = BlogService(user_repo, post_repo, comment_repo)
+
+    alice = user_repo.save(User(id=0, name="Alice", email="alice@example.com"))
+    print(f"Created user: {alice.name} (id={alice.id})")
+
+    result = service.create_post(
+        author_id=alice.id,
+        title="Python Type System",
+        content="A comprehensive guide...",
+        tags=["python", "typing"],
+    )
+    if is_ok(result):
+        post = result.value
+        post.publish()
+        print(f"Published: {post.title} (status={post.status})")
+
+        comment_result = service.add_comment(
+            post_id=post.id, author_name="Bob", content="Great!",
+        )
+        if is_ok(comment_result):
+            print(f"Comment: {comment_result.value.content}")
+
+    alice.deactivate()
+    blocked = service.create_post(author_id=alice.id, title="X", content="...")
+    if isinstance(blocked, Err):
+        print(f"Blocked: {blocked.error}")
+
+if __name__ == "__main__":
+    main()
+```
+
+### mypy 配置与错误捕获
+
+```toml
+[tool.mypy]
+strict = true
+warn_return_any = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+```
+
+假设我们犯以下错误，mypy 会一一捕获：
+
+```python
+# 错误 1：传错参数类型
+service.create_post(author_id="alice", title="Test", content="...")
+# mypy: Argument "author_id" has incompatible type "str"; expected "int"
+
+# 错误 2：赋值超出 Literal 范围
+post.status = "deleted"
+# mypy: Incompatible types in assignment (expression has type "Literal['deleted']")
+
+# 错误 3：参数类型不匹配
+comment = Comment(id=1, post_id=1, author_name=123, content="hi")
+# mypy: Argument "author_name" has incompatible type "int"; expected "str"
+
+# 错误 4：对 None 调用方法
+author = user_repo.get_by_id(999)
+print(author.name)
+# mypy: Item "None" of "Optional[User]" has no attribute "name"
+```
+
+这些都是运行前就能发现的 bug，不需要等到测试或生产环境。
+
+---
+
+## 十一、总结与下一步
+
+### 核心要点
+
+- 类型注解是**可检查的文档**——Python 不执行它们，mypy 会
+- 从内置类型到 `Protocol`、`TypeGuard`、`@overload`，Python 的类型系统足以覆盖绝大多数场景
+- `from __future__ import annotations` + `TYPE_CHECKING` 解决前向引用和循环导入
+- mypy 的 `strict` 模式是新项目的推荐起点
+- 渐进式采用：先注解公共 API，再逐步收紧
+
+### 下一步
+
+- [FastAPI 完整指南](/posts/python/fastapi-complete-guide)——FastAPI 的参数校验、依赖注入、自动文档全部建立在类型注解之上
+- **pyright**：微软的替代类型检查器，速度快，VS Code 内置
+- **pytype**：Google 的类型检查器，能分析无注解代码
+- **beartype**：运行时类型检查器，在函数调用时强制验证
+- **Python 3.12+**：`type` 语句让类型别名更简洁：`type Vector = list[float]`
+- **Python 3.13+**：`TypeIs` 比 `TypeGuard` 收窄更精确

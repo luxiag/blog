@@ -1,0 +1,155 @@
+---
+title: '追光者：光照模型的数学原理'
+date: '2025-03-12'
+description: '为什么物体会有明暗？高光是怎么产生的？为什么金属看起来像金属？本文将从最基础的 Lambert 漫反射开始，一步步推导出 Blinn-Phong 高光模型，并简要介绍菲涅尔效应，带你领略渲染方程的冰山一角。'
+tags: ['Math', 'Lighting', 'Shader', 'Graphics']
+---
+
+# 追光者：光照模型的数学原理
+
+在图形学中，"看见"一个物体，意味着光线从光源发出，击中物体表面，反射进入你的眼睛。
+我们要做的，就是用数学公式来模拟这个**反射**的过程。
+
+本文将拆解经典光照模型的三个核心分量：**环境光 (Ambient)**、**漫反射 (Diffuse)** 和 **镜面反射 (Specular)**。
+
+---
+
+## 一、 准备工作：向量三巨头
+
+在开始计算之前，我们需要三个标准化的单位向量（全部归一化！）：
+1.  **N (Normal)**：法线。垂直于物体表面的方向。
+2.  **L (Light)**：光线方向。指向光源。
+3.  **V (View)**：视线方向。指向摄像机。
+
+## 二、 漫反射 (Diffuse)：Lambert 定律
+
+漫反射描述的是光线打在粗糙表面（如墙壁、纸张）上，向四面八方均匀散射的现象。
+
+### 1. 直觉
+当光线垂直射向表面时（$L$ 和 $N$ 平行），接收到的光能量最大。
+当光线侧着射向表面时，同样的能量散布在更大的面积上，单位面积接收的光就少了。
+
+### 2. 公式
+$$ I_{diffuse} = K_d \cdot \max(0, \vec{N} \cdot \vec{L}) $$
+
+*   $\vec{N} \cdot \vec{L}$：点积计算夹角的余弦值。
+*   $\max(0, ...)$：如果光在物体背面（点积 < 0），亮度为 0，不能是负数。
+
+## 三、 镜面反射 (Specular)：Phong vs Blinn-Phong
+
+镜面反射描述的是光线打在光滑表面（如金属、塑料）上，向特定方向集中反射，形成**高光 (Highlight)**。
+
+### 1. Phong 模型 (1975)
+直觉：如果你的视线 $V$，刚好在光的反射方向 $R$ 上，你就会看到最亮的高光。
+*   计算反射向量：$\vec{R} = \text{reflect}(-\vec{L}, \vec{N})$。
+*   公式：
+    $$ I_{spec} = K_s \cdot (\max(0, \vec{V} \cdot \vec{R}))^{\alpha} $$
+*   $\alpha$ (Shininess)：反光度。值越大，高光点越小、越锐利。
+
+### 2. Blinn-Phong 模型 (1977)
+Phong 模型有一个问题：当 $\alpha$ 很大时，计算反射向量 $R$ 比较费性能，而且在某些角度高光会断裂。
+Jim Blinn 提出了一个改良版：**半程向量 (Half Vector)**。
+*   **H**：光线 $L$ 和视线 $V$ 的中间方向。
+    $$ \vec{H} = \text{normalize}(\vec{L} + \vec{V}) $$
+*   直觉：如果 $H$ 和法线 $N$ 重合，说明视线就在反射方向上。
+*   公式：
+    $$ I_{spec} = K_s \cdot (\max(0, \vec{N} \cdot \vec{H}))^{\alpha} $$
+
+**优势**：计算 $H$ 比计算 $R$ 快，而且高光过渡更柔和自然。这是 OpenGL/DirectX 的默认选择。
+
+<ShaderPreview title="Lighting Model Visualizer" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    // 模拟一个球体
+    float r = 0.8;
+    float d = length(uv);
+    
+    if (d > r) {
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    
+    // 计算球表面法线
+    // z = sqrt(r^2 - x^2 - y^2)
+    float z = sqrt(r*r - d*d);
+    vec3 N = normalize(vec3(uv, z));
+    
+    // 光源 (绕圈旋转)
+    vec3 L = normalize(vec3(sin(uTime), cos(uTime), 1.0));
+    
+    // 视线 (正对着屏幕)
+    vec3 V = vec3(0.0, 0.0, 1.0);
+    
+    // 1. Diffuse (Lambert)
+    // 红色分量展示 Diffuse
+    float diff = max(0.0, dot(N, L));
+    
+    // 2. Specular (Blinn-Phong)
+    // 绿色分量展示 Specular
+    vec3 H = normalize(L + V);
+    float spec = pow(max(0.0, dot(N, H)), 32.0); // Shininess = 32
+    
+    // 3. Fresnel (菲涅尔)
+    // 蓝色分量展示 Fresnel
+    // 边缘发光：视线与法线越垂直，越亮
+    float fresnel = pow(1.0 - max(0.0, dot(N, V)), 3.0);
+    
+    // 组合展示
+    // 左半边：完整光照
+    // 右半边：拆解 (R=Diff, G=Spec, B=Fresnel)
+    vec3 col = vec3(0.0);
+    
+    if (uv.x < 0.0) {
+        // 综合光照 (模拟塑料球)
+        vec3 albedo = vec3(1.0, 0.5, 0.2); // 橙色本体
+        col = albedo * diff + vec3(spec) + vec3(fresnel * 0.2);
+    } else {
+        // Debug 视图
+        col = vec3(diff, spec, fresnel);
+    }
+    
+    // 分割线
+    if(abs(uv.x) < 0.01) col = vec3(1.0);
+    
+    gl_FragColor = vec4(col, 1.0);
+}
+`} />
+
+## 四、 光的衰减 (Attenuation)
+
+现实中的光会随着距离变暗。
+物理定律：**平方反比定律 (Inverse Square Law)**。
+$$ \text{Att} = \frac{1}{\text{distance}^2} $$
+
+但在图形学中，为了防止除以 0 且为了艺术控制，我们通常用：
+$$ \text{Att} = \frac{1}{K_c + K_l \cdot d + K_q \cdot d^2} $$
+*   $K_c$ (Constant)：常数项，通常为 1。
+*   $K_l$ (Linear)：线性项。
+*   $K_q$ (Quadratic)：二次项（物理真实项）。
+
+## 五、 菲涅尔效应 (Fresnel Effect)
+
+你有没有注意过，平静的湖面：
+*   脚下的水是透明的（能看到水底）。
+*   远处的水是像镜子一样的（反射天空）。
+
+这就是 **菲涅尔效应**：**视线与表面越平行，反射越强。**
+公式 (Schlick 近似)：
+$$ F = F_0 + (1 - F_0)(1 - (\vec{N} \cdot \vec{V}))^5 $$
+*   $F_0$：物体正对着你的反射率（金属高，非金属低）。
+
+这是 PBR (基于物理渲染) 的核心基石之一。
+
+## 总结
+
+光照计算就是这三个向量的游戏：$N, L, V$。
+
+1.  **Diffuse**：$N \cdot L$。漫反射，决定物体基本明暗。
+2.  **Specular**：$N \cdot H$。镜面高光，决定物体光泽度。
+3.  **Fresnel**：$1 - (N \cdot V)$。边缘光，决定物体真实感。
+
+把它们加起来，你就点亮了世界。

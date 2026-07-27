@@ -1,0 +1,194 @@
+---
+title: 'C# 表达式树 Expression Tree：从 Lambda 到 IQueryable'
+date: '2026-07-14'
+excerpt: '理解表达式树的作用：Expression<Func<T,bool>>、运行时分析 Lambda、动态查询，以及它和 IQueryable、EF Core 的关系。'
+tags: ['dotnet', 'csharp', 'expression-tree', 'linq', 'ef-core']
+nextPost: 'dotnet/csharp-async-await'
+---
+
+# C# 表达式树 Expression Tree：从 Lambda 到 IQueryable
+
+普通委托表示“可以执行的代码”，表达式树表示“可以被分析的数据结构”。这是 LINQ to SQL、EF Core、AutoMapper 投影、动态查询等能力的重要基础。
+
+:::tip C# 语言系列阅读顺序
+本文建议在 [委托、事件与 Lambda](/posts/dotnet/csharp-delegate-event-lambda)、[扩展方法与迭代器](/posts/dotnet/csharp-extension-methods-iterators) 和 [C# LINQ](/posts/dotnet/csharp-linq) 之后阅读。
+:::
+
+## Func 和 Expression 的区别
+
+`Func<T, bool>` 是可执行委托。
+
+```csharp
+Func<int, bool> predicate = n => n > 10;
+
+Console.WriteLine(predicate(20));
+```
+
+`Expression<Func<T, bool>>` 是表达式树，保存的是 Lambda 的结构。
+
+```csharp
+using System.Linq.Expressions;
+
+Expression<Func<int, bool>> expression = n => n > 10;
+
+Console.WriteLine(expression.Body);
+Console.WriteLine(expression.Parameters[0].Name);
+```
+
+输出类似：
+
+```text
+(n > 10)
+n
+```
+
+表达式树可以被框架读取、分析、转换，而不仅仅是执行。
+
+## 编译表达式树
+
+表达式树可以通过 `Compile()` 编译成委托。
+
+```csharp
+using System.Linq.Expressions;
+
+Expression<Func<int, bool>> expression = n => n % 2 == 0;
+
+Func<int, bool> compiled = expression.Compile();
+
+Console.WriteLine(compiled(4));
+Console.WriteLine(compiled(5));
+```
+
+但在 EF Core 查询中，通常不要手动 `Compile()`，否则查询可能从数据库翻译变成内存执行。
+
+## 为什么 EF Core 需要表达式树
+
+内存集合使用 `IEnumerable<T>`，查询条件可以直接执行。
+
+```csharp
+IEnumerable<Product> products = GetProducts();
+
+var result = products.Where(p => p.Price >= 100m);
+```
+
+数据库查询使用 `IQueryable<T>`，框架需要分析查询表达式，并翻译成 SQL。
+
+```csharp
+IQueryable<Product> query = dbContext.Products;
+
+var result = query.Where(p => p.Price >= 100m);
+```
+
+对于 `IQueryable<T>`，`p => p.Price >= 100m` 通常会被接收为表达式树，EF Core 分析后生成类似 SQL：
+
+```sql
+SELECT * FROM Products WHERE Price >= 100
+```
+
+## 手动构建表达式树
+
+表达式树也可以手动构建。
+
+```csharp
+using System.Linq.Expressions;
+
+ParameterExpression parameter = Expression.Parameter(typeof(Product), "p");
+MemberExpression price = Expression.Property(parameter, nameof(Product.Price));
+ConstantExpression value = Expression.Constant(100m);
+BinaryExpression body = Expression.GreaterThanOrEqual(price, value);
+
+Expression<Func<Product, bool>> expression =
+    Expression.Lambda<Func<Product, bool>>(body, parameter);
+
+Console.WriteLine(expression);
+
+public class Product
+{
+    public decimal Price { get; set; }
+}
+```
+
+这个表达式等价于：
+
+```csharp
+p => p.Price >= 100m
+```
+
+## 动态查询示例
+
+表达式树常用于根据用户输入动态拼接查询条件。
+
+```csharp
+using System.Linq.Expressions;
+
+Expression<Func<Product, bool>> BuildPriceFilter(decimal? minPrice)
+{
+    if (minPrice is null)
+    {
+        return p => true;
+    }
+
+    return p => p.Price >= minPrice.Value;
+}
+
+var products = new List<Product>
+{
+    new() { Name = "键盘", Price = 199m },
+    new() { Name = "鼠标", Price = 99m }
+};
+
+var filter = BuildPriceFilter(100m).Compile();
+
+foreach (Product product in products.Where(filter))
+{
+    Console.WriteLine(product.Name);
+}
+
+public class Product
+{
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+}
+```
+
+在真实 EF Core 查询里，应把 `Expression<Func<Product, bool>>` 直接传给 `Where`，不要先 `Compile()`。
+
+## 组合表达式的注意点
+
+组合表达式时要小心参数一致性。两个表达式的参数看起来名字一样，也可能是不同的 `ParameterExpression` 实例。
+
+生产项目里可以使用成熟库辅助动态查询，例如：
+
+- `System.Linq.Dynamic.Core`
+- Specification Pattern
+- 自己封装小范围表达式组合工具
+
+不要为了动态查询直接拼接 SQL 字符串，除非明确处理参数化和注入风险。
+
+## 表达式树不能表示所有 C# 语法
+
+表达式树只支持一部分表达式结构，不是完整 C# 语法树。复杂语句、局部变量声明、循环等不能直接作为表达式树主体。
+
+```csharp
+// 可以
+Expression<Func<int, bool>> ok = n => n > 0;
+
+// 不可以：语句体 Lambda 不能转换为表达式树
+// Expression<Func<int, bool>> wrong = n =>
+// {
+//     return n > 0;
+// };
+```
+
+## 什么时候需要学表达式树
+
+普通业务开发不一定每天手写表达式树，但理解它很有价值：
+
+- 看懂 `IQueryable<T>` 和 `IEnumerable<T>` 的区别
+- 理解 EF Core 为什么能把 Lambda 翻译成 SQL
+- 构建动态筛选、排序、搜索条件
+- 理解 AutoMapper、验证框架、规则引擎等库的部分设计
+
+## 总结
+
+`Func<T>` 表示可执行逻辑，`Expression<Func<T>>` 表示可分析的数据结构。表达式树是 C# 语言特性和数据库查询框架之间的重要桥梁。

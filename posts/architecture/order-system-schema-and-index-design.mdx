@@ -1,0 +1,356 @@
+---
+title: '订单系统数据库表结构与索引设计：含 MySQL SQL 示例'
+date: '2026-04-02'
+excerpt: '这篇文章从实战角度讲清订单系统的数据库设计：主表、明细表、状态日志、幂等表、Outbox 消息表如何建模，索引怎么设计，常见查询如何写，以及如何避免慢 SQL。'
+tags: ['architecture', 'mysql', 'database', 'order-system', 'sql']
+---
+
+# 订单系统数据库表结构与索引设计：含 MySQL SQL 示例
+
+订单系统做得稳不稳，数据库设计是核心。
+
+很多线上问题最后都能追到表结构：
+
+- 状态错乱
+- 查询慢
+- 重复订单
+- 补偿困难
+- 对账困难
+
+这篇文章给你一套可落地的 MySQL 设计模板。
+
+---
+
+## 一、设计目标
+
+我们先明确目标：
+
+1. 下单写入稳定（高并发）
+2. 查询高频接口可走索引
+3. 订单状态可追溯
+4. 幂等可保障
+5. 事件可靠投递可补偿
+
+---
+
+## 二、核心表清单
+
+推荐至少有这 5 张表：
+
+1. `orders`：订单主表
+2. `order_items`：订单明细表
+3. `order_status_log`：状态流转日志
+4. `idempotency_record`：幂等记录
+5. `order_outbox`：本地消息表（事务消息）
+
+---
+
+## 三、订单主表 `orders`
+
+### 1. 建表 SQL
+
+```sql
+CREATE TABLE `orders` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `order_no` VARCHAR(32) NOT NULL COMMENT '订单号，业务唯一',
+  `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
+  `status` TINYINT UNSIGNED NOT NULL COMMENT '订单状态',
+  `total_amount` BIGINT NOT NULL COMMENT '订单总金额，单位分',
+  `discount_amount` BIGINT NOT NULL DEFAULT 0 COMMENT '优惠金额，单位分',
+  `pay_amount` BIGINT NOT NULL COMMENT '应付金额，单位分',
+  `currency` CHAR(3) NOT NULL DEFAULT 'CNY' COMMENT '币种',
+  `address_snapshot` JSON NULL COMMENT '地址快照',
+  `price_snapshot` JSON NULL COMMENT '价格快照',
+  `ext_json` JSON NULL COMMENT '扩展字段',
+  `pay_timeout_at` DATETIME NULL COMMENT '支付超时时间',
+  `paid_at` DATETIME NULL COMMENT '支付完成时间',
+  `version` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_order_no` (`order_no`),
+  KEY `idx_user_created` (`user_id`, `created_at` DESC),
+  KEY `idx_status_created` (`status`, `created_at`),
+  KEY `idx_pay_timeout` (`status`, `pay_timeout_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单主表';
+```
+
+### 2. 设计说明
+
+- 金额统一用“分”（整数），避免浮点误差
+- `order_no` 业务唯一，便于跨系统追踪
+- 状态和时间字段要可索引，支撑定时任务
+- 快照字段建议保留，便于审计和对账
+
+---
+
+## 四、订单明细表 `order_items`
+
+### 1. 建表 SQL
+
+```sql
+CREATE TABLE `order_items` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `order_id` BIGINT UNSIGNED NOT NULL COMMENT '订单ID',
+  `order_no` VARCHAR(32) NOT NULL COMMENT '订单号',
+  `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
+  `sku_id` BIGINT UNSIGNED NOT NULL COMMENT 'SKU ID',
+  `spu_id` BIGINT UNSIGNED NULL COMMENT 'SPU ID',
+  `sku_name_snapshot` VARCHAR(255) NOT NULL COMMENT 'SKU名称快照',
+  `quantity` INT UNSIGNED NOT NULL COMMENT '购买数量',
+  `origin_price` BIGINT NOT NULL COMMENT '原价，单位分',
+  `sale_price` BIGINT NOT NULL COMMENT '成交单价，单位分',
+  `item_amount` BIGINT NOT NULL COMMENT '小计金额，单位分',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_order_id` (`order_id`),
+  KEY `idx_order_no` (`order_no`),
+  KEY `idx_user_created` (`user_id`, `created_at` DESC),
+  KEY `idx_sku_created` (`sku_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单明细表';
+```
+
+### 2. 设计说明
+
+- 冗余 `order_no` 与 `user_id`，提升常见查询效率
+- 商品名称做快照，避免后续商品改名影响历史订单
+
+---
+
+## 五、状态日志表 `order_status_log`
+
+### 1. 建表 SQL
+
+```sql
+CREATE TABLE `order_status_log` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `order_id` BIGINT UNSIGNED NOT NULL,
+  `order_no` VARCHAR(32) NOT NULL,
+  `from_status` TINYINT UNSIGNED NULL,
+  `to_status` TINYINT UNSIGNED NOT NULL,
+  `operator_type` TINYINT UNSIGNED NOT NULL COMMENT '1用户 2系统 3运营 4支付回调',
+  `operator_id` VARCHAR(64) NULL,
+  `remark` VARCHAR(255) NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_order_id_created` (`order_id`, `created_at`),
+  KEY `idx_order_no_created` (`order_no`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单状态流转日志';
+```
+
+### 2. 设计说明
+
+- 不要只改主表状态，必须有状态日志
+- 排障、审计、对账都依赖它
+
+---
+
+## 六、幂等记录表 `idempotency_record`
+
+### 1. 建表 SQL
+
+```sql
+CREATE TABLE `idempotency_record` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `biz_type` VARCHAR(32) NOT NULL COMMENT '业务类型，如 CREATE_ORDER/PAY_CALLBACK',
+  `idempotency_key` VARCHAR(128) NOT NULL COMMENT '幂等键',
+  `biz_no` VARCHAR(64) NULL COMMENT '业务单号，如 order_no/pay_no',
+  `status` TINYINT UNSIGNED NOT NULL COMMENT '1处理中 2成功 3失败',
+  `response_snapshot` JSON NULL COMMENT '响应快照',
+  `expire_at` DATETIME NULL COMMENT '过期时间',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_biz_type_key` (`biz_type`, `idempotency_key`),
+  KEY `idx_expire_at` (`expire_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='幂等记录表';
+```
+
+### 2. 设计说明
+
+- `biz_type + idempotency_key` 唯一约束是核心
+- 适合防重复下单、支付回调防重、消息防重消费
+
+---
+
+## 七、本地消息表 `order_outbox`
+
+### 1. 建表 SQL
+
+```sql
+CREATE TABLE `order_outbox` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `event_id` VARCHAR(64) NOT NULL COMMENT '事件ID，全局唯一',
+  `aggregate_type` VARCHAR(32) NOT NULL COMMENT '聚合类型，如 ORDER',
+  `aggregate_id` VARCHAR(64) NOT NULL COMMENT '聚合ID，如 order_no',
+  `event_type` VARCHAR(64) NOT NULL COMMENT '事件类型，如 ORDER_CREATED',
+  `payload` JSON NOT NULL COMMENT '事件负载',
+  `status` TINYINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '1待发送 2已发送 3失败',
+  `retry_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `next_retry_at` DATETIME NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_event_id` (`event_id`),
+  KEY `idx_status_retry` (`status`, `next_retry_at`, `created_at`),
+  KEY `idx_aggregate` (`aggregate_type`, `aggregate_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单本地消息表';
+```
+
+### 2. 设计说明
+
+- 用于实现 Outbox 模式
+- 与订单写库放在同一本地事务中，保证“业务落库 + 事件产生”一致
+
+---
+
+## 八、常见状态码建议
+
+建议统一枚举，避免多系统语义不一致。
+
+```text
+0  INIT
+10 CREATED
+20 PAYING
+30 PAID
+40 FULFILLING
+50 FINISHED
+60 CANCELED
+70 CLOSED
+80 REFUNDING
+90 REFUNDED
+```
+
+并在代码里做状态机校验，不允许非法跳转。
+
+---
+
+## 九、核心查询 SQL 示例
+
+### 1. 用户分页查订单
+
+```sql
+SELECT id, order_no, status, pay_amount, created_at
+FROM orders
+WHERE user_id = ?
+ORDER BY created_at DESC
+LIMIT ?, ?;
+```
+
+依赖索引：`idx_user_created(user_id, created_at DESC)`。
+
+### 2. 查订单详情 + 明细
+
+```sql
+SELECT o.id, o.order_no, o.status, o.pay_amount, o.created_at,
+       i.sku_id, i.sku_name_snapshot, i.quantity, i.sale_price
+FROM orders o
+JOIN order_items i ON o.id = i.order_id
+WHERE o.order_no = ?;
+```
+
+依赖索引：`uk_order_no` + `idx_order_id`。
+
+### 3. 扫描超时未支付订单
+
+```sql
+SELECT id, order_no
+FROM orders
+WHERE status = 10
+  AND pay_timeout_at <= NOW()
+ORDER BY pay_timeout_at ASC
+LIMIT 500;
+```
+
+依赖索引：`idx_pay_timeout(status, pay_timeout_at)`。
+
+### 4. 乐观锁更新状态
+
+```sql
+UPDATE orders
+SET status = ?, version = version + 1, updated_at = NOW()
+WHERE order_no = ?
+  AND status = ?
+  AND version = ?;
+```
+
+影响行数为 1 表示成功，0 表示并发冲突或状态不匹配。
+
+---
+
+## 十、高并发写入建议
+
+1. 主键用雪花 ID / 自增均可，但要结合分库策略
+2. 热点写操作尽量短事务
+3. 避免在下单事务里做复杂查询
+4. 严控索引数量，防止写放大
+5. 定时归档历史数据，减小活跃数据集
+
+---
+
+## 十一、分库分表怎么演进
+
+建议演进顺序：
+
+1. 单库单表（先跑通）
+2. 主从 + 读写分离
+3. 按业务域垂直拆库
+4. 订单按 `user_id` 或 `order_no hash` 水平分片
+
+分片后新增挑战：
+
+- 跨分片查询
+- 全局排序
+- 分页游标
+- 跨分片对账
+
+所以不要过早分片。
+
+---
+
+## 十二、慢 SQL 与反模式
+
+常见反模式：
+
+1. `select *`
+2. 用 `%keyword%` 走主表模糊查
+3. 多条件但无联合索引
+4. 深分页 `limit 100000, 20`
+5. 大事务里混入远程调用
+
+实用优化：
+
+1. 覆盖索引查询
+2. 游标分页（`id < ?`）
+3. 热冷数据分层
+4. 读请求走缓存
+5. 复杂搜索走 ES
+
+---
+
+## 十三、一份可复用的建表检查清单
+
+上线前可逐项自查：
+
+1. 金额字段是否全部用整数分
+2. 订单号是否全局唯一
+3. 核心查询是否有匹配索引
+4. 状态流转是否可追溯
+5. 幂等是否有唯一约束
+6. Outbox 是否可重试可补偿
+7. 是否有超时任务索引
+8. 是否支持快速对账
+
+---
+
+## 总结
+
+订单系统数据库设计的核心不是“表越多越高级”，而是：
+
+1. 写得准
+2. 查得快
+3. 状态可追
+4. 出错可补
+
+你可以先按这篇的 5 张核心表落地一个版本，再根据业务体量逐步演进到分库分表和更复杂的数据架构。

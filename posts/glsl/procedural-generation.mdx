@@ -1,0 +1,190 @@
+---
+title: '造物主的算法：程序化生成 (Procedural Generation)'
+date: '2024-11-18'
+description: '如何用几行代码生成无限的森林？如何让电脑自动建造复杂的地下洞穴？本文将带你探索程序化生成的两大神器：用于模拟植物生长的 L-System，以及用于构建体素世界的 Marching Cubes。'
+tags: ['WebGL', 'Algorithm', 'Procedural', 'Terrain']
+---
+
+# 造物主的算法：程序化生成 (Procedural Generation)
+
+在《我的世界》或《无人深空》这样的游戏中，你会发现地图是无限的。开发者并没有手动放置每一棵树、每一块石头。他们写了一套**规则**，然后让计算机自己去"生长"世界。
+
+这就是 **程序化生成 (PCG)**。
+今天我们介绍两个最经典的算法，分别用于制造生命（植物）和土地（地形）。
+
+## 一、 L-System：数字植物学
+
+1968 年，生物学家 Aristid Lindenmayer 发明了一套系统来模拟藻类的生长。后来，这成为了计算机图形学中生成树木的标准算法。
+
+### 1. 核心原理：字符串重写
+L-System 本质上是一个**字符串替换游戏**。
+它由三部分组成：
+*   **公理 (Axiom)**：初始状态。比如 "F" (茎)。
+*   **规则 (Rule)**：生长法则。比如 "F -> F[+F]F[-F]"。意思是：每一段茎长大了，都会变成一段主茎，分叉出左右两根侧枝。
+*   **迭代 (Iteration)**：重复这个过程。
+
+### 2. 乌龟绘图 (Turtle Graphics)
+生成了一串像 "FF[+F][-F]" 这样的字符串后，我们需要把它画出来。我们想象一只乌龟在爬行：
+*   `F`: 向前爬一步，画一条线。
+*   `+`: 向右转 25 度。
+*   `-`: 向左转 25 度。
+*   `[`: **保存当前状态**（位置和角度入栈）。开始画分叉。
+*   `]`: **恢复之前状态**（位置和角度出栈）。回到分叉点。
+
+<ShaderPreview title="L-System Fractal Tree" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 2D 旋转矩阵
+mat2 rot(float a) {
+    float s = sin(a);
+    float c = cos(a);
+    return mat2(c, -s, s, c);
+}
+
+// 简单的线段距离函数
+float sdSegment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    uv.y -= -0.8; // 移到底部
+    
+    vec3 col = vec3(0.0);
+    
+    // 由于 Shader 是并行的，很难做真正的递归 L-System。
+    // 这里我们用 SDF 模拟一颗 3 级分形树的视觉效果。
+    
+    float d = 1.0;
+    float w = 0.01; // 线宽
+    
+    vec2 p = uv;
+    float scale = 1.0;
+    
+    // 迭代绘制分枝
+    for(int i=0; i<4; i++) {
+        // 1. 绘制主干 (从 0,0 到 0,1)
+        // 我们根据当前层级的坐标系来画
+        
+        // 这一层的长度 (随时间摆动)
+        float len = 0.6 + sin(uTime * 2.0 + float(i)) * 0.1;
+        
+        // 累积距离场
+        // 注意：这里是伪代码逻辑，真实的 SDF 分形需要更复杂的折叠
+        // 为了演示，我们只画几根固定的枝干
+        
+        // 简单的模拟：只画一根主干，然后坐标系分裂
+        d = min(d, sdSegment(p, vec2(0.0), vec2(0.0, len)));
+        
+        // 坐标系变换：移动到末端
+        p -= vec2(0.0, len);
+        p *= 1.5; // 每一层缩小
+        scale *= 1.5;
+        
+        // 分形折叠：把左右两边折叠到一边
+        p.x = abs(p.x);
+        
+        // 旋转：分叉角度
+        p = rot(0.6 + sin(uTime)*0.2) * p;
+    }
+    
+    // 渲染
+    float tree = 1.0 - smoothstep(0.0, 0.01 * scale, d);
+    col += vec3(0.2, 0.8, 0.2) * tree;
+    
+    gl_FragColor = vec4(col, 1.0);
+}
+`} />
+
+## 二、 Marching Cubes：体素世界的构建者
+
+如果你想生成像《我的世界》那样的地形，但又希望它是**平滑**的（不是方块），该怎么办？
+你需要 **Marching Cubes (移动立方体)** 算法。
+
+### 1. 标量场 (Scalar Field)
+首先，我们把空间切成无数个小格子（体素）。
+每个格子的顶点都有一个数值（比如"密度"）。
+*   如果数值 > 0.5，说明这个点在**地下**。
+*   如果数值 < 0.5，说明这个点在**空气中**。
+
+### 2. 查表法
+对于一个立方体格子，它有 8 个顶点。每个顶点都在"地下"或"空气"中。
+一共有 $2^8 = 256$ 种情况。
+Marching Cubes 算法预先计算好了这 256 种情况下，**地表应该如何穿过这个立方体**（生成哪些三角形）。
+
+### 3. 应用
+我们只需要给出一个 3D 噪声函数（比如 3D Perlin Noise），Marching Cubes 就能把它转化成连绵起伏的山脉、复杂的洞穴系统，甚至是人体器官（CT 扫描重建）。
+
+<ShaderPreview title="Marching Cubes Logic (2D: Marching Squares)" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 2D 噪声
+float noise(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// 模拟标量场 (Metaballs)
+float map(vec2 p) {
+    vec2 c1 = vec2(sin(uTime)*0.5 + 0.5, 0.5);
+    vec2 c2 = vec2(cos(uTime)*0.5 + 0.5, sin(uTime*0.8)*0.5 + 0.5);
+    
+    float d1 = length(p - c1);
+    float d2 = length(p - c2);
+    
+    // 融合场：1/d
+    return 0.1/d1 + 0.1/d2;
+}
+
+void main() {
+    vec2 uv = vUv;
+    
+    // 1. 可视化标量场
+    float val = map(uv);
+    vec3 col = vec3(val * 0.2); // 背景灰度
+    
+    // 2. Marching Squares (2D 版的 Marching Cubes)
+    // 把屏幕分成网格
+    float gridSize = 10.0;
+    vec2 gridUV = floor(uv * gridSize) / gridSize;
+    vec2 cellUV = fract(uv * gridSize);
+    
+    // 采样网格四个角的数值
+    float bl = map(gridUV); // Bottom Left
+    float br = map(gridUV + vec2(1.0/gridSize, 0.0));
+    float tl = map(gridUV + vec2(0.0, 1.0/gridSize));
+    float tr = map(gridUV + vec2(1.0/gridSize, 1.0/gridSize));
+    
+    float threshold = 0.8;
+    
+    // 3. 绘制等值线 (Isoline)
+    // 在 2D 中，Marching Squares 就是连接这些值的插值点
+    // 这里我们用一种简单的可视化：如果在阈值附近就画线
+    
+    float d = abs(val - threshold);
+    float line = 1.0 - smoothstep(0.0, 0.02, d);
+    
+    col = mix(col, vec3(1.0, 0.5, 0.0), line);
+    
+    // 绘制网格点状态 (红=内部，绿=外部)
+    if (length(cellUV - 0.5) < 0.1) {
+        // 采样当前所在格子的左下角
+        float cornerVal = map(floor(uv * gridSize) / gridSize);
+        col = cornerVal > threshold ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+    }
+    
+    gl_FragColor = vec4(col, 1.0);
+}
+`} />
+
+## 总结
+
+程序化生成是图形学中最迷人的领域之一。它让我们从"画家"变成了"园丁"。
+
+1.  **L-System**：通过递归规则，模拟植物的分形生长。
+2.  **Marching Cubes**：通过离散采样，把数学场变成实体模型。
+
+掌握了它们，你就拥有了创造无限世界的能力。

@@ -1,0 +1,1403 @@
+'use client';
+
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import PageTitle from '@/components/PageTitle';
+import Link from 'next/link';
+import { pdfDB } from './db';
+import { 
+  ChevronLeft, 
+  FileText, 
+  Plus, 
+  List, 
+  Folder, 
+  ChevronLeft as ChevronLeftIcon, 
+  ChevronRight, 
+  AlertCircle, 
+  Trash2,
+  Loader2,
+  LayoutGrid,
+  Monitor,
+  Tablet
+} from 'lucide-react';
+
+interface UserPdf {
+  id: string;
+  name: string;
+  addedAt: number;
+}
+
+interface PdfPageMemory {
+  [pdfId: string]: number;
+}
+
+interface PdfOutlineItem {
+  title: string;
+  dest: any;
+  items: PdfOutlineItem[];
+}
+
+interface PageInfo {
+  page: number;
+  width: number;
+  height: number;
+  rendered: boolean;
+}
+
+interface PageOffset {
+  top: number;
+  height: number;
+}
+
+type PreviewMode = 'normal' | 'eink';
+
+export default function PdfViewerPage() {
+  const [activeTab, setActiveTab] = useState<'outline' | 'library' | 'thumbnails'>('library');
+  const [userPdfs, setUserPdfs] = useState<UserPdf[]>([]);
+  const [currentPdf, setCurrentPdf] = useState<{ id: string; name: string; url: string; isPublic: boolean } | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [scale, setScale] = useState(1.2);
+  const [outline, setOutline] = useState<PdfOutlineItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [isDBReady, setIsDBReady] = useState(false);
+  const [pdfToDelete, setPdfToDelete] = useState<string | null>(null);
+  const [showMemoryPrompt, setShowMemoryPrompt] = useState(false);
+  const [savedPage, setSavedPage] = useState<number | null>(null);
+  const [countdown, setCountdown] = useState(5);
+  const [thumbnails, setThumbnails] = useState<{ page: number; url: string }[]>([]);
+  const [thumbnailsLoading, setThumbnailsLoading] = useState(false);
+  const [pageInput, setPageInput] = useState('');
+  const [pagesInfo, setPagesInfo] = useState<PageInfo[]>([]);
+  const [renderedPages, setRenderedPages] = useState<Set<number>>(new Set());
+  const renderedScaleRef = useRef<Map<number, number>>(new Map());
+  const [previewMode, setPreviewMode] = useState<PreviewMode>('normal');
+  const [publicPdfs, setPublicPdfs] = useState<{ id: string; name: string; url: string; size: number }[]>([]);
+  const [pdfjsLibLoaded, setPdfjsLibLoaded] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const pdfDocRef = useRef<any>(null);
+  const pageCanvasesRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
+  const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const renderTasksRef = useRef<Map<number, any>>(new Map());
+  const pdfjsLibRef = useRef<any>(null);
+  const scrollRAFRef = useRef<number | null>(null);
+  const lastScrollTimeRef = useRef<number>(0);
+  const pageOffsetsRef = useRef<PageOffset[]>([]);
+  const renderingPageRef = useRef<Set<number>>(new Set());
+  const pageRefsRef = useRef<Map<number, HTMLDivElement>>(new Map());
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const scrollEndTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Initialize DB and load user PDFs
+  useEffect(() => {
+    let isMounted = true;
+    
+    // Check if mobile
+    const checkMobile = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (mobile) {
+        setScale(0.8);
+      }
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    
+    const init = async () => {
+      try {
+        await pdfDB.init();
+        if (!isMounted) return;
+        setIsDBReady(true);
+        await loadUserPdfs();
+        await loadPublicPdfs();
+      } catch (err) {
+        if (isMounted) {
+          setError('Failed to initialize database. Please check browser compatibility.');
+        }
+      }
+    };
+    
+    // Initialize PDF.js
+    const initPdfJs = async () => {
+      if (typeof window === 'undefined') return;
+      
+      try {
+        const pdfjs = await import('pdfjs-dist');
+        if (!isMounted) return;
+        
+        pdfjsLibRef.current = pdfjs;
+        
+        // Initialize worker with local file (version 5.4.296)
+        pdfjs.GlobalWorkerOptions.workerSrc = `${process.env.NEXT_PUBLIC_BASE_PATH || ''}/js/pdf.worker.min.mjs`;
+        
+        if (isMounted) {
+          setPdfjsLibLoaded(true);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setError('Failed to initialize PDF viewer library');
+        }
+      }
+    };
+    
+    init();
+    initPdfJs();
+    
+    return () => {
+      isMounted = false;
+      window.removeEventListener('resize', checkMobile);
+      if (scrollRAFRef.current) {
+        cancelAnimationFrame(scrollRAFRef.current);
+      }
+      if (scrollEndTimerRef.current) {
+        clearTimeout(scrollEndTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Setup IntersectionObserver for lazy rendering
+  useEffect(() => {
+    if (!pdfDocRef.current || pagesInfo.length === 0) return;
+    
+    // Cleanup old observer
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+    }
+    
+    observerRef.current = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const pageNum = parseInt(entry.target.getAttribute('data-page') || '0', 10);
+          if (!pageNum) return;
+          
+          // When page enters viewport (with buffer), render it
+          if (entry.isIntersecting && !renderedPages.has(pageNum)) {
+            renderPage(pageNum);
+          }
+        });
+      },
+      {
+        root: scrollContainerRef.current,
+        rootMargin: '200px', // Start rendering 200px before visible
+        threshold: 0
+      }
+    );
+    
+    // Observe all page elements
+    pageRefsRef.current.forEach((el) => {
+      if (el) observerRef.current?.observe(el);
+    });
+    
+    return () => {
+      observerRef.current?.disconnect();
+    };
+  }, [currentPdf, pagesInfo.length]);
+
+  // Load public PDFs from /public PDF directory
+  const loadPublicPdfs = async () => {
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/json/pdf-list.json?t=${Date.now()}`);
+      if (response.ok) {
+        const data = await response.json();
+        setPublicPdfs(data.pdfs || []);
+      } else if (response.status === 404) {
+        console.log('pdf-list.json not found, public PDFs will not be available');
+        setPublicPdfs([]);
+      }
+    } catch (err) {
+      setPublicPdfs([]);
+    }
+  };
+
+  // Load user PDFs from IndexedDB
+  const loadUserPdfs = async () => {
+    try {
+      const pdfs = await pdfDB.getAllPdfs();
+      setUserPdfs(pdfs.map(p => ({ 
+        id: p.id, 
+        name: p.name, 
+        addedAt: p.addedAt 
+      })));
+    } catch (err) {
+      // handled
+    }
+  };
+
+  // Save current page to memory
+  useEffect(() => {
+    if (currentPdf && currentPage > 0) {
+      const memory = localStorage.getItem('pdfViewer_pageMemory');
+      const parsed: PdfPageMemory = memory ? JSON.parse(memory) : {};
+      parsed[currentPdf.id] = currentPage;
+      localStorage.setItem('pdfViewer_pageMemory', JSON.stringify(parsed));
+    }
+  }, [currentPdf, currentPage]);
+
+  // Countdown timer for memory prompt
+  useEffect(() => {
+    if (showMemoryPrompt && countdown > 0) {
+      const timer = setTimeout(() => {
+        setCountdown(c => c - 1);
+      }, 1000);
+      return () => clearTimeout(timer);
+    } else if (showMemoryPrompt && countdown === 0) {
+      if (savedPage) {
+        scrollToPage(savedPage);
+      }
+      setShowMemoryPrompt(false);
+    }
+  }, [showMemoryPrompt, countdown, savedPage]);
+
+  // Scroll to specific page
+  const scrollToPage = (pageNum: number) => {
+    if (!scrollContainerRef.current || pagesInfo.length === 0) return;
+    
+    let offset = 0;
+    for (let i = 0; i < pageNum - 1 && i < pagesInfo.length; i++) {
+      offset += pagesInfo[i].height * scale + 20;
+    }
+    
+    scrollContainerRef.current.scrollTo({
+      top: offset,
+      behavior: 'smooth'
+    });
+    setCurrentPage(pageNum);
+  };
+
+  // Get page dimensions
+  const getPageDimensions = async (pdf: any, pageNum: number): Promise<{ width: number; height: number }> => {
+    try {
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1 });
+      return { width: viewport.width, height: viewport.height };
+    } catch {
+      return { width: 600, height: 800 };
+    }
+  };
+
+  // Render a single page
+  const renderPage = async (pageNum: number) => {
+    if (!pdfDocRef.current || !pagesInfo.length) return;
+    
+    // Prevent duplicate rendering
+    if (renderingPageRef.current.has(pageNum)) return;
+    renderingPageRef.current.add(pageNum);
+    
+    const canvas = pageCanvasesRef.current.get(pageNum);
+    if (!canvas) {
+      renderingPageRef.current.delete(pageNum);
+      return;
+    }
+    
+    // Check if already rendered at current scale - skip if already rendered
+    const renderedScale = renderedScaleRef.current.get(pageNum);
+    if (renderedPages.has(pageNum) && renderedScale === scale) {
+      renderingPageRef.current.delete(pageNum);
+      return;
+    }
+    
+    // Cancel any existing render task for this page
+    if (renderTasksRef.current.has(pageNum)) {
+      const existingTask = renderTasksRef.current.get(pageNum);
+      if (existingTask && existingTask.cancel) {
+        existingTask.cancel();
+      }
+      renderTasksRef.current.delete(pageNum);
+    }
+    
+    try {
+      const page = await pdfDocRef.current.getPage(pageNum);
+      const context = canvas.getContext('2d', { alpha: false });
+      if (!context) return;
+
+      // Get page info from pagesInfo array
+      const pageInfo = pagesInfo.find(p => p.page === pageNum);
+      if (!pageInfo) return;
+
+      // Get device pixel ratio for crisp rendering on HiDPI/Retina displays
+      const dpr = window.devicePixelRatio || 1;
+      
+      // Calculate logical (CSS) dimensions
+      const logicalWidth = pageInfo.width * scale;
+      const logicalHeight = pageInfo.height * scale;
+      
+      // Set actual canvas size (physical pixels)
+      canvas.width = Math.floor(logicalWidth * dpr);
+      canvas.height = Math.floor(logicalHeight * dpr);
+      
+      // Set CSS display size (logical pixels)
+      canvas.style.width = `${logicalWidth}px`;
+      canvas.style.height = `${logicalHeight}px`;
+      
+      // Create viewport at the scaled resolution
+      const viewport = page.getViewport({ scale: scale * dpr });
+      
+      // Clear canvas
+      context.fillStyle = 'white';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Create render task with high quality settings
+      const renderTask = page.render({
+        canvasContext: context,
+        viewport: viewport,
+        intent: 'display',
+        background: 'white'
+      });
+      
+      renderTasksRef.current.set(pageNum, renderTask);
+      
+      await renderTask.promise;
+      
+      // Apply e-ink effect if in e-ink mode
+      if (previewMode === 'eink') {
+        applyEInkEffect(canvas);
+      }
+      
+      renderTasksRef.current.delete(pageNum);
+      renderedScaleRef.current.set(pageNum, scale);
+      setRenderedPages(prev => new Set([...prev, pageNum]));
+      renderingPageRef.current.delete(pageNum);
+    } catch (err) {
+      renderingPageRef.current.delete(pageNum);
+      if (err && typeof err === 'object' && 'name' in err && err.name === 'RenderingCancelledException') {
+        return;
+      }
+      // handled
+    }
+  };
+
+  // Apply e-ink (electronic ink) effect to canvas
+  const applyEInkEffect = (canvas: HTMLCanvasElement) => {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    
+    // 16-level grayscale for better font clarity (0-255 divided into 16 steps)
+    const levels = 16;
+    const step = 255 / (levels - 1);
+    
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      
+      // Use luminance formula for better grayscale conversion
+      const gray = Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
+      
+      // Quantize to 16 levels for e-ink look while keeping font clarity
+      const einkValue = Math.round(gray / step) * step;
+      
+      data[i] = einkValue;
+      data[i + 1] = einkValue;
+      data[i + 2] = einkValue;
+    }
+    
+    ctx.putImageData(imageData, 0, 0);
+  };
+
+  // Re-render all pages when preview mode or scale changes
+  useEffect(() => {
+    if (currentPdf && pageOffsets.length > 0) {
+      // Clear all rendered flags to force re-render
+      setRenderedPages(new Set());
+      renderedScaleRef.current.clear();
+      renderingPageRef.current.clear();
+      
+      // Cancel any ongoing render tasks
+      renderTasksRef.current.forEach(task => {
+        if (task && task.cancel) task.cancel();
+      });
+      renderTasksRef.current.clear();
+
+      // Trigger re-render of currently visible pages
+      const container = scrollContainerRef.current;
+      if (container) {
+        // A small timeout to let the new layout settle
+        setTimeout(() => {
+          handleScroll();
+        }, 50);
+      }
+    }
+  }, [previewMode, scale]);
+
+  // Load PDF (from DB or public)
+  const loadPdf = async (pdfId: string, name: string, url: string, isPublic: boolean = false) => {
+    if (!pdfjsLibLoaded || !pdfjsLibRef.current) {
+      setError('PDF viewer library not loaded yet. Please wait a moment and try again.');
+      return;
+    }
+    
+    setLoading(true);
+    setError('');
+    setShowMemoryPrompt(false);
+    setSavedPage(null);
+    setRenderedPages(new Set());
+    setPagesInfo([]);
+    setPreviewMode('normal');
+    
+    renderTasksRef.current.forEach((task) => {
+      if (task && task.cancel) {
+        task.cancel();
+      }
+    });
+    renderTasksRef.current.clear();
+    renderedScaleRef.current.clear();
+    pageCanvasesRef.current.clear();
+    
+    if (renderTimeoutRef.current) {
+      clearTimeout(renderTimeoutRef.current);
+    }
+    
+    try {
+      let pdfUrl: string;
+      
+      if (isPublic) {
+        pdfUrl = url;
+      } else {
+        const pdfRecord = await pdfDB.getPdf(pdfId);
+        if (!pdfRecord) {
+          setError('PDF not found in database');
+          setLoading(false);
+          return;
+        }
+        const blob = new Blob([pdfRecord.data], { type: 'application/pdf' });
+        pdfUrl = URL.createObjectURL(blob);
+      }
+      
+      const loadingTask = pdfjsLibRef.current.getDocument(pdfUrl);
+      const pdf = await loadingTask.promise;
+      pdfDocRef.current = pdf;
+      
+      setCurrentPdf({ id: pdfId, name, url: pdfUrl, isPublic });
+      setTotalPages(pdf.numPages);
+      setOutline([]);
+      setThumbnails([]);
+      
+      // Get all page dimensions
+      const pageInfos: PageInfo[] = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const dims = await getPageDimensions(pdf, i);
+        pageInfos.push({
+          page: i,
+          width: dims.width,
+          height: dims.height,
+          rendered: false
+        });
+      }
+      setPagesInfo(pageInfos);
+      
+      // Try to get outline
+      try {
+        const outlineData = await pdf.getOutline();
+        if (outlineData && outlineData.length > 0) {
+          setOutline(outlineData);
+          setActiveTab('outline');
+        } else {
+          setOutline([]);
+          setActiveTab('library');
+        }
+      } catch {
+        setOutline([]);
+        setActiveTab('library');
+      }
+      
+      setLoading(false);
+      
+      // Scroll to saved page after a delay
+      const saved = getSavedPage(pdfId);
+      if (saved > 1 && pdf.numPages > 1) {
+        setSavedPage(saved);
+        setCountdown(5);
+        setShowMemoryPrompt(true);
+      }
+      
+      // Trigger initial render after DOM is ready
+      setTimeout(() => {
+        for (let i = 1; i <= Math.min(3, pdf.numPages); i++) {
+          renderPage(i);
+        }
+      }, 100);
+    } catch (err) {
+      setError('Failed to load PDF. Please check if the file is valid.');
+      setLoading(false);
+    }
+  };
+
+  // Get saved page from memory
+  const getSavedPage = useCallback((pdfId: string): number => {
+    const memory = localStorage.getItem('pdfViewer_pageMemory');
+    if (memory) {
+      const parsed: PdfPageMemory = JSON.parse(memory);
+      const saved = parsed[pdfId];
+      if (saved && saved > 1) {
+        return saved;
+      }
+    }
+    return 1;
+  }, []);
+
+  // Handle file upload
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    if (file.type !== 'application/pdf') {
+      setError('Please upload a valid PDF file');
+      return;
+    }
+    
+    if (file.size > 50 * 1024 * 1024) {
+      if (!confirm('This PDF is larger than 50MB. It may take a while to process. Continue?')) {
+        return;
+      }
+    }
+    
+    setLoading(true);
+    setError('');
+    
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const id = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      await pdfDB.addPdf(id, file.name, arrayBuffer);
+      await loadUserPdfs();
+      await loadPdf(id, file.name, '', false);
+    } catch (err) {
+      setError('Failed to upload PDF. The file may be too large or corrupted.');
+    } finally {
+      setLoading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  // Remove user PDF
+  const removeUserPdf = async (id: string) => {
+    try {
+      await pdfDB.deletePdf(id);
+      setUserPdfs(prev => prev.filter(p => p.id !== id));
+      
+      if (currentPdf?.id === id) {
+        renderTasksRef.current.forEach((task) => {
+          if (task && task.cancel) {
+            task.cancel();
+          }
+        });
+        renderTasksRef.current.clear();
+        
+        setCurrentPdf(null);
+        setCurrentPage(1);
+        setTotalPages(0);
+        pdfDocRef.current = null;
+        setOutline([]);
+        setPagesInfo([]);
+        setRenderedPages(new Set());
+        renderedScaleRef.current.clear();
+        pageCanvasesRef.current.clear();
+        
+        if (!currentPdf.isPublic) {
+          URL.revokeObjectURL(currentPdf.url);
+        }
+      }
+      
+      const memory = localStorage.getItem('pdfViewer_pageMemory');
+      if (memory) {
+        const parsed: PdfPageMemory = JSON.parse(memory);
+        delete parsed[id];
+        localStorage.setItem('pdfViewer_pageMemory', JSON.stringify(parsed));
+      }
+      
+      setPdfToDelete(null);
+    } catch (err) {
+      setError('Failed to delete PDF');
+    }
+  };
+
+  // Handle memory prompt actions
+  const handleStayOnFirstPage = () => {
+    setShowMemoryPrompt(false);
+    setSavedPage(null);
+  };
+
+  const handleJumpToSavedPage = () => {
+    if (savedPage) {
+      scrollToPage(savedPage);
+    }
+    setShowMemoryPrompt(false);
+    setSavedPage(null);
+  };
+
+  // Close sidebar on mobile when a PDF is loaded or tab changed
+  useEffect(() => {
+    if (isMobile) {
+      setIsSidebarOpen(false);
+    }
+  }, [currentPdf?.id, activeTab]);
+
+  // Handle outline item click
+  const handleOutlineClick = async (item: PdfOutlineItem) => {
+    if (!pdfDocRef.current || !item.dest) return;
+    
+    try {
+      let pageNumber: number | null = null;
+      
+      if (typeof item.dest === 'string') {
+        try {
+          const destination = await pdfDocRef.current.getDestination(item.dest);
+          if (destination && Array.isArray(destination) && destination[0]) {
+            pageNumber = await pdfDocRef.current.getPageIndex(destination[0]) + 1;
+          }
+        } catch {
+          const parsed = parseInt(item.dest, 10);
+          if (!isNaN(parsed) && parsed > 0) {
+            pageNumber = parsed;
+          }
+        }
+      } else if (Array.isArray(item.dest)) {
+        const firstElement = item.dest[0];
+        if (typeof firstElement === 'number') {
+          pageNumber = firstElement + 1;
+        } else if (firstElement && typeof firstElement === 'object') {
+          try {
+            pageNumber = await pdfDocRef.current.getPageIndex(firstElement) + 1;
+          } catch {}
+        }
+      } else if (typeof item.dest === 'number') {
+        pageNumber = item.dest + 1;
+      }
+      
+      if (pageNumber && pageNumber > 0 && pageNumber <= totalPages) {
+        scrollToPage(pageNumber);
+      }
+    } catch (err) {
+      // handled
+    }
+  };
+
+  // Render outline recursively
+  const renderOutline = (items: PdfOutlineItem[], depth = 0) => {
+    return items.map((item, index) => (
+      <div key={`${depth}-${index}`} style={{ marginLeft: `${depth * 12}px` }}>
+        <button
+          onClick={() => handleOutlineClick(item)}
+          className="w-full text-left px-3 py-2 text-xs font-mono hover:bg-orange-50 hover:text-orange-600 transition-colors rounded"
+        >
+          {item.title}
+        </button>
+        {item.items && item.items.length > 0 && renderOutline(item.items, depth + 1)}
+      </div>
+    ));
+  };
+
+  // Generate thumbnail for a specific page
+  const generateThumbnail = async (pageNum: number): Promise<string> => {
+    if (!pdfDocRef.current) return '';
+    
+    try {
+      const page = await pdfDocRef.current.getPage(pageNum);
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      
+      if (!context) return '';
+      
+      const thumbScale = 0.2;
+      const viewport = page.getViewport({ scale: thumbScale });
+      
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      
+      await page.render({
+        canvasContext: context,
+        viewport: viewport
+      }).promise;
+      
+      return canvas.toDataURL('image/jpeg', 0.7);
+    } catch (err) {
+      return '';
+    }
+  };
+
+  // Load thumbnails progressively
+  useEffect(() => {
+    if (activeTab === 'thumbnails' && pdfDocRef.current && totalPages > 0) {
+      let isCancelled = false;
+      
+      const loadThumbnails = async () => {
+        setThumbnails([]);
+        setThumbnailsLoading(true);
+        
+        const maxThumbs = Math.min(totalPages, 50);
+        const batchSize = 5;
+        
+        for (let i = 1; i <= maxThumbs && !isCancelled; i += batchSize) {
+          const batch: { page: number; url: string }[] = [];
+          const batchPromises = [];
+          
+          for (let j = i; j < Math.min(i + batchSize, maxThumbs + 1); j++) {
+            batchPromises.push(
+              generateThumbnail(j).then(url => {
+                if (url) batch.push({ page: j, url });
+              })
+            );
+          }
+          
+          await Promise.all(batchPromises);
+          
+          if (!isCancelled && batch.length > 0) {
+            setThumbnails(prev => [...prev, ...batch].sort((a, b) => a.page - b.page));
+          }
+          
+          await new Promise(r => setTimeout(r, 50));
+        }
+        
+        if (!isCancelled) {
+          setThumbnailsLoading(false);
+        }
+      };
+      
+      loadThumbnails();
+      
+      return () => {
+        isCancelled = true;
+      };
+    }
+  }, [activeTab, totalPages]);
+
+  // Handle page input submission
+  const handlePageInputSubmit = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      const page = parseInt(pageInput, 10);
+      if (!isNaN(page) && page >= 1 && page <= totalPages) {
+        scrollToPage(page);
+        setPageInput('');
+      }
+    }
+  };
+
+  // Calculate page offsets (memoized)
+  const pageOffsets = useMemo((): PageOffset[] => {
+    if (pagesInfo.length === 0) return [];
+    const offsets: PageOffset[] = [];
+    let currentTop = 0;
+    for (let i = 0; i < pagesInfo.length; i++) {
+      const height = pagesInfo[i].height * scale + 20;
+      offsets.push({ top: currentTop, height });
+      currentTop += height;
+    }
+    pageOffsetsRef.current = offsets;
+    return offsets;
+  }, [pagesInfo, scale]);
+
+  // Calculate total scroll height
+  const totalScrollHeight = useMemo(() => {
+    if (pageOffsets.length === 0) return 0;
+    const last = pageOffsets[pageOffsets.length - 1];
+    return last.top + last.height;
+  }, [pageOffsets]);
+
+  // Handle scroll - only update currentPage when scroll ends
+  const handleScroll = useCallback(() => {
+    if (!scrollContainerRef.current || pageOffsetsRef.current.length === 0) return;
+    
+    const now = Date.now();
+    if (now - lastScrollTimeRef.current < 50) return;
+    lastScrollTimeRef.current = now;
+    
+    if (scrollRAFRef.current) {
+      cancelAnimationFrame(scrollRAFRef.current);
+    }
+    
+    scrollRAFRef.current = requestAnimationFrame(() => {
+      const container = scrollContainerRef.current;
+      if (!container) return;
+      
+      const offsets = pageOffsetsRef.current;
+      const scrollTop = container.scrollTop;
+      const viewportHeight = container.clientHeight;
+      
+      let currentP = 1;
+      
+      // Determine visible pages and update current page
+      for (let i = 0; i < offsets.length; i++) {
+        const pageNum = i + 1;
+        const { top, height } = offsets[i];
+        
+        // Update current page (middle of viewport)
+        if (scrollTop < top + height / 2 && currentP === 1) {
+          currentP = pageNum;
+        }
+
+        // Check if page is in viewport (with buffer)
+        const isVisible = (top < scrollTop + viewportHeight + 600) && (top + height > scrollTop - 600);
+        if (isVisible && !renderedPages.has(pageNum)) {
+          renderPage(pageNum);
+        }
+      }
+      
+      // Clear existing timer
+      if (scrollEndTimerRef.current) {
+        clearTimeout(scrollEndTimerRef.current);
+      }
+      
+      // Update currentPage after scroll ends (150ms delay)
+      scrollEndTimerRef.current = setTimeout(() => {
+        setCurrentPage(currentP);
+      }, 150);
+    });
+  }, []);
+
+  // Navigation functions
+  const prevPage = () => {
+    if (currentPage > 1) {
+      scrollToPage(currentPage - 1);
+    }
+  };
+
+  const nextPage = () => {
+    if (currentPage < totalPages) {
+      scrollToPage(currentPage + 1);
+    }
+  };
+
+  if (!isDBReady) {
+    return (
+      <div className="min-h-screen bg-[#f5f5f5] flex items-center justify-center">
+        <div className="flex items-center gap-3">
+          <Loader2 className="w-6 h-6 animate-spin text-[#ea580c]" />
+          <span className="font-mono text-sm">Initializing database...</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#f5f5f5] font-sans text-[oklch(0.145_0_0)]">
+      <PageTitle title="PDF 预览" />
+
+      {/* Memory Prompt Modal */}
+      {showMemoryPrompt && savedPage && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+          <div className="bg-white border border-[oklch(0.145_0_0)] rounded-xl p-6 max-w-md mx-4 shadow-[8px_8px_0px_oklch(0.145_0_0)]">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ea580c" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12"/>
+                  <path d="M3 3v9h9"/>
+                </svg>
+              </div>
+              <h3 className="font-bold text-lg">Continue Reading?</h3>
+            </div>
+            <p className="text-sm text-gray-600 mb-2">
+              You previously read this PDF up to page <strong>{savedPage}</strong> of {totalPages}.
+            </p>
+            <p className="text-xs text-gray-500 mb-6 font-mono">
+              Auto-jumping in {countdown}s...
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={handleStayOnFirstPage}
+                className="flex-1 px-4 py-2 border border-[oklch(0.145_0_0)] rounded-lg font-mono text-xs font-bold uppercase hover:bg-gray-50 transition-colors"
+              >
+                Stay on page 1
+              </button>
+              <button
+                onClick={handleJumpToSavedPage}
+                className="flex-1 px-4 py-2 bg-[#ea580c] text-white rounded-lg font-mono text-xs font-bold uppercase hover:bg-orange-700 transition-colors"
+              >
+                Go to page {savedPage}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {pdfToDelete && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+          <div className="bg-white border border-[oklch(0.145_0_0)] rounded-xl p-6 max-w-md mx-4 shadow-[8px_8px_0px_oklch(0.145_0_0)]">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                <Trash2 className="w-5 h-5 text-red-600" />
+              </div>
+              <h3 className="font-bold text-lg">Delete PDF?</h3>
+            </div>
+            <p className="text-sm text-gray-600 mb-6">
+              Are you sure you want to delete <strong>{userPdfs.find(p => p.id === pdfToDelete)?.name}</strong>? This action cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setPdfToDelete(null)}
+                className="flex-1 px-4 py-2 border border-[oklch(0.145_0_0)] rounded-lg font-mono text-xs font-bold uppercase hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => removeUserPdf(pdfToDelete)}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg font-mono text-xs font-bold uppercase hover:bg-red-700 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex h-screen overflow-hidden relative">
+        {/* Mobile Sidebar Backdrop */}
+        {isMobile && isSidebarOpen && (
+          <div 
+            className="fixed inset-0 bg-black/50 z-40 transition-opacity"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+        )}
+
+        {/* Left Sidebar */}
+        <div className={`
+          ${isMobile ? 'fixed inset-y-0 left-0 z-50 transform transition-transform duration-300' : 'relative w-72'}
+          ${isMobile && !isSidebarOpen ? '-translate-x-full' : 'translate-x-0'}
+          w-72 bg-white border-r border-[oklch(0.145_0_0)] flex flex-col
+        `}>
+          {/* Header */}
+          <div className="px-4 py-4 border-b border-[oklch(0.145_0_0)] flex items-center justify-between">
+            <div>
+              <Link
+                href="/tools"
+                className="inline-flex items-center text-[10px] font-mono font-bold uppercase tracking-[0.15em] text-[#ea580c] mb-1 hover:underline"
+              >
+                <ChevronLeft className="w-3 h-3 mr-1" />
+                Back
+              </Link>
+              <h1 className="text-xl font-black tracking-tight">PDF Viewer</h1>
+            </div>
+            {isMobile && (
+              <button 
+                onClick={() => setIsSidebarOpen(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+                aria-label="Close sidebar"
+              >
+                <ChevronLeftIcon className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+
+          {/* Tabs */}
+          <div className="flex border-b border-[oklch(0.145_0_0)]">
+            <button
+              onClick={() => setActiveTab('outline')}
+              className={`flex-1 px-3 py-3 text-xs font-mono font-bold uppercase flex items-center justify-center gap-2 transition-colors ${
+                activeTab === 'outline' 
+                  ? 'bg-[oklch(0.145_0_0)] text-white' 
+                  : 'hover:bg-gray-50'
+              }`}
+            >
+              <List className="w-3 h-3" />
+              Outline
+            </button>
+            <button
+              onClick={() => setActiveTab('thumbnails')}
+              disabled={!currentPdf}
+              className={`flex-1 px-3 py-3 text-xs font-mono font-bold uppercase flex items-center justify-center gap-2 transition-colors ${
+                activeTab === 'thumbnails' 
+                  ? 'bg-[oklch(0.145_0_0)] text-white' 
+                  : 'hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed'
+              }`}
+            >
+              <LayoutGrid className="w-3 h-3" />
+              Pages
+            </button>
+            <button
+              onClick={() => setActiveTab('library')}
+              className={`flex-1 px-3 py-3 text-xs font-mono font-bold uppercase flex items-center justify-center gap-2 transition-colors ${
+                activeTab === 'library' 
+                  ? 'bg-[oklch(0.145_0_0)] text-white' 
+                  : 'hover:bg-gray-50'
+              }`}
+            >
+              <Folder className="w-3 h-3" />
+              Library
+            </button>
+          </div>
+
+          {/* Tab Content */}
+          <div className="flex-1 overflow-auto">
+            {activeTab === 'outline' && (
+              <div className="p-3">
+                {outline.length > 0 ? (
+                  <div className="space-y-1">
+                    {renderOutline(outline)}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 opacity-40">
+                    <List className="w-8 h-8 mx-auto mb-2" />
+                    <p className="text-xs font-mono">No outline available</p>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {activeTab === 'thumbnails' && currentPdf && (
+              <div className="p-3">
+                {thumbnailsLoading ? (
+                  <div className="flex flex-col items-center justify-center py-8 text-gray-400">
+                    <Loader2 className="w-8 h-8 animate-spin mb-2" />
+                    <span className="text-xs font-mono">Generating thumbnails...</span>
+                  </div>
+                ) : thumbnails.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {thumbnails.map((thumb) => (
+                      <button
+                        key={thumb.page}
+                        onClick={() => {
+                          scrollToPage(thumb.page);
+                        }}
+                        className={`border-2 rounded-lg overflow-hidden transition-all ${
+                          currentPage === thumb.page
+                            ? 'border-[#ea580c] shadow-md'
+                            : 'border-gray-200 hover:border-gray-400'
+                        }`}
+                      >
+                        <img
+                          src={thumb.url}
+                          alt={`Page ${thumb.page}`}
+                          className="w-full h-auto block"
+                        />
+                        <div className={`text-center text-[10px] font-mono py-1 ${
+                          currentPage === thumb.page ? 'bg-[#ea580c] text-white' : 'bg-gray-100'
+                        }`}>
+                          {thumb.page}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 opacity-40">
+                    <LayoutGrid className="w-8 h-8 mx-auto mb-2" />
+                    <p className="text-xs font-mono">No thumbnails available</p>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {activeTab === 'library' && (
+              <div className="p-3 space-y-3">
+                {/* Add PDF Button */}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={loading}
+                  className="w-full px-4 py-3 border-2 border-dashed border-[oklch(0.145_0_0)] rounded-lg flex items-center justify-center gap-2 hover:bg-orange-50 hover:border-[#ea580c] transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loading ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <>
+                      <div className="w-8 h-8 rounded-full border border-[oklch(0.145_0_0)] flex items-center justify-center group-hover:border-[#ea580c] group-hover:bg-orange-100 transition-colors">
+                        <Plus className="w-4 h-4" />
+                      </div>
+                      <span className="text-xs font-mono font-bold">Add PDF</span>
+                    </>
+                  )}
+                </button>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileUpload}
+                  accept=".pdf"
+                  className="hidden"
+                />
+
+                {/* Public PDFs */}
+                {publicPdfs.length > 0 && (
+                  <div>
+                    <h3 className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-500 mb-2 px-1">
+                      Public PDFs ({publicPdfs.length})
+                    </h3>
+                    <div className="space-y-1">
+                      {publicPdfs.map((pdf) => (
+                        <div
+                          key={pdf.id}
+                          className={`w-full px-3 py-2 flex items-center gap-2 rounded-lg text-left text-xs transition-all group ${
+                            currentPdf?.id === pdf.id && currentPdf?.isPublic
+                              ? 'bg-[#ea580c] text-white'
+                              : 'hover:bg-gray-100'
+                          }`}
+                        >
+                          <button
+                            onClick={() => loadPdf(pdf.id, pdf.name, pdf.url, true)}
+                            className="flex items-center gap-2 flex-1 min-w-0"
+                          >
+                            <FileText className="w-4 h-4 flex-shrink-0" />
+                            <span className="truncate font-mono text-left">{pdf.name}</span>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* User PDFs */}
+                {userPdfs.length > 0 && (
+                  <div>
+                    <h3 className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-500 mb-2 px-1">
+                      Your PDFs ({userPdfs.length})
+                    </h3>
+                    <div className="space-y-1">
+                      {userPdfs.map((pdf) => (
+                        <div
+                          key={pdf.id}
+                          className={`w-full px-3 py-2 flex items-center gap-2 rounded-lg text-left text-xs transition-all group ${
+                            currentPdf?.id === pdf.id && !currentPdf?.isPublic
+                              ? 'bg-[oklch(0.145_0_0)] text-white'
+                              : 'hover:bg-gray-100'
+                          }`}
+                        >
+                          <button
+                            onClick={() => loadPdf(pdf.id, pdf.name, '', false)}
+                            className="flex items-center gap-2 flex-1 min-w-0"
+                          >
+                            <FileText className="w-4 h-4 flex-shrink-0" />
+                            <span className="truncate font-mono text-left">{pdf.name}</span>
+                          </button>
+                          <button
+                            onClick={() => setPdfToDelete(pdf.id)}
+                            className={`p-1 rounded transition-colors ${
+                              currentPdf?.id === pdf.id && !currentPdf?.isPublic
+                                ? 'hover:bg-white/20'
+                                : 'hover:bg-red-100 hover:text-red-500'
+                            }`}
+                            title="Delete PDF"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {userPdfs.length === 0 && publicPdfs.length === 0 && (
+                  <div className="px-3 py-8 text-center opacity-40">
+                    <Folder className="w-8 h-8 mx-auto mb-2" />
+                    <p className="text-[10px] font-mono">No PDFs yet</p>
+                    <p className="text-[9px] font-mono mt-1">Click &quot;Add PDF&quot; to upload</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div className={`flex-1 flex flex-col min-w-0 ${previewMode === 'eink' ? 'bg-white' : 'bg-[#f5f5f5]'}`}>
+          {/* Toolbar */}
+          {currentPdf ? (
+            <div className="h-auto min-h-[3.5rem] py-2 bg-white border-b border-[oklch(0.145_0_0)] flex flex-wrap items-center justify-between px-4 z-10 gap-2">
+              <div className="flex items-center gap-3 min-w-0">
+                {isMobile && (
+                  <button
+                    onClick={() => setIsSidebarOpen(true)}
+                    className="p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 transition-colors"
+                    aria-label="Open sidebar"
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                )}
+                <span className="text-sm font-mono font-bold truncate max-w-[150px] sm:max-w-md">
+                  {currentPdf.name}
+                </span>
+              </div>
+              
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                {/* Preview Mode Toggle - Icon only on mobile */}
+                <div className="flex items-center border border-[oklch(0.145_0_0)] rounded overflow-hidden">
+                  <button
+                    onClick={() => setPreviewMode('normal')}
+                    className={`px-2 sm:px-3 py-1.5 text-[10px] sm:text-xs font-mono font-bold uppercase flex items-center gap-1.5 transition-colors ${
+                      previewMode === 'normal'
+                        ? 'bg-[oklch(0.145_0_0)] text-white'
+                        : 'bg-white hover:bg-gray-50'
+                    }`}
+                    title="Normal Preview"
+                  >
+                    <Monitor className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Normal</span>
+                  </button>
+                  <button
+                    onClick={() => setPreviewMode('eink')}
+                    className={`px-2 sm:px-3 py-1.5 text-[10px] sm:text-xs font-mono font-bold uppercase flex items-center gap-1.5 transition-colors ${
+                      previewMode === 'eink'
+                        ? 'bg-[oklch(0.145_0_0)] text-white'
+                        : 'bg-white hover:bg-gray-50'
+                    }`}
+                    title="E-ink Preview"
+                  >
+                    <Tablet className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">E-ink</span>
+                  </button>
+                </div>
+
+                {!isMobile && <div className="w-px h-6 bg-gray-300 mx-1" />}
+
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={prevPage}
+                    disabled={currentPage <= 1}
+                    className="p-1.5 sm:p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Previous page"
+                  >
+                    <ChevronLeftIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  </button>
+                  
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={1}
+                      max={totalPages}
+                      value={pageInput}
+                      onChange={(e) => setPageInput(e.target.value)}
+                      onKeyDown={handlePageInputSubmit}
+                      onBlur={() => setPageInput('')}
+                      placeholder={currentPage.toString()}
+                      aria-label="Page number"
+                      className="w-10 sm:w-12 px-1 sm:px-2 py-1 border border-[oklch(0.145_0_0)] rounded text-[10px] sm:text-xs font-mono text-center focus:outline-none focus:border-[#ea580c]"
+                    />
+                    <span className="text-[10px] sm:text-xs font-mono text-gray-500">/ {totalPages}</span>
+                  </div>
+                  
+                  <button
+                    onClick={nextPage}
+                    disabled={currentPage >= totalPages}
+                    className="p-1.5 sm:p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Next page"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  </button>
+                </div>
+
+                {!isMobile && <div className="w-px h-6 bg-gray-300 mx-1" />}
+
+                <select
+                  value={scale}
+                  onChange={(e) => setScale(Number(e.target.value))}
+                  aria-label="Zoom level"
+                  className="px-1 sm:px-2 py-1 border border-[oklch(0.145_0_0)] rounded text-[10px] sm:text-xs font-mono bg-white"
+                >
+                  <option value={0.5}>50%</option>
+                  <option value={0.75}>75%</option>
+                  <option value={0.8}>80%</option>
+                  <option value={1}>100%</option>
+                  <option value={1.2}>120%</option>
+                  <option value={1.5}>150%</option>
+                  <option value={2}>200%</option>
+                </select>
+              </div>
+            </div>
+          ) : isMobile ? (
+            <div className="h-14 bg-white border-b border-[oklch(0.145_0_0)] flex items-center px-4 z-10">
+              <button
+                onClick={() => setIsSidebarOpen(true)}
+                className="p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 transition-colors"
+                aria-label="Open sidebar"
+              >
+                <List className="w-4 h-4" />
+              </button>
+              <span className="ml-3 text-sm font-mono font-bold">Select PDF</span>
+            </div>
+          ) : null}
+
+          {/* PDF Viewer Area - Virtual Scrolling */}
+          <div 
+            ref={scrollContainerRef}
+            className="flex-1 overflow-auto w-full"
+            onScroll={handleScroll}
+          >
+            {currentPdf ? (
+              <div className="p-4 sm:p-8">
+                {/* Spacer for total height */}
+                <div style={{ height: totalScrollHeight, position: 'relative' }}>
+                  {pagesInfo.map((pageInfo, index) => {
+                    const pageNum = index + 1;
+                    const canvasWidth = pageInfo.width * scale;
+                    const canvasHeight = pageInfo.height * scale;
+                    const isRendered = renderedPages.has(pageNum);
+                    
+                    return (
+                      <div
+                        key={pageNum}
+                        ref={(el) => {
+                          if (el) pageRefsRef.current.set(pageNum, el);
+                        }}
+                        data-page={pageNum}
+                        className="absolute left-1/2 -translate-x-1/2 min-w-max"
+                        style={{
+                          top: pageOffsets[pageNum - 1]?.top || 0,
+                          width: canvasWidth,
+                          height: canvasHeight,
+                          marginBottom: '20px',
+                        }}
+                      >
+                        <div 
+                          className={`relative shadow-lg ${previewMode === 'eink' ? 'border border-gray-300' : ''} bg-white transition-opacity duration-300 ${isRendered ? 'opacity-100' : 'opacity-0'}`}
+                          style={{ width: canvasWidth, height: canvasHeight }}
+                        >
+                          <canvas
+                            ref={(el) => {
+                              if (el) {
+                                pageCanvasesRef.current.set(pageNum, el);
+                              }
+                            }}
+                            style={{
+                              width: canvasWidth,
+                              height: canvasHeight,
+                            }}
+                            className="block"
+                          />
+                        </div>
+                        {!isRendered && (
+                          <div 
+                            className="absolute inset-0 bg-white shadow-lg flex items-center justify-center border border-gray-100"
+                            style={{ width: canvasWidth, height: canvasHeight }}
+                          >
+                            <Loader2 className="w-6 h-6 animate-spin text-gray-200" />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                
+                {/* Loading overlay */}
+                {loading && (
+                  <div className="fixed inset-0 flex items-center justify-center bg-[#f5f5f5]/80 z-50">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 border-2 border-[oklch(0.145_0_0)] border-t-[#ea580c] rounded-full animate-spin" />
+                      <span className="font-mono text-xs">Loading PDF...</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full text-center opacity-40">
+                <div className="w-24 h-24 rounded-full border border-dashed border-[oklch(0.145_0_0)] flex items-center justify-center mb-6">
+                  <div className="w-[75%] h-[75%] rounded-full border border-[oklch(0.145_0_0)] flex items-center justify-center">
+                    <FileText className="w-8 h-8" />
+                  </div>
+                </div>
+                <p className="font-mono text-xs font-bold uppercase tracking-widest">
+                  Select a PDF to start reading
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

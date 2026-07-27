@@ -1,0 +1,651 @@
+---
+title: 'ASP.NET Core OpenAPI：Swagger、接口文档与版本控制'
+date: '2026-07-24'
+excerpt: '系统掌握 ASP.NET Core Web API 文档与版本管理：Swashbuckle/Swagger UI、XML 注释、JWT 鉴权按钮、API 分组、API Versioning、Deprecated 标记和请求响应示例。'
+tags: ['dotnet', 'aspnetcore', 'openapi', 'swagger', 'versioning']
+nextPost: 'dotnet/aspnet-core-testing'
+---
+
+# ASP.NET Core OpenAPI：Swagger、接口文档与版本控制
+
+Web API 写出来只是第一步。如果前端、移动端、第三方开发者不知道你的接口怎么调用、参数是什么、返回什么格式，API 就无法被正确使用。OpenAPI（原名 Swagger）是 Web API 文档的行业标准，ASP.NET Core 生态中最常用的实现是 Swashbuckle。
+
+这篇文章不只讲"怎么把 Swagger 页面跑起来"，而是按生产项目实际需求讲清楚：如何让文档自动生成、如何补充业务描述、如何配置 JWT 鉴权按钮、如何给接口分组、如何管理 API 版本，以及 Deprecated 标记怎么用。
+
+:::tip 阶段三阅读顺序
+本文属于 ASP.NET Core 生产项目常用能力阶段。建议先掌握 [Controller](/posts/dotnet/aspnet-core-webapi-controller)、[参数绑定与模型验证](/posts/dotnet/aspnet-core-model-binding-validation) 和 [Authentication](/posts/dotnet/aspnet-core-authentication)。
+:::
+
+## 为什么 Web API 需要文档
+
+没有文档的 API 会产生这些问题：
+
+- 前端开发者需要反复问后端"这个接口怎么调"
+- 参数类型、必填项、枚举值不清楚
+- 返回结构靠口口相传，容易出偏差
+- 接口改了但调用方不知道
+- 新人上手慢，需要大量口头交接
+
+OpenAPI 规范把接口的 URL、Method、参数、返回结构、错误码都标准化描述，Swagger UI 则把这份描述渲染成可交互的文档页面。
+
+## Swagger UI 基础
+
+### 安装 Swashbuckle
+
+ASP.NET Core 项目使用 Swashbuckle 生成 OpenAPI 文档。
+
+使用 `dotnet new webapi` 模板创建的项目已经自带 Swashbuckle。如果是手动添加：
+
+```bash
+dotnet add package Swashbuckle.AspNetCore
+```
+
+### 注册 Swagger 服务
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.MapControllers();
+
+app.Run();
+```
+
+关键点：
+
+- `AddEndpointsApiExplorer()` 注册 Endpoint 元数据探索器，Swashbuckle 依赖它发现接口。
+- `AddSwaggerGen()` 注册 Swagger 生成器。
+- `UseSwagger()` 暴露 OpenAPI JSON（默认 `/swagger/v1/swagger.json`）。
+- `UseSwaggerUI()` 提供 Swagger HTML 页面（默认 `/swagger`）。
+
+### 访问 Swagger UI
+
+启动应用后访问：
+
+```text
+https://localhost:5001/swagger
+```
+
+你会看到自动生成的接口列表，每个接口可以展开查看参数、返回值，并点击 "Try it out" 直接测试。
+
+## Swagger 生成器配置
+
+默认配置生成的文档可能不够详细。可以通过 `AddSwaggerGen` 选项补充信息。
+
+```csharp
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Product API",
+        Version = "v1",
+        Description = "商品管理 Web API"
+    });
+});
+```
+
+需要命名空间：
+
+```csharp
+using Microsoft.OpenApi.Models;
+```
+
+## XML 注释与接口描述
+
+Swagger 默认只能从代码结构推断接口信息。要让文档包含中文描述、参数说明、响应描述，需要启用 XML 注释。
+
+### 启用 XML 文档生成
+
+在项目文件 `.csproj` 中添加：
+
+```xml
+<PropertyGroup>
+  <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  <NoWarn>$(NoWarn);1591</NoWarn>
+</PropertyGroup>
+```
+
+`1591` 是"缺少 XML 注释"的警告编号，加上 `NoWarn` 避免每个公开成员都报警告。
+
+### 注册 XML 注释
+
+```csharp
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Product API",
+        Version = "v1"
+    });
+
+    string xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    string xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    options.IncludeXmlComments(xmlPath);
+});
+```
+
+需要命名空间：
+
+```csharp
+using System.Reflection;
+```
+
+### 给 Controller 和 Action 添加注释
+
+```csharp
+/// <summary>
+/// 商品管理接口
+/// </summary>
+[ApiController]
+[Route("api/products")]
+public class ProductsController : ControllerBase
+{
+    /// <summary>
+    /// 获取商品列表
+    /// </summary>
+    /// <param name="keyword">搜索关键字</param>
+    /// <param name="page">页码，从 1 开始</param>
+    /// <param name="pageSize">每页数量，最大 100</param>
+    /// <returns>商品列表</returns>
+    [HttpGet]
+    public IActionResult GetProducts(
+        string? keyword,
+        int page = 1,
+        int pageSize = 20)
+    {
+        return Ok();
+    }
+
+    /// <summary>
+    /// 根据 ID 获取商品详情
+    /// </summary>
+    /// <param name="id">商品 ID</param>
+    /// <response code="200">商品详情</response>
+    /// <response code="404">商品不存在</response>
+    [HttpGet("{id:int}")]
+    public IActionResult GetById(int id)
+    {
+        return Ok();
+    }
+}
+```
+
+Swagger UI 会把 `<summary>` 显示为接口描述，`<param>` 显示为参数说明，`<response>` 显示为响应状态码说明。
+
+### 给 DTO 添加注释
+
+```csharp
+/// <summary>
+/// 创建商品请求
+/// </summary>
+public class CreateProductRequest
+{
+    /// <summary>
+    /// 商品名称，2-100 字符
+    /// </summary>
+    [Required]
+    [StringLength(100, MinimumLength = 2)]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 商品价格，单位：元
+    /// </summary>
+    [Range(0.01, 999999)]
+    public decimal Price { get; set; }
+}
+```
+
+DTO 上的 `Required`、`StringLength`、`Range` 等 DataAnnotations 也会自动反映到 Swagger Schema 中。
+
+## JWT 鉴权按钮配置
+
+如果你的 API 使用 JWT Bearer 认证，可以在 Swagger UI 中添加一个 "Authorize" 按钮，方便测试需要登录的接口。
+
+```csharp
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Product API",
+        Version = "v1"
+    });
+
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header. Example: \"Authorization: Bearer {token}\"",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
+    });
+
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
+```
+
+配置后，Swagger UI 右上角会出现 "Authorize" 按钮。点击输入 Token 后，所有标记了 `[Authorize]` 的接口都会自动带上 `Authorization` Header。
+
+## API 分组
+
+当接口数量增多时，可以按模块或版本分组展示。
+
+### 定义多个 Swagger Doc
+
+```csharp
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("products", new OpenApiInfo
+    {
+        Title = "Product API - Products",
+        Version = "v1",
+        Description = "商品相关接口"
+    });
+
+    options.SwaggerDoc("orders", new OpenApiInfo
+    {
+        Title = "Product API - Orders",
+        Version = "v1",
+        Description = "订单相关接口"
+    });
+});
+```
+
+### 配置 Swagger UI 多文档切换
+
+```csharp
+app.UseSwaggerUI(options =>
+{
+    options.SwaggerEndpoint("/swagger/products/swagger.json", "Products");
+    options.SwaggerEndpoint("/swagger/orders/swagger.json", "Orders");
+});
+```
+
+### 给 Controller 指定分组
+
+```csharp
+[ApiController]
+[Route("api/products")]
+public class ProductsController : ControllerBase
+{
+    // ...
+}
+
+// 通过 OperationFilter 或直接标注
+```
+
+更灵活的方式是实现 `IOperationFilter`，根据 Controller 命名空间或路由前缀自动分配分组。
+
+## API Versioning
+
+API 一旦被前端或第三方使用，接口变更就必须考虑兼容性。API Versioning 让你可以在同一应用中同时提供多个版本的接口。
+
+### 安装包
+
+```bash
+dotnet add package Asp.Versioning.Http
+dotnet add package Asp.Versioning.Mvc
+```
+
+.NET 8+ 推荐使用 `Asp.Versioning` 系列包，替代旧版 `Microsoft.AspNetCore.Mvc.Versioning`。
+
+### 注册 API Versioning
+
+```csharp
+builder.Services
+    .AddApiVersioning(options =>
+    {
+        options.DefaultApiVersion = new ApiVersion(1, 0);
+        options.AssumeDefaultVersionWhenUnspecified = true;
+        options.ReportApiVersions = true;
+    })
+    .AddApiExplorer(options =>
+    {
+        options.GroupNameFormat = "'v'VVV";
+        options.SubstituteApiVersionInUrl = true;
+    });
+```
+
+配置说明：
+
+| 选项 | 作用 |
+|---|---|
+| `DefaultApiVersion` | 默认版本 |
+| `AssumeDefaultVersionWhenUnspecified` | 未指定版本时使用默认版本 |
+| `ReportApiVersions` | 响应头中返回支持的版本信息 |
+| `GroupNameFormat` | Swagger 分组名格式 |
+| `SubstituteApiVersionInUrl` | URL 中的版本段自动替换 |
+
+### URL 版本路由
+
+最直观的版本方式是 URL 路径中包含版本号。
+
+```csharp
+[ApiController]
+[ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}/products")]
+public class ProductsV1Controller : ControllerBase
+{
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        return Ok(new[] { "Keyboard V1", "Mouse V1" });
+    }
+}
+
+[ApiController]
+[ApiVersion("2.0")]
+[Route("api/v{version:apiVersion}/products")]
+public class ProductsV2Controller : ControllerBase
+{
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        return Ok(new[] { new { Name = "Keyboard V2", Price = 199m } });
+    }
+}
+```
+
+请求：
+
+```text
+GET /api/v1/products
+GET /api/v2/products
+```
+
+### Header 版本
+
+也可以通过 Header 指定版本：
+
+```csharp
+builder.Services
+    .AddApiVersioning(options =>
+    {
+        options.ApiVersionReader = new HeaderApiVersionReader("X-Api-Version");
+    });
+```
+
+请求：
+
+```http
+GET /api/products
+X-Api-Version: 2.0
+```
+
+### Query 版本
+
+通过查询字符串指定版本：
+
+```csharp
+builder.Services
+    .AddApiVersioning(options =>
+    {
+        options.ApiVersionReader = new QueryStringApiVersionReader("api-version");
+    });
+```
+
+请求：
+
+```text
+GET /api/products?api-version=2.0
+```
+
+### 组合多种版本方式
+
+```csharp
+builder.Services
+    .AddApiVersioning(options =>
+    {
+        options.ApiVersionReader = ApiVersionReader.Combine(
+            new UrlSegmentApiVersionReader(),
+            new HeaderApiVersionReader("X-Api-Version"),
+            new QueryStringApiVersionReader("api-version"));
+    });
+```
+
+### Swagger 与 API Versioning 集成
+
+每个版本需要独立的 Swagger 文档。
+
+```csharp
+builder.Services.Configure<ApiExplorerOptions>(options =>
+{
+    options.GroupNameFormat = "'v'VVV";
+});
+
+builder.Services.AddSwaggerGen();
+
+builder.Services.ConfigureOptions<ConfigureSwaggerOptions>();
+```
+
+`ConfigureSwaggerOptions` 负责为每个 API 版本创建 Swagger Doc：
+
+```csharp
+public class ConfigureSwaggerOptions : IConfigureOptions<SwaggerGenOptions>
+{
+    private readonly IApiVersionDescriptionProvider _provider;
+
+    public ConfigureSwaggerOptions(IApiVersionDescriptionProvider provider)
+    {
+        _provider = provider;
+    }
+
+    public void Configure(SwaggerGenOptions options)
+    {
+        foreach (ApiVersionDescription description in _provider.ApiVersionDescriptions)
+        {
+            options.SwaggerDoc(description.GroupName, new OpenApiInfo
+            {
+                Title = $"Product API {description.ApiVersion}",
+                Version = description.ApiVersion.ToString()
+            });
+        }
+    }
+
+    public void Configure(string? name, SwaggerGenOptions options)
+    {
+        Configure(options);
+    }
+}
+```
+
+Swagger UI 配置：
+
+```csharp
+app.UseSwaggerUI(options =>
+{
+    foreach (ApiVersionDescription description in provider.ApiVersionDescriptions.OrderByDescending(d => d.ApiVersion))
+    {
+        options.SwaggerEndpoint($"/swagger/{description.GroupName}/swagger.json",
+            $"Product API {description.GroupName}");
+    }
+});
+```
+
+需要注入 `IApiVersionDescriptionProvider`：
+
+```csharp
+var provider = app.Services.GetRequiredService<IApiVersionDescriptionProvider>();
+```
+
+## Deprecated 标记
+
+接口废弃时应该标记 `[Obsolete]`，让调用方知道这个接口即将移除。
+
+```csharp
+[ApiController]
+[ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}/products")]
+public class ProductsV1Controller : ControllerBase
+{
+    [Obsolete("Use GET /api/v2/products instead.")]
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        return Ok();
+    }
+}
+```
+
+Swagger 可以配置显示 `[Obsolete]` 标记：
+
+```csharp
+builder.Services.AddSwaggerGen(options =>
+{
+    options.IgnoreObsoleteActions();
+    // 或保留但标记为 deprecated：
+    // options.DescribeAllParametersInCamelCase();
+});
+```
+
+如果不忽略，`[Obsolete]` 标记的 Action 在 Swagger 中会显示删除线，提示调用方迁移。
+
+API Versioning 也支持标记版本为废弃：
+
+```csharp
+[ApiVersion("1.0", Deprecated = true)]
+```
+
+`Deprecated = true` 的版本在 API Explorer 和 Swagger 中会有明确提示。
+
+## 请求和响应示例
+
+Swagger 可以通过 XML 注释或 `ProducesResponseType` 属性显示不同状态码的响应格式。
+
+### 使用 ProducesResponseType
+
+```csharp
+/// <summary>
+/// 获取商品详情
+/// </summary>
+/// <param name="id">商品 ID</param>
+/// <response code="200">商品详情</response>
+/// <response code="404">商品不存在</response>
+[HttpGet("{id:int}")]
+[ProducesResponseType(typeof(ProductDto), StatusCodes.Status200OK)]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+public IActionResult GetById(int id)
+{
+    return Ok();
+}
+```
+
+### Schema 描述和示例值
+
+给 DTO 属性添加 `Description` 和默认值：
+
+```csharp
+public class CreateProductRequest
+{
+    /// <example>Keyboard</example>
+    [Required]
+    [StringLength(100)]
+    public string Name { get; set; } = string.Empty;
+
+    /// <example>199.99</example>
+    [Range(0.01, 999999)]
+    public decimal Price { get; set; }
+}
+```
+
+`<example>` 标签会在 Swagger UI 的请求示例中显示。
+
+## 生产环境建议
+
+### 开发环境启用，生产环境关闭
+
+```csharp
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+```
+
+生产环境暴露 Swagger 可能会泄露接口设计。如果需要在生产环境提供文档给合作方，可以考虑：
+
+- 仅对内网开放
+- 使用 API 网关控制访问
+- 生成静态 OpenAPI JSON 文件分发给调用方
+
+### 文档和代码同步
+
+XML 注释的好处是文档和代码在同一文件中，修改接口时不容易忘记更新文档。但要养成习惯：
+
+- 每个 Action 都写 `<summary>`
+- 每个 DTO 属性都写 `<summary>` 和 `<example>`
+- 状态码用 `<response>` 或 `ProducesResponseType` 描述
+- 变更接口时同步修改注释
+
+### OpenAPI JSON 导出
+
+Swagger 生成的 OpenAPI JSON 可以直接导入其他工具：
+
+- Apifox / Postman —— 接口调试
+- code generator —— 自动生成客户端 SDK
+- API 网关 —— 路由和验证规则
+
+```text
+/swagger/v1/swagger.json
+```
+
+## 常见问题
+
+### Swagger 页面不显示接口
+
+检查：
+
+- 是否调用了 `builder.Services.AddEndpointsApiExplorer()`
+- 是否调用了 `builder.Services.AddSwaggerGen()`
+- 是否调用了 `app.UseSwagger()` 和 `app.UseSwaggerUI()`
+- Controller 是否加了 `[ApiController]` 和 `[Route]`
+- 是否调用了 `app.MapControllers()`
+
+### XML 注释不显示
+
+检查：
+
+- `.csproj` 中是否设置了 `<GenerateDocumentationFile>true</GenerateDocumentationFile>`
+- `IncludeXmlComments` 的路径是否正确
+- XML 注释是否写在公开成员上（`public`）
+
+### Swagger UI 样式或路径自定义
+
+```csharp
+app.UseSwaggerUI(options =>
+{
+    options.RoutePrefix = "docs";
+    options.DocumentTitle = "Product API Docs";
+});
+```
+
+访问路径变为 `/docs`。
+
+## 总结
+
+OpenAPI 文档不是"锦上添花"，而是 Web API 项目的基础设施。Swashbuckle 让你用最小代价生成文档，XML 注释让文档和代码保持同步，JWT 鉴权按钮让测试更方便，API Versioning 让接口演进有章可循。
+
+掌握 Swagger 配置、XML 注释、分组、版本和 Deprecated 标记后，你的 API 文档就能从"能看"变成"好用"。

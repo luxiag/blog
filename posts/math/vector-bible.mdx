@@ -1,0 +1,240 @@
+---
+title: '向量圣经：图形学数学的第一块基石'
+date: '2025-02-28'
+description: '如果你想在图形学的世界里自由行走，向量 (Vector) 就是你的双腿。本文不仅是一篇教程，更是一本参考手册。我们将从最基础的加减乘除，深入到点积、叉积的几何意义，再到反射、折射等高级应用，带你彻底征服向量。'
+tags: ['Math', 'Vector', 'Graphics', 'Tutorial']
+---
+
+# 向量圣经：图形学数学的第一块基石
+
+在图形学中，几乎所有的计算最终都会归结为向量运算。
+光照是向量，摄像机是向量，甚至颜色也是向量。
+如果你觉得"数学很枯燥"，那是因为你还没有看到它在屏幕上发光的样子。
+
+本文将为你构建一个**全面、系统、直观**的向量知识体系。
+
+---
+
+## 一、 向量 vs 点：由于方向的哲学
+
+虽然在代码里它们长得一样（都是 `vec3(x, y, z)`），但在数学意义上，它们截然不同。
+
+*   **点 (Point)**：是一个**位置**。它在坐标系里是固定的。比如："我家在经纬度 (120, 30)"。
+*   **向量 (Vector)**：是一个**位移**。它只有**大小**和**方向**，没有位置。比如："向北走 100 米"。
+
+**关键直觉**：
+*   **点 - 点 = 向量**：我家 - 你家 = 从你家到我家的路径。
+*   **点 + 向量 = 点**：你家 + 向北走100米 = 我家。
+*   **向量 + 向量 = 向量**：先向北走，再向东走 = 向东北走。
+*   **点 + 点 = ?**：无意义（除非是在求中点等特殊情况）。
+
+## 二、 基础运算：行走的基础
+
+### 1. 加减法 (Addition / Subtraction)
+*   **加法**：首尾相连。$\vec{v} + \vec{w}$
+*   **减法**：指向被减数。$\vec{v} - \vec{w}$ 是从 $\vec{w}$ 指向 $\vec{v}$ 的箭头。
+    *   **口诀**：**终点 - 起点**。想求从 A 到 B 的向量？就是 $B - A$。
+
+### 2. 数乘 (Scalar Multiplication)
+*   $2 \cdot \vec{v}$：方向不变，长度变 2 倍。
+*   $-1 \cdot \vec{v}$：长度不变，方向反向。
+
+### 3. 长度 (Magnitude / Length)
+也就是模长。根据勾股定理：
+$$ ||\vec{v}|| = \sqrt{x^2 + y^2 + z^2} $$
+在 GLSL 中：`length(v)`。
+
+### 4. 归一化 (Normalization)
+这是图形学中最最最常用的操作。
+**把向量的长度变为 1，但保持方向不变。**
+$$ \hat{v} = \frac{\vec{v}}{||\vec{v}||} $$
+在 GLSL 中：`normalize(v)`。
+**为什么？** 因为在算光照、点积时，我们只关心方向，如果不归一化，长度会干扰计算结果。
+
+### 5. 距离与方向 (Distance & Direction)
+想知道物体 A 和 B 的关系？
+*   **距离**：`distance = length(B - A)`
+*   **方向**：`direction = normalize(B - A)`
+
+---
+
+## 三、 点积 (Dot Product)：方向的一致性
+
+点积是两个向量的"默契程度"。
+公式：$\vec{a} \cdot \vec{b} = ||\vec{a}|| ||\vec{b}|| \cos\theta$
+如果 $\vec{a}, \vec{b}$ 都是单位向量，那么 $\vec{a} \cdot \vec{b} = \cos\theta$。
+
+### 1. 判断夹角 (Angle)
+*   **结果 = 1**：方向完全相同 ($\theta = 0^\circ$)。
+*   **结果 = 0**：**垂直** ($\theta = 90^\circ$)。这是判断垂直的最快方法！
+*   **结果 = -1**：方向完全相反 ($\theta = 180^\circ$)。
+
+### 2. 判断朝向 (Facing)
+在光照计算中，我们用**法线 (N)** 和 **光线方向 (L)** 的点积。
+*   `dot(N, L) > 0`：光照在物体正面（亮）。
+*   `dot(N, L) < 0`：光照在物体背面（黑）。
+
+### 3. 投影 (Projection)
+把向量 $\vec{v}$ 投影到向量 $\vec{n}$ 上：
+$$ \text{proj}_{\vec{n}}\vec{v} = (\vec{v} \cdot \hat{n}) \hat{n} $$
+**应用**：分离速度。比如你在斜坡上跑，你的重力可以分解为"垂直于斜坡的力"（压力）和"平行于斜坡的力"（下滑力）。
+
+<ShaderPreview title="Dot Product Visualizer" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    // 向量 A (红色，随时间旋转)
+    vec2 A = vec2(cos(uTime), sin(uTime));
+    
+    // 向量 B (绿色，固定向上)
+    vec2 B = vec2(0.0, 1.0);
+    
+    // 绘制向量线 (简单的 SDF)
+    // 这里为了演示，我们只画向量的终点圆
+    float drawA = 1.0 - step(0.05, length(uv - A * 0.5)); // 缩短一点以便显示
+    float drawB = 1.0 - step(0.05, length(uv - B * 0.5));
+    
+    // 计算点积
+    float dotVal = dot(normalize(A), normalize(B));
+    
+    // 可视化点积结果
+    // 背景颜色随点积变化：
+    // 1.0 (同向) -> 白色
+    // 0.0 (垂直) -> 灰色
+    // -1.0 (反向) -> 黑色
+    vec3 bgColor = vec3(dotVal * 0.5 + 0.5);
+    
+    vec3 color = bgColor;
+    color = mix(color, vec3(1.0, 0.0, 0.0), drawA);
+    color = mix(color, vec3(0.0, 1.0, 0.0), drawB);
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+---
+
+## 四、 叉积 (Cross Product)：寻找第三者
+
+叉积只存在于 3D 空间。
+它接受两个向量，吐出一个**新向量**。
+公式：$\vec{c} = \vec{a} \times \vec{b}$
+
+### 1. 求垂直向量 (Normal)
+**新向量 $\vec{c}$ 同时垂直于 $\vec{a}$ 和 $\vec{b}$。**
+这是求**三角形法线**的唯一方法：
+*   三角形三个点 A, B, C。
+*   边 $\vec{e1} = B - A$。
+*   边 $\vec{e2} = C - A$。
+*   法线 $\vec{n} = \text{normalize}(\text{cross}(\vec{e1}, \vec{e2}))$。
+
+### 2. 判断左右/正反 (Orientation)
+*   **右手定则**：伸出右手，四指从 $\vec{a}$ 弯向 $\vec{b}$，大拇指的方向就是叉积方向。
+*   **判断点在三角形内**：利用叉积的方向，可以判断一个点是否在边的"左侧"。如果在三条边的同一侧，那它就在三角形内。
+
+---
+
+## 五、 高级应用：光的舞蹈
+
+### 1. 反射 (Reflection)
+光线射到镜子上弹开。
+公式：$\vec{R} = \vec{I} - 2(\vec{I} \cdot \vec{N})\vec{N}$
+在 GLSL 中：`reflect(I, N)`。
+*   `I`: 入射向量 (Incident)，**必须指向表面**。
+*   `N`: 法线，**必须归一化**。
+
+### 2. 折射 (Refraction)
+光线穿过水面发生偏折。遵循斯涅尔定律 (Snell's Law)。
+在 GLSL 中：`refract(I, N, eta)`。
+*   `eta`: 折射率比 ($\frac{n_1}{n_2}$)。比如空气(1.0)射入水(1.33)，`eta = 1.0/1.33`。
+
+### 3. 面向 (Faceforward)
+如果法线背对着摄像机，把它翻转过来。
+在 GLSL 中：`faceforward(N, I, Nref)`。
+这在双面渲染（比如树叶）时非常有用，确保光照总是正确的。
+
+<ShaderPreview title="Reflection Logic" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 简单的 2D 反射模拟
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    
+    // 模拟一面镜子 (法线向上)
+    vec2 N = vec2(0.0, 1.0);
+    
+    // 入射光 (随时间摆动)
+    vec2 I = normalize(vec2(sin(uTime), -1.0));
+    
+    // 计算反射光
+    vec2 R = reflect(I, N);
+    
+    // 绘制线条 (SDF)
+    // 1. 镜面
+    float mirror = 1.0 - step(0.02, abs(uv.y));
+    
+    // 2. 入射光 (黄色)
+    // 计算点到射线的距离
+    // I 是方向，我们让它穿过原点
+    // 为了只画上半部分，我们截断它
+    float dI = length(uv - I * dot(uv, I)); // 投影距离
+    // 只画 y > 0 的部分 (上半球)
+    float maskI = step(0.0, uv.y) * (1.0 - step(0.0, dot(uv, I))); // 入射光是从上往下，所以 dot < 0
+    float rayI = (1.0 - step(0.01, dI)) * maskI;
+    
+    // 3. 反射光 (青色)
+    float dR = length(uv - R * dot(uv, R));
+    float maskR = step(0.0, uv.y) * step(0.0, dot(uv, R)); // 反射光向上，dot > 0
+    float rayR = (1.0 - step(0.01, dR)) * maskR;
+    
+    vec3 color = vec3(mirror);
+    color += vec3(1.0, 1.0, 0.0) * rayI; // 黄色入射
+    color += vec3(0.0, 1.0, 1.0) * rayR; // 青色反射
+    
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 六、 实战技巧：向量的瑞士军刀
+
+### 1. 线性插值 (Lerp / Mix)
+你想让一个物体从点 A 平滑移动到点 B 吗？
+你想让颜色从红色渐变成蓝色吗？
+这就是 **线性插值**。
+
+公式：$\vec{v} = \vec{A} \cdot (1 - t) + \vec{B} \cdot t$
+或者：$\vec{v} = \vec{A} + (\vec{B} - \vec{A}) \cdot t$
+
+在 GLSL 中：`mix(A, B, t)`。
+*   `t = 0.0` -> A
+*   `t = 0.5` -> A 和 B 的中点
+*   `t = 1.0` -> B
+
+### 2. 构建坐标系 (Gram-Schmidt / LookAt)
+如果你只知道一个法线向量 $\vec{N}$（比如一个角色站在斜坡上），你怎么知道他的"右边"和"前边"在哪里？
+我们需要构建一个互相垂直的坐标系（TBN）。
+
+**技巧**：利用叉积连续制造垂直向量。
+1.  已有：$\vec{Up}$ (法线)。
+2.  假设：一个临时的前方 $\vec{TempForward}$ (比如世界坐标的 $(0,0,1)$)。
+3.  计算右方：$\vec{Right} = \text{normalize}(\text{cross}(\vec{TempForward}, \vec{Up}))$。
+4.  修正前方：$\vec{Forward} = \text{cross}(\vec{Up}, \vec{Right})$。
+
+现在，$\vec{Up}, \vec{Right}, \vec{Forward}$ 就是三个完美的互相垂直的轴。这就是 `lookAt` 矩阵背后的原理。
+
+## 七、 总结
+
+向量是图形学的语言。
+
+1.  **加减**：移动和定位。
+2.  **归一化**：只看方向，不看长短。
+3.  **点积**：算夹角，算光照强度，算投影。
+4.  **叉积**：算垂直向量（法线），构建坐标系。
+5.  **插值 (Mix)**：实现动画和过渡。
+6.  **反射/折射**：模拟光的物理行为。
+
+把这些工具装进你的工具箱，下次遇到"求光照"、"求碰撞"、"求朝向"的问题时，你就会发现答案就在这些公式里。

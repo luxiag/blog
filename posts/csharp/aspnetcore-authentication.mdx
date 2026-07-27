@@ -1,0 +1,1130 @@
+---
+title: 'ASP.NET Core 身份验证与授权完全指南'
+date: '2025-02-10'
+excerpt: '深入学习 ASP.NET Core 的身份验证与授权机制：Cookie 认证、JWT Token、OAuth 2.0、角色与策略授权。从基础到实战，构建安全的 Web 应用。'
+tags: ['aspnetcore', 'authentication', 'authorization', 'jwt', 'oauth']
+---
+
+# ASP.NET Core 身份验证与授权完全指南
+
+## 身份验证 vs 授权
+
+在开始之前，先理解两个核心概念：
+
+### 身份验证（Authentication）
+**"你是谁？"** - 验证用户身份的过程。
+
+```csharp
+// 用户登录，提供用户名和密码
+// 系统验证：这个人真的是张三吗？
+```
+
+### 授权（Authorization）
+**"你能做什么？"** - 验证用户权限的过程。
+
+```csharp
+// 张三已登录（已认证）
+// 但他能删除文章吗？（授权检查）
+```
+
+**类比：**
+- 🎫 **身份验证**：机场安检，检查你的身份证
+- 🚪 **授权**：登机牌检查，确认你能登上这架飞机
+
+---
+
+## 第一部分：Cookie 身份验证
+
+Cookie 认证是最传统的 Web 认证方式，适合服务端渲染的应用。
+
+### 1. 基础配置
+
+```csharp
+// Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+// 添加 Cookie 认证
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.LoginPath = "/Account/Login";           // 登录页面
+        options.LogoutPath = "/Account/Logout";         // 登出路径
+        options.AccessDeniedPath = "/Account/AccessDenied";  // 拒绝访问页面
+        options.ExpireTimeSpan = TimeSpan.FromHours(2); // Cookie 过期时间
+        options.SlidingExpiration = true;               // 滑动过期
+    });
+
+builder.Services.AddAuthorization();
+
+var app = builder.Build();
+
+// 启用认证和授权中间件
+app.UseAuthentication();  // 必须在 UseAuthorization 之前
+app.UseAuthorization();
+
+app.MapControllers();
+app.Run();
+```
+
+### 2. 用户登录
+
+```csharp
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using System.Security.Claims;
+
+[ApiController]
+[Route("api/[controller]")]
+public class AccountController : ControllerBase
+{
+    [HttpPost("login")]
+    public async Task<IActionResult> Login([FromBody] LoginRequest request)
+    {
+        // 1. 验证用户名和密码（这里简化处理）
+        if (request.Username != "admin" || request.Password != "password")
+        {
+            return Unauthorized(new { message = "用户名或密码错误" });
+        }
+        
+        // 2. 创建 Claims（声明）
+        var claims = new List<Claim>
+        {
+            new Claim(ClaimTypes.Name, request.Username),
+            new Claim(ClaimTypes.Email, "admin@example.com"),
+            new Claim(ClaimTypes.Role, "Admin"),
+            new Claim("UserId", "1"),
+            new Claim("Department", "IT")
+        };
+        
+        // 3. 创建 ClaimsIdentity
+        var claimsIdentity = new ClaimsIdentity(
+            claims, 
+            CookieAuthenticationDefaults.AuthenticationScheme);
+        
+        // 4. 创建 AuthenticationProperties
+        var authProperties = new AuthenticationProperties
+        {
+            IsPersistent = request.RememberMe,  // 记住我
+            ExpiresUtc = DateTimeOffset.UtcNow.AddHours(2)
+        };
+        
+        // 5. 登录（写入 Cookie）
+        await HttpContext.SignInAsync(
+            CookieAuthenticationDefaults.AuthenticationScheme,
+            new ClaimsPrincipal(claimsIdentity),
+            authProperties);
+        
+        return Ok(new { message = "登录成功" });
+    }
+    
+    [HttpPost("logout")]
+    public async Task<IActionResult> Logout()
+    {
+        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        return Ok(new { message = "已登出" });
+    }
+    
+    [HttpGet("profile")]
+    [Authorize]  // 需要认证
+    public IActionResult GetProfile()
+    {
+        var username = User.Identity.Name;
+        var userId = User.FindFirst("UserId")?.Value;
+        var email = User.FindFirst(ClaimTypes.Email)?.Value;
+        var roles = User.FindAll(ClaimTypes.Role).Select(c => c.Value);
+        
+        return Ok(new
+        {
+            username,
+            userId,
+            email,
+            roles
+        });
+    }
+}
+
+public class LoginRequest
+{
+    public string Username { get; set; }
+    public string Password { get; set; }
+    public bool RememberMe { get; set; }
+}
+```
+
+### 3. 使用授权
+
+```csharp
+[ApiController]
+[Route("api/[controller]")]
+public class ProductsController : ControllerBase
+{
+    // 所有人都可以访问
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        return Ok(new[] { "Product 1", "Product 2" });
+    }
+    
+    // 需要登录
+    [HttpGet("{id}")]
+    [Authorize]
+    public IActionResult GetById(int id)
+    {
+        return Ok($"Product {id}");
+    }
+    
+    // 需要 Admin 角色
+    [HttpPost]
+    [Authorize(Roles = "Admin")]
+    public IActionResult Create([FromBody] Product product)
+    {
+        return Ok("创建成功");
+    }
+    
+    // 需要 Admin 或 Manager 角色
+    [HttpPut("{id}")]
+    [Authorize(Roles = "Admin,Manager")]
+    public IActionResult Update(int id, [FromBody] Product product)
+    {
+        return Ok("更新成功");
+    }
+    
+    // 需要 Admin 角色
+    [HttpDelete("{id}")]
+    [Authorize(Roles = "Admin")]
+    public IActionResult Delete(int id)
+    {
+        return Ok("删除成功");
+    }
+}
+```
+
+---
+
+## 第二部分：JWT 身份验证
+
+JWT（JSON Web Token）是现代 API 的标准认证方式，适合前后端分离的应用。
+
+### 1. JWT 基础知识
+
+JWT 由三部分组成：
+
+```
+Header.Payload.Signature
+```
+
+**示例：**
+```
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.
+eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.
+SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+```
+
+**结构：**
+- **Header**：算法和令牌类型
+- **Payload**：用户信息（Claims）
+- **Signature**：签名，防止篡改
+
+### 2. 安装包
+
+```bash
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
+```
+
+### 3. 配置 JWT
+
+```csharp
+// appsettings.json
+{
+  "Jwt": {
+    "Key": "YourSuperSecretKeyThatIsAtLeast32CharactersLong",
+    "Issuer": "YourApp",
+    "Audience": "YourAppUsers",
+    "ExpirationMinutes": 60
+  }
+}
+
+// Program.cs
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// 读取配置
+var jwtSettings = builder.Configuration.GetSection("Jwt");
+var key = Encoding.UTF8.GetBytes(jwtSettings["Key"]);
+
+// 添加 JWT 认证
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = jwtSettings["Issuer"],
+        ValidAudience = jwtSettings["Audience"],
+        IssuerSigningKey = new SymmetricSecurityKey(key),
+        ClockSkew = TimeSpan.Zero  // 移除默认的 5 分钟时间偏移
+    };
+});
+
+builder.Services.AddAuthorization();
+```
+
+### 4. 生成 JWT Token
+
+```csharp
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+
+public class JwtService
+{
+    private readonly IConfiguration configuration;
+    
+    public JwtService(IConfiguration configuration)
+    {
+        this.configuration = configuration;
+    }
+    
+    public string GenerateToken(string userId, string username, List<string> roles)
+    {
+        var jwtSettings = configuration.GetSection("Jwt");
+        var key = new SymmetricSecurityKey(
+            Encoding.UTF8.GetBytes(jwtSettings["Key"]));
+        
+        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        
+        // 创建 Claims
+        var claims = new List<Claim>
+        {
+            new Claim(JwtRegisteredClaimNames.Sub, userId),
+            new Claim(JwtRegisteredClaimNames.Name, username),
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            new Claim(JwtRegisteredClaimNames.Iat, 
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString())
+        };
+        
+        // 添加角色
+        foreach (var role in roles)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, role));
+        }
+        
+        // 创建 Token
+        var token = new JwtSecurityToken(
+            issuer: jwtSettings["Issuer"],
+            audience: jwtSettings["Audience"],
+            claims: claims,
+            expires: DateTime.UtcNow.AddMinutes(
+                int.Parse(jwtSettings["ExpirationMinutes"])),
+            signingCredentials: credentials
+        );
+        
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+    
+    public ClaimsPrincipal ValidateToken(string token)
+    {
+        var jwtSettings = configuration.GetSection("Jwt");
+        var key = new SymmetricSecurityKey(
+            Encoding.UTF8.GetBytes(jwtSettings["Key"]));
+        
+        var tokenHandler = new JwtSecurityTokenHandler();
+        
+        try
+        {
+            var principal = tokenHandler.ValidateToken(token, 
+                new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    ValidIssuer = jwtSettings["Issuer"],
+                    ValidAudience = jwtSettings["Audience"],
+                    IssuerSigningKey = key,
+                    ClockSkew = TimeSpan.Zero
+                }, 
+                out SecurityToken validatedToken);
+            
+            return principal;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+}
+```
+
+### 5. 登录接口
+
+```csharp
+[ApiController]
+[Route("api/[controller]")]
+public class AuthController : ControllerBase
+{
+    private readonly JwtService jwtService;
+    
+    public AuthController(JwtService jwtService)
+    {
+        this.jwtService = jwtService;
+    }
+    
+    [HttpPost("login")]
+    public IActionResult Login([FromBody] LoginRequest request)
+    {
+        // 验证用户名和密码（实际应该查询数据库）
+        if (request.Username != "admin" || request.Password != "password")
+        {
+            return Unauthorized(new { message = "用户名或密码错误" });
+        }
+        
+        // 生成 Token
+        var token = jwtService.GenerateToken(
+            userId: "1",
+            username: request.Username,
+            roles: new List<string> { "Admin", "User" }
+        );
+        
+        return Ok(new
+        {
+            token,
+            expiresIn = 3600,
+            tokenType = "Bearer"
+        });
+    }
+    
+    [HttpGet("me")]
+    [Authorize]
+    public IActionResult GetCurrentUser()
+    {
+        var userId = User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        var username = User.Identity.Name;
+        var roles = User.FindAll(ClaimTypes.Role).Select(c => c.Value);
+        
+        return Ok(new
+        {
+            userId,
+            username,
+            roles
+        });
+    }
+}
+```
+
+### 6. 客户端使用
+
+```javascript
+// 登录
+const response = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        username: 'admin',
+        password: 'password'
+    })
+});
+
+const data = await response.json();
+const token = data.token;
+
+// 保存 Token
+localStorage.setItem('token', token);
+
+// 使用 Token 访问受保护的 API
+const apiResponse = await fetch('/api/products', {
+    headers: {
+        'Authorization': `Bearer ${token}`
+    }
+});
+```
+
+### 7. Refresh Token
+
+```csharp
+public class RefreshTokenService
+{
+    private readonly Dictionary<string, RefreshToken> refreshTokens = new();
+    
+    public string GenerateRefreshToken(string userId)
+    {
+        var token = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
+        
+        refreshTokens[token] = new RefreshToken
+        {
+            UserId = userId,
+            Token = token,
+            ExpiresAt = DateTime.UtcNow.AddDays(7)
+        };
+        
+        return token;
+    }
+    
+    public bool ValidateRefreshToken(string token, out string userId)
+    {
+        userId = null;
+        
+        if (!refreshTokens.TryGetValue(token, out var refreshToken))
+            return false;
+        
+        if (refreshToken.ExpiresAt < DateTime.UtcNow)
+        {
+            refreshTokens.Remove(token);
+            return false;
+        }
+        
+        userId = refreshToken.UserId;
+        return true;
+    }
+    
+    public void RevokeRefreshToken(string token)
+    {
+        refreshTokens.Remove(token);
+    }
+}
+
+public class RefreshToken
+{
+    public string UserId { get; set; }
+    public string Token { get; set; }
+    public DateTime ExpiresAt { get; set; }
+}
+
+// 使用
+[HttpPost("refresh")]
+public IActionResult RefreshToken([FromBody] RefreshTokenRequest request)
+{
+    if (!refreshTokenService.ValidateRefreshToken(request.RefreshToken, out var userId))
+    {
+        return Unauthorized(new { message = "无效的 Refresh Token" });
+    }
+    
+    // 生成新的 Access Token
+    var newAccessToken = jwtService.GenerateToken(userId, "username", roles);
+    var newRefreshToken = refreshTokenService.GenerateRefreshToken(userId);
+    
+    return Ok(new
+    {
+        accessToken = newAccessToken,
+        refreshToken = newRefreshToken
+    });
+}
+```
+
+---
+
+## 第三部分：基于策略的授权
+
+### 1. 简单策略
+
+```csharp
+// Program.cs
+builder.Services.AddAuthorization(options =>
+{
+    // 要求年龄 >= 18
+    options.AddPolicy("AdultOnly", policy =>
+        policy.RequireClaim("Age", "18", "19", "20", "21", "22", "23", "24", "25"));
+    
+    // 要求特定角色
+    options.AddPolicy("AdminOnly", policy =>
+        policy.RequireRole("Admin"));
+    
+    // 要求多个角色之一
+    options.AddPolicy("ManagerOrAdmin", policy =>
+        policy.RequireRole("Manager", "Admin"));
+    
+    // 要求认证用户
+    options.AddPolicy("AuthenticatedUser", policy =>
+        policy.RequireAuthenticatedUser());
+});
+
+// 使用
+[Authorize(Policy = "AdultOnly")]
+public IActionResult AdultContent()
+{
+    return Ok("成人内容");
+}
+```
+
+### 2. 自定义授权需求
+
+```csharp
+// 定义需求
+public class MinimumAgeRequirement : IAuthorizationRequirement
+{
+    public int MinimumAge { get; }
+    
+    public MinimumAgeRequirement(int minimumAge)
+    {
+        MinimumAge = minimumAge;
+    }
+}
+
+// 定义处理器
+public class MinimumAgeHandler : AuthorizationHandler<MinimumAgeRequirement>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        MinimumAgeRequirement requirement)
+    {
+        var ageClaim = context.User.FindFirst("Age");
+        
+        if (ageClaim == null)
+        {
+            return Task.CompletedTask;
+        }
+        
+        if (int.TryParse(ageClaim.Value, out var age) && age >= requirement.MinimumAge)
+        {
+            context.Succeed(requirement);
+        }
+        
+        return Task.CompletedTask;
+    }
+}
+
+// 注册
+builder.Services.AddSingleton<IAuthorizationHandler, MinimumAgeHandler>();
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AtLeast18", policy =>
+        policy.Requirements.Add(new MinimumAgeRequirement(18)));
+});
+
+// 使用
+[Authorize(Policy = "AtLeast18")]
+public IActionResult AdultContent()
+{
+    return Ok("成人内容");
+}
+```
+
+### 3. 基于资源的授权
+
+```csharp
+// 定义需求
+public class DocumentAuthorizationRequirement : IAuthorizationRequirement
+{
+}
+
+// 定义处理器
+public class DocumentAuthorizationHandler 
+    : AuthorizationHandler<DocumentAuthorizationRequirement, Document>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        DocumentAuthorizationRequirement requirement,
+        Document resource)
+    {
+        var userId = context.User.FindFirst("UserId")?.Value;
+        
+        // 文档所有者或管理员可以访问
+        if (resource.OwnerId == userId || 
+            context.User.IsInRole("Admin"))
+        {
+            context.Succeed(requirement);
+        }
+        
+        return Task.CompletedTask;
+    }
+}
+
+// 注册
+builder.Services.AddSingleton<IAuthorizationHandler, DocumentAuthorizationHandler>();
+
+// 使用
+[HttpGet("{id}")]
+public async Task<IActionResult> GetDocument(int id, 
+    [FromServices] IAuthorizationService authorizationService)
+{
+    var document = await documentRepository.GetByIdAsync(id);
+    
+    if (document == null)
+        return NotFound();
+    
+    var authResult = await authorizationService.AuthorizeAsync(
+        User, 
+        document, 
+        new DocumentAuthorizationRequirement());
+    
+    if (!authResult.Succeeded)
+        return Forbid();
+    
+    return Ok(document);
+}
+
+public class Document
+{
+    public int Id { get; set; }
+    public string Title { get; set; }
+    public string Content { get; set; }
+    public string OwnerId { get; set; }
+}
+```
+
+---
+
+## 第四部分：OAuth 2.0 与第三方登录
+
+### 1. Google 登录
+
+```bash
+dotnet add package Microsoft.AspNetCore.Authentication.Google
+```
+
+```csharp
+// Program.cs
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = GoogleDefaults.AuthenticationScheme;
+})
+.AddCookie()
+.AddGoogle(options =>
+{
+    options.ClientId = builder.Configuration["Google:ClientId"];
+    options.ClientSecret = builder.Configuration["Google:ClientSecret"];
+    options.CallbackPath = "/signin-google";
+    
+    // 请求额外的权限
+    options.Scope.Add("profile");
+    options.Scope.Add("email");
+    
+    // 保存 Token
+    options.SaveTokens = true;
+    
+    // 事件处理
+    options.Events.OnCreatingTicket = async context =>
+    {
+        var email = context.Principal.FindFirst(ClaimTypes.Email)?.Value;
+        // 可以在这里保存用户信息到数据库
+    };
+});
+
+// 控制器
+[HttpGet("login-google")]
+public IActionResult LoginGoogle()
+{
+    var properties = new AuthenticationProperties
+    {
+        RedirectUri = "/api/auth/google-callback"
+    };
+    
+    return Challenge(properties, GoogleDefaults.AuthenticationScheme);
+}
+
+[HttpGet("google-callback")]
+public async Task<IActionResult> GoogleCallback()
+{
+    var result = await HttpContext.AuthenticateAsync(
+        CookieAuthenticationDefaults.AuthenticationScheme);
+    
+    if (!result.Succeeded)
+        return Unauthorized();
+    
+    var email = result.Principal.FindFirst(ClaimTypes.Email)?.Value;
+    var name = result.Principal.FindFirst(ClaimTypes.Name)?.Value;
+    
+    return Ok(new { email, name });
+}
+```
+
+### 2. GitHub 登录
+
+```bash
+dotnet add package AspNet.Security.OAuth.GitHub
+```
+
+```csharp
+builder.Services.AddAuthentication()
+    .AddCookie()
+    .AddGitHub(options =>
+    {
+        options.ClientId = builder.Configuration["GitHub:ClientId"];
+        options.ClientSecret = builder.Configuration["GitHub:ClientSecret"];
+        options.CallbackPath = "/signin-github";
+        options.Scope.Add("user:email");
+    });
+```
+
+---
+
+## 第五部分：实战案例
+
+### 完整的用户认证系统
+
+```csharp
+// 用户实体
+public class User
+{
+    public int Id { get; set; }
+    public string Username { get; set; }
+    public string Email { get; set; }
+    public string PasswordHash { get; set; }
+    public List<string> Roles { get; set; } = new();
+    public DateTime CreatedAt { get; set; }
+    public DateTime? LastLoginAt { get; set; }
+}
+
+// 用户服务
+public interface IUserService
+{
+    Task<User> AuthenticateAsync(string username, string password);
+    Task<User> RegisterAsync(string username, string email, string password);
+    Task<User> GetByIdAsync(int id);
+    Task<bool> UpdatePasswordAsync(int userId, string oldPassword, string newPassword);
+}
+
+public class UserService : IUserService
+{
+    private readonly AppDbContext context;
+    
+    public UserService(AppDbContext context)
+    {
+        this.context = context;
+    }
+    
+    public async Task<User> AuthenticateAsync(string username, string password)
+    {
+        var user = await context.Users
+            .FirstOrDefaultAsync(u => u.Username == username);
+        
+        if (user == null)
+            return null;
+        
+        // 验证密码
+        if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
+            return null;
+        
+        // 更新最后登录时间
+        user.LastLoginAt = DateTime.UtcNow;
+        await context.SaveChangesAsync();
+        
+        return user;
+    }
+    
+    public async Task<User> RegisterAsync(string username, string email, string password)
+    {
+        // 检查用户名是否已存在
+        if (await context.Users.AnyAsync(u => u.Username == username))
+            throw new Exception("用户名已存在");
+        
+        // 检查邮箱是否已存在
+        if (await context.Users.AnyAsync(u => u.Email == email))
+            throw new Exception("邮箱已被使用");
+        
+        var user = new User
+        {
+            Username = username,
+            Email = email,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
+            Roles = new List<string> { "User" },
+            CreatedAt = DateTime.UtcNow
+        };
+        
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+        
+        return user;
+    }
+    
+    public async Task<User> GetByIdAsync(int id)
+    {
+        return await context.Users.FindAsync(id);
+    }
+    
+    public async Task<bool> UpdatePasswordAsync(int userId, string oldPassword, string newPassword)
+    {
+        var user = await context.Users.FindAsync(userId);
+        
+        if (user == null)
+            return false;
+        
+        if (!BCrypt.Net.BCrypt.Verify(oldPassword, user.PasswordHash))
+            return false;
+        
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
+        await context.SaveChangesAsync();
+        
+        return true;
+    }
+}
+
+// 认证控制器
+[ApiController]
+[Route("api/[controller]")]
+public class AuthController : ControllerBase
+{
+    private readonly IUserService userService;
+    private readonly JwtService jwtService;
+    private readonly RefreshTokenService refreshTokenService;
+    
+    public AuthController(
+        IUserService userService,
+        JwtService jwtService,
+        RefreshTokenService refreshTokenService)
+    {
+        this.userService = userService;
+        this.jwtService = jwtService;
+        this.refreshTokenService = refreshTokenService;
+    }
+    
+    [HttpPost("register")]
+    public async Task<IActionResult> Register([FromBody] RegisterRequest request)
+    {
+        try
+        {
+            var user = await userService.RegisterAsync(
+                request.Username,
+                request.Email,
+                request.Password);
+            
+            return Ok(new
+            {
+                message = "注册成功",
+                userId = user.Id,
+                username = user.Username
+            });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+    
+    [HttpPost("login")]
+    public async Task<IActionResult> Login([FromBody] LoginRequest request)
+    {
+        var user = await userService.AuthenticateAsync(
+            request.Username,
+            request.Password);
+        
+        if (user == null)
+        {
+            return Unauthorized(new { message = "用户名或密码错误" });
+        }
+        
+        var accessToken = jwtService.GenerateToken(
+            user.Id.ToString(),
+            user.Username,
+            user.Roles);
+        
+        var refreshToken = refreshTokenService.GenerateRefreshToken(
+            user.Id.ToString());
+        
+        return Ok(new
+        {
+            accessToken,
+            refreshToken,
+            expiresIn = 3600,
+            tokenType = "Bearer",
+            user = new
+            {
+                id = user.Id,
+                username = user.Username,
+                email = user.Email,
+                roles = user.Roles
+            }
+        });
+    }
+    
+    [HttpPost("refresh")]
+    public IActionResult RefreshToken([FromBody] RefreshTokenRequest request)
+    {
+        if (!refreshTokenService.ValidateRefreshToken(
+            request.RefreshToken, out var userId))
+        {
+            return Unauthorized(new { message = "无效的 Refresh Token" });
+        }
+        
+        var user = userService.GetByIdAsync(int.Parse(userId)).Result;
+        
+        var newAccessToken = jwtService.GenerateToken(
+            userId,
+            user.Username,
+            user.Roles);
+        
+        var newRefreshToken = refreshTokenService.GenerateRefreshToken(userId);
+        
+        return Ok(new
+        {
+            accessToken = newAccessToken,
+            refreshToken = newRefreshToken,
+            expiresIn = 3600
+        });
+    }
+    
+    [HttpPost("change-password")]
+    [Authorize]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        var userId = int.Parse(User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value);
+        
+        var success = await userService.UpdatePasswordAsync(
+            userId,
+            request.OldPassword,
+            request.NewPassword);
+        
+        if (!success)
+        {
+            return BadRequest(new { message = "旧密码错误" });
+        }
+        
+        return Ok(new { message = "密码修改成功" });
+    }
+    
+    [HttpGet("me")]
+    [Authorize]
+    public async Task<IActionResult> GetCurrentUser()
+    {
+        var userId = int.Parse(User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value);
+        var user = await userService.GetByIdAsync(userId);
+        
+        if (user == null)
+            return NotFound();
+        
+        return Ok(new
+        {
+            id = user.Id,
+            username = user.Username,
+            email = user.Email,
+            roles = user.Roles,
+            createdAt = user.CreatedAt,
+            lastLoginAt = user.LastLoginAt
+        });
+    }
+}
+
+public class RegisterRequest
+{
+    public string Username { get; set; }
+    public string Email { get; set; }
+    public string Password { get; set; }
+}
+
+public class ChangePasswordRequest
+{
+    public string OldPassword { get; set; }
+    public string NewPassword { get; set; }
+}
+```
+
+---
+
+## 安全最佳实践
+
+### 1. 密码安全
+
+```csharp
+// ✅ 使用 BCrypt 哈希密码
+var hashedPassword = BCrypt.Net.BCrypt.HashPassword(password);
+
+// ✅ 验证密码
+var isValid = BCrypt.Net.BCrypt.Verify(password, hashedPassword);
+
+// ❌ 不要使用 MD5 或 SHA1
+// var hash = MD5.Create().ComputeHash(Encoding.UTF8.GetBytes(password));
+```
+
+### 2. Token 安全
+
+```csharp
+// ✅ 使用强密钥（至少 32 字符）
+"YourSuperSecretKeyThatIsAtLeast32CharactersLong"
+
+// ✅ 设置合理的过期时间
+ExpiresUtc = DateTimeOffset.UtcNow.AddHours(1)
+
+// ✅ 使用 HTTPS
+app.UseHttpsRedirection();
+
+// ✅ 设置安全的 Cookie
+options.Cookie.HttpOnly = true;
+options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+options.Cookie.SameSite = SameSiteMode.Strict;
+```
+
+### 3. CORS 配置
+
+```csharp
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowSpecificOrigin", policy =>
+    {
+        policy.WithOrigins("https://yourdomain.com")
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
+    });
+});
+
+app.UseCors("AllowSpecificOrigin");
+```
+
+### 4. 防止常见攻击
+
+```csharp
+// 防止 CSRF
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = "X-CSRF-TOKEN";
+});
+
+// 限流
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("fixed", opt =>
+    {
+        opt.PermitLimit = 10;
+        opt.Window = TimeSpan.FromMinutes(1);
+    });
+});
+
+// 使用
+[EnableRateLimiting("fixed")]
+[HttpPost("login")]
+public async Task<IActionResult> Login([FromBody] LoginRequest request)
+{
+    // ...
+}
+```
+
+---
+
+## 总结
+
+通过本教程，你已经掌握了 ASP.NET Core 的身份验证与授权：
+
+✅ **Cookie 认证**：传统 Web 应用的认证方式  
+✅ **JWT 认证**：现代 API 的标准认证  
+✅ **基于策略的授权**：灵活的权限控制  
+✅ **OAuth 2.0**：第三方登录集成  
+✅ **完整实战**：用户注册、登录、密码修改  
+✅ **安全最佳实践**：密码哈希、Token 安全、CORS、防攻击  
+
+**关键要点：**
+- 🔐 始终使用 HTTPS
+- 🔑 使用强密钥和密码哈希
+- ⏰ 设置合理的 Token 过期时间
+- 🛡️ 实施多层安全防护
+- 📝 记录安全相关的操作日志
+
+掌握这些知识，你就能构建安全可靠的 Web 应用！
+
+**推荐资源：**
+- [ASP.NET Core 安全文档](https://docs.microsoft.com/zh-cn/aspnet/core/security/)
+- [JWT 官方网站](https://jwt.io/)
+- [OAuth 2.0 规范](https://oauth.net/2/)
+- [OWASP 安全指南](https://owasp.org/)

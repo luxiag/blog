@@ -1,0 +1,409 @@
+---
+title: 'ASP.NET Core Health Checks：存活检查、就绪检查与依赖探测'
+date: '2026-07-21'
+excerpt: '掌握 ASP.NET Core Health Checks：live/readiness 探针、数据库依赖检查、自定义健康检查、响应格式和容器/Kubernetes 场景。'
+tags: ['dotnet', 'aspnetcore', 'healthchecks', 'deployment']
+nextPost: 'dotnet/aspnet-core-observability'
+---
+
+# ASP.NET Core Health Checks：存活检查、就绪检查与依赖探测
+
+健康检查用于回答一个生产问题：**这个应用现在能不能接收流量？**
+
+在容器、Kubernetes、负载均衡和自动化部署中，健康检查是服务发现、自动重启、流量切换的重要依据。
+
+:::tip 阶段四阅读顺序
+建议结合 [部署基础](/posts/dotnet/aspnet-core-deployment)、[Logging](/posts/dotnet/aspnet-core-logging) 和 [可观测性](/posts/dotnet/aspnet-core-observability) 阅读。
+:::
+
+## 最小健康检查
+
+注册：
+
+```csharp
+builder.Services.AddHealthChecks();
+```
+
+映射端点：
+
+```csharp
+app.MapHealthChecks("/health");
+```
+
+访问：
+
+```text
+GET /health
+```
+
+返回：
+
+```text
+Healthy
+```
+
+## Liveness 与 Readiness
+
+生产中建议区分两个检查：
+
+| 类型 | 作用 | 示例 |
+|---|---|---|
+| Liveness | 应用进程是否活着 | `/health/live` |
+| Readiness | 应用是否准备好接收流量 | `/health/ready` |
+
+配置：
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddCheck("self", () => HealthCheckResult.Healthy(), tags: new[] { "live" });
+
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("live")
+});
+
+app.MapHealthChecks("/health/ready");
+```
+
+### 为什么 Liveness 不检查数据库？
+
+Liveness 探针回答的问题是：**应用进程本身是否还活着？** 它的检查范围仅限于进程内部——内存是否耗尽、线程池是否饥饿、死锁是否发生。只要进程还能响应 HTTP 请求，Liveness 就应该返回 Healthy。
+
+如果 Liveness 包含了数据库检查，会发生这样的连锁反应：
+
+1. 数据库出现短暂故障（网络抖动、重启、连接池耗尽）
+2. Liveness 探针返回 Unhealthy
+3. Kubernetes 认为容器不可恢复，**杀死 Pod 并重启**
+4. 但数据库在几秒后恢复了——此时 Pod 本身并无问题，重启完全是多余的
+5. 如果多个 Pod 同时被重启，还会引发**雪崩**：重启潮导致请求集中到剩余实例，进一步加剧压力
+
+:::danger 典型反模式
+Liveness 检查数据库 = 数据库故障 → 所有 Pod 被重启 → 数据库恢复后 Pod 还在启动中 → 服务整体中断时间远超数据库故障时间。
+:::
+
+正确的做法是让数据库故障只影响 Readiness：
+
+- **数据库挂了** → Readiness 返回 Unhealthy → Kubernetes 停止向该 Pod 转发流量 → Pod 不重启，等待数据库恢复后自动恢复
+- **应用进程崩溃**（死锁、OOM）→ Liveness 返回 Unhealthy → Kubernetes 重启 Pod → 正确的恢复策略
+
+两条规则：
+
+- **Liveness 只检查进程存活**：简单的自检即可，甚至可以只返回 `Healthy()`
+- **Readiness 检查所有关键依赖**：数据库、缓存、消息队列等，任一不可用则该 Pod 不应接收流量
+
+## 数据库健康检查
+
+可以添加数据库探测。以 SQL Server 为例，常用扩展包来自 `AspNetCore.HealthChecks.SqlServer`：
+
+```bash
+dotnet add package AspNetCore.HealthChecks.SqlServer
+```
+
+注册：
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddSqlServer(
+        builder.Configuration.GetConnectionString("Default")!,
+        name: "sqlserver",
+        tags: new[] { "ready" });
+```
+
+就绪检查包含数据库，存活检查不包含数据库。
+
+## 自定义健康检查
+
+```csharp
+public class DiskSpaceHealthCheck : IHealthCheck
+{
+    private readonly DiskSpaceOptions _options;
+
+    public DiskSpaceHealthCheck(IOptions<DiskSpaceOptions> options)
+    {
+        _options = options.Value;
+    }
+
+    public Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken cancellationToken = default)
+    {
+        DriveInfo drive = new(_options.TargetPath);
+
+        if (drive.AvailableFreeSpace < _options.MinimumFreeBytes)
+        {
+            return Task.FromResult(HealthCheckResult.Unhealthy(
+                $"Disk space is low. Available: {drive.AvailableFreeSpace / (1024L * 1024 * 1024)}GB"));
+        }
+
+        if (drive.AvailableFreeSpace < _options.WarningFreeBytes)
+        {
+            return Task.FromResult(HealthCheckResult.Degraded(
+                $"Disk space is running low. Available: {drive.AvailableFreeSpace / (1024L * 1024 * 1024)}GB"));
+        }
+
+        return Task.FromResult(HealthCheckResult.Healthy());
+    }
+}
+
+public class DiskSpaceOptions
+{
+    public string TargetPath { get; set; } = AppContext.BaseDirectory;
+    public long MinimumFreeBytes { get; set; } = 1024L * 1024 * 1024;
+    public long WarningFreeBytes { get; set; } = 5L * 1024 * 1024 * 1024;
+}
+```
+
+注册：
+
+```csharp
+builder.Services.Configure<DiskSpaceOptions>(
+    builder.Configuration.GetSection("DiskSpace"));
+
+builder.Services.AddHealthChecks()
+    .AddCheck<DiskSpaceHealthCheck>("disk", tags: new[] { "ready" });
+```
+
+对应的 `appsettings.json`：
+
+```json
+{
+  "DiskSpace": {
+    "TargetPath": "/data",
+    "MinimumFreeBytes": 2147483648,
+    "WarningFreeBytes": 10737418240
+  }
+}
+```
+
+:::tip 配置注入的好处
+通过 `IOptions<T>` 注入配置，阈值可以在不同环境（开发/预发/生产）使用不同值，而无需修改代码。`MinimumFreeBytes` 设为 2GB 表示低于此值报告 Unhealthy，`WarningFreeBytes` 设为 10GB 表示低于此值报告 Degraded。
+:::
+
+## JSON 响应
+
+默认响应只有 `Healthy`，生产中常需要 JSON。
+
+```csharp
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+
+        var result = new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.Select(entry => new
+            {
+                name = entry.Key,
+                status = entry.Value.Status.ToString(),
+                description = entry.Value.Description,
+                duration = entry.Value.Duration.TotalMilliseconds
+            })
+        };
+
+        await context.Response.WriteAsJsonAsync(result);
+    }
+});
+```
+
+## 健康检查端点安全保护
+
+健康检查的 JSON 响应会暴露依赖名称、状态和描述信息。如果直接公开到外网，攻击者可以借此了解你的基础设施构成。
+
+:::danger 安全风险
+未保护的健康检查端点 = 泄露所有依赖名称（sqlserver、redis、rabbitmq）+ 各依赖的连接状态 + 错误描述（可能含连接字符串片段）。
+:::
+
+### 方案一：要求授权访问
+
+```csharp
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("HealthPolicy", policy =>
+        policy.RequireRole("Admin"));
+
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("live")
+}).RequireAuthorization("HealthPolicy");
+
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        var result = new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.Select(entry => new
+            {
+                name = entry.Key,
+                status = entry.Value.Status.ToString(),
+                description = entry.Value.Description,
+                duration = entry.Value.Duration.TotalMilliseconds
+            })
+        };
+        await context.Response.WriteAsJsonAsync(result);
+    }
+}).RequireAuthorization("HealthPolicy");
+```
+
+### 方案二：内部端点 + 简化外部端点
+
+Kubernetes 集群内部访问详细端点，外部只暴露一个不包含细节的状态端点：
+
+```csharp
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("live")
+});
+
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready")
+});
+
+app.MapHealthChecks("/health", new HealthCheckOptions
+{
+    Predicate = _ => false,
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(new { status = "Healthy" });
+    }
+});
+```
+
+`/health` 只返回总体状态，不泄露任何依赖细节，适合暴露给负载均衡器或监控系统。`/health/live` 和 `/health/ready` 仅供 K8s 集群内部访问，可以通过 NetworkPolicy 限制只允许 kubelet 访问。
+
+## Kubernetes 示例
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health/live
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 10
+```
+
+Readiness 失败时，Kubernetes 会停止向 Pod 转发流量；Liveness 失败时，可能重启容器。
+
+## 常见依赖的健康检查注册
+
+ASP.NET Core 健康检查生态有大量社区包，覆盖主流中间件。注册方式统一——调用 `AddXxx` 扩展方法，指定 `tags` 归入 `ready` 组。
+
+### Redis
+
+```bash
+dotnet add package AspNetCore.HealthChecks.Redis
+```
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddRedis(
+        builder.Configuration.GetConnectionString("Redis")!,
+        name: "redis",
+        tags: new[] { "ready" });
+```
+
+### RabbitMQ
+
+```bash
+dotnet add package AspNetCore.HealthChecks.RabbitMQ
+```
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddRabbitMQ(
+        builder.Configuration.GetConnectionString("RabbitMQ")!,
+        name: "rabbitmq",
+        tags: new[] { "ready" });
+```
+
+### SQL Server
+
+```bash
+dotnet add package AspNetCore.HealthChecks.SqlServer
+```
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddSqlServer(
+        builder.Configuration.GetConnectionString("Default")!,
+        name: "sqlserver",
+        tags: new[] { "ready" });
+```
+
+### PostgreSQL
+
+```bash
+dotnet add package AspNetCore.HealthChecks.NpgSql
+```
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddNpgSql(
+        builder.Configuration.GetConnectionString("Postgres")!,
+        name: "postgres",
+        tags: new[] { "ready" });
+```
+
+### Elasticsearch
+
+```bash
+dotnet add package AspNetCore.HealthChecks.Elasticsearch
+```
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddElasticsearch(
+        builder.Configuration.GetConnectionString("Elasticsearch")!,
+        name: "elasticsearch",
+        tags: new[] { "ready" });
+```
+
+### 组合注册
+
+实际项目中往往需要同时检查多个依赖，完整注册如下：
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddCheck("self", () => HealthCheckResult.Healthy(), tags: new[] { "live" })
+    .AddSqlServer(
+        builder.Configuration.GetConnectionString("Default")!,
+        name: "sqlserver",
+        tags: new[] { "ready" })
+    .AddRedis(
+        builder.Configuration.GetConnectionString("Redis")!,
+        name: "redis",
+        tags: new[] { "ready" })
+    .AddRabbitMQ(
+        builder.Configuration.GetConnectionString("RabbitMQ")!,
+        name: "rabbitmq",
+        tags: new[] { "ready" })
+    .AddCheck<DiskSpaceHealthCheck>("disk", tags: new[] { "ready" });
+```
+
+Readiness 探针会并行执行所有 `ready` 标签的检查。任一检查返回 Unhealthy，整体状态即为 Unhealthy，Kubernetes 便会停止向该 Pod 转发流量。
+
+## 注意事项
+
+- Liveness 不要检查数据库、Redis 等外部依赖（详见上方 [为什么 Liveness 不检查数据库](#为什么-liveness-不检查数据库)）。
+- Readiness 可以检查关键依赖，任一失败即停止转发流量。
+- 健康检查要有超时，避免探针堆积：`AddCheck("xxx", timeout: TimeSpan.FromSeconds(3))`。
+- 不要在公开网络暴露详细依赖信息（详见上方 [健康检查端点安全保护](#健康检查端点安全保护)）。
+- 自定义检查使用 `IOptions<T>` 注入配置，避免硬编码阈值。
+- 健康检查失败要配合日志和指标排查。
+
+## 总结
+
+健康检查是生产部署的基础设施。Liveness 判断应用是否活着，Readiness 判断是否能接流量。合理拆分探针，可以避免错误重启，也能让部署和流量切换更可靠。

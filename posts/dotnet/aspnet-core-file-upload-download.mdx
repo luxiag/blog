@@ -1,0 +1,387 @@
+---
+title: 'ASP.NET Core 文件上传下载：FormFile、Stream 与安全限制'
+date: '2026-07-21'
+excerpt: '系统掌握 ASP.NET Core 文件上传下载：IFormFile、Multipart 表单、Stream 保存、大文件处理、下载响应、文件名安全、大小限制和生产安全策略。'
+tags: ['dotnet', 'aspnetcore', 'file-upload', 'download', 'security']
+nextPost: 'dotnet/aspnet-core-openapi-versioning'
+---
+
+# ASP.NET Core 文件上传下载：FormFile、Stream 与安全限制
+
+文件上传下载是 Web API 中非常常见的能力：头像上传、附件上传、报表导出、图片预览、合同下载、日志文件下载等。它看起来只是“接收一个文件并保存”，但生产环境里真正需要关注的是：大小限制、文件名安全、路径安全、MIME 校验、流式处理、权限控制和存储策略。
+
+这篇文章按完整链路讲：如何上传小文件、如何保存到磁盘、如何返回下载响应、如何处理大文件，以及哪些安全问题必须提前考虑。
+
+:::tip 阶段三阅读顺序
+建议先掌握 [参数绑定与模型验证](/posts/dotnet/aspnet-core-model-binding-validation)、[异常处理](/posts/dotnet/aspnet-core-exception-handling)、[文件与资源管理](/posts/dotnet/csharp-file-resource-management)。文件上传涉及外部输入，后续还应结合 [ASP.NET Core 安全基础](/posts/dotnet/aspnet-core-security) 阅读。
+:::
+
+## 上传文件的 HTTP 基础
+
+浏览器或客户端上传文件通常使用 `multipart/form-data`。
+
+```http
+POST /api/files/upload HTTP/1.1
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
+
+------WebKitFormBoundary
+Content-Disposition: form-data; name="file"; filename="report.pdf"
+Content-Type: application/pdf
+
+<binary content>
+------WebKitFormBoundary--
+```
+
+ASP.NET Core 会把表单中的文件绑定为 `IFormFile`。
+
+## 最小上传示例
+
+```csharp
+[ApiController]
+[Route("api/files")]
+public class FilesController : ControllerBase
+{
+    [HttpPost("upload")]
+    public async Task<IActionResult> Upload([FromForm] IFormFile file)
+    {
+        if (file.Length == 0)
+        {
+            return BadRequest("Empty file.");
+        }
+
+        Directory.CreateDirectory("uploads");
+
+        string filePath = Path.Combine("uploads", file.FileName);
+
+        await using FileStream stream = System.IO.File.Create(filePath);
+        await file.CopyToAsync(stream);
+
+        return Ok(new
+        {
+            file.FileName,
+            file.Length,
+            file.ContentType
+        });
+    }
+}
+```
+
+这个示例可以运行，但不能直接用于生产。因为 `file.FileName` 来自客户端，不可信。
+
+## 不要信任客户端文件名
+
+客户端传来的文件名可能包含路径、特殊字符或恶意内容。
+
+不推荐：
+
+```csharp
+string path = Path.Combine("uploads", file.FileName);
+```
+
+推荐生成服务端文件名：
+
+```csharp
+string extension = Path.GetExtension(file.FileName);
+string storedFileName = $"{Guid.NewGuid():N}{extension}";
+string filePath = Path.Combine("uploads", storedFileName);
+```
+
+如果需要保留原始文件名，应只作为展示字段保存到数据库，不作为真实存储路径。
+
+```csharp
+string originalFileName = Path.GetFileName(file.FileName);
+```
+
+`Path.GetFileName` 可以去掉路径部分，但仍不能保证文件名业务安全，所以真实存储名仍建议由服务端生成。
+
+## 限制文件大小
+
+可以在 Action 上限制请求体大小：
+
+```csharp
+[RequestSizeLimit(10 * 1024 * 1024)]
+[HttpPost("upload")]
+public async Task<IActionResult> Upload([FromForm] IFormFile file)
+{
+    // max 10 MB
+    return Ok();
+}
+```
+
+也可以配置表单限制：
+
+```csharp
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = 10 * 1024 * 1024;
+});
+```
+
+需要命名空间：
+
+```csharp
+using Microsoft.AspNetCore.Http.Features;
+```
+
+生产环境还要考虑反向代理限制，例如 Nginx 的 `client_max_body_size`。
+
+## 校验扩展名和 ContentType
+
+扩展名和 `ContentType` 都来自客户端，不能完全信任，但可以作为第一层过滤。
+
+```csharp
+private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
+{
+    ".jpg",
+    ".png",
+    ".pdf"
+};
+
+private static readonly HashSet<string> AllowedContentTypes = new(StringComparer.OrdinalIgnoreCase)
+{
+    "image/jpeg",
+    "image/png",
+    "application/pdf"
+};
+```
+
+校验：
+
+```csharp
+string extension = Path.GetExtension(file.FileName);
+
+if (!AllowedExtensions.Contains(extension))
+{
+    return BadRequest("Unsupported file extension.");
+}
+
+if (!AllowedContentTypes.Contains(file.ContentType))
+{
+    return BadRequest("Unsupported content type.");
+}
+```
+
+更严格的场景需要检查文件头 Magic Number，甚至接入病毒扫描。
+
+## 完整上传服务示例
+
+把保存逻辑放到服务层。
+
+```csharp
+public record UploadedFileDto(
+    string OriginalFileName,
+    string StoredFileName,
+    long Size,
+    string ContentType);
+
+public interface IFileStorageService
+{
+    Task<UploadedFileDto> SaveAsync(IFormFile file, CancellationToken cancellationToken);
+}
+```
+
+实现：
+
+```csharp
+public class LocalFileStorageService : IFileStorageService
+{
+    private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".jpg",
+        ".png",
+        ".pdf"
+    };
+
+    private readonly string _rootPath = Path.Combine(AppContext.BaseDirectory, "uploads");
+
+    public async Task<UploadedFileDto> SaveAsync(IFormFile file, CancellationToken cancellationToken)
+    {
+        if (file.Length == 0)
+        {
+            throw new ArgumentException("File is empty.");
+        }
+
+        if (file.Length > 10 * 1024 * 1024)
+        {
+            throw new ArgumentException("File is too large.");
+        }
+
+        string extension = Path.GetExtension(file.FileName);
+        if (!AllowedExtensions.Contains(extension))
+        {
+            throw new ArgumentException("Unsupported file extension.");
+        }
+
+        Directory.CreateDirectory(_rootPath);
+
+        string originalFileName = Path.GetFileName(file.FileName);
+        string storedFileName = $"{Guid.NewGuid():N}{extension}";
+        string filePath = Path.Combine(_rootPath, storedFileName);
+
+        await using FileStream stream = File.Create(filePath);
+        await file.CopyToAsync(stream, cancellationToken);
+
+        return new UploadedFileDto(
+            originalFileName,
+            storedFileName,
+            file.Length,
+            file.ContentType);
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddScoped<IFileStorageService, LocalFileStorageService>();
+```
+
+Controller：
+
+```csharp
+[ApiController]
+[Route("api/files")]
+public class FilesController : ControllerBase
+{
+    private readonly IFileStorageService _fileStorageService;
+
+    public FilesController(IFileStorageService fileStorageService)
+    {
+        _fileStorageService = fileStorageService;
+    }
+
+    [HttpPost("upload")]
+    [RequestSizeLimit(10 * 1024 * 1024)]
+    public async Task<ActionResult<UploadedFileDto>> Upload(
+        [FromForm] IFormFile file,
+        CancellationToken cancellationToken)
+    {
+        UploadedFileDto result = await _fileStorageService.SaveAsync(file, cancellationToken);
+        return Ok(result);
+    }
+}
+```
+
+## 多文件上传
+
+```csharp
+[HttpPost("upload-many")]
+public async Task<IActionResult> UploadMany(
+    [FromForm] List<IFormFile> files,
+    CancellationToken cancellationToken)
+{
+    if (files.Count == 0)
+    {
+        return BadRequest("No files.");
+    }
+
+    var results = new List<UploadedFileDto>();
+
+    foreach (IFormFile file in files)
+    {
+        UploadedFileDto result = await _fileStorageService.SaveAsync(file, cancellationToken);
+        results.Add(result);
+    }
+
+    return Ok(results);
+}
+```
+
+多文件上传要限制总大小、单文件大小和文件数量。
+
+## 文件下载
+
+ASP.NET Core Controller 提供 `File` 方法返回文件。
+
+```csharp
+[HttpGet("download/{fileName}")]
+public IActionResult Download(string fileName)
+{
+    string safeFileName = Path.GetFileName(fileName);
+    string path = Path.Combine(AppContext.BaseDirectory, "uploads", safeFileName);
+
+    if (!System.IO.File.Exists(path))
+    {
+        return NotFound();
+    }
+
+    Stream stream = System.IO.File.OpenRead(path);
+
+    return File(stream, "application/octet-stream", safeFileName);
+}
+```
+
+注意：下载接口必须做权限校验。不要让用户通过猜文件名下载别人的文件。
+
+## 返回图片预览
+
+```csharp
+[HttpGet("images/{fileName}")]
+public IActionResult GetImage(string fileName)
+{
+    string safeFileName = Path.GetFileName(fileName);
+    string path = Path.Combine(AppContext.BaseDirectory, "uploads", safeFileName);
+
+    if (!System.IO.File.Exists(path))
+    {
+        return NotFound();
+    }
+
+    string contentType = safeFileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
+        ? "image/png"
+        : "image/jpeg";
+
+    return PhysicalFile(path, contentType);
+}
+```
+
+图片预览也要考虑鉴权、缓存头和防盗链等问题。
+
+## 大文件处理思路
+
+`IFormFile` 对普通文件上传很方便，但超大文件要考虑：
+
+- 反向代理限制
+- ASP.NET Core 请求体限制
+- 临时文件目录空间
+- 上传中断恢复
+- 分片上传
+- 对象存储直传
+
+生产上大文件通常不直接经过业务服务器，而是让客户端直传对象存储，例如 S3、Azure Blob、MinIO，再把文件元数据提交给业务 API。
+
+## 文件元数据入库
+
+真实项目通常要把文件元数据保存到数据库。
+
+```csharp
+public class FileRecord
+{
+    public long Id { get; set; }
+    public string OriginalFileName { get; set; } = string.Empty;
+    public string StoredFileName { get; set; } = string.Empty;
+    public string ContentType { get; set; } = string.Empty;
+    public long Size { get; set; }
+    public long OwnerUserId { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+```
+
+下载时不要直接按文件名查，应该按文件 ID 查询元数据，再检查当前用户是否有权限访问。
+
+## 安全清单
+
+- 不信任客户端文件名。
+- 服务端生成存储文件名。
+- 限制扩展名和 ContentType。
+- 需要时检查文件头。
+- 限制单文件大小、总大小和文件数量。
+- 上传目录不要放在可执行目录中。
+- 下载必须鉴权。
+- 不把物理路径暴露给客户端。
+- 敏感文件建议使用对象存储私有桶和签名 URL。
+- 高风险文件接入病毒扫描。
+
+## 总结
+
+文件上传下载的核心不是 `IFormFile` 语法，而是安全边界和资源控制。小文件可以通过 `IFormFile` 接收并保存，大文件更适合分片或对象存储直传。所有下载接口都必须做权限控制，所有上传输入都必须当作不可信输入处理。

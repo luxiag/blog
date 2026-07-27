@@ -1,0 +1,246 @@
+---
+title: 'C# 扩展方法与迭代器：LINQ 背后的语言基础'
+date: '2026-07-14'
+excerpt: '理解 C# 扩展方法、链式调用、yield return、IEnumerable、IEnumerator 和延迟执行，这是 LINQ 的语言基础。'
+tags: ['dotnet', 'csharp', 'extension-methods', 'iterator', 'linq']
+nextPost: 'dotnet/csharp-delegate-event-lambda'
+---
+
+# C# 扩展方法与迭代器：LINQ 背后的语言基础
+
+LINQ 看起来像一组神奇的集合操作：`Where`、`Select`、`OrderBy` 可以不断链式调用。它背后依赖两个重要语言能力：扩展方法和迭代器。
+
+:::tip C# 语言系列阅读顺序
+本文建议在 [泛型](/posts/dotnet/csharp-generics) 和 [委托、事件与 Lambda](/posts/dotnet/csharp-delegate-event-lambda) 之后阅读。读完本文后，再看 [C# LINQ](/posts/dotnet/csharp-linq) 会更容易理解延迟执行和链式调用。
+:::
+
+## 什么是扩展方法
+
+扩展方法允许你在不修改原类型源码的情况下，为它“添加”可调用的方法。
+
+```csharp
+public static class StringExtensions
+{
+    public static bool IsNullOrBlank(this string? value)
+    {
+        return string.IsNullOrWhiteSpace(value);
+    }
+}
+
+string? name = "  ";
+Console.WriteLine(name.IsNullOrBlank());
+```
+
+关键规则：
+
+- 扩展方法必须定义在 `static` 类中
+- 扩展方法本身必须是 `static`
+- 第一个参数前面写 `this`，表示要扩展的类型
+- 调用时看起来像实例方法，本质仍然是静态方法调用
+
+## 扩展方法不是修改原类型
+
+扩展方法只是编译器提供的语法糖。
+
+```csharp
+name.IsNullOrBlank();
+
+// 本质接近：
+StringExtensions.IsNullOrBlank(name);
+```
+
+如果原类型后来真的新增了同名实例方法，实例方法优先级高于扩展方法。因此扩展方法适合补充工具能力，不适合伪装成核心业务行为。
+
+## 泛型扩展方法
+
+扩展方法经常配合泛型使用。
+
+```csharp
+public static class EnumerableExtensions
+{
+    public static bool IsNullOrEmpty<T>(this IEnumerable<T>? source)
+    {
+        return source is null || !source.Any();
+    }
+}
+
+List<int> numbers = new();
+Console.WriteLine(numbers.IsNullOrEmpty());
+```
+
+这类写法在 ASP.NET Core 中很常见，例如 `services.AddControllers()`、`app.UseRouting()`、`builder.Configuration.AddJsonFile()` 很多都是扩展方法。
+
+## 链式调用
+
+扩展方法如果返回原对象或新对象，就可以链式调用。
+
+```csharp
+public static class StringCleanExtensions
+{
+    public static string TrimSafe(this string? value)
+    {
+        return value?.Trim() ?? string.Empty;
+    }
+
+    public static string ToLowerSafe(this string value)
+    {
+        return value.ToLowerInvariant();
+    }
+}
+
+string normalized = "  HELLO  "
+    .TrimSafe()
+    .ToLowerSafe();
+
+Console.WriteLine(normalized);
+```
+
+LINQ 方法链就是这个思路：每一步返回一个新的序列，下一步继续处理。
+
+## IEnumerable 和 IEnumerator
+
+`IEnumerable<T>` 表示“可以被枚举的一组数据”。`foreach` 能遍历它，是因为它能提供枚举器。
+
+```csharp
+IEnumerable<int> numbers = new List<int> { 1, 2, 3 };
+
+foreach (int number in numbers)
+{
+    Console.WriteLine(number);
+}
+```
+
+粗略理解：
+
+- `IEnumerable<T>`：可遍历对象
+- `IEnumerator<T>`：具体遍历过程，知道当前元素和如何移动到下一个元素
+
+大多数业务代码只需要使用 `IEnumerable<T>`，很少手写 `IEnumerator<T>`。
+
+## yield return
+
+`yield return` 可以让你用普通方法写出迭代器。
+
+```csharp
+IEnumerable<int> GetNumbers()
+{
+    yield return 1;
+    yield return 2;
+    yield return 3;
+}
+
+foreach (int number in GetNumbers())
+{
+    Console.WriteLine(number);
+}
+```
+
+调用 `GetNumbers()` 时，方法体不会立刻完整执行。只有枚举到某个元素时，才执行到对应的 `yield return`。
+
+## 延迟执行
+
+迭代器默认具有延迟执行特性。
+
+```csharp
+IEnumerable<int> GetNumbers()
+{
+    Console.WriteLine("开始生成");
+
+    for (int i = 1; i <= 3; i++)
+    {
+        Console.WriteLine($"生成 {i}");
+        yield return i;
+    }
+}
+
+IEnumerable<int> numbers = GetNumbers();
+
+Console.WriteLine("还没有开始遍历");
+
+foreach (int number in numbers)
+{
+    Console.WriteLine($"消费 {number}");
+}
+```
+
+这就是 LINQ 延迟执行的基础。`Where`、`Select` 等方法通常不会立刻计算结果，而是在枚举时逐个处理。
+
+## 实现一个简化版 Where
+
+下面用扩展方法和迭代器实现一个简化版 `Where`。
+
+```csharp
+public static class MyLinqExtensions
+{
+    public static IEnumerable<T> MyWhere<T>(
+        this IEnumerable<T> source,
+        Func<T, bool> predicate)
+    {
+        foreach (T item in source)
+        {
+            if (predicate(item))
+            {
+                yield return item;
+            }
+        }
+    }
+}
+
+var numbers = new List<int> { 1, 2, 3, 4, 5 };
+
+var evenNumbers = numbers.MyWhere(n => n % 2 == 0);
+
+foreach (int number in evenNumbers)
+{
+    Console.WriteLine(number);
+}
+```
+
+这个例子串起了泛型、扩展方法、委托、Lambda、`IEnumerable<T>` 和 `yield return`。
+
+## yield break
+
+`yield break` 可以提前结束迭代。
+
+```csharp
+IEnumerable<int> TakeUntilNegative(IEnumerable<int> numbers)
+{
+    foreach (int number in numbers)
+    {
+        if (number < 0)
+        {
+            yield break;
+        }
+
+        yield return number;
+    }
+}
+
+foreach (int number in TakeUntilNegative(new[] { 1, 2, -1, 3 }))
+{
+    Console.WriteLine(number);
+}
+```
+
+输出只有 `1` 和 `2`。
+
+## 使用边界
+
+扩展方法和迭代器很好用，但也有边界：
+
+- 扩展方法不要替代正常的领域建模
+- 不要给常用类型添加过多语义模糊的方法
+- 迭代器是延迟执行，重复枚举可能重复执行逻辑
+- 迭代器内部不要依赖已经释放的外部资源
+
+如果数据必须固定下来，使用 `ToList()` 或 `ToArray()` 立即执行并缓存结果。
+
+```csharp
+List<int> cached = numbers
+    .Where(n => n > 0)
+    .ToList();
+```
+
+## 总结
+
+扩展方法让你能以自然的方式扩展类型 API，迭代器让你能按需生成序列。二者结合，就是 LINQ 方法链和延迟执行的语言基础。

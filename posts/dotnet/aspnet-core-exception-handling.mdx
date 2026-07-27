@@ -1,0 +1,684 @@
+---
+title: 'ASP.NET Core 异常处理：ExceptionHandler、ProblemDetails 与统一响应'
+date: '2026-07-21'
+excerpt: '系统理解 ASP.NET Core 异常处理：全局异常中间件、UseExceptionHandler、ProblemDetails、业务异常、状态码映射和统一错误响应。'
+tags: ['dotnet', 'aspnetcore', 'exception-handling', 'problemdetails']
+nextPost: 'dotnet/aspnet-core-authentication'
+---
+
+# ASP.NET Core 异常处理：ExceptionHandler、ProblemDetails 与统一响应
+
+异常处理不是在每个 Controller 里写一堆 `try/catch`。ASP.NET Core 项目应该用统一机制处理未捕获异常，把错误转换成稳定、可诊断、不会泄露敏感信息的 HTTP 响应。
+
+:::tip 阶段二阅读顺序
+建议先读 [Logging](/posts/dotnet/aspnet-core-logging)，再阅读本文。后续继续学习 [Authentication](/posts/dotnet/aspnet-core-authentication)、[Authorization](/posts/dotnet/aspnet-core-authorization) 和 [Filters](/posts/dotnet/aspnet-core-filters)。
+:::
+
+## 为什么要统一异常处理
+
+不推荐这样写：
+
+```csharp
+[HttpPost]
+public IActionResult Create(CreateProductRequest request)
+{
+    try
+    {
+        // business logic
+        return Ok();
+    }
+    catch (Exception ex)
+    {
+        return StatusCode(500, ex.Message);
+    }
+}
+```
+
+问题：
+
+- 每个 Action 重复代码。
+- 容易漏记日志。
+- 可能把异常细节暴露给用户。
+- 错误响应格式不统一。
+
+更推荐：业务代码正常抛异常，统一异常处理中间件负责日志和响应。
+
+## UseExceptionHandler
+
+生产环境建议使用 `UseExceptionHandler`。
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddProblemDetails();
+
+var app = builder.Build();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler();
+}
+
+app.MapControllers();
+
+app.Run();
+```
+
+`AddProblemDetails()` 会注册标准错误响应支持。ASP.NET Core 会把异常转换成符合 RFC 7807 / RFC 9457 风格的 `ProblemDetails` 响应。
+
+:::tip .NET 8+ 推荐
+.NET 8 引入了 `IExceptionHandler` 接口，是官方推荐的全局异常处理方式，比手写 lambda 或自定义中间件更清晰。详见后文 [IExceptionHandler（.NET 8+）](#iexceptionhandler-net-8) 章节。
+:::
+
+## ProblemDetails 是什么
+
+`ProblemDetails` 是标准化错误响应结构，常见字段包括：
+
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.6.1",
+  "title": "An error occurred while processing your request.",
+  "status": 500,
+  "traceId": "00-..."
+}
+```
+
+它的价值是统一错误格式，让前端和客户端可以稳定处理错误。
+
+## IExceptionHandler（.NET 8+）
+
+.NET 8 引入了 `IExceptionHandler` 接口，这是官方推荐的全局异常处理方式。相比 `UseExceptionHandler` 的 lambda 重载，`IExceptionHandler` 支持依赖注入、支持多个 handler 按顺序匹配、代码结构更清晰。
+
+### 接口定义
+
+```csharp
+public interface IExceptionHandler
+{
+    ValueTask<bool> TryHandleAsync(
+        HttpContext httpContext,
+        Exception exception,
+        CancellationToken cancellationToken);
+}
+```
+
+返回 `true` 表示异常已处理，不再传递给下一个 handler；返回 `false` 继续传递。
+
+### 实现业务异常 Handler
+
+```csharp
+public class BusinessExceptionHandler : IExceptionHandler
+{
+    private readonly IProblemDetailsService _problemDetailsService;
+    private readonly ILogger<BusinessExceptionHandler> _logger;
+
+    public BusinessExceptionHandler(
+        IProblemDetailsService problemDetailsService,
+        ILogger<BusinessExceptionHandler> logger)
+    {
+        _problemDetailsService = problemDetailsService;
+        _logger = logger;
+    }
+
+    public async ValueTask<bool> TryHandleAsync(
+        HttpContext httpContext,
+        Exception exception,
+        CancellationToken cancellationToken)
+    {
+        int statusCode = exception switch
+        {
+            NotFoundException => StatusCodes.Status404NotFound,
+            ConflictException => StatusCodes.Status409Conflict,
+            UnauthorizedException => StatusCodes.Status401Unauthorized,
+            ForbiddenException => StatusCodes.Status403Forbidden,
+            ArgumentException => StatusCodes.Status400BadRequest,
+            _ => StatusCodes.Status500InternalServerError
+        };
+
+        if (statusCode == StatusCodes.Status500InternalServerError)
+        {
+            _logger.LogError(exception, "Unhandled exception. TraceId: {TraceId}", httpContext.TraceIdentifier);
+            return false;
+        }
+
+        _logger.LogWarning(exception, "Business exception. TraceId: {TraceId}", httpContext.TraceIdentifier);
+
+        httpContext.Response.StatusCode = statusCode;
+
+        await _problemDetailsService.WriteAsync(new ProblemDetailsContext
+        {
+            HttpContext = httpContext,
+            ProblemDetails =
+            {
+                Status = statusCode,
+                Title = exception.GetType().Name.Replace("Exception", ""),
+                Detail = exception.Message,
+                Instance = httpContext.Request.Path
+            }
+        });
+
+        return true;
+    }
+}
+```
+
+### 未知异常 Handler
+
+多个 `IExceptionHandler` 会按注册顺序依次调用。业务异常 handler 返回 `false` 的异常，会落到下一个 handler：
+
+```csharp
+public class UnhandledExceptionHandler : IExceptionHandler
+{
+    private readonly IProblemDetailsService _problemDetailsService;
+    private readonly ILogger<UnhandledExceptionHandler> _logger;
+
+    public UnhandledExceptionHandler(
+        IProblemDetailsService problemDetailsService,
+        ILogger<UnhandledExceptionHandler> logger)
+    {
+        _problemDetailsService = problemDetailsService;
+        _logger = logger;
+    }
+
+    public async ValueTask<bool> TryHandleAsync(
+        HttpContext httpContext,
+        Exception exception,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogError(exception, "Unhandled exception. TraceId: {TraceId}", httpContext.TraceIdentifier);
+
+        httpContext.Response.StatusCode = StatusCodes.Status500InternalServerError;
+
+        await _problemDetailsService.WriteAsync(new ProblemDetailsContext
+        {
+            HttpContext = httpContext,
+            ProblemDetails =
+            {
+                Status = StatusCodes.Status500InternalServerError,
+                Title = "Server error",
+                Detail = "An unexpected error occurred.",
+                Instance = httpContext.Request.Path
+            }
+        });
+
+        return true;
+    }
+}
+```
+
+### 注册
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<BusinessExceptionHandler>();
+builder.Services.AddExceptionHandler<UnhandledExceptionHandler>();
+
+var app = builder.Build();
+
+app.UseExceptionHandler();
+
+app.MapControllers();
+app.Run();
+```
+
+:::important
+注册 `IExceptionHandler` 后仍需调用 `app.UseExceptionHandler()`，它作为入口将异常分发给已注册的 handler。`AddExceptionHandler` 的注册顺序决定 handler 的执行顺序。
+:::
+
+### 与自定义中间件的对比
+
+| 维度 | IExceptionHandler | 自定义中间件 |
+|---|---|---|
+| 依赖注入 | 原生支持，构造函数注入 | 需手动解析或使用 `IServiceProvider` |
+| 多 handler 分工 | 支持，按注册顺序链式调用 | 需在单个中间件内 if-else |
+| ProblemDetails 集成 | 通过 `IProblemDetailsService` 原生集成 | 需手动构造 `ProblemDetails` |
+| 非 MVC 请求覆盖 | 覆盖所有请求 | 覆盖所有请求 |
+| 最低版本 | .NET 8 | 所有版本 |
+
+.NET 8+ 项目优先使用 `IExceptionHandler`。如果项目需要兼容 .NET 7 或更低版本，使用自定义中间件。
+
+## 自定义异常处理中间件
+
+如果你需要更强控制，可以写自定义中间件。
+
+```csharp
+public class GlobalExceptionMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly ILogger<GlobalExceptionMiddleware> _logger;
+
+    public GlobalExceptionMiddleware(
+        RequestDelegate next,
+        ILogger<GlobalExceptionMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        try
+        {
+            await _next(context);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled exception. TraceId: {TraceId}", context.TraceIdentifier);
+
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            context.Response.ContentType = "application/problem+json";
+
+            await context.Response.WriteAsJsonAsync(new ProblemDetails
+            {
+                Title = "Server error",
+                Status = StatusCodes.Status500InternalServerError,
+                Detail = "An unexpected error occurred.",
+                Instance = context.Request.Path
+            });
+        }
+    }
+}
+```
+
+注册时尽量靠前：
+
+```csharp
+app.UseMiddleware<GlobalExceptionMiddleware>();
+```
+
+## 业务异常与状态码映射
+
+不是所有异常都应该返回 500。业务异常应该映射为更准确的状态码。
+
+```csharp
+public class NotFoundException : Exception
+{
+    public NotFoundException(string message) : base(message)
+    {
+    }
+}
+
+public class ConflictException : Exception
+{
+    public ConflictException(string message) : base(message)
+    {
+    }
+}
+```
+
+处理中间件中映射：
+
+```csharp
+int statusCode = ex switch
+{
+    NotFoundException => StatusCodes.Status404NotFound,
+    ConflictException => StatusCodes.Status409Conflict,
+    UnauthorizedException => StatusCodes.Status401Unauthorized,
+    ForbiddenException => StatusCodes.Status403Forbidden,
+    ArgumentException => StatusCodes.Status400BadRequest,
+    _ => StatusCodes.Status500InternalServerError
+};
+```
+
+401 和 403 的区别：
+
+| 状态码 | 含义 | 典型异常 |
+|---|---|---|
+| 401 | 未认证，请求没有有效身份 | Token 过期或缺失 |
+| 403 | 已认证但无权限 | 权限不足、租户隔离越权 |
+
+在自定义异常中间件中区分 401/403，前端可以根据状态码决定是跳转登录页还是提示无权限。
+
+## 验证错误（400 Bad Request）
+
+实际项目中 400 错误比 500 更常见——请求参数格式不对、必填字段缺失、值超出范围等。ASP.NET Core 对验证错误有内置的 ProblemDetails 支持。
+
+### DataAnnotations 自动验证
+
+Controller 参数标注 `[ApiController]` 后，DataAnnotations 验证失败会自动返回 400 + ProblemDetails：
+
+```csharp
+public class CreateProductRequest
+{
+    [Required(ErrorMessage = "商品名称不能为空")]
+    [StringLength(200, ErrorMessage = "商品名称不能超过200字符")]
+    public string Name { get; set; } = "";
+
+    [Range(0.01, 999999.99, ErrorMessage = "价格必须在 0.01 ~ 999999.99 之间")]
+    public decimal Price { get; set; }
+}
+
+[ApiController]
+[Route("api/[controller]")]
+public class ProductsController : ControllerBase
+{
+    [HttpPost]
+    public IActionResult Create(CreateProductRequest request)
+    {
+        return Ok();
+    }
+}
+```
+
+发送缺少 `Name` 且 `Price` 为 -1 的请求，响应：
+
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+  "title": "One or more validation errors occurred.",
+  "status": 400,
+  "errors": {
+    "Name": ["商品名称不能为空"],
+    "Price": ["价格必须在 0.01 ~ 999999.99 之间"]
+  },
+  "traceId": "00-..."
+}
+```
+
+:::note
+`[ApiController]` 特性自动触发模型验证。如果不想用这个行为，可以在 `Program.cs` 中关闭：`builder.Services.Configure<ApiBehaviorOptions>(o => o.SuppressModelStateInvalidFilter = true);`
+:::
+
+### FluentValidation 集成
+
+DataAnnotations 适合简单验证。复杂业务规则（跨字段校验、数据库查询校验）推荐 FluentValidation：
+
+```csharp
+using FluentValidation;
+
+public class CreateProductRequestValidator : AbstractValidator<CreateProductRequest>
+{
+    public CreateProductRequestValidator()
+    {
+        RuleFor(x => x.Name)
+            .NotEmpty().WithMessage("商品名称不能为空")
+            .MaximumLength(200).WithMessage("商品名称不能超过200字符");
+
+        RuleFor(x => x.Price)
+            .InclusiveBetween(0.01m, 999999.99m)
+            .WithMessage("价格必须在 0.01 ~ 999999.99 之间");
+    }
+}
+```
+
+注册 FluentValidation 并替换默认模型验证：
+
+```csharp
+using FluentValidation.AspNetCore;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddFluentValidationAutoValidation();
+builder.Services.AddValidatorsFromAssemblyContaining<CreateProductRequestValidator>();
+builder.Services.AddControllers();
+builder.Services.AddProblemDetails();
+```
+
+:::tip
+FluentValidation 验证失败同样走 `[ApiController]` 的自动 400 机制，返回格式与 DataAnnotations 一致的 ProblemDetails。前端不需要区分验证框架。
+:::
+
+### 自定义验证错误响应格式
+
+如果需要统一 `errors` 字段的结构（比如给每个错误加错误码），可以自定义 `ApiBehaviorOptions`：
+
+```csharp
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    options.InvalidModelStateResponseFactory = context =>
+    {
+        var problemDetails = new ValidationProblemDetails(context.ModelState)
+        {
+            Status = StatusCodes.Status400BadRequest,
+            Title = "Validation failed",
+            Instance = context.HttpContext.Request.Path,
+            Extensions =
+            {
+                ["traceId"] = context.HttpContext.TraceIdentifier
+            }
+        };
+
+        return new ObjectResult(problemDetails)
+        {
+            StatusCode = StatusCodes.Status400BadRequest,
+            ContentTypes = { "application/problem+json" }
+        };
+    };
+});
+```
+
+## ProblemDetails 自定义
+
+### Extensions 字段
+
+`ProblemDetails` 有一个 `Extensions` 字典，可以附加自定义数据——错误码、文档链接、调试信息等：
+
+```csharp
+await _problemDetailsService.WriteAsync(new ProblemDetailsContext
+{
+    HttpContext = httpContext,
+    ProblemDetails =
+    {
+        Status = StatusCodes.Status404NotFound,
+        Title = "Not found",
+        Detail = "Product with id 42 does not exist.",
+        Instance = httpContext.Request.Path,
+        Extensions =
+        {
+            ["errorCode"] = "PRODUCT_NOT_FOUND",
+            ["docs"] = "https://docs.example.com/errors/PRODUCT_NOT_FOUND",
+            ["traceId"] = httpContext.TraceIdentifier
+        }
+    }
+});
+```
+
+响应示例：
+
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.5.4",
+  "title": "Not found",
+  "status": 404,
+  "detail": "Product with id 42 does not exist.",
+  "instance": "/api/products/42",
+  "errorCode": "PRODUCT_NOT_FOUND",
+  "docs": "https://docs.example.com/errors/PRODUCT_NOT_FOUND",
+  "traceId": "00-..."
+}
+```
+
+:::warning
+不要在 `Extensions` 中放置敏感信息（数据库连接串、内部 IP、堆栈跟踪）。即使是 404 响应也会暴露给客户端。
+:::
+
+### 自定义 IProblemDetailsFactory
+
+默认的 `ProblemDetailsFactory` 生成的响应格式比较基础。实现 `IProblemDetailsFactory` 可以统一所有错误响应的结构，确保每个 `ProblemDetails` 都包含 `traceId`、`errorCode` 等约定字段：
+
+```csharp
+public class CustomProblemDetailsFactory : ProblemDetailsFactory
+{
+    public override ProblemDetails CreateProblemDetails(
+        HttpContext httpContext,
+        int? statusCode = null,
+        string? title = null,
+        string? type = null,
+        string? detail = null,
+        string? instance = null)
+    {
+        statusCode ??= StatusCodes.Status500InternalServerError;
+
+        var problemDetails = new ProblemDetails
+        {
+            Status = statusCode,
+            Title = title ?? GetDefaultTitle(statusCode.Value),
+            Type = type ?? $"https://httpstatuses.com/{statusCode}",
+            Detail = detail,
+            Instance = instance ?? httpContext?.Request.Path,
+            Extensions =
+            {
+                ["traceId"] = httpContext?.TraceIdentifier ?? "",
+                ["timestamp"] = DateTimeOffset.UtcNow.ToString("O")
+            }
+        };
+
+        return problemDetails;
+    }
+
+    public override ValidationProblemDetails CreateValidationProblemDetails(
+        HttpContext httpContext,
+        ModelStateDictionary modelStateDictionary,
+        int? statusCode = null,
+        string? title = null,
+        string? type = null,
+        string? detail = null,
+        string? instance = null)
+    {
+        statusCode ??= StatusCodes.Status400BadRequest;
+
+        var problemDetails = new ValidationProblemDetails(modelStateDictionary)
+        {
+            Status = statusCode,
+            Title = title ?? "Validation failed",
+            Type = type ?? "https://httpstatuses.com/400",
+            Detail = detail,
+            Instance = instance ?? httpContext?.Request.Path,
+            Extensions =
+            {
+                ["traceId"] = httpContext?.TraceIdentifier ?? "",
+                ["timestamp"] = DateTimeOffset.UtcNow.ToString("O")
+            }
+        };
+
+        return problemDetails;
+    }
+
+    private static string GetDefaultTitle(int statusCode) => statusCode switch
+    {
+        StatusCodes.Status400BadRequest => "Bad request",
+        StatusCodes.Status401Unauthorized => "Unauthorized",
+        StatusCodes.Status403Forbidden => "Forbidden",
+        StatusCodes.Status404NotFound => "Not found",
+        StatusCodes.Status409Conflict => "Conflict",
+        StatusCodes.Status500InternalServerError => "Server error",
+        _ => "An error occurred"
+    };
+}
+```
+
+注册替换默认工厂：
+
+```csharp
+builder.Services.AddSingleton<ProblemDetailsFactory, CustomProblemDetailsFactory>();
+```
+
+注册后，所有内置中间件（`UseExceptionHandler`、`[ApiController]` 验证失败、状态码页等）生成的 `ProblemDetails` 都会经过你的工厂，自动包含 `traceId` 和 `timestamp`。
+
+## 全局异常过滤器
+
+除了 Middleware 方式，也可以在 MVC 层注册全局 Exception Filter：
+
+```csharp
+public class GlobalExceptionFilter : IExceptionFilter
+{
+    private readonly ILogger<GlobalExceptionFilter> _logger;
+
+    public GlobalExceptionFilter(ILogger<GlobalExceptionFilter> logger)
+    {
+        _logger = logger;
+    }
+
+    public void OnException(ExceptionContext context)
+    {
+        _logger.LogError(context.Exception, "Unhandled MVC exception");
+
+        int statusCode = context.Exception switch
+        {
+            NotFoundException => StatusCodes.Status404NotFound,
+            ConflictException => StatusCodes.Status409Conflict,
+            ArgumentException => StatusCodes.Status400BadRequest,
+            _ => StatusCodes.Status500InternalServerError
+        };
+
+        context.Result = new ObjectResult(new ProblemDetails
+        {
+            Title = "Request failed",
+            Status = statusCode,
+            Detail = context.Exception.Message
+        })
+        {
+            StatusCode = statusCode
+        };
+
+        context.ExceptionHandled = true;
+    }
+}
+```
+
+注册：
+
+```csharp
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<GlobalExceptionFilter>();
+});
+```
+
+Middleware vs Exception Filter 选择：
+
+| 场景 | 推荐 |
+|---|---|
+| 捕获所有异常（包括非 MVC） | Middleware |
+| 只处理 MVC/Controller 层异常 | Exception Filter |
+| 需要返回 ProblemDetails | 两者都可以 |
+
+生产项目推荐以 Middleware 为主，Exception Filter 作为 MVC 层补充。
+
+## 什么时候捕获异常
+
+适合捕获异常的场景：
+
+- 统一边界层：全局异常中间件
+- 需要补充上下文日志后继续抛出
+- 调用外部系统，需要转换异常类型
+- 后台任务中防止循环退出
+
+不适合捕获异常的场景：
+
+- 捕获后什么都不做
+- 每个 Controller 都重复 catch
+- 用异常控制正常业务分支
+
+## 开发环境与生产环境
+
+开发环境可以使用详细异常页：
+
+```csharp
+if (app.Environment.IsDevelopment())
+{
+    app.UseDeveloperExceptionPage();
+}
+else
+{
+    app.UseExceptionHandler();
+}
+```
+
+生产环境不要把堆栈、数据库连接、文件路径等细节返回给客户端。
+
+## 总结
+
+ASP.NET Core 异常处理的目标是：集中处理、统一响应、保留日志、隐藏敏感细节。普通业务代码不要到处写 `try/catch`，让全局异常处理负责最后的 HTTP 错误转换。
+
+选择指南：
+
+| 方案 | 适用场景 |
+|---|---|
+| `IExceptionHandler`（.NET 8+） | 首选方案，DI 原生支持，多 handler 分工 |
+| 自定义中间件 | .NET 7 或更低版本，需要完全控制 |
+| Exception Filter | 仅 MVC 层异常 |
+| `[ApiController]` + 验证 | 400 验证错误自动处理 |
+
+验证错误和运行时异常是两类不同的错误来源：验证错误走 `[ApiController]` 自动 400 机制，运行时异常走全局异常处理。两者都输出 `ProblemDetails`，前端用统一逻辑处理。
