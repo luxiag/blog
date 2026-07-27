@@ -1,7 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect } from 'react';
-// import {MermaidExcalidraw} from './MermaidToExcalidraw';
+import React, { useState, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { createLowlight } from 'lowlight';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -27,7 +26,6 @@ import diff from 'highlight.js/lib/languages/diff';
 import markdown from 'highlight.js/lib/languages/markdown';
 import plaintext from 'highlight.js/lib/languages/plaintext';
 
-// 新的 mermaid 原生渲染组件（手绘风 + 中文手写字体 + 主题色 + 缩放/拖拽）
 const MermaidExcalidraw = dynamic(
   () => import('./MermaidDiagram').then((mod) => mod.MermaidDiagram),
   {
@@ -37,12 +35,10 @@ const MermaidExcalidraw = dynamic(
 );
 const MAX_CODE_LINES = 15;
 
-// 创建 lowlight 实例，只注册常用语言（~20种 vs 全部 200+ 种）
 const lowlight = createLowlight({
   javascript, typescript, python, css, scss, xml, json, yaml,
   bash, sql, java, go, rust, cpp, csharp, php, ruby, swift, kotlin,
   diff, markdown, plaintext,
-  // 常见别名
   js: javascript, ts: typescript, py: python, rb: ruby, kt: kotlin,
   'c++': cpp, 'c#': csharp, sh: bash, shell: bash, yml: yaml,
 });
@@ -55,6 +51,9 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   yml: 'yaml',
   plain: 'plaintext',
   text: 'plaintext',
+  mdx: 'javascript',
+  jsx: 'javascript',
+  tsx: 'typescript',
 };
 
 function resolveLanguage(className?: string) {
@@ -66,70 +65,47 @@ function resolveLanguage(className?: string) {
   }
 
   const normalizedLanguage = LANGUAGE_ALIASES[rawLanguage] || rawLanguage;
-
   return lowlight.registered(normalizedLanguage) ? normalizedLanguage : 'plaintext';
 }
 
-export default function CodeBlock({ children, className, codeContent: propCodeContent, ...props }: {
-  children?: React.ReactNode;
+function nodeToHtml(node: any): string {
+  if (node.type === 'text') return node.value;
+  if (node.type === 'element') {
+    const cls = node.properties?.className?.join(' ') || '';
+    const children = node.children.map((child: any) => nodeToHtml(child)).join('');
+    return `<span class="${cls}">${children}</span>`;
+  }
+  return '';
+}
+
+function highlightCode(language: string, code: string): string {
+  if (language === 'mermaid' || language === 'plaintext' || !code) return code;
+  try {
+    const result = lowlight.highlight(language, code);
+    return result.children.map((node: any) => nodeToHtml(node)).join('');
+  } catch {
+    return code;
+  }
+}
+
+export default function CodeBlock({ className, codeContent }: {
   className?: string;
   codeContent?: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [highlightedCode, setHighlightedCode] = useState('');
   const [showMermaidPreview, setShowMermaidPreview] = useState(true);
 
-  const codeChild = children as React.ReactElement<{ children?: React.ReactNode }>;
-  // 优先使用 propCodeContent，其次从 children 中提取
-  const codeContent = propCodeContent || codeChild?.props?.children || '';
-  const codeString = typeof codeContent === 'string' ? codeContent : '';
+  const codeString = codeContent || '';
   const lines = codeString.split('\n');
   const showGradient = lines.length > MAX_CODE_LINES && !isExpanded;
 
   const displayLines = isExpanded ? lines : lines.slice(0, MAX_CODE_LINES);
   const displayContent = displayLines.join('\n');
 
-  // 代码高亮处理
-  useEffect(() => {
-    if (!displayContent) {
-      setHighlightedCode(displayContent);
-      return;
-    }
+  const language = resolveLanguage(className);
+  const isMermaid = language === 'mermaid';
 
-    try {
-      // 提取语言
-      const language = resolveLanguage(className);
-      const isMermaid = language === 'mermaid';
-
-      if (isMermaid) {
-        setHighlightedCode(displayContent);
-        return;
-      }
-
-      // 使用 lowlight 进行代码高亮
-      const result = lowlight.highlight(language, displayContent);
-
-      // 递归转换节点为 HTML
-      const nodeToHtml = (node: any): string => {
-        if (node.type === 'text') {
-          return node.value;
-        }
-        if (node.type === 'element') {
-          const className = node.properties?.className?.join(' ') || '';
-          const children = node.children.map((child: any) => nodeToHtml(child)).join('');
-          return `<span class="${className}">${children}</span>`;
-        }
-        return '';
-      };
-
-      // 将 lowlight 的结果转换为 HTML
-      const html = result.children.map((node: any) => nodeToHtml(node)).join('');
-
-      setHighlightedCode(html);
-    } catch (error) {
-      setHighlightedCode(displayContent);
-    }
-  }, [displayContent, className]);
+  const highlightedCode = useMemo(() => highlightCode(language, displayContent), [language, displayContent]);
 
   const toggleExpand = useCallback(() => {
     setIsExpanded(prev => !prev);
@@ -138,10 +114,6 @@ export default function CodeBlock({ children, className, codeContent: propCodeCo
   const toggleMermaidView = useCallback(() => {
     setShowMermaidPreview(prev => !prev);
   }, []);
-
-  // 检查是否为 Mermaid 代码
-  const language = resolveLanguage(className);
-  const isMermaid = language === 'mermaid';
 
   return (
     <div className="relative my-4">
@@ -167,7 +139,6 @@ export default function CodeBlock({ children, className, codeContent: propCodeCo
               </button>
               <pre
                 className="p-4 overflow-x-auto font-mono text-sm leading-6 text-neutral-800 dark:text-neutral-200 m-0"
-                {...props}
               >
                 <code
                   className={className}
@@ -182,10 +153,9 @@ export default function CodeBlock({ children, className, codeContent: propCodeCo
         </>
       ) : (
         <>
-          <div className={`overflow-hidden rounded-lg  border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 ${!isExpanded ? 'max-h-[400px]' : ''}`}>
+          <div className={`overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 ${!isExpanded ? 'max-h-[400px]' : ''}`}>
             <pre
               className="p-4 overflow-x-auto font-mono text-sm leading-6 text-neutral-800 dark:text-neutral-200 m-0"
-              {...props}
             >
               <code
                 className={className}

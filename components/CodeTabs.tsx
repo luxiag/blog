@@ -34,21 +34,6 @@ export default function CodeTabs({ items, children }: CodeTabsProps) {
       <div className="code-tabs-content min-h-[40px]">
         {childArray[activeIndex] || null}
       </div>
-      <style>{`
-        .code-tabs .code-tabs-content > div {
-          margin: 0 !important;
-        }
-        .code-tabs .code-tabs-content > div > div {
-          border-radius: 0 !important;
-          border: 0 !important;
-          box-shadow: none !important;
-        }
-        .code-tabs .code-tabs-content pre {
-          margin: 0 !important;
-          border-radius: 0 !important;
-          border: 0 !important;
-        }
-      `}</style>
     </div>
   );
 }

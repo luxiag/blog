@@ -409,9 +409,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       }
 
       return (
-        <CodeBlock className={className} codeContent={codeString} {...props}>
-          <code className={className}>{codeProps.children}</code>
-        </CodeBlock>
+        <CodeBlock className={className} codeContent={codeString} />
       );
 
     },

@@ -364,6 +364,30 @@ void main() {
   `}
 />
 
+## 代码块
+```js
+function memoize(fn) {
+  const cache = new Map();
+  return (...args) => {
+    const key = JSON.stringify(args);
+    if (cache.has(key)) return cache.get(key);
+    const result = fn(...args);
+    cache.set(key, result);
+    return result;
+  };
+}
+
+const expensive = (n) => {
+  console.log(`计算 fibonacci(${n})`);
+  return n <= 1 ? n : expensive(n - 1) + expensive(n - 2);
+};
+
+const fastFib = memoize(expensive);
+console.log(fastFib(10));
+console.log(fastFib(10));
+
+```
+
 ## 可运行代码块
 
 代码块内加 `// 可运行` 注释，会渲染为带运行按钮的交互式代码块：
@@ -432,7 +456,15 @@ graph TD
 
 > 引用块：好的文档不是把所有细节塞进正文，而是通过交互组件让读者**按需探索**。点击、悬停、展开——信息在需要时才出现。
 
+---
+
+## Markdown 语法
+
+### 文本格式
+
 **加粗文本**、*斜体文本*、~~删除线~~、`行内代码`，以及 [链接示例](/posts)。
+
+### 列表
 
 1. 有序列表第一项
 2. 有序列表第二项
@@ -441,6 +473,85 @@ graph TD
 - 无序列表项 A
 - 无序列表项 B
 - 无序列表项 C
+
+- [x] 已完成任务
+- [ ] 待完成任务
+
+### 引用
+
+> 引用块：好的文档不是把所有细节塞进正文，而是通过交互组件让读者**按需探索**。点击、悬停、展开——信息在需要时才出现。
+
+### 分割线
+
+---
+
+### 表格
+
+| 组件 | 用途 | 交互 |
+|---|---|---|
+| CodeTabs | 多语言切换 | 点击 Tab |
+| CodeAnnotation | 行级注解 | Hover 行 |
+| Steps | 步骤引导 | 视觉编号 |
+| FileTree | 目录展示 | 点击展开 |
+| DiffCompare | 代码对比 | 静态展示 |
+| Glossary | 术语提示 | Hover 词汇 |
+| ProgressIndicator | 系列进度 | 点击跳转 |
+
+### 图片
+
+相对路径图片自动解析（文件放在 `posts/<category>/images/` 下）：
+
+```md
+![替代文本](./images/screenshot.png)
+```
+
+点击图片会打开 Lightbox 全屏预览。
+
+### 链接
+
+内部链接不带 `/blog` 前缀（basePath 已在 next.config.ts 配置）：
+
+```md
+[链接文本](/posts/dotnet/csharp-basic-syntax)
+```
+
+外部链接自动在新标签页打开，并显示外链图标。
+
+---
+
+## MDX 语法
+
+`.mdx` 文件在 Markdown 基础上支持 JSX 表达式和组件：
+
+### 变量与表达式
+
+花括号内可以写 JavaScript 表达式，结果会被计算并渲染到页面上。例如 `2 + 2 的结果是 {2 + 2}` 会渲染为 "2 + 2 的结果是 4"。
+
+### 条件渲染
+
+使用逻辑与运算符 `&&` 实现条件渲染：`{someCondition && <Component />}`，当 `someCondition` 为真时才渲染后面的内容。
+
+### 组件属性传值
+
+通过属性向组件传递数据，如 `items` 数组、`title` 字符串等。属性用花括号 `{}` 包裹表示 JavaScript 表达式，用引号 `""` 包裹表示字符串字面量。
+
+### 多行属性
+
+属性较多时可以换行书写，每行一个属性，最后用 `/>` 自闭合。
+
+### 内联样式
+
+`style` 属性接受对象语法，外层花括号 `{}` 是 JSX 表达式，内层花括号 `{}` 是样式对象，如 `style={{ color: "red" }}`。
+
+### HTML 标签
+
+MDX 中可以直接使用 HTML 标签，但推荐使用 `::: details` 语法代替原生 `<details>`，会自动获得增强样式和动画效果。
+
+### 注释
+
+JSX 风格注释写在花括号内的 `/* */` 中，如 `{/* 注释内容 */}`，不会渲染到页面上。
+```
+```
 
 ---
 
