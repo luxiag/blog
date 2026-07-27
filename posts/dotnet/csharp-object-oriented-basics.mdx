@@ -193,6 +193,64 @@ admin.DeleteUser("test");
 
 继承可以复用父类能力，但不要为了复用几行代码就滥用继承。很多时候组合比继承更清晰。
 
+### 组合优于继承
+
+继承表达"是一种"关系，组合表达"有一个"关系。如果两类之间不存在明确的"是一种"关系，优先用组合。
+
+```csharp
+// 继承方式：AdminUser "是一种" User，合理
+public class AdminUser : User
+{
+    public void DeleteUser(string userName) { }
+}
+
+// 继承方式：Logger "是一种" Service？不太合理
+// 组合方式：OrderService "有一个" Logger，更自然
+public class OrderService
+{
+    private readonly ILogger _logger;
+
+    public OrderService(ILogger logger)
+    {
+        _logger = logger;
+    }
+}
+```
+
+### sealed：防止继承
+
+`sealed` 修饰的类不能被继承，适合明确不需要子类化的场景。
+
+```csharp
+public sealed class PaymentResult
+{
+    public bool Success { get; init; }
+    public string TransactionId { get; init; } = string.Empty;
+}
+```
+
+`sealed` 的好处：防止意外继承导致的耦合，编译器也可以对 sealed 类做额外优化（如将虚调用转为直接调用）。
+
+### partial：分部类
+
+`partial` 允许一个类的定义分散在多个文件中。ASP.NET Core 中 Source Generator 大量使用这个机制。
+
+```csharp
+// User.cs
+public partial class User
+{
+    public string Name { get; set; } = string.Empty;
+}
+
+// User.Generated.cs（可能由工具自动生成）
+public partial class User
+{
+    public string GetDisplayName() => Name.ToUpperInvariant();
+}
+```
+
+EF Core、ASP.NET Core 的路由注册、序列化代码生成等场景，都会通过 Source Generator 生成 `partial` 类的另一半。你不需要手写那些生成的代码，但需要理解为什么你的类有时必须是 `partial`。
+
 ## virtual、override 和多态
 
 多态允许用父类变量指向子类对象，并在运行时执行子类自己的实现。
@@ -224,6 +282,62 @@ payment.Pay(100m);
 ```
 
 `abstract` 表示抽象成员必须由子类实现。
+
+### override 与 new 的区别
+
+`override` 替换父类实现，多态调用时执行子类版本。`new` 隐藏父类实现，通过父类引用调用时仍执行父类版本。
+
+```csharp
+public class Base
+{
+    public virtual void Print() => Console.WriteLine("Base");
+}
+
+public class OverrideChild : Base
+{
+    public override void Print() => Console.WriteLine("OverrideChild");
+}
+
+public class NewChild : Base
+{
+    public new void Print() => Console.WriteLine("NewChild");
+}
+
+Base obj1 = new OverrideChild();
+Base obj2 = new NewChild();
+
+obj1.Print(); // OverrideChild
+obj2.Print(); // Base（new 不参与多态）
+```
+
+绝大多数场景应该用 `override`。`new` 只在极少数需要隐藏但不想破坏继承关系的场景使用。
+
+### is 和 as：类型检查与转换
+
+`is` 检查对象是否是某个类型，同时可以声明变量：
+
+```csharp
+object value = "Hello";
+
+if (value is string text)
+{
+    Console.WriteLine(text.Length);
+}
+```
+
+`as` 尝试转换，失败返回 `null`（只能用于引用类型和可空类型）：
+
+```csharp
+object value = "Hello";
+string? text = value as string;
+
+if (text is not null)
+{
+    Console.WriteLine(text.Length);
+}
+```
+
+优先使用 `is` + 模式匹配，比 `as` + null 检查更简洁。
 
 ## 接口
 
@@ -267,7 +381,61 @@ public class NotificationService
 }
 ```
 
+`NotificationService` 依赖 `IMessageSender` 而不是具体实现，这就是依赖注入的雏形。在 ASP.NET Core 中，你会在 `Program.cs` 中注册 `services.AddScoped<IMessageSender, EmailSender>()`，框架自动完成注入。
+
 接口是依赖注入和可测试代码的基础。业务服务依赖接口，而不是依赖具体实现，可以降低耦合。
+
+### 默认接口方法（C# 8+）
+
+接口可以提供默认实现，添加新成员时不强制所有实现类立即实现：
+
+```csharp
+public interface ILogger
+{
+    void Log(string message);
+
+    // 默认实现，已有实现类不需要改动
+    void LogWarning(string message) => Log($"[WARN] {message}");
+}
+```
+
+这个特性在库和框架设计中很有用——可以给接口添加新方法而不破坏现有实现。但业务代码中应谨慎使用，避免接口变成"弱基类"。
+
+### 多接口实现
+
+一个类可以实现多个接口：
+
+```csharp
+public class Product : IEntity, ISoftDelete
+{
+    public long Id { get; set; }
+    public bool IsDeleted { get; private set; }
+
+    public void Delete() => IsDeleted = true;
+}
+```
+
+如果两个接口有同名方法，需要显式实现来消除冲突：
+
+```csharp
+public interface IReader
+{
+    void Process();
+}
+
+public interface IWriter
+{
+    void Process();
+}
+
+public class ReadWriteHandler : IReader, IWriter
+{
+    void IReader.Process() => Console.WriteLine("读取处理");
+    void IWriter.Process() => Console.WriteLine("写入处理");
+}
+```
+
+显式实现的成员只能通过接口引用调用，不能通过类引用直接调用。
 
 ## 抽象类和接口怎么选
 
@@ -288,6 +456,17 @@ public interface ISoftDelete
 ```
 
 一个类只能继承一个基类，但可以实现多个接口。
+
+选择参考：
+
+| 判断维度 | 抽象类 | 接口 |
+|---|---|---|
+| 是否有共享字段或实现逻辑 | 有 → 抽象类 | 无 → 接口 |
+| 是否需要多继承 | 不支持 | 支持 |
+| 是否表达"是一种"关系 | 是 → 抽象类 | 否 → 接口 |
+| 是否表达"有一种能力" | 否 | 是 → 接口 |
+
+EF Core 的 Entity 基类适合用抽象类（共享 `Id`、`CreatedAt`），`ISoftDelete`、`IAuditable` 适合用接口（横向能力）。
 
 ## static 静态成员
 

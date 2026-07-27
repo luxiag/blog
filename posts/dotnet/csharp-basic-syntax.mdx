@@ -149,6 +149,42 @@ Console.WriteLine($"商品：{productName}，价格：{price:C}");
 
 `{price:C}` 会按当前区域设置格式化为货币。实际项目里金额展示通常还会结合文化区域配置。
 
+## 字符串常用操作
+
+字符串是不可变类型，每次操作都会返回新字符串。
+
+```csharp
+string name = "  Hello, C#  ";
+
+Console.WriteLine(name.Trim());           // "Hello, C#"
+Console.WriteLine(name.Substring(2, 5));  // "Hello"
+Console.WriteLine(name.Replace("C#", ".NET"));
+Console.WriteLine(name.Contains("Hello"));
+Console.WriteLine(name.StartsWith("  H"));
+```
+
+处理文件路径时，反斜杠需要转义。C# 提供了 verbatim 字符串 `@"..."`，不需要对反斜杠转义：
+
+```csharp
+// 普通字符串需要双重转义
+string path1 = "C:\\Users\\Admin\\notes.txt";
+
+// verbatim 字符串更直观
+string path2 = @"C:\Users\Admin\notes.txt";
+```
+
+`Split` 按分隔符拆分字符串：
+
+```csharp
+string csv = "键盘,鼠标,显示器";
+string[] items = csv.Split(',');
+
+foreach (string item in items)
+{
+    Console.WriteLine(item.Trim());
+}
+```
+
 ## 运算符
 
 常见算术运算：
@@ -234,7 +270,7 @@ switch (status)
 }
 ```
 
-现代 C# 更常用 `switch` 表达式返回结果。
+现代 C#（C# 8+）更常用 `switch` 表达式返回结果。
 
 ```csharp
 string text = status switch
@@ -273,6 +309,23 @@ while (retryCount < 3)
 }
 ```
 
+## do-while 循环
+
+`do-while` 至少执行一次循环体，然后再判断条件。
+
+```csharp
+string? input;
+
+do
+{
+    Console.Write("请输入命令（输入 q 退出）：");
+    input = Console.ReadLine();
+}
+while (input != "q");
+```
+
+`while` 可能一次都不执行，`do-while` 保证至少执行一次。需要至少执行一次的场景（如菜单选择、用户确认）适合用 `do-while`。
+
 ## foreach 循环
 
 `foreach` 适合遍历集合。
@@ -287,6 +340,60 @@ foreach (string name in names)
 ```
 
 后续学习 LINQ 时，你会看到很多集合遍历可以改成声明式查询。
+
+## break 和 continue
+
+`break` 立即退出当前循环，`continue` 跳过本次迭代进入下一次。
+
+```csharp
+for (int i = 1; i <= 10; i++)
+{
+    if (i == 7)
+    {
+        break;
+    }
+
+    if (i % 2 == 0)
+    {
+        continue;
+    }
+
+    Console.WriteLine(i);
+}
+```
+
+输出：`1`、`3`、`5`。`i == 7` 时退出循环，偶数被 `continue` 跳过。
+
+`break` 和 `continue` 也可以用在 `while` 和 `do-while` 中，但不能用在 `foreach` 中（编译错误）。
+
+## 三元运算符
+
+三元运算符 `? :` 是 `if/else` 的简洁写法，适合根据条件返回一个值。
+
+```csharp
+decimal amount = 600m;
+
+decimal discount = amount >= 500m ? 50m : 0m;
+
+Console.WriteLine(discount);
+```
+
+等价于：
+
+```csharp
+decimal discount;
+
+if (amount >= 500m)
+{
+    discount = 50m;
+}
+else
+{
+    discount = 0m;
+}
+```
+
+三元运算符不要嵌套使用，嵌套时用 `if/else` 或 `switch` 表达式更清晰。
 
 ## 方法
 
@@ -333,6 +440,28 @@ Console.WriteLine(CalculateShippingFee(amount: 300m, isVip: true));
 ```
 
 命名参数可以提升调用时的可读性，尤其是布尔参数较多时。
+
+## out 参数
+
+`out` 让方法通过参数返回额外数据。调用方必须在调用时声明 `out` 变量。
+
+```csharp
+bool TryParsePrice(string? input, out decimal price)
+{
+    price = 0m;
+
+    return decimal.TryParse(input, out price);
+}
+
+if (TryParsePrice("19.9", out decimal result))
+{
+    Console.WriteLine($"解析成功：{result}");
+}
+```
+
+`out` 参数必须在方法内部赋值，编译器会强制检查。C# 7 开始可以在调用时直接声明 `out` 变量类型，不需要提前声明。
+
+`TryParse` 系列方法就是 `out` 的典型应用：返回 `bool` 表示是否成功，成功时通过 `out` 传出转换结果。
 
 ## 基础输入输出
 

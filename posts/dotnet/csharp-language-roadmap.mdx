@@ -64,6 +64,8 @@ nextPost: 'dotnet/csharp-basic-syntax'
 
 这一篇补齐 `class`、`struct`、`enum`、可空值类型、装箱拆箱和参数传递的底层差异。它能帮助你判断什么时候用类，什么时候用结构体，状态字段要不要用枚举。
 
+性能敏感场景还需要了解 `Span<T>` 和 `Memory<T>`：`Span<T>` 是 `ref struct`，在栈上操作连续内存，避免堆分配；`Memory<T>` 是可以存储在堆上的版本，适合异步场景。日常业务代码很少直接使用，但在处理大量数据、序列化、网络缓冲区等场景中很重要。
+
 ### 5. 泛型：建立类型复用能力
 
 再读：[C# 泛型：类型安全的复用机制](/posts/dotnet/csharp-generics)
@@ -108,6 +110,8 @@ Web API、EF Core、HttpClient、消息队列和文件 I/O 都大量依赖异步
 
 这部分重点不是背 `async` 和 `await` 语法，而是理解 `Task`、异常、取消、并发控制，以及为什么不要用 `.Result` 和 `.Wait()` 阻塞异步代码。
 
+异步编程的延伸能力包括 `Channel<T>`（异步生产者-消费者管道）和 `IAsyncEnumerable<T>`（异步流），它们在消息处理、实时数据推送等场景中很常用。详情可参考 [C# async/await 异步编程从原理到实践](/posts/dotnet/csharp-async-await)。
+
 ### 11. 文件与资源管理：理解外部资源生命周期
 
 再读：[C# 文件与资源管理：File、Stream、using 与 IDisposable](/posts/dotnet/csharp-file-resource-management)
@@ -142,7 +146,8 @@ ASP.NET Core 路由、模型验证、ORM 映射、依赖注入扫描、序列化
 graph TD
   A[基础语法] --> B[面向对象]
   B --> C[集合与异常]
-  C --> D[类型系统]
+  B --> D[类型系统]
+  C --> D
   D --> E[泛型]
   E --> F[扩展方法与迭代器]
   E --> G[委托与 Lambda]
@@ -153,10 +158,13 @@ graph TD
   C --> K[文件与资源管理]
   B --> L[反射与 Attribute]
   D --> M[可空引用类型与现代语法]
+  G --> M
   H --> N[ASP.NET Core 与 EF Core 实战]
   I --> N
   J --> N
   L --> N
+  J --> O[Channel 与 IAsyncEnumerable]
+  D --> P[Span 与 Memory]
 ```
 
 这条线的核心逻辑是：
@@ -174,6 +182,8 @@ graph TD
 - 异步编程解决 I/O 等待和并发协作问题
 - 反射和 Attribute 支撑框架读取元数据
 - 现代语法让模型表达更简洁、更安全
+- `Channel<T>` 和 `IAsyncEnumerable<T>` 是异步编程的延伸，构建异步数据流和管道
+- `Span<T>` 和 `Memory<T>` 是类型系统的延伸，在性能敏感代码中避免堆分配和拷贝
 
 ## 学习时容易踩的坑
 

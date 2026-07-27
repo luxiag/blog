@@ -75,6 +75,24 @@ public record Product(string Name, decimal Price);
 
 如果用普通 `class`，`==` 默认比较引用是否相同。`record` 更关注值是否相同。
 
+`record` 自动生成了这些成员：基于值的 `Equals` 和 `GetHashCode`、`ToString()`（打印所有属性值）、`with` 表达式支持。你不需要手写这些代码。
+
+```csharp
+var p1 = new Product("键盘", 199m);
+var p2 = new Product("键盘", 199m);
+
+// 这些都是 record 自动提供的：
+Console.WriteLine(p1 == p2);               // True（值相等）
+Console.WriteLine(p1.GetHashCode() == p2.GetHashCode()); // True
+Console.WriteLine(p1);                      // Product { Name = 键盘, Price = 199 }
+
+var p3 = p1 with { Price = 99m };          // with 创建新实例
+Console.WriteLine(p3);                      // Product { Name = 键盘, Price = 99 }
+Console.WriteLine(p1.Price);                // 199（原对象不变）
+```
+
+普通 `class` 默认按引用比较，`record` 按值比较。这是选择 `record` 还是 `class` 的核心判断依据。
+
 ## with 表达式
 
 `record` 常配合 `with` 创建一个修改了部分属性的新对象。
@@ -141,6 +159,25 @@ public class Program
 
 `switch` 表达式比传统 `switch` 语句更适合返回一个计算结果。
 
+### 元组模式
+
+元组模式可以同时匹配多个值：
+
+```csharp
+static decimal CalculateShipping(string status, decimal amount)
+{
+    return (status, amount) switch
+    {
+        ("Paid", >= 500m) => 0m,
+        ("Paid", _) => 20m,
+        ("Shipped", _) => 10m,
+        _ => 30m
+    };
+}
+```
+
+元组模式适合多个条件联合判断的场景，比嵌套 `if` 更清晰。
+
 ## 属性模式
 
 属性模式可以直接判断对象内部属性。
@@ -202,6 +239,69 @@ public class Program
 
 它不只适合路由，也适合解析命令参数、规则匹配等场景。
 
+## 原始字符串字面量（C# 11）
+
+原始字符串字面量用三个以上双引号包裹，不需要转义任何字符，适合 JSON、SQL、正则等场景：
+
+```csharp
+string json = """
+{
+    "name": "键盘",
+    "price": 199
+}
+""";
+
+string regex = """\d{4}-\d{2}-\d{2}""";
+```
+
+起始和结束引号可以换行，内容按缩进自动调整。这比用 `\"` 逐个转义可读性高很多。
+
+## file 修饰符（C# 11）
+
+`file` 修饰符限制类型的可见范围为当前源文件，不会与其他文件的同名类型冲突：
+
+```csharp
+// File1.cs
+file class Helper
+{
+    public static void DoWork() => Console.WriteLine("File1 Helper");
+}
+
+// File2.cs - 可以定义同名类型，不会冲突
+file class Helper
+{
+    public static void DoWork() => Console.WriteLine("File2 Helper");
+}
+```
+
+Source Generator 生成辅助类型时经常用 `file` 修饰符，避免与用户代码命名冲突。
+
+## 静态抽象接口成员（C# 11）
+
+接口可以声明静态抽象成员，让泛型约束支持运算符和工厂方法：
+
+```csharp
+public interface IAddable<T> where T : IAddable<T>
+{
+    static abstract T operator +(T left, T right);
+}
+
+public record Money(decimal Amount, string Currency) : IAddable<Money>
+{
+    public static Money operator +(Money left, Money right)
+    {
+        if (left.Currency != right.Currency)
+            throw new InvalidOperationException("货币不同不能相加");
+
+        return new Money(left.Amount + right.Amount, left.Currency);
+    }
+}
+
+T Add<T>(T a, T b) where T : IAddable<T> => a + b;
+```
+
+这在数值计算、向量运算等场景中很有用，改变了泛型约束的能力边界。
+
 ## 可空引用类型
 
 可空引用类型从 C# 8 开始可用。开启后，`string` 表示理论上不应该为 `null`，`string?` 表示可以为 `null`。
@@ -224,6 +324,8 @@ public record User(string Name, string? Email);
 ```
 
 可空引用类型不是运行时保护机制，而是编译期静态分析。它能帮助你更早发现潜在的空引用问题。
+
+本文只介绍可空引用类型的基本用法，完整实践指南见 [C# 可空引用类型：null 安全与项目实践](/posts/dotnet/csharp-nullable-reference-types)。
 
 ## required 成员
 
@@ -322,6 +424,27 @@ public class ConsoleLogger : ILogger
 ```
 
 在 ASP.NET Core 服务类中，主构造函数可以让依赖注入代码更短。但如果构造逻辑复杂，传统构造函数仍然更清晰。
+
+注意：主构造函数参数在类的整个生命周期内都可访问，编译器会将它们保存为字段。如果只需要在构造时使用，传统构造函数的局部变量更合适。
+
+```csharp
+// 主构造函数：logger 会被保存为字段，整个类都能用
+public class OrderService(ILogger logger)
+{
+    public void Create(string orderNo) => logger.Log(orderNo);
+}
+
+// 如果只想在初始化时使用，传统构造函数更明确
+public class OrderService
+{
+    private readonly string _serviceName;
+
+    public OrderService(IConfiguration config)
+    {
+        _serviceName = config["ServiceName"]; // 只保存需要的结果
+    }
+}
+```
 
 ## global using 和文件范围命名空间
 

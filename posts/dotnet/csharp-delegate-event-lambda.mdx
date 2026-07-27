@@ -202,6 +202,57 @@ public class Program
 
 注意，闭包捕获的是变量本身，不是当时的值。因此外部变量变化后，Lambda 内部看到的值也会变化。
 
+### 循环中的闭包陷阱
+
+闭包最常见的坑是在 `for` 循环中捕获循环变量：
+
+```csharp
+var actions = new List<Action>();
+
+for (int i = 0; i < 3; i++)
+{
+    actions.Add(() => Console.WriteLine(i));
+}
+
+foreach (Action action in actions)
+{
+    action();
+}
+```
+
+你可能期望输出 `0`、`1`、`2`，但实际输出是 `3`、`3`、`3`。因为所有 Lambda 捕获的是同一个变量 `i`，循环结束后 `i` 已经变成 `3`。
+
+解决方法是在循环内部创建一个局部变量副本：
+
+```csharp
+for (int i = 0; i < 3; i++)
+{
+    int copy = i;
+    actions.Add(() => Console.WriteLine(copy));
+}
+```
+
+C# 5 以后 `foreach` 循环变量已经是每次迭代独立的，不会出现这个问题。但 `for` 循环中仍然需要手动创建副本。
+
+### 闭包延长变量生命周期
+
+闭包会让局部变量在方法返回后仍然存活，因为委托持有对变量的引用：
+
+```csharp
+Func<int> CreateCounter()
+{
+    int count = 0;
+    return () => ++count;
+}
+
+var counter = CreateCounter();
+
+Console.WriteLine(counter()); // 1
+Console.WriteLine(counter()); // 2
+```
+
+`count` 本来是 `CreateCounter` 的局部变量，但因为 Lambda 捕获了它，方法返回后它仍然存在。这在大多数场景下没问题，但如果捕获了大对象，可能导致内存无法及时回收。
+
 ## 多播委托
 
 委托可以组合，调用时按顺序执行。
@@ -228,9 +279,46 @@ public class Program
 
 如果多播委托有返回值，最终只能拿到最后一个方法的返回值。因此多播委托更适合 `void` 场景。
 
+### 多播委托的异常处理
+
+多播委托中某个处理器抛异常时，后续处理器不会执行：
+
+```csharp
+Action handlers = () => Console.WriteLine("第一步");
+handlers += () => throw new InvalidOperationException("第二步失败");
+handlers += () => Console.WriteLine("第三步");
+
+try
+{
+    handlers();
+}
+catch (InvalidOperationException ex)
+{
+    Console.WriteLine($"捕获异常：{ex.Message}");
+}
+// 输出：第一步 → 捕获异常：第二步失败
+// "第三步"不会执行
+```
+
+如果需要每个处理器都执行并分别处理异常，可以用 `GetInvocationList` 逐个调用：
+
+```csharp
+foreach (Delegate handler in handlers.GetInvocationList())
+{
+    try
+    {
+        handler.DynamicInvoke();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"处理器异常：{ex.InnerException?.Message}");
+    }
+}
+```
+
 ## event 是什么
 
-事件是对委托的一层限制。它允许外部订阅和取消订阅，但不允许外部直接触发事件。
+多播委托虽然可以组合多个处理器，但它有两个安全问题：外部可以用 `=` 覆盖所有处理器，也可以直接调用委托。`event` 就是对委托的一层限制，解决这两个问题。它允许外部订阅和取消订阅，但不允许外部直接触发事件或覆盖。
 
 ```csharp
 using System;
@@ -312,11 +400,54 @@ public class OrderPaidEventArgs : EventArgs
 }
 ```
 
-## 委托、事件和接口怎么选
+## 事件访问器
 
-如果只是传入一小段行为，用 `Func` 或 `Action` 最简单。如果需要多个订阅者响应状态变化，用 `event`。如果行为复杂、有多个方法、需要清晰建模，优先使用接口。
+默认情况下，编译器自动生成事件的 `add` 和 `remove` 访问器。如果需要自定义订阅逻辑（如线程安全、日志记录），可以显式实现：
 
 ```csharp
+public class OrderService
+{
+    private EventHandler<string>? _orderCreated;
+
+    public event EventHandler<string>? OrderCreated
+    {
+        add
+        {
+            Console.WriteLine("新订阅者注册");
+            _orderCreated += value;
+        }
+        remove
+        {
+            _orderCreated -= value;
+        }
+    }
+
+    public void Create(string orderNo)
+    {
+        _orderCreated?.Invoke(this, orderNo);
+    }
+}
+```
+
+日常开发中很少需要自定义事件访问器，编译器默认生成的版本已经够用。了解这个机制主要是为了理解 `event` 底层是如何工作的。
+
+## 委托、事件和接口怎么选
+
+| 场景 | 推荐方式 | 原因 |
+|---|---|---|
+| 传入一小段行为（筛选、转换、比较） | `Func` / `Action` | 轻量、内联 |
+| 多个订阅者响应状态变化 | `event` | 安全的发布订阅 |
+| 复杂行为、多个方法、需要清晰建模 | 接口 | 结构化、可测试 |
+
+```csharp
+// 传入行为：用 Func
+var expensive = products.Where(p => p.Price >= 100m);
+
+// 多订阅者：用 event
+orderService.OrderCreated += OnOrderCreated;
+orderService.OrderCreated += SendNotification;
+
+// 复杂建模：用接口
 public interface IPaymentGateway
 {
     Task<PaymentResult> PayAsync(PaymentRequest request, CancellationToken cancellationToken);

@@ -42,6 +42,24 @@ Console.WriteLine(name.Length);
 Console.WriteLine(email?.Length ?? 0);
 ```
 
+### 局部禁用和恢复
+
+可以在文件内局部控制可空检查：
+
+```csharp
+#nullable enable
+
+string name = "Alice";
+
+#nullable disable
+string legacyCode = null; // 不产生警告
+#nullable restore
+
+string another = "Bob";
+```
+
+这在迁移老项目时很有用：新代码启用检查，暂不修改的旧代码局部禁用。
+
 ## 可空引用类型不是运行时机制
 
 可空引用类型主要是编译器静态分析。运行时仍然允许引用为 `null`。
@@ -107,6 +125,25 @@ Console.WriteLine(input!.Length);
 ```
 
 不要把 `!` 当作解决空值问题的万能工具。它适合用在编译器无法推断、但你通过其他机制已经保证非空的场景。
+
+### 什么时候用 !，什么时候用 ThrowIfNull
+
+- `!`：你**确认**值不为 null，编译器只是不知道。如果运行时为 null，会抛 `NullReferenceException`，调试不友好
+- `ThrowIfNull`：你在公共入口**校验**值不为 null，如果为 null 会抛 `ArgumentNullException`，调用栈更清晰
+
+```csharp
+// 内部代码，已经通过其他方式保证非空
+string name = GetName()!;
+
+// 公共方法入口，防御式校验
+public void Process(User user)
+{
+    ArgumentNullException.ThrowIfNull(user);
+    // 后续安全使用 user
+}
+```
+
+内部代码可以谨慎使用 `!`；公共 API 入口用 `ThrowIfNull` 更安全。
 
 ## ArgumentNullException.ThrowIfNull
 
@@ -185,6 +222,96 @@ public class User
 ```
 
 这样调用方可以直接遍历，不需要每次判空。
+
+同样的原则也适用于输入参数：方法接收集合参数时，不建议用 `null` 表示"空"。
+
+```csharp
+public void ProcessOrders(IReadOnlyList<Order> orders)
+{
+    // 不需要判空：调用方应该传空集合而非 null
+    foreach (Order order in orders)
+    {
+        Console.WriteLine(order.OrderNo);
+    }
+}
+```
+
+如果你控制不了调用方，可以用默认值参数：
+
+```csharp
+public void ProcessOrders(IReadOnlyList<Order>? orders = null)
+{
+    foreach (Order order in orders ?? Array.Empty<Order>())
+    {
+        Console.WriteLine(order.OrderNo);
+    }
+}
+```
+
+## 泛型中的 T? 问题
+
+泛型方法中使用 `T?` 是可空引用类型中最容易困惑的部分。`T?` 的含义取决于 `T` 是值类型还是引用类型：
+
+- `T` 是值类型（如 `int`）：`T?` 是 `Nullable<int>`，即 `int?`
+- `T` 是引用类型（如 `string`）：`T?` 只是加了可空注解的 `string`
+
+没有约束时，编译器不知道 `T?` 该按哪种方式处理：
+
+```csharp
+T? GetDefault<T>()
+{
+    return default; // 编译器无法确定 T? 的含义
+}
+```
+
+需要用约束明确 `T` 的类型类别：
+
+```csharp
+// T 是引用类型时，T? 就是可空引用类型
+T? GetDefaultRef<T>() where T : class
+{
+    return null;
+}
+
+// T 是值类型时，T? 是 Nullable<T>
+T? GetDefaultVal<T>() where T : struct
+{
+    return null;
+}
+```
+
+.NET 还提供了 `[MaybeNull]` 和 `[NotNull]` Attribute 来表达更精确的可空语义：
+
+```csharp
+[return: MaybeNull]
+public static T FirstOrDefault<T>(this IEnumerable<T> source)
+{
+    // 返回值可能是 null，即使 T 不是可空类型
+    foreach (T item in source)
+    {
+        return item;
+    }
+
+    return default;
+}
+```
+
+`[MemberNotNull]` 用于保证构造函数执行后字段已初始化：
+
+```csharp
+public class UserService
+{
+    private string _name;
+
+    [MemberNotNull(nameof(_name))]
+    public UserService()
+    {
+        _name = "Guest";
+    }
+}
+```
+
+编译器会验证 `[MemberNotNull]` 标注的字段在方法退出时确实已赋值。
 
 ## 老项目迁移策略
 

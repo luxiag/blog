@@ -48,12 +48,76 @@ foreach (string line in File.ReadLines("lines.txt"))
 
 `ReadLines` 是延迟读取，更适合较大文本文件；`ReadAllLines` 会一次性读入内存。
 
+## Path 类：安全操作文件路径
+
+手动拼接路径容易出错（分隔符问题），`Path` 类提供安全的路径操作方法。
+
+```csharp
+using System.IO;
+
+string fullPath = Path.Combine("data", "orders", "2026.txt");
+Console.WriteLine(fullPath); // data\orders\2026.txt（Windows）
+
+Console.WriteLine(Path.GetFileName(fullPath));       // 2026.txt
+Console.WriteLine(Path.GetExtension(fullPath));       // .txt
+Console.WriteLine(Path.GetFileNameWithoutExtension(fullPath)); // 2026
+Console.WriteLine(Path.GetDirectoryName(fullPath));   // data\orders
+```
+
+永远用 `Path.Combine` 拼接路径，不要手动用 `+` 或字符串插值拼接分隔符。
+
+## 检查文件和目录是否存在
+
+```csharp
+string path = "notes.txt";
+
+if (File.Exists(path))
+{
+    string content = File.ReadAllText(path);
+    Console.WriteLine(content);
+}
+
+if (!Directory.Exists("output"))
+{
+    Directory.CreateDirectory("output");
+}
+```
+
+注意：`Exists` 检查和后续操作之间存在竞态条件（文件可能在检查后被删除）。对读取场景，更推荐直接尝试操作并捕获异常。
+
+## Directory 和 DirectoryInfo
+
+`Directory` 提供静态方法，`DirectoryInfo` 提供实例方法，功能类似。
+
+```csharp
+string[] files = Directory.GetFiles("data", "*.txt");
+
+foreach (string file in files)
+{
+    Console.WriteLine(file);
+}
+
+var dir = new DirectoryInfo("data");
+Console.WriteLine($"创建时间：{dir.CreationTime}");
+Console.WriteLine($"文件数：{dir.GetFiles().Length}");
+```
+
+`Directory.CreateDirectory` 会在目录不存在时创建，已存在时不报错，适合初始化输出目录。
+
 ## Stream 是什么
 
-`Stream` 表示连续的字节数据。文件、网络、内存都可以抽象为流。
+`Stream` 表示连续的字节数据流。文件、网络、内存都可以抽象为流。Stream 有几个核心概念：
+
+- **方向性**：流有读取和写入方向，`CanRead`、`CanWrite`、`CanSeek` 属性标识流的能力
+- **位置指针**：`Position` 表示当前读写位置，`Seek` 可以移动位置（`CanSeek` 为 `true` 时）
+- **流是资源**：用完必须释放，否则文件句柄、网络连接等不会归还给操作系统
 
 ```csharp
 using FileStream stream = File.OpenRead("notes.txt");
+
+Console.WriteLine($"可读：{stream.CanRead}");
+Console.WriteLine($"可定位：{stream.CanSeek}");
+Console.WriteLine($"长度：{stream.Length}");
 
 byte[] buffer = new byte[stream.Length];
 int bytesRead = stream.Read(buffer, 0, buffer.Length);
@@ -61,7 +125,7 @@ int bytesRead = stream.Read(buffer, 0, buffer.Length);
 Console.WriteLine($"读取字节数：{bytesRead}");
 ```
 
-直接处理字节比较底层，文本文件通常会配合 `StreamReader` 和 `StreamWriter`。
+直接处理字节比较底层，文本文件通常会配合 `StreamReader` 和 `StreamWriter`——它们是 Stream 的包装器，将字节流转为字符流。
 
 ## StreamReader 和 StreamWriter
 
@@ -80,6 +144,19 @@ using (var reader = new StreamReader("log.txt"))
 
 `using` 代码块结束时，会自动调用对象的 `Dispose` 方法释放资源。
 
+嵌套 `using` 的写法：
+
+```csharp
+using (var fileStream = File.OpenRead("notes.txt"))
+using (var reader = new StreamReader(fileStream))
+{
+    string content = reader.ReadToEnd();
+    Console.WriteLine(content);
+}
+```
+
+省略大括号时，多个 `using` 紧跟写即可，它们共享同一个作用域。
+
 ## using var
 
 现代 C# 可以使用更简洁的 `using var`。
@@ -91,6 +168,24 @@ writer.WriteLine("写入一条日志");
 ```
 
 资源会在当前作用域结束时释放。
+
+`using var` 和 `using` 语句块的区别：`using var` 在当前方法作用域结束时释放；`using` 语句块在块结束时释放。如果需要更早释放资源，用 `using` 语句块更合适。
+
+```csharp
+void ProcessFile()
+{
+    // using var：整个方法结束时释放
+    using var stream1 = File.OpenRead("a.txt");
+
+    // using 块：块结束时立即释放
+    using (var stream2 = File.OpenRead("b.txt"))
+    {
+        // stream2 在这里释放
+    }
+
+    // stream2 已释放，stream1 还在
+}
+```
 
 ## IDisposable
 
@@ -122,6 +217,61 @@ report.WriteLine("销售报表");
 ```
 
 如果你的类持有 `Stream`、数据库连接、文件句柄等可释放资源，通常也应该实现 `IDisposable`。
+
+### 完整 Dispose 模式
+
+当类同时持有托管和非托管资源时，应该实现完整的 dispose 模式：
+
+```csharp
+public class ResourceHolder : IDisposable
+{
+    private StreamWriter? _writer;
+    private bool _disposed;
+
+    public ResourceHolder(string path)
+    {
+        _writer = new StreamWriter(path);
+    }
+
+    public void WriteLine(string line)
+    {
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(ResourceHolder));
+        }
+
+        _writer!.WriteLine(line);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (disposing)
+        {
+            _writer?.Dispose();
+        }
+
+        _disposed = true;
+    }
+
+    public void Dispose()
+    {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+}
+```
+
+关键点：
+- `Dispose(bool disposing)` 区分是否由用户代码调用（`true`）还是终结器调用（`false`）
+- `GC.SuppressFinalize(this)` 告诉 GC 不需要再调用终结器，因为资源已经手动释放
+- `_disposed` 标记防止重复释放和释放后访问
+
+大多数业务场景只需要简单模式（像前面 `ReportWriter` 那样）。只有涉及非托管资源或需要继承安全时，才需要完整模式。
 
 ## 异步文件 I/O
 
@@ -200,4 +350,6 @@ foreach (string line in File.ReadLines("large.log"))
 
 ## 总结
 
-文件和流属于外部资源，重点不是“能读写”，而是“正确释放”。小文件可以用 `File` 便捷方法，大文件优先用流式处理，持有资源的对象用 `using`、`IDisposable` 或 `await using` 管理生命周期。
+文件和流属于外部资源，重点不是“能读写”，而是“正确释放”。小文件可以用 `File` 便捷方法，路径操作用 `Path` 类，大文件优先用流式处理，持有资源的对象用 `using`、`IDisposable` 或 `await using` 管理生命周期。
+
+掌握这些后，再看 ASP.NET Core 的静态文件中间件、日志文件写入、数据库连接管理，会更容易理解它们为什么这样设计。

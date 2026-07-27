@@ -110,6 +110,70 @@ public class Program
 
 日常开发中通常不需要手动检查这些状态，直接 `await` 即可。
 
+## ValueTask：避免不必要的堆分配
+
+`Task` 是引用类型，每次创建都会在堆上分配。对于同步完成的高频场景，`ValueTask<T>` 可以避免这个分配。
+
+```csharp
+public class CacheService
+{
+    private readonly Dictionary<string, string> _cache = new();
+
+    public ValueTask<string> GetAsync(string key)
+    {
+        if (_cache.TryGetValue(key, out string? value))
+        {
+            return new ValueTask<string>(value);
+        }
+
+        return new ValueTask<string>(LoadFromDbAsync(key));
+    }
+
+    private async Task<string> LoadFromDbAsync(string key)
+    {
+        await Task.Delay(100);
+        return $"data_{key}";
+    }
+}
+```
+
+`ValueTask<T>` 的限制：
+- **不能被多次 await**：一个 `ValueTask` 只能 await 一次，第二次会抛异常
+- **不能并发 await**：多个调用者不能同时 await 同一个 `ValueTask`
+- **不推荐 `.Result` 或 `.GetAwaiter().GetResult()`**
+
+大多数场景用 `Task<T>` 就够了。只在性能分析确认 `Task` 分配是瓶颈、且方法经常同步完成时，才考虑 `ValueTask<T>`。
+
+## TaskCompletionSource：手动创建 Task
+
+`TaskCompletionSource<T>` 允许你手动控制 Task 的完成时机，常用于桥接回调模式到 async/await。
+
+```csharp
+public class ManualTaskExample
+{
+    public Task<string> WaitForUserInputAsync()
+    {
+        var tcs = new TaskCompletionSource<string>();
+
+        Console.Write("请输入值：");
+        string? input = Console.ReadLine();
+
+        if (string.IsNullOrEmpty(input))
+        {
+            tcs.SetException(new InvalidOperationException("输入不能为空"));
+        }
+        else
+        {
+            tcs.SetResult(input);
+        }
+
+        return tcs.Task;
+    }
+}
+```
+
+`SetResult` 标记成功，`SetException` 标记失败，`SetCanceled` 标记取消。这在单元测试中模拟异步操作、封装事件驱动 API 时非常有用。
+
 ## async 和 await 做了什么
 
 `async` 标记一个方法内部可以使用 `await`。`await` 会把方法拆成两段：等待之前的代码先执行，等待完成后再继续执行后面的代码。
@@ -162,6 +226,35 @@ public class Program
 
 在控制台程序里，`await` 之后可能恢复到不同线程；在 ASP.NET Core 中没有传统 ASP.NET 的请求同步上下文，通常不需要为了避免死锁而到处写 `ConfigureAwait(false)`。
 
+### ConfigureAwait 的原理
+
+`ConfigureAwait(false)` 告诉编译器：`await` 之后不需要回到原来的上下文继续执行。
+
+在有同步上下文的环境（WinForms、WPF、旧版 ASP.NET）中，`await` 默认会回到原上下文继续执行。如果同步上下文只有一个线程（如 UI 线程），而你在同步方法中用 `.Result` 等待异步结果，就会产生死锁：UI 线程在等 `.Result`，而异步方法在等 UI 线程回来继续执行。
+
+```csharp
+// UI 线程中：这段代码会死锁
+private void Button_Click(object sender, EventArgs e)
+{
+    var data = GetDataAsync().Result; // 死锁！
+}
+
+// 修复方式一：一路异步到底
+private async void Button_Click(object sender, EventArgs e)
+{
+    var data = await GetDataAsync();
+}
+
+// 修复方式二：库代码加 ConfigureAwait(false)
+public async Task<string> GetDataAsync()
+{
+    await Task.Delay(100).ConfigureAwait(false);
+    return "data";
+}
+```
+
+ASP.NET Core 没有同步上下文，`ConfigureAwait(false)` 加不加效果一样。但库代码建议加，因为调用方可能是有同步上下文的环境。
+
 ## 顺序等待与并发等待
 
 如果多个异步操作互不依赖，应该先启动，再统一等待。
@@ -209,6 +302,42 @@ public class Program
 
 如果写成连续 `await`，总耗时接近 3 秒；使用 `Task.WhenAll`，总耗时接近 1 秒。
 
+### WhenAny：任一完成即可
+
+`Task.WhenAny` 返回最先完成的任务，适合"竞速"场景。
+
+```csharp
+using System;
+using System.Threading.Tasks;
+
+public class Program
+{
+    public static async Task Main()
+    {
+        Task<string> cacheTask = GetFromCacheAsync();
+        Task<string> dbTask = GetFromDbAsync();
+
+        Task<string> firstCompleted = await Task.WhenAny(cacheTask, dbTask);
+
+        Console.WriteLine($"最先返回：{await firstCompleted}");
+    }
+
+    static async Task<string> GetFromCacheAsync()
+    {
+        await Task.Delay(100);
+        return "缓存数据";
+    }
+
+    static async Task<string> GetFromDbAsync()
+    {
+        await Task.Delay(500);
+        return "数据库数据";
+    }
+}
+```
+
+注意：`WhenAny` 返回的 `Task` 可能是失败的任务。如果需要处理异常，仍需 `await` 该任务。未完成的任务也不会自动取消，需要自行处理。
+
 ## 异常处理
 
 异步方法内部抛出的异常会存储在 `Task` 中，`await` 时重新抛出。
@@ -240,6 +369,34 @@ public class Program
 ```
 
 不要用 `Task.Wait()` 或 `.Result` 去拿异步结果，它们会把异常包进 `AggregateException`，也可能造成线程阻塞。
+
+### WhenAll 中的多个异常
+
+`Task.WhenAll` 中多个任务失败时，`await` 只抛出第一个异常。要看到所有异常，需要检查 `Task.Exception`：
+
+```csharp
+Task task1 = Task.Run(() => throw new InvalidOperationException("任务1失败"));
+Task task2 = Task.Run(() => throw new ArgumentException("任务2失败"));
+
+Task all = Task.WhenAll(task1, task2);
+
+try
+{
+    await all;
+}
+catch
+{
+    if (all.Exception is not null)
+    {
+        foreach (Exception inner in all.Exception.InnerExceptions)
+        {
+            Console.WriteLine($"{inner.GetType().Name}: {inner.Message}");
+        }
+    }
+}
+```
+
+`all.Exception` 是 `AggregateException`，包含所有任务的异常。
 
 ```csharp
 // 不推荐
@@ -375,8 +532,47 @@ public async Task SaveAsync()
 - 能传 `CancellationToken` 就传下去
 - 并发调用外部资源时限制并发数量
 
+## Channel：异步生产者-消费者模型
+
+`Channel<T>` 是 .NET 提供的异步安全队列，适合生产者和消费者解耦的场景。
+
+```csharp
+using System.Threading.Channels;
+
+var channel = Channel.CreateBounded<string>(capacity: 10);
+
+// 生产者
+async Task ProduceAsync()
+{
+    for (int i = 1; i <= 5; i++)
+    {
+        await channel.Writer.WriteAsync($"消息{i}");
+        Console.WriteLine($"写入：消息{i}");
+    }
+
+    channel.Writer.Complete();
+}
+
+// 消费者
+async Task ConsumeAsync()
+{
+    await foreach (string message in channel.Reader.ReadAllAsync())
+    {
+        Console.WriteLine($"读取：{message}");
+    }
+}
+
+await Task.WhenAll(ProduceAsync(), ConsumeAsync());
+```
+
+`Bounded` 限制容量，满了会阻塞写入；`Unbounded` 不限容量。`ReadAllAsync` 返回 `IAsyncEnumerable<T>`，可以用 `await foreach` 消费。
+
+`Channel<T>` 比自己用 `Queue<T>` + 锁实现更安全，也比 `BlockingCollection<T>` 更适合异步场景。
+
 ## 总结
 
 `async/await` 解决的是等待 I/O 时的线程占用问题，不是让单个操作本身变快。理解它的关键是：`Task` 表示未来完成的操作，`await` 表示等待这个操作并在完成后继续执行。
+
+进阶要点：`ValueTask<T>` 避免同步完成场景的堆分配；`TaskCompletionSource<T>` 手动控制 Task 完成；`WhenAny` 处理竞速场景；`ConfigureAwait(false)` 在库代码中避免死锁；`Channel<T>` 构建异步生产者-消费者模型。
 
 掌握异步编程后，你才能更稳地理解 ASP.NET Core、EF Core、HttpClient、后台服务和微服务调用这些更上层的内容。

@@ -78,6 +78,73 @@ Console.WriteLine(money1.Amount);  // 100
 - 小型、不可变、表达一个值的对象，可以考虑 `readonly struct` 或 `record struct`
 - 不要为了性能随意把业务对象改成 `struct`
 
+### struct 的常见陷阱
+
+struct 是值类型，赋值时会完整复制。这可能在某些场景下造成意外行为：
+
+```csharp
+public struct Money
+{
+    public decimal Amount { get; set; }
+    public string Currency { get; set; }
+}
+
+var wallet = new List<Money> { new() { Amount = 100m, Currency = "CNY" } };
+
+// 编译错误：无法修改 struct 属性，因为它是值拷贝
+// wallet[0].Amount = 200m;
+
+// 必须整体替换
+var money = wallet[0];
+money.Amount = 200m;
+wallet[0] = money;
+```
+
+struct 通过方法返回时也是值拷贝，修改返回值不会影响原始数据。这是 struct 最常踩的坑。
+
+struct 的默认值是所有字段为零值，可能导致无效状态：
+
+```csharp
+Money defaultMoney = default; // Amount = 0, Currency = null
+```
+
+如果不希望出现这种默认状态，用 `class` 或 `record struct` 加构造约束更安全。
+
+### readonly struct
+
+`readonly struct` 保证所有字段不可变，编译器可以据此做优化。
+
+```csharp
+public readonly struct Point
+{
+    public double X { get; }
+    public double Y { get; }
+
+    public Point(double x, double y)
+    {
+        X = x;
+        Y = y;
+    }
+
+    public double DistanceTo(Point other)
+        => Math.Sqrt(Math.Pow(X - other.X, 2) + Math.Pow(Y - other.Y, 2));
+}
+```
+
+`readonly struct` 的所有成员也必须是 readonly。小型不可变值对象推荐使用 `readonly struct` 或 `readonly record struct`。
+
+### ref struct
+
+`ref struct` 必须只能在栈上分配，不能被装箱、不能作为类字段、不能被 Lambda 捕获。`Span<T>` 就是 `ref struct`。
+
+```csharp
+ReadOnlySpan<char> span = "Hello, C#".AsSpan();
+
+Console.WriteLine(span.Length);
+```
+
+`ref struct` 是高性能场景避免堆分配的核心工具，日常业务代码很少需要自己定义 `ref struct`。
+
 ## enum：表达有限状态
 
 `enum` 适合表达一组有限、固定的状态或选项。
@@ -135,7 +202,46 @@ Console.WriteLine(permission.HasFlag(Permission.Read));
 Console.WriteLine(permission.HasFlag(Permission.Delete));
 ```
 
-标志枚举的值通常使用 1、2、4、8 这样的 2 的幂，方便按位组合。
+标志枚举的值必须使用 2 的幂（1、2、4、8...），因为按位组合依赖二进制位：`Read | Write` 的值是 `3`（二进制 `011`），如果 `Write` 的值是 `3` 而非 `2`，`Read | Write` 就会等于 `5`，组合结果会混乱。
+
+### enum 的底层类型
+
+默认底层类型是 `int`，可以显式指定：
+
+```csharp
+public enum OrderStatus : byte
+{
+    Pending = 0,
+    Paid = 1,
+    Shipped = 2,
+    Canceled = 3
+}
+```
+
+使用 `byte` 可以节省存储空间，适合值域小的枚举。
+
+### enum 的安全隐患
+
+C# 允许把任意整数强制转换为枚举，不会报错：
+
+```csharp
+OrderStatus invalid = (OrderStatus)99;
+
+Console.WriteLine(invalid); // 99
+```
+
+可以用 `Enum.IsDefined` 检查值是否合法：
+
+```csharp
+OrderStatus status = (OrderStatus)99;
+
+if (!Enum.IsDefined(status))
+{
+    Console.WriteLine($"非法状态值：{status}");
+}
+```
+
+在接收外部输入（API 参数、数据库值）转枚举时，务必用 `IsDefined` 校验。
 
 ## Nullable<T> 与可空值类型
 
@@ -183,7 +289,7 @@ int right = (int)value;
 
 泛型集合 `List<int>` 比 `ArrayList` 更安全也更高效，一个原因就是它避免了频繁装箱拆箱。
 
-## 参数传递：值复制和引用复制
+## 参数传递：值传递与 ref/out/in
 
 C# 默认按值传递参数。对于引用类型，复制的是引用本身。
 
@@ -226,6 +332,57 @@ Replace(ref person);
 
 Console.WriteLine(person.Name); // Cindy
 ```
+
+### out：必须赋值的输出参数
+
+`out` 参数要求方法内部必须赋值，调用方必须在调用时声明 `out` 变量。
+
+```csharp
+bool TryGetDiscount(string code, out decimal discount)
+{
+    discount = 0m;
+
+    if (code == "VIP50")
+    {
+        discount = 50m;
+        return true;
+    }
+
+    return false;
+}
+
+if (TryGetDiscount("VIP50", out decimal discount))
+{
+    Console.WriteLine($"优惠金额：{discount}");
+}
+```
+
+`TryParse`、`TryGetValue` 等方法都用 `out` 返回额外数据。
+
+### in：只读引用传递
+
+`in` 传递引用但不允许修改，避免 struct 拷贝的同时保证安全。
+
+```csharp
+decimal CalculateDistance(in Point from, in Point to)
+{
+    // from.X = 0; // 编译错误：in 参数不能修改
+    return (decimal)Math.Sqrt(Math.Pow(from.X - to.X, 2) + Math.Pow(from.Y - to.Y, 2));
+}
+```
+
+`in` 主要用于传递较大的 `struct` 时避免值拷贝开销。小型 struct（如 `int`、`decimal`）用 `in` 反而可能因间接寻址更慢。
+
+### record 与值/引用类型
+
+`record class`（简写 `record`）是引用类型，`record struct` 是值类型。`record` 在对应基础上增加了按值比较、`with` 表达式、`ToString()` 等自动生成的成员。
+
+```csharp
+public record class UserDto(int Id, string Name);       // 引用类型，按值比较
+public readonly record struct Money(decimal Amount, string Currency); // 值类型，按值比较
+```
+
+选择 `record class` 还是 `record struct` 的原则和 `class` vs `struct` 一致：数据量小、不可变、强调值语义用 `record struct`；有身份、需要引用语义用 `record class`。
 
 ## 类型转换
 

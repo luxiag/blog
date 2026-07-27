@@ -87,11 +87,20 @@ var rows = orders.Join(
 | `Intersect` | 交集 |
 | `Except` | 差集 |
 | `Concat` | 拼接两个序列，不去重 |
+| `DistinctBy` | 按键去重（.NET 6+） |
+| `UnionBy` | 按键并集（.NET 6+） |
+| `IntersectBy` | 按键交集（.NET 6+） |
+| `ExceptBy` | 按键差集（.NET 6+） |
 
 ```csharp
 var distinct = numbers.Distinct();
 var all = first.Concat(second);
 var union = first.Union(second);
+```
+
+```csharp
+var distinctByPrice = products.DistinctBy(p => p.Category);
+var unionByName = first.UnionBy(second, x => x.Id);
 ```
 
 ## 分页和截取
@@ -103,6 +112,9 @@ var union = first.Union(second);
 | `SkipWhile` | 条件成立时持续跳过 |
 | `TakeWhile` | 条件成立时持续获取 |
 | `Chunk` | 分块 |
+| `TakeLast` | 获取最后 N 个元素 |
+| `SkipLast` | 跳过最后 N 个元素 |
+| `Reverse` | 反转序列顺序 |
 
 ```csharp
 var pageItems = source
@@ -111,6 +123,37 @@ var pageItems = source
 
 var chunks = source.Chunk(100);
 ```
+
+## 追加和插入
+
+| 方法 | 用途 |
+|---|---|
+| `Append` | 在末尾追加一个元素 |
+| `Prepend` | 在开头插入一个元素 |
+
+```csharp
+var withDefault = numbers.Prepend(0).Append(99);
+```
+
+## 配对
+
+| 方法 | 用途 |
+|---|---|
+| `Zip` | 将两个序列按位置配对 |
+
+```csharp
+var names = new[] { "Alice", "Bob" };
+var scores = new[] { 90, 85 };
+
+var pairs = names.Zip(scores, (name, score) => $"{name}: {score}");
+```
+
+## 类型转换
+
+| 方法 | 用途 |
+|---|---|
+| `AsEnumerable` | 转为 `IEnumerable<T>`，切换到客户端执行 |
+| `AsQueryable` | 转为 `IQueryable<T>`，支持查询提供程序 |
 
 ## 元素获取
 

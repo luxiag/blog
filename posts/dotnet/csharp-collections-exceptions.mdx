@@ -1,7 +1,7 @@
 ---
 title: 'C# 集合与异常处理：数组、List、Dictionary 与 try/catch'
 date: '2026-07-14'
-excerpt: '掌握 C# 常用集合类型和异常处理：数组、List、Dictionary、HashSet、foreach、TryParse、try/catch/finally 与自定义异常。'
+excerpt: '掌握 C# 常用集合类型和异常处理：数组、List、Dictionary、HashSet、Queue、Stack、foreach、TryParse、try/catch/finally/when、AggregateException 与自定义异常。'
 tags: ['dotnet', 'csharp', 'collections', 'exception', 'beginner']
 nextPost: 'dotnet/csharp-type-system'
 ---
@@ -107,6 +107,39 @@ Console.WriteLine(roles.Contains("admin"));
 
 权限、标签、去重结果等场景常用 `HashSet<T>`。
 
+## Queue 和 Stack
+
+`Queue<T>` 是先进先出（FIFO）集合，适合消息排队、任务调度等场景。
+
+```csharp
+var queue = new Queue<string>();
+
+queue.Enqueue("订单1");
+queue.Enqueue("订单2");
+queue.Enqueue("订单3");
+
+string first = queue.Dequeue();
+Console.WriteLine(first); // 订单1
+
+Console.WriteLine(queue.Peek()); // 订单2（只看不取）
+Console.WriteLine(queue.Count);  // 2
+```
+
+`Stack<T>` 是后进先出（LIFO）集合，适合撤销操作、表达式求值等场景。
+
+```csharp
+var stack = new Stack<string>();
+
+stack.Push("第一步");
+stack.Push("第二步");
+stack.Push("第三步");
+
+Console.WriteLine(stack.Pop()); // 第三步
+Console.WriteLine(stack.Peek()); // 第二步
+```
+
+`Dequeue`/`Pop` 会移除并返回元素，`Peek` 只返回不移除。集合为空时调用会抛异常。
+
 ## 遍历集合
 
 最常用的是 `foreach`。
@@ -162,6 +195,21 @@ foreach (Product product in products)
 
 这段代码后续可以用 LINQ 写得更简洁。
 
+返回集合时，优先返回只读接口，防止调用方意外修改内部数据。
+
+```csharp
+public class ProductService
+{
+    private readonly List<Product> _products = new();
+
+    public IReadOnlyList<Product> Products => _products;
+
+    public void Add(Product product) => _products.Add(product);
+}
+```
+
+`IReadOnlyList<T>` 和 `IReadOnlyDictionary<TKey, TValue>` 是比 `List<T>` 和 `Dictionary<TKey, TValue>` 更安全的返回类型。
+
 ## 什么是异常
 
 异常表示程序运行时发生了无法按正常流程继续处理的问题。
@@ -183,6 +231,44 @@ Console.WriteLine(numbers[10]);
 | `FormatException` | 字符串格式转换失败 |
 | `KeyNotFoundException` | Dictionary 中 Key 不存在 |
 
+所有异常都继承自 `Exception`。理解异常层次有助于选择正确的 catch 类型：
+
+```csharp
+try
+{
+    throw new FileNotFoundException("配置文件不存在");
+}
+catch (IOException ex)
+{
+    Console.WriteLine($"I/O 异常：{ex.Message}");
+}
+```
+
+`FileNotFoundException` 继承自 `IOException`，后者继承自 `Exception`。catch 父类型可以捕获所有子类型异常。
+
+异常可以包含内部异常（`InnerException`），表示导致当前异常的根本原因：
+
+```csharp
+try
+{
+    try
+    {
+        throw new FileNotFoundException("appsettings.json 不存在");
+    }
+    catch (FileNotFoundException ex)
+    {
+        throw new InvalidOperationException("应用初始化失败", ex);
+    }
+}
+catch (InvalidOperationException ex)
+{
+    Console.WriteLine($"异常：{ex.Message}");
+    Console.WriteLine($"根因：{ex.InnerException?.Message}");
+}
+```
+
+框架代码中 `InnerException` 非常常见，EF Core、HttpClient 等抛出的异常通常把底层异常包在 `InnerException` 中。
+
 ## try/catch
 
 用 `try/catch` 捕获并处理异常。
@@ -203,6 +289,40 @@ catch (FormatException)
 ```
 
 不要用一个空 `catch` 把异常吞掉，否则问题会变得更难排查。
+
+### 异常过滤器 when（C# 6+）
+
+`when` 子句可以根据附加条件决定是否捕获异常。
+
+```csharp
+try
+{
+    throw new HttpRequestException("请求失败", null, System.Net.HttpStatusCode.TooManyRequests);
+}
+catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+{
+    Console.WriteLine("请求过于频繁，稍后重试");
+}
+catch (HttpRequestException ex)
+{
+    Console.WriteLine($"HTTP 请求失败：{ex.Message}");
+}
+```
+
+`when` 条件不满足时，异常会继续传递到下一个 catch，而不是被错误地捕获。这在日志记录+条件处理场景中特别有用：
+
+```csharp
+catch (Exception ex) when (LogException(ex))
+{
+    // LogException 返回 false，异常不会被吞掉
+}
+
+static bool LogException(Exception ex)
+{
+    Console.WriteLine($"[ERROR] {ex.GetType().Name}: {ex.Message}");
+    return false;
+}
+```
 
 ## TryParse 优先于异常控制流程
 
@@ -245,6 +365,8 @@ finally
 ```
 
 现代 C# 更常用 `using` 或 `await using` 管理资源，但理解 `finally` 仍然很重要。
+
+`finally` 中不应该放业务逻辑，也不应该抛出异常（会掩盖 `try` 中的原始异常）。它只适合做资源清理。
 
 ## throw 主动抛出异常
 
@@ -292,6 +414,29 @@ void DeductStock(string productName, int stock, int quantity)
 ```
 
 简单项目不一定需要很多自定义异常。只有当调用方需要根据异常类型做不同处理时，自定义异常才更有价值。
+
+## AggregateException
+
+多个异常合并时，`AggregateException` 用来把它们打包在一起。这在并行和异步编程中常见。
+
+```csharp
+try
+{
+    Parallel.Invoke(
+        () => throw new InvalidOperationException("任务1失败"),
+        () => throw new ArgumentException("任务2失败")
+    );
+}
+catch (AggregateException ex)
+{
+    foreach (Exception inner in ex.InnerExceptions)
+    {
+        Console.WriteLine($"{inner.GetType().Name}: {inner.Message}");
+    }
+}
+```
+
+`await` 只抛出第一个异常，`AggregateException` 能看到所有异常。这在后续异步编程文章中会进一步展开。
 
 ## 一个完整小练习
 
@@ -344,4 +489,4 @@ Console.WriteLine($"下单成功，剩余库存：{stocks[productCode]}");
 
 集合让程序能处理一组数据，异常处理让程序在错误发生时有清晰的应对方式。
 
-掌握数组、`List<T>`、`Dictionary<TKey, TValue>`、`HashSet<T>` 和 `try/catch` 后，再学习泛型和 LINQ，会更容易理解它们为什么存在。
+掌握数组、`List<T>`、`Dictionary<TKey, TValue>`、`HashSet<T>`、`Queue<T>`、`Stack<T>` 和 `try/catch`/`when`/`AggregateException` 后，再学习泛型和 LINQ，会更容易理解它们为什么存在。

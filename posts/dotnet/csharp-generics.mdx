@@ -131,6 +131,27 @@ Console.WriteLine(stringBox.Get());
 
 `Box<int>` 和 `Box<string>` 是两个不同的构造类型。它们来自同一个泛型类型定义 `Box<T>`。
 
+### 泛型静态成员的陷阱
+
+泛型类的静态成员在每个构造类型中独立存在：
+
+```csharp
+public class Counter<T>
+{
+    public static int Count { get; set; }
+}
+
+Counter<int>.Count = 10;
+Counter<string>.Count = 20;
+
+Console.WriteLine(Counter<int>.Count);    // 10
+Console.WriteLine(Counter<string>.Count); // 20
+```
+
+`Counter<int>` 和 `Counter<string>` 的 `Count` 是完全独立的静态字段。这是一个反直觉的行为：你可能以为所有 `Counter<T>` 共享同一个 `Count`，但实际上每个构造类型都有自己的静态数据。
+
+这在泛型单例模式中可以利用——`Counter<T>` 天然为每种 `T` 提供独立的静态实例。
+
 ## 泛型接口
 
 泛型接口在 .NET 中非常常见，例如 `IEnumerable<T>`、`IComparable<T>`、`IRepository<T>`。
@@ -246,6 +267,8 @@ PrintName(new User { Name = "Alice" });
 | `where T : BaseClass` | `T` 必须继承某个基类 |
 | `where T : IInterface` | `T` 必须实现某个接口 |
 | `where T : Enum` | `T` 必须是枚举类型 |
+| `where T : Delegate` | `T` 必须是委托类型（C# 7.3+） |
+| `where T : class?` | `T` 必须是引用类型，可为 null（C# 9+） |
 
 多个约束可以组合。
 
@@ -258,6 +281,36 @@ public static T CreateNamed<T>()
 ```
 
 `new()` 约束必须放在约束列表最后。
+
+`unmanaged` 约束表示 `T` 必须是不包含引用类型的值类型，适合互操作和指针操作：
+
+```csharp
+public static byte[] ToBytes<T>(T value) where T : unmanaged
+{
+    int size = System.Runtime.InteropServices.Marshal.SizeOf<T>();
+    byte[] bytes = new byte[size];
+    System.Runtime.InteropServices.Marshal.StructureToPtr(value, 
+        System.Runtime.InteropServices.Marshal.AllocHGlobal(size), false);
+    System.Runtime.InteropServices.Marshal.Copy(
+        System.Runtime.InteropServices.Marshal.AllocHGlobal(size), bytes, 0, size);
+    return bytes;
+}
+```
+
+多个约束可以组合使用：
+
+```csharp
+public class Repository<T> where T : class, IEntity, new()
+{
+    public T CreateNew()
+    {
+        var entity = new T();
+        return entity;
+    }
+}
+```
+
+这个组合要求 `T` 是引用类型、实现 `IEntity` 接口、并且有无参构造函数。
 
 ## default(T)
 
@@ -281,6 +334,23 @@ Console.WriteLine(GetDefault<string>() is null); // True
 - `DateTime` 默认是 `DateTime.MinValue`
 - 引用类型默认是 `null`
 - 结构体默认是所有字段的默认值组合
+
+上面代码用了 `default!`，其中 `!` 是空包容运算符，告诉编译器"我知道这里可能为 null，但我接受风险"。在泛型方法中，`default` 对引用类型返回 `null`，加了 `!` 只是消除编译器警告，运行时仍然是 `null`。如果调用方不检查就访问成员，仍可能抛出 `NullReferenceException`。
+
+更安全的做法是让方法签名明确表达可空性：
+
+```csharp
+public static T? GetDefaultSafe<T>() => default;
+```
+
+这样调用方会收到可空提醒，而不是被 `!` 掩盖。
+
+C# 7.1 开始可以用 `default` 代替 `default(T)`，类型可以推断时更简洁：
+
+```csharp
+int number = default;      // 代替 default(int)
+string? name = default;    // 代替 default(string)
+```
 
 ## 泛型集合为什么重要
 
@@ -313,6 +383,22 @@ foreach (int number in list)
 ```
 
 这就是泛型的核心价值：**让类型错误尽量在编译期暴露**。
+
+## 运行时创建泛型类型
+
+反射可以通过 `MakeGenericType` 在运行时构造封闭泛型类型：
+
+```csharp
+Type openGeneric = typeof(List<>);
+Type closedGeneric = openGeneric.MakeGenericType(typeof(int));
+
+Console.WriteLine(closedGeneric); // System.Collections.Generic.List`1[System.Int32]
+
+object? instance = Activator.CreateInstance(closedGeneric);
+Console.WriteLine(instance?.GetType().Name); // List`1
+```
+
+这在依赖注入容器、插件系统等需要运行时发现和构造泛型类型的场景中常用。与泛型文章的关联：`typeof(List<>)` 是开放泛型类型定义，`typeof(List<int>)` 是封闭构造类型。
 
 ## 协变：out
 

@@ -32,7 +32,7 @@ LINQ 建立在集合、泛型、扩展方法、委托、Lambda 和迭代器之�
 - 想快速查操作符：看 [C# LINQ 操作符速查](/posts/dotnet/csharp-linq-cheatsheet)。
 - 想理解链式调用和延迟执行基础：看 [C# 扩展方法与迭代器](/posts/dotnet/csharp-extension-methods-iterators)。
 - 想理解 EF Core 如何把 Lambda 转成 SQL：看 [C# 表达式树 Expression Tree](/posts/dotnet/csharp-expression-tree)。
-- 想深入数据库查询性能：结合 [Entity Framework Core：基础使用与实体映射](/posts/dotnet/entify-framework-core)。
+- 想深入数据库查询性能：结合 [Entity Framework Core：基础使用与实体映射](/posts/dotnet/entity-framework-core)。
 
 ## 为什么需要 LINQ
 
@@ -279,6 +279,19 @@ var orderGroups = orders
 public record Order(string CustomerName, decimal Amount);
 ```
 
+`GroupBy` 返回的是 `IEnumerable<IGrouping<TKey, TElement>>`。`IGrouping` 本身也是 `IEnumerable<T>`，同时有一个 `Key` 属性：
+
+```csharp
+var groups = orders.GroupBy(order => order.CustomerName);
+
+foreach (IGrouping<string, Order> group in groups)
+{
+    Console.WriteLine($"客户：{group.Key}，订单数：{group.Count()}");
+}
+```
+
+`group.Key` 就是分组依据的值，`group` 本身可以遍历获取该组的所有元素。
+
 聚合常用 `Count`、`Sum`、`Average`、`Max`、`Min`。
 
 ```csharp
@@ -339,6 +352,27 @@ public record Customer(string Name, List<string> OrderNumbers);
 
 如果你发现自己写了两层循环只是为了把内部集合拿出来，通常可以考虑 `SelectMany`。
 
+`SelectMany` 的执行过程可以这样理解：
+
+1. 对每个客户调用 `customer.OrderNumbers`，得到一个内部集合
+2. 把所有内部集合的元素"铺平"成一个序列
+3. 最终得到 `["A001", "A002", "B001"]`
+
+`SelectMany` 也可以带结果选择器，同时保留外部和内部信息：
+
+```csharp
+var orderDetails = customers
+    .SelectMany(
+        customer => customer.OrderNumbers,
+        (customer, orderNo) => new { customer.Name, OrderNo = orderNo })
+    .ToList();
+
+foreach (var detail in orderDetails)
+{
+    Console.WriteLine($"{detail.Name} - {detail.OrderNo}");
+}
+```
+
 ## Join：关联两个数据源
 
 内存集合可以用 `Join` 关联。
@@ -382,6 +416,21 @@ var users = dbContext.Users
 
 `AsEnumerable()` 会把后续操作切换到客户端执行。除非你明确知道这么做的原因，否则不要在数据库查询中提前使用它。
 
+`AsEnumerable()` 和 `AsQueryable()` 的区别：
+
+- `AsEnumerable()`：把 `IQueryable<T>` 转成 `IEnumerable<T>`，后续操作在客户端执行
+- `AsQueryable()`：把 `IEnumerable<T>` 转成 `IQueryable<T>`，如果数据源支持查询提供程序，后续操作可以翻译
+
+```csharp
+// 数据库端执行筛选
+IQueryable<Product> dbQuery = dbContext.Products.Where(p => p.Price > 100);
+
+// 切到客户端，后续操作在内存中执行
+IEnumerable<Product> clientQuery = dbContext.Products.AsEnumerable().Where(p => p.Name.Length > 3);
+```
+
+绝大多数场景不需要 `AsQueryable()`，它主要用于单元测试模拟 `IQueryable` 数据源。
+
 只读查询建议使用 `AsNoTracking`。
 
 ```csharp
@@ -390,6 +439,28 @@ var users = await dbContext.Users
     .Where(user => user.IsActive)
     .ToListAsync();
 ```
+
+## 查询语法的 let 和 into
+
+查询语法中 `let` 引入中间变量，避免重复计算：
+
+```csharp
+var result = from product in products
+             let totalStock = product.Price * product.Stock
+             where totalStock >= 1000m
+             select new { product.Name, TotalValue = totalStock };
+```
+
+`into` 用于继续查询分组或连接的结果：
+
+```csharp
+var result = from order in orders
+             group order by order.CustomerName into group
+             where group.Count() >= 2
+             select new { Customer = group.Key, Count = group.Count() };
+```
+
+这两个关键字只在查询语法中可用，方法语法中用中间变量或 `Select` 替代。
 
 ## 一个完整示例：订单报表
 

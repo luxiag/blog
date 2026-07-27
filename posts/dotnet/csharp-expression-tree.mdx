@@ -151,7 +151,9 @@ public class Product
 }
 ```
 
-在真实 EF Core 查询里，应把 `Expression<Func<Product, bool>>` 直接传给 `Where`，不要先 `Compile()`。
+:::info Compile 的使用边界
+上面示例用 `Compile()` 是因为数据源是内存 `List<T>`，走的是 `IEnumerable<T>` 的 `Where`，需要委托。但在 EF Core 查询中，`Where` 接收的是 `Expression<Func<T, bool>>`，编译器会自动包装，不需要也不应该手动 `Compile()`——否则表达式树会被编译成委托，EF Core 无法分析并翻译成 SQL。
+:::
 
 ## 组合表达式的注意点
 
@@ -164,6 +166,82 @@ public class Product
 - 自己封装小范围表达式组合工具
 
 不要为了动态查询直接拼接 SQL 字符串，除非明确处理参数化和注入风险。
+
+### 组合表达式：AndAlso 和 OrElse
+
+动态查询最常见的场景是：用户可选多个筛选条件，条件之间用 AND 或 OR 组合。
+
+```csharp
+using System.Linq.Expressions;
+
+public static class ExpressionCombiner
+{
+    public static Expression<Func<T, bool>> And<T>(
+        this Expression<Func<T, bool>> left,
+        Expression<Func<T, bool>> right)
+    {
+        ParameterExpression parameter = left.Parameters[0];
+
+        // 把 right 的参数替换成 left 的参数
+        Expression body = Expression.AndAlso(
+            left.Body,
+            new ParameterReplacer(right.Parameters[0], parameter).Visit(right.Body));
+
+        return Expression.Lambda<Func<T, bool>>(body, parameter);
+    }
+
+    public static Expression<Func<T, bool>> Or<T>(
+        this Expression<Func<T, bool>> left,
+        Expression<Func<T, bool>> right)
+    {
+        ParameterExpression parameter = left.Parameters[0];
+
+        Expression body = Expression.OrElse(
+            left.Body,
+            new ParameterReplacer(right.Parameters[0], parameter).Visit(right.Body));
+
+        return Expression.Lambda<Func<T, bool>>(body, parameter);
+    }
+}
+
+public class ParameterReplacer : ExpressionVisitor
+{
+    private readonly ParameterExpression _oldParam;
+    private readonly ParameterExpression _newParam;
+
+    public ParameterReplacer(ParameterExpression oldParam, ParameterExpression newParam)
+    {
+        _oldParam = oldParam;
+        _newParam = newParam;
+    }
+
+    protected override Expression VisitParameter(ParameterExpression node)
+    {
+        return node == _oldParam ? _newParam : node;
+    }
+}
+```
+
+使用示例：
+
+```csharp
+Expression<Func<Product, bool>> filter = p => true;
+
+if (minPrice is not null)
+{
+    filter = filter.And(p => p.Price >= minPrice);
+}
+
+if (category is not null)
+{
+    filter = filter.And(p => p.Category == category);
+}
+
+// 传给 EF Core Where，不需要 Compile
+var result = dbContext.Products.Where(filter).ToList();
+```
+
+`ExpressionVisitor` 是修改/重写表达式树的核心工具。`ParameterReplacer` 统一了两个表达式的参数，避免参数不一致导致的异常。
 
 ## 表达式树不能表示所有 C# 语法
 
@@ -178,10 +256,20 @@ Expression<Func<int, bool>> ok = n => n > 0;
 // {
 //     return n > 0;
 // };
+
 ```
 
-## 什么时候需要学表达式树
+### 什么时候需要手写表达式树
 
+大多数场景用 Lambda 语法就足够了。需要手写 `Expression.XXX` 的典型场景：
+
+- 运行时动态拼接查询条件（如上面的多条件筛选）
+- 表达式的结构在编译期无法确定
+- 需要对表达式做变换或优化
+
+如果 Lambda 语法能表达你的逻辑，就不要退回到手写。手写表达式树可读性差、容易出错，且没有编译期检查。
+
+## 什么时候需要学表达式树
 普通业务开发不一定每天手写表达式树，但理解它很有价值：
 
 - 看懂 `IQueryable<T>` 和 `IEnumerable<T>` 的区别

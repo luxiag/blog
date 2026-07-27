@@ -37,6 +37,7 @@ Console.WriteLine(name.IsNullOrBlank());
 - 扩展方法本身必须是 `static`
 - 第一个参数前面写 `this`，表示要扩展的类型
 - 调用时看起来像实例方法，本质仍然是静态方法调用
+- 扩展方法必须通过 `using` 引入其所在命名空间后才能使用，否则编译器找不到它
 
 ## 扩展方法不是修改原类型
 
@@ -50,6 +51,15 @@ StringExtensions.IsNullOrBlank(name);
 ```
 
 如果原类型后来真的新增了同名实例方法，实例方法优先级高于扩展方法。因此扩展方法适合补充工具能力，不适合伪装成核心业务行为。
+
+如果两个不同命名空间定义了同名扩展方法，编译器会报二义性错误，需要用完整的静态方法调用消除歧义：
+
+```csharp
+// 如果 NamespaceA 和 NamespaceB 都有 IsNullOrBlank 扩展方法
+StringExtensionsA.IsNullOrBlank(name); // 显式调用消除歧义
+```
+
+引入第三方库时要注意，避免扩展方法名冲突。
 
 ## 泛型扩展方法
 
@@ -97,9 +107,11 @@ Console.WriteLine(normalized);
 
 LINQ 方法链就是这个思路：每一步返回一个新的序列，下一步继续处理。
 
+LINQ 的每一步返回的是 `IEnumerable<T>`，理解这个接口是理解链式调用和延迟执行的关键。
+
 ## IEnumerable 和 IEnumerator
 
-`IEnumerable<T>` 表示“可以被枚举的一组数据”。`foreach` 能遍历它，是因为它能提供枚举器。
+`IEnumerable<T>` 表示"可以被枚举的一组数据"。`foreach` 能遍历它，是因为它能提供枚举器。
 
 ```csharp
 IEnumerable<int> numbers = new List<int> { 1, 2, 3 };
@@ -110,12 +122,30 @@ foreach (int number in numbers)
 }
 ```
 
-粗略理解：
+`foreach` 本质上做了什么？编译器把它翻译成对 `IEnumerator<T>` 的调用：
 
-- `IEnumerable<T>`：可遍历对象
-- `IEnumerator<T>`：具体遍历过程，知道当前元素和如何移动到下一个元素
+```csharp
+IEnumerable<int> numbers = new List<int> { 1, 2, 3 };
 
-大多数业务代码只需要使用 `IEnumerable<T>`，很少手写 `IEnumerator<T>`。
+IEnumerator<int> enumerator = numbers.GetEnumerator();
+
+while (enumerator.MoveNext())
+{
+    Console.WriteLine(enumerator.Current);
+}
+```
+
+`IEnumerator<T>` 的核心成员：
+
+- `MoveNext()`：移动到下一个元素，返回 `bool` 表示是否还有元素
+- `Current`：获取当前元素
+- `Reset()`：重置到起始位置（很少使用，COM 互操作遗留）
+
+`IEnumerable<T>` 只有一个方法：`GetEnumerator()`，返回 `IEnumerator<T>`。
+
+理解这个机制后，你就知道为什么 `foreach` 不能在遍历时修改集合——`MoveNext` 会检测集合版本号，修改后版本号变化会抛 `InvalidOperationException`。
+
+大多数业务代码只需要使用 `IEnumerable<T>`，很少手写 `IEnumerator<T>`。但理解 `MoveNext`/`Current` 的配合，有助于理解延迟执行和 `yield return` 的底层原理。
 
 ## yield return
 
@@ -231,6 +261,7 @@ foreach (int number in TakeUntilNegative(new[] { 1, 2, -1, 3 }))
 - 扩展方法不要替代正常的领域建模
 - 不要给常用类型添加过多语义模糊的方法
 - 迭代器是延迟执行，重复枚举可能重复执行逻辑
+- 如果延迟执行的查询依赖了数据库连接等外部资源，重复枚举时资源可能已被释放
 - 迭代器内部不要依赖已经释放的外部资源
 
 如果数据必须固定下来，使用 `ToList()` 或 `ToArray()` 立即执行并缓存结果。

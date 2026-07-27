@@ -144,6 +144,48 @@ public class Product
 
 依赖注入容器、插件系统、对象映射器都可能用到类似机制。但生产级 DI 容器不会每次都用最原始的反射调用，通常会做表达式树、委托缓存等优化。
 
+### MethodInfo.Invoke：动态调用方法
+
+反射不只是读取类型信息，还可以在运行时动态调用方法：
+
+```csharp
+using System;
+using System.Reflection;
+
+public class Calculator
+{
+    public int Add(int a, int b) => a + b;
+}
+
+var calc = new Calculator();
+MethodInfo? method = typeof(Calculator).GetMethod("Add");
+
+if (method is not null)
+{
+    object? result = method.Invoke(calc, new object[] { 3, 5 });
+    Console.WriteLine(result); // 8
+}
+```
+
+`Invoke` 的参数：第一个是实例对象（静态方法传 `null`），第二个是方法参数数组。返回值是 `object?`，需要自己转换类型。
+
+### ConstructorInfo：带参数构造
+
+`Activator.CreateInstance` 只能调用无参构造函数。带参数的构造可以用 `ConstructorInfo`：
+
+```csharp
+ConstructorInfo? ctor = typeof(Order)
+    .GetConstructor(new[] { typeof(string), typeof(decimal) });
+
+if (ctor is not null)
+{
+    object? instance = ctor.Invoke(new object[] { "NO-001", 299m });
+    Console.WriteLine(instance);
+}
+```
+
+这比 `Activator.CreateInstance` 更灵活，但在生产代码中应该优先考虑依赖注入容器。
+
 ## 什么是 Attribute
 
 Attribute 是附加在代码元素上的元数据。它本身不直接改变代码行为，真正改变行为的是读取这些元数据的框架或代码。
@@ -183,6 +225,21 @@ public class TableAttribute : Attribute
 
 这里 `[Table("products")]` 只是元数据。只有当代码通过反射读取它时，它才会产生实际效果。
 
+`AttributeUsage` 有三个重要属性：
+
+```csharp
+[AttributeUsage(
+    AttributeTargets.Property,
+    AllowMultiple = true,   // 同一元素是否可以多次标注
+    Inherited = false)]     // 是否被子类继承
+public class ValidationAttribute : Attribute
+{
+}
+```
+
+- `AllowMultiple = true`：允许同一属性上标注多个同类型 Attribute（如多个验证规则）
+- `Inherited = true`（默认）：子类会继承父类上的 Attribute；设为 `false` 则不继承
+
 ## 自定义验证 Attribute
 
 下面实现一个最小验证器，演示 Attribute 和反射如何配合。
@@ -212,7 +269,7 @@ public class Program
 
 public class RegisterRequest
 {
-    [Required]
+    [NonEmpty]
     public string UserName { get; set; } = string.Empty;
 
     [MinLength(6)]
@@ -220,9 +277,13 @@ public class RegisterRequest
 }
 
 [AttributeUsage(AttributeTargets.Property)]
-public class RequiredAttribute : Attribute
+public class NonEmptyAttribute : Attribute
 {
 }
+
+:::info
+这里使用 `NonEmptyAttribute` 而非 `RequiredAttribute`，是为了避免与 `System.ComponentModel.DataAnnotations.RequiredAttribute` 同名混淆。实际项目中可以直接使用 .NET 内置的验证 Attribute。
+:::
 
 [AttributeUsage(AttributeTargets.Property)]
 public class MinLengthAttribute : Attribute
@@ -246,7 +307,7 @@ public static class Validator
         {
             object? value = property.GetValue(instance);
 
-            if (property.GetCustomAttribute<RequiredAttribute>() is not null &&
+            if (property.GetCustomAttribute<NonEmptyAttribute>() is not null &&
                 string.IsNullOrWhiteSpace(value?.ToString()))
             {
                 errors.Add($"{property.Name} 不能为空");
@@ -311,6 +372,27 @@ public class OrderPaidHandler : IEventHandler
 
 这类代码常用于自动注册服务、插件发现、消息处理器扫描等场景。
 
+### 泛型类型的反射
+
+运行时可以检查和构造泛型类型：
+
+```csharp
+Type openGeneric = typeof(IRepository<>);
+Type closedGeneric = typeof(IRepository<Product>);
+
+Console.WriteLine($"是否泛型定义：{openGeneric.IsGenericTypeDefinition}");
+Console.WriteLine($"是否构造泛型：{closedGeneric.IsConstructedGenericType}");
+
+Type[] typeArgs = closedGeneric.GetGenericArguments();
+Console.WriteLine($"类型参数：{typeArgs[0].Name}");
+
+// 运行时构造封闭泛型
+Type repositoryType = openGeneric.MakeGenericType(typeof(Product));
+Console.WriteLine(repositoryType);
+```
+
+DI 容器在运行时根据接口类型找到实现类、`MakeGenericType` 构造封闭类型、再用 `Activator.CreateInstance` 创建实例，这就是依赖注入的底层原理之一。
+
 ## 反射的成本与边界
 
 反射比直接调用更灵活，但也有代价：
@@ -319,6 +401,16 @@ public class OrderPaidHandler : IEventHandler
 - 性能通常低于直接调用，频繁路径需要缓存元数据或委托
 - 代码可读性可能下降，调试成本更高
 - 在 Native AOT、裁剪发布等场景中需要额外注意元数据保留问题
+
+### Source Generator：反射的现代替代
+
+.NET 近年推广 Source Generator，在编译期生成代码，替代部分运行时反射场景：
+
+- 编译期生成代码，不需要运行时反射，性能更好
+- 与 Native AOT 兼容，不会被裁剪
+- 生成的代码可以通过 IDE 查看和调试
+
+ASP.NET Core 的路由注册、JSON 序列化、日志记录等已经大量使用 Source Generator。了解这个趋势，有助于理解为什么新版本 .NET 框架中反射的使用在减少。
 
 常见优化方式是缓存反射结果。
 
