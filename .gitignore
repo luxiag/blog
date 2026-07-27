@@ -4,3 +4,12 @@ src/.vuepress/.cache/
 src/.vuepress/.temp/
 src/.vuepress/dist/
 .history/
+.alma-snapshots
+.codegraph
+.deveco
+.github
+.next
+.playwright-mcp
+.vercel
+.vscode
+out
