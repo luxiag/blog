@@ -6,7 +6,6 @@ const nextConfig: NextConfig = {
   output: 'export',
   basePath: '/blog',
   pageExtensions: ["js", "jsx", "md", "mdx", "ts", "tsx"],
-  reactCompiler: true,
   images: {
     unoptimized: true,
     remotePatterns: [
@@ -18,7 +17,6 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  turbopack: {},
   async headers() {
     return [
       {
