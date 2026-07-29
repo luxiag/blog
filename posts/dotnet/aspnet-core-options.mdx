@@ -326,7 +326,7 @@ builder.Services.PostConfigure<SmtpOptions>(options =>
 });
 ```
 
-### IPostConfigureOptions<T>
+### IPostConfigureOptions`<T>`
 
 如果 PostConfigure 逻辑需要依赖 DI 服务，可以实现 `IPostConfigureOptions<T>`：
 

@@ -842,7 +842,7 @@ fi
 echo "Backup completed successfully."
 ```
 
-:::tip ${1:?message} 用法
+:::tip \${1:\?message} 用法
 `${1:?Usage: ...}` 是一种简洁的参数校验写法——如果 `$1` 为空或未设置，脚本会输出冒号后的消息并退出（退出码 1）。比手动写 if 判断更紧凑。
 :::
 

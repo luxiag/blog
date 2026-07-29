@@ -1,4 +1,3 @@
-
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -48,7 +47,6 @@ function rotateLog() {
     if (fs.existsSync(logConfig.logFile)) {
       const stats = fs.statSync(logConfig.logFile);
       if (stats.size > logConfig.maxFileSize) {
-        // 轮转日志文件
         for (let i = logConfig.maxFiles - 1; i > 0; i--) {
           const oldFile = `${logConfig.logFile}.${i}`;
           const newFile = `${logConfig.logFile}.${i + 1}`;
