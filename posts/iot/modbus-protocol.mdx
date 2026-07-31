@@ -1,0 +1,687 @@
+---
+title: 'Modbus 协议实战：寄存器模型、RTU 与 TCP、轮询设计'
+date: '2026-07-31'
+excerpt: '工业现场最普及的标准协议：四类数据区与功能码、地址偏移的经典坑、RTU 的静默间隔分帧与 TCP 的 MBAP 头、32 位数值的字序问题、批量读取优化与从站轮询调度。'
+tags: ['iot', 'dotnet', 'modbus', 'rs485', 'polling']
+nextPost: 'iot/pinvoke-vendor-sdk'
+---
+
+# Modbus 协议实战：寄存器模型、RTU 与 TCP、轮询设计
+
+电表、水表、温湿度传感器、变频器、IO 模块、称重变送器、部分 PLC——工业现场只要是"标准化"的设备，大概率支持 Modbus。它是 1979 年的老协议，简单到一个人一天就能实现，也正因为简单成了事实标准，四十多年没被替代。
+
+前两篇讲的是私有协议：厂商给你一份文档，你从零翻译。Modbus 相反——**协议本身是公开且固定的，难点在于把设备手册里的寄存器表映射成有意义的业务数据**，以及在 RS485 总线上把几十台设备轮询好。
+
+:::tip 系列阅读顺序
+本文是 [.NET 对接工业设备路线图](/posts/iot/industrial-device-roadmap) 的第三篇，直接建立在前两篇之上：[串口通信](/posts/iot/serial-port-communication) 的 RS485 半双工约束和拆帧模型、[私有 TCP 协议](/posts/iot/tcp-protocol-binary-parsing) 的 CRC16 实现和请求应答关联，本文都会用到，不再重复。
+:::
+
+## 协议全貌
+
+Modbus 的模型极简：**一主多从，主机问、从机答，从机永不主动说话。**
+
+三种变体，帧格式不同但**核心数据部分完全一样**：
+
+| 变体 | 承载 | 校验 | 场景 |
+|---|---|---|---|
+| **Modbus RTU** | 串口（RS485/RS232） | CRC16 | 现场设备主流 |
+| **Modbus TCP** | 以太网，默认端口 502 | 无（TCP 自带） | 网口设备、PLC |
+| Modbus ASCII | 串口，十六进制字符 | LRC | 已很少见，可忽略 |
+
+这个"核心数据部分"叫 **PDU**（协议数据单元），由功能码 + 数据组成。RTU 和 TCP 只是在 PDU 外面套了不同的壳。**这决定了实现策略：PDU 编解码写一份，RTU 和 TCP 各写一层薄薄的包装。**
+
+## 四类数据区与功能码
+
+Modbus 把设备的数据抽象成四个区，这是理解一切的基础：
+
+| 数据区 | 读写 | 单位 | 典型用途 |
+|---|---|---|---|
+| **线圈 Coil** | 读写 | 1 位 | 继电器输出、开关控制、道闸抬杆 |
+| **离散输入 Discrete Input** | 只读 | 1 位 | 开关量输入、门磁、光电开关 |
+| **保持寄存器 Holding Register** | 读写 | 16 位 | 设定值、参数配置、可写数据 |
+| **输入寄存器 Input Register** | 只读 | 16 位 | 测量值：温度、电压、重量 |
+
+对应的功能码：
+
+| 功能码 | 作用 | 单次上限 |
+|---|---|---|
+| `0x01` | 读线圈 | 2000 个 |
+| `0x02` | 读离散输入 | 2000 个 |
+| `0x03` | **读保持寄存器** | 125 个 |
+| `0x04` | **读输入寄存器** | 125 个 |
+| `0x05` | 写单个线圈 | 1 |
+| `0x06` | **写单个保持寄存器** | 1 |
+| `0x0F` | 写多个线圈 | 1968 个 |
+| `0x10` | **写多个保持寄存器** | 123 个 |
+
+**实际项目里 90% 的工作只用到 `0x03`、`0x04`、`0x06`、`0x10` 这四个。** 先把它们做扎实，其余按需补。
+
+:::note 区的划分在很多设备上是虚的
+标准上"输入寄存器只读、保持寄存器可读写"，但大量国产设备**把所有数据都塞进保持寄存器**，用 `0x03` 读一切。也有设备两个功能码读同一块数据。
+
+所以不要纠结"这个值理论上属于哪个区"，**照手册写的功能码用就对了**。手册说用 `0x03` 读温度，就用 `0x03`。
+:::
+
+## 第一个坑：地址偏移
+
+这是 Modbus 新手 100% 会踩的坑，值得单独一节。
+
+历史上 Modbus 有一套**传统编号**（也叫 Modicon 编号），用首位数字表示数据区：
+
+| 传统编号 | 数据区 | 协议地址 |
+|---|---|---|
+| `00001` ~ `09999` | 线圈 | 编号 − 1 |
+| `10001` ~ `19999` | 离散输入 | 编号 − 10001 |
+| `30001` ~ `39999` | 输入寄存器 | 编号 − 30001 |
+| `40001` ~ `49999` | 保持寄存器 | 编号 − 40001 |
+
+**关键点：报文里传的是协议地址，从 0 开始。** 手册写"温度在 40001"，你要在报文里填 `0`；写"在 40100"，你填 `99`。
+
+麻烦的是各家手册写法完全不统一，你会遇到三种：
+
+- 直接给协议地址（`0`、`1`、`2`……）—— 照填
+- 给传统编号（`40001`、`40002`）—— 减掉基址
+- 给"寄存器号"且从 1 开始（`1`、`2`、`3`）—— 减 1
+
+**分不清时的判断办法**：读一个你知道答案的点位（比如设备面板上显示 25.6℃ 的温度）。读出来是别的寄存器的值，就把地址 ±1 试。这比对着文档纠结快得多。
+
+代码里建议用显式的转换而不是让调用方自己算：
+
+```csharp
+/// <summary>
+/// 寄存器地址。避免"传统编号"和"协议地址"混用导致的偏移错误。
+/// </summary>
+public readonly record struct RegisterAddress(ushort ProtocolAddress)
+{
+    /// <summary>从协议地址创建（报文里实际传的值，从 0 开始）。</summary>
+    public static RegisterAddress FromProtocol(ushort address) => new(address);
+
+    /// <summary>从手册上的传统编号创建，如 40001。</summary>
+    public static RegisterAddress FromLegacy(int legacyNumber) => legacyNumber switch
+    {
+        >= 40001 and <= 49999 => new((ushort)(legacyNumber - 40001)),
+        >= 30001 and <= 39999 => new((ushort)(legacyNumber - 30001)),
+        >= 10001 and <= 19999 => new((ushort)(legacyNumber - 10001)),
+        >= 1 and <= 9999 => new((ushort)(legacyNumber - 1)),
+        _ => throw new ArgumentOutOfRangeException(nameof(legacyNumber)),
+    };
+}
+```
+
+配置里也把来源标清楚，让现场人员看得懂：
+
+```json
+{
+  "Points": [
+    { "Name": "温度", "AddressStyle": "Legacy", "Address": 40001, "Scale": 0.1 },
+    { "Name": "湿度", "AddressStyle": "Legacy", "Address": 40002, "Scale": 0.1 }
+  ]
+}
+```
+
+## RTU 帧结构
+
+```text
++--------+--------+-----------------+--------+
+| 从站   | 功能码 | 数据            | CRC16  |
+| 1字节  | 1字节  | N 字节          | 2字节  |
++--------+--------+-----------------+--------+
+   ↑        └────────── PDU ────────┘   ↑
+从站地址 1~247，0 是广播          低字节在前
+```
+
+**RTU 最大的特点：没有帧头和帧尾。** 它靠**时间**分帧——帧与帧之间至少有 3.5 个字符时间的静默。9600 波特率下一个字符约 1.15 毫秒，3.5 个字符约 4 毫秒。
+
+这给串口编程带来一个现实问题：**按时间分帧在通用操作系统上不可靠**。Windows 的串口驱动和调度精度做不到稳定区分 4 毫秒的间隔。
+
+好消息是**实践中不需要**。因为 Modbus 是严格一问一答的，你知道自己发了什么，所以**知道应该收到多长的响应**：
+
+```csharp
+/// <summary>
+/// RTU 响应长度是可预知的，按预期长度读取而不是靠静默间隔分帧。
+/// 这是在通用操作系统上实现 Modbus RTU 的标准做法。
+/// </summary>
+private static int ExpectedResponseLength(byte functionCode, int requestQuantity)
+    => functionCode switch
+    {
+        // 读位类：从站+功能码+字节数+数据+CRC
+        0x01 or 0x02 => 1 + 1 + 1 + (requestQuantity + 7) / 8 + 2,
+
+        // 读寄存器类：每个寄存器 2 字节
+        0x03 or 0x04 => 1 + 1 + 1 + requestQuantity * 2 + 2,
+
+        // 写单个：响应是请求的回显，固定 8 字节
+        0x05 or 0x06 => 8,
+
+        // 写多个：从站+功能码+起始地址+数量+CRC
+        0x0F or 0x10 => 8,
+
+        _ => throw new NotSupportedException($"未支持的功能码 0x{functionCode:X2}"),
+    };
+```
+
+读取逻辑：先读固定的头部两字节，**判断是否是异常响应**（功能码最高位被置 1），再按情况读剩余部分：
+
+```csharp
+private async Task<byte[]> ReadRtuResponseAsync(
+    byte expectedSlave, byte expectedFunction, int quantity, CancellationToken ct)
+{
+    // 先读 2 字节：从站地址 + 功能码
+    var head = new byte[2];
+    await _channel.ReadExactlyAsync(head, ct);
+
+    if (head[0] != expectedSlave)
+        throw new ModbusException($"从站地址不匹配：期望 {expectedSlave}，收到 {head[0]}");
+
+    // 异常响应：功能码 = 原功能码 | 0x80，后面跟 1 字节异常码 + CRC
+    if ((head[1] & 0x80) != 0)
+    {
+        var errorTail = new byte[3];
+        await _channel.ReadExactlyAsync(errorTail, ct);
+
+        throw new ModbusExceptionResponse(errorTail[0]);
+    }
+
+    if (head[1] != expectedFunction)
+        throw new ModbusException($"功能码不匹配：期望 0x{expectedFunction:X2}，收到 0x{head[1]:X2}");
+
+    var remaining = ExpectedResponseLength(expectedFunction, quantity) - 2;
+    var body = new byte[remaining];
+    await _channel.ReadExactlyAsync(body, ct);
+
+    var frame = new byte[2 + remaining];
+    head.CopyTo(frame, 0);
+    body.CopyTo(frame, 2);
+
+    // CRC 校验，注意 Modbus 的 CRC 在帧尾是低字节在前
+    var expected = Crc16Modbus(frame.AsSpan(0, frame.Length - 2));
+    var actual = BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(frame.Length - 2));
+
+    if (expected != actual)
+        throw new ModbusException($"CRC 校验失败：计算 {expected:X4}，收到 {actual:X4}");
+
+    return frame;
+}
+```
+
+`Crc16Modbus` 的实现在 [私有 TCP 协议](/posts/iot/tcp-protocol-binary-parsing) 那篇里。
+
+异常码要转成可读信息，这是排查的重要线索：
+
+```csharp
+public sealed class ModbusExceptionResponse : ModbusException
+{
+    public byte ExceptionCode { get; }
+
+    public ModbusExceptionResponse(byte code)
+        : base($"从站返回异常 0x{code:X2}：{Describe(code)}")
+        => ExceptionCode = code;
+
+    private static string Describe(byte code) => code switch
+    {
+        0x01 => "非法功能码，从站不支持这个操作",
+        0x02 => "非法数据地址，寄存器地址超范围（最常见，通常是地址偏移算错）",
+        0x03 => "非法数据值，写入的值超出允许范围",
+        0x04 => "从站设备故障",
+        0x05 => "已确认，从站需要较长时间处理",
+        0x06 => "从站忙，稍后重试",
+        0x0B => "网关目标设备无响应（Modbus 网关后面的设备没接好）",
+        _ => "未知异常码，查设备手册",
+    };
+}
+```
+
+**`0x02` 非法数据地址是最常见的异常**，看到它先怀疑地址偏移。
+
+## TCP 帧结构
+
+Modbus TCP 在 PDU 前面加了 7 字节的 **MBAP 头**，同时**去掉了 CRC**（TCP 自己保证完整性）：
+
+```text
++----------+----------+--------+--------+--------+---------+
+| 事务标识 | 协议标识 | 长度   | 单元ID | 功能码 | 数据    |
+| 2字节    | 2字节(0) | 2字节  | 1字节  | 1字节  | N字节   |
++----------+----------+--------+--------+--------+---------+
+      └──────── MBAP 头（7字节）────────┘└──── PDU ────┘
+```
+
+四个字段的含义：
+
+- **事务标识**：由你生成，从站原样返回。**正好可以用来做请求应答关联**——这就是上一篇讲的带序号协议的现成实现
+- **协议标识**：固定 0
+- **长度**：从"单元 ID"开始到帧尾的字节数
+- **单元 ID**：相当于 RTU 的从站地址。直连以太网设备时通常填 1 或 255；**通过 Modbus 网关转接 RS485 设备时，这里填真实的 RS485 从站地址**
+
+由于 PDU 完全相同，编解码可以复用：
+
+```csharp
+/// <summary>PDU 构造。RTU 和 TCP 共用。</summary>
+public static byte[] BuildReadRegistersPdu(
+    byte functionCode, ushort startAddress, ushort quantity)
+{
+    var pdu = new byte[5];
+    pdu[0] = functionCode;
+    BinaryPrimitives.WriteUInt16BigEndian(pdu.AsSpan(1), startAddress);  // 协议内一律大端
+    BinaryPrimitives.WriteUInt16BigEndian(pdu.AsSpan(3), quantity);
+    return pdu;
+}
+
+/// <summary>RTU 包装：前面加从站地址，后面加 CRC。</summary>
+public static byte[] WrapRtu(byte slaveAddress, ReadOnlySpan<byte> pdu)
+{
+    var frame = new byte[1 + pdu.Length + 2];
+    frame[0] = slaveAddress;
+    pdu.CopyTo(frame.AsSpan(1));
+
+    var crc = Crc16Modbus(frame.AsSpan(0, 1 + pdu.Length));
+    BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(1 + pdu.Length), crc);  // CRC 小端
+
+    return frame;
+}
+
+/// <summary>TCP 包装：前面加 MBAP 头，无 CRC。</summary>
+public static byte[] WrapTcp(ushort transactionId, byte unitId, ReadOnlySpan<byte> pdu)
+{
+    var frame = new byte[7 + pdu.Length];
+
+    BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0), transactionId);
+    BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(2), 0);                    // 协议标识固定 0
+    BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(4), (ushort)(pdu.Length + 1)); // 长度含 unitId
+    frame[6] = unitId;
+
+    pdu.CopyTo(frame.AsSpan(7));
+    return frame;
+}
+```
+
+**注意两处字节序的不一致**：协议内的地址、数量、寄存器值全部是大端；但 RTU 的 CRC 是小端。这不是笔误，是协议规定，写的时候容易搞混。
+
+## 数值语义：寄存器到业务数据
+
+读回来的是一串 16 位寄存器，怎么变成温度、电量、流量，全看手册怎么定义。
+
+### 单寄存器的定点小数
+
+最常见的形式。手册写"温度，单位 0.1℃"：
+
+```csharp
+// 读到 0x00FF = 255，实际是 25.5℃
+ushort raw = ReadRegister(0);
+decimal temperature = raw * 0.1m;
+
+// 可能为负时，寄存器里是补码，要先转成有符号
+short signed = unchecked((short)raw);
+decimal temp = signed * 0.1m;    // -12.7℃
+```
+
+**负数必须走 `short` 转换。** 直接用 `ushort` 会把 −1 读成 65535，这个错误在冬天上线的项目里特别容易出现——夏天测试一切正常。
+
+### 32 位数值的字序问题
+
+电能、累计流量这类大数值要占两个寄存器。**Modbus 标准只规定了单个寄存器内部是大端，没有规定两个寄存器之间的顺序**，于是各家实现不一。同一个 32 位值 `0x12345678` 可能以四种方式出现：
+
+| 字序 | 寄存器 N | 寄存器 N+1 | 别称 |
+|---|---|---|---|
+| ABCD | `0x1234` | `0x5678` | 大端（Big Endian） |
+| CDAB | `0x5678` | `0x1234` | **字交换，最常见的"另一种"** |
+| BADC | `0x3412` | `0x7856` | 字节交换 |
+| DCBA | `0x7856` | `0x3412` | 小端 |
+
+所以 32 位读取必须支持配置字序：
+
+```csharp
+public enum WordOrder { ABCD, CDAB, BADC, DCBA }
+
+public static uint ReadUInt32(ReadOnlySpan<ushort> registers, WordOrder order)
+{
+    ushort high = registers[0];
+    ushort low = registers[1];
+
+    return order switch
+    {
+        WordOrder.ABCD => ((uint)high << 16) | low,
+        WordOrder.CDAB => ((uint)low << 16) | high,
+        WordOrder.BADC => ((uint)SwapBytes(high) << 16) | SwapBytes(low),
+        WordOrder.DCBA => ((uint)SwapBytes(low) << 16) | SwapBytes(high),
+        _ => throw new ArgumentOutOfRangeException(nameof(order)),
+    };
+
+    static ushort SwapBytes(ushort v) => (ushort)((v >> 8) | (v << 8));
+}
+
+public static float ReadFloat(ReadOnlySpan<ushort> registers, WordOrder order)
+    => BitConverter.UInt32BitsToSingle(ReadUInt32(registers, order));
+```
+
+:::tip 字序对不上时怎么试
+读一个已知值（比如设备面板显示的累计电量），四种字序全试一遍，哪个对就用哪个。
+
+有个快速判断法：如果读出来的数**大得离谱**（比如电量显示几十亿），基本就是字序错了。把 `ABCD` 换成 `CDAB` 试试，这两种覆盖了绝大多数设备。
+:::
+
+### 位域与字符串
+
+```csharp
+// 状态寄存器：一个寄存器里 16 个开关位
+ushort status = ReadRegister(10);
+bool isRunning = (status & (1 << 0)) != 0;
+bool hasFault  = (status & (1 << 1)) != 0;
+
+// 字符串：每个寄存器装 2 个字节，注意手册说的顺序
+public static string ReadString(ReadOnlySpan<ushort> registers)
+{
+    var bytes = new byte[registers.Length * 2];
+    for (int i = 0; i < registers.Length; i++)
+        BinaryPrimitives.WriteUInt16BigEndian(bytes.AsSpan(i * 2), registers[i]);
+
+    int end = Array.IndexOf(bytes, (byte)0);
+    return Encoding.ASCII.GetString(bytes, 0, end < 0 ? bytes.Length : end).Trim();
+}
+```
+
+## 轮询设计
+
+真实项目不是读一个寄存器，而是**几十台设备、几百个点位、持续不断地读**。轮询设计的好坏直接决定系统能不能用。
+
+### RS485 上绝对不能并发
+
+这一点在第一篇讲过，这里再强调：**RS485 是半双工共享总线，同一时刻只能有一个设备在发。** 并发请求会导致报文互相冲垮，表现是"大量超时 + 偶发数据错乱"。
+
+必须串行化：
+
+```csharp
+public sealed class ModbusRtuMaster
+{
+    // 一条总线一个信号量，保证严格一问一答
+    private readonly SemaphoreSlim _busLock = new(1, 1);
+
+    public async Task<ushort[]> ReadHoldingRegistersAsync(
+        byte slave, ushort start, ushort quantity, CancellationToken ct)
+    {
+        await _busLock.WaitAsync(ct);
+        try
+        {
+            var pdu = BuildReadRegistersPdu(0x03, start, quantity);
+            await _channel.WriteAsync(WrapRtu(slave, pdu), ct);
+
+            var response = await ReadRtuResponseAsync(slave, 0x03, quantity, ct);
+
+            // 跳过 从站+功能码+字节数 三字节，解析寄存器数据
+            return ParseRegisters(response.AsSpan(3, quantity * 2));
+        }
+        finally
+        {
+            // 帧间静默：给从站留出总线切换时间。
+            // 不加这个延迟，慢速设备会出现大量偶发超时。
+            await Task.Delay(_frameInterval, ct);
+            _busLock.Release();
+        }
+    }
+}
+```
+
+**帧间延迟别省。** 标准要求 3.5 字符时间，实践中给 10~20 毫秒更稳，尤其是总线上有老设备时。
+
+Modbus TCP 没有这个限制，可以并发，用事务标识做关联。但**通过 Modbus 网关转 RS485 时，网关后面还是共享总线**，一样要串行。
+
+### 批量读取优化
+
+逐个点位读是新手最容易犯的性能错误。假设一台设备有 20 个点位分布在地址 0~19：
+
+```text
+逐个读：20 次请求 × (往返 30ms + 帧间 15ms) ≈ 900ms
+批量读：1 次请求读 20 个寄存器 ≈ 45ms
+```
+
+差 20 倍。所以要把**地址连续或接近的点位合并成一次请求**：
+
+```csharp
+/// <summary>
+/// 把点位合并成尽量少的读取块。
+/// 允许跨越少量无用寄存器（gap），因为多读几个字节比多发一次请求便宜得多。
+/// </summary>
+public static List<ReadBlock> PlanReadBlocks(
+    IEnumerable<PointDefinition> points,
+    int maxGap = 8,
+    int maxRegistersPerRequest = 120)
+{
+    var sorted = points.OrderBy(p => p.Address).ToList();
+    var blocks = new List<ReadBlock>();
+
+    if (sorted.Count == 0) return blocks;
+
+    int start = sorted[0].Address;
+    int end = start + sorted[0].RegisterCount;
+
+    foreach (var point in sorted.Skip(1))
+    {
+        int pointEnd = point.Address + point.RegisterCount;
+
+        bool gapTooBig = point.Address - end > maxGap;
+        bool wouldExceedLimit = pointEnd - start > maxRegistersPerRequest;
+
+        if (gapTooBig || wouldExceedLimit)
+        {
+            blocks.Add(new ReadBlock(start, end - start));
+            start = point.Address;
+            end = pointEnd;
+        }
+        else
+        {
+            end = Math.Max(end, pointEnd);
+        }
+    }
+
+    blocks.Add(new ReadBlock(start, end - start));
+    return blocks;
+}
+```
+
+注意 `maxRegistersPerRequest` 留了余量（120 而不是上限 125）。**部分设备的实际上限比标准小**，有些甚至只支持一次读 16 个。上线前要按设备实测。
+
+### 轮询调度与故障退避
+
+不同点位的更新频率需求差别很大：
+
+```csharp
+public sealed class PollingScheduler : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            foreach (var device in _devices)
+            {
+                // 故障设备退避：不要每轮都去撞一台离线设备。
+                // 一次超时 1 秒，十台离线设备就让整轮多花 10 秒，
+                // 在线设备的数据也跟着变慢——这是最典型的连带故障。
+                if (device.NextAttemptAt > DateTimeOffset.UtcNow) continue;
+
+                foreach (var group in device.PointGroups)
+                {
+                    // 按组的周期决定这轮是否要读（实时量 1s、累计量 60s）
+                    if (DateTimeOffset.UtcNow - group.LastPolledAt < group.Interval) continue;
+
+                    try
+                    {
+                        await PollGroupAsync(device, group, ct);
+
+                        group.LastPolledAt = DateTimeOffset.UtcNow;
+                        device.ConsecutiveFailures = 0;
+                        device.NextAttemptAt = DateTimeOffset.MinValue;
+                    }
+                    catch (ModbusExceptionResponse ex)
+                    {
+                        // 从站明确回了异常：配置问题，重试无用，直接告警
+                        _logger.LogError(ex, "点位组配置错误 {Device}/{Group}",
+                            device.Name, group.Name);
+                        group.Disabled = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        device.ConsecutiveFailures++;
+
+                        // 连续失败则退避，最长 1 分钟
+                        var backoff = TimeSpan.FromSeconds(
+                            Math.Min(60, Math.Pow(2, device.ConsecutiveFailures)));
+                        device.NextAttemptAt = DateTimeOffset.UtcNow + backoff;
+
+                        _logger.LogWarning(ex, "读取失败 {Device}，{Backoff} 后重试",
+                            device.Name, backoff);
+                        break;   // 这台设备本轮放弃，继续下一台
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+三条调度原则：
+
+**按周期分组。** 温度、电压这类实时量 1 秒读一次；累计电量、总流量这类 1 分钟读一次足够。全按最快周期读会白白占满总线。
+
+**故障设备要退避。** 这是最容易忽略的一点：一台离线设备每次超时 1 秒，十台离线设备就让每轮多花 10 秒，**在线设备的数据也跟着变慢**。退避能把故障隔离在局部。
+
+**明确的配置错误直接停掉。** 从站返回"非法数据地址"说明点位配错了，重试一万次也是一样的结果，标记禁用并告警比无限重试好。
+
+## 完整示例
+
+一台温湿度传感器接入采集：
+
+```csharp
+// appsettings.json
+{
+  "Modbus": {
+    "ChannelType": "SerialPort",
+    "PortName": "COM4",
+    "BaudRate": 9600,
+    "FrameIntervalMs": 15,
+    "Devices": [
+      {
+        "Name": "1号仓温湿度",
+        "SlaveAddress": 1,
+        "PointGroups": [
+          {
+            "Name": "实时量",
+            "IntervalMs": 1000,
+            "FunctionCode": 3,
+            "Points": [
+              { "Name": "温度", "AddressStyle": "Legacy", "Address": 40001, "Type": "Int16", "Scale": 0.1, "Unit": "℃" },
+              { "Name": "湿度", "AddressStyle": "Legacy", "Address": 40002, "Type": "UInt16", "Scale": 0.1, "Unit": "%" }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+```csharp
+private async Task PollGroupAsync(
+    ModbusDevice device, PointGroup group, CancellationToken ct)
+{
+    // 合并成尽量少的请求
+    foreach (var block in group.ReadBlocks)
+    {
+        var registers = await _master.ReadHoldingRegistersAsync(
+            device.SlaveAddress, block.StartAddress, (ushort)block.Count, ct);
+
+        // 按点位定义从块里取值
+        foreach (var point in group.Points.Where(p => block.Contains(p)))
+        {
+            int offset = point.Address - block.StartAddress;
+            var value = point.Decode(registers.AsSpan(offset, point.RegisterCount));
+
+            // 采集结果进 Channel，业务侧异步消费，采集循环不被写库拖慢
+            await _writer.WriteAsync(new PointValue(
+                DeviceName: device.Name,
+                PointName: point.Name,
+                Value: value,
+                Unit: point.Unit,
+                ReadAt: DateTimeOffset.Now), ct);
+        }
+    }
+}
+```
+
+数据落库、缓存、上报的部分和前面几篇一致：`Channel` 解耦 + `BackgroundService` 消费。
+
+## 自己写还是用库
+
+| 方案 | 适用 |
+|---|---|
+| **NModbus**（开源） | 标准 Modbus 场景，RTU/TCP 都支持，成熟稳定 |
+| **HslCommunication** | 功能覆盖广（还含西门子、三菱等），注意其授权条款 |
+| **自己实现** | 需要处理非标变体、要完全掌控超时与调度、或不想引入依赖 |
+
+我的建议：**先用库跑通，把重点放在点位配置和轮询调度上**——那才是这类项目真正的工作量所在。
+
+但**协议细节你必须懂**。因为现场大量设备是"基本符合 Modbus"：地址偏移不标准、一次读取数量有隐含上限、响应超时特别长、异常码乱用。这些情况下库会直接报错，而你需要知道为什么、怎么绕。**读完这篇再用库，遇到问题能自己判断；直接用库不看协议，出问题就只能猜。**
+
+## 调试工具
+
+这三个能覆盖绝大多数场景：
+
+**Modbus Poll**（主机模拟器）：模拟主机去读你的设备。**先用它确认设备能读通**，再写代码。这一步能立刻分清是设备/接线问题还是代码问题。
+
+**Modbus Slave**（从机模拟器）：模拟一台设备，让你的程序去读。没有真机时的开发利器，配合上一篇讲的录制回放思路效果更好。
+
+**mbpoll**（开源命令行）：适合脚本化和自动测试，`mbpoll -a 1 -r 1 -c 10 /dev/ttyUSB0` 这样一行就能读。
+
+串口链路还可以用串口监视工具看原始字节，网口的直接 Wireshark 过滤 `tcp.port == 502`。
+
+:::details 常见问题速查 | 点开看 Modbus 的高频坑
+**读到的值和设备面板显示的不一样**
+地址偏移错了。±1 试，或换传统编号/协议地址的换算方式。
+
+**返回异常码 0x02（非法数据地址）**
+最常见的错误。地址超范围或偏移算错，先查地址换算。
+
+**返回异常码 0x0B（网关目标设备无响应）**
+你连的是 Modbus 网关，网关后面的 RS485 设备没接好或从站地址错。查单元 ID 是否填了真实从站地址。
+
+**32 位数值大得离谱**
+字序错了。`ABCD` 和 `CDAB` 互换试。
+
+**温度冬天变成 65000 多**
+负数当无符号读了。用 `short` 而不是 `ushort`。
+
+**一次读 100 个寄存器失败，读 16 个正常**
+设备的实际上限比标准小。按实测值调 `maxRegistersPerRequest`。
+
+**大量偶发超时**
+RS485 上并发了，或帧间延迟太短。串行化 + 加到 15~20ms。
+
+**多台设备时数据串了**
+同上，并发导致报文冲撞。一条总线必须严格一问一答。
+
+**接了一台设备正常，接第二台全乱**
+从站地址冲突（两台都是 1），或 RS485 接线极性反了、缺终端电阻。
+
+**轮询越来越慢**
+有离线设备在每轮超时。必须做故障设备退避。
+
+**CRC 一直校验失败**
+CRC 字节序搞反了（Modbus 是低字节在前），或者算的范围含了 CRC 自身。
+
+**Modbus TCP 连上了但没响应**
+单元 ID 填错。直连设备通常是 1 或 255，网关转接时要填真实从站地址。
+:::
+
+## 小结
+
+Modbus 简单，但坑集中且固定，知道了就不会再犯：
+
+1. **PDU 与承载分离**：编解码写一份，RTU 和 TCP 各套一层壳
+2. **地址偏移是第一大坑**：手册的 40001 在报文里是 0，分不清就 ±1 试
+3. **RTU 靠预期长度读取**，不要试图在通用操作系统上按 3.5 字符静默分帧
+4. **注意两处字节序**：协议内一律大端，但 RTU 的 CRC 是小端
+5. **32 位数值的字序不在标准内**，必须可配置，`ABCD` 和 `CDAB` 覆盖大多数设备
+6. **RS485 严格串行 + 帧间延迟**，并发是"大量偶发超时"的根因
+7. **批量读取 + 分组周期 + 故障退避**，三者决定轮询系统能不能用
+
+下一篇 [P/Invoke 对接厂商 SDK](/posts/iot/pinvoke-vendor-sdk) 离开标准协议，进入厂商原生库的世界——那里没有公开规范，只有 DLL 和头文件。

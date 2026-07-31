@@ -1,0 +1,619 @@
+---
+title: '门禁对接：人员权限下发同步与事件补漏'
+date: '2026-07-31'
+excerpt: '门禁系统的真正难点不是开门，而是人员、凭证、权限的下发同步：期望状态与设备状态的对账、增量下发与全量校准、人脸下发校验、断网期间事件的游标补拉，以及消防联动的硬件兜底。'
+tags: ['iot', 'dotnet', 'access-control', 'sync', 'isapi']
+nextPost: 'iot/device-layer-and-reliability'
+---
+
+# 门禁对接：人员权限下发同步与事件补漏
+
+刚接触门禁的人几乎都会误判它的难度：以为核心是"调一个开门接口"。
+
+真正的工作量在别处。**门禁控制器必须离线可用**——网线断了、你的服务器宕了，员工刷卡照样要能进门。这意味着人员、卡号、人脸、权限、时间段规则**必须提前下发并存储在设备本地**。
+
+于是问题的性质就变了：你不是在调用一个服务，而是在**维护一份分布在几十台设备上的数据副本**。这是一个分布式数据同步问题，也是门禁项目复杂度的全部来源。
+
+:::tip 系列阅读顺序
+本文是 [.NET 对接工业设备路线图](/posts/iot/industrial-device-roadmap) 的第七篇。它和前面几篇相对独立，但如果要走 SDK 路线，需要 [P/Invoke 对接厂商 SDK](/posts/iot/pinvoke-vendor-sdk) 的基础。
+:::
+
+## 和摄像头的本质区别
+
+先把这个区别想透，后面的设计都是它的推论：
+
+| 维度 | 摄像头 | 门禁 |
+|---|---|---|
+| 交互性质 | **无状态查询**：要图就取一张 | **有状态同步**：数据要常驻设备 |
+| 断网影响 | 取不到图，业务暂停 | **必须照常工作** |
+| 数据流向 | 主要是设备 → 你 | **双向**：权限下去，记录上来 |
+| 核心难点 | 选对路线 | **对账**：设备上的数据和系统是否一致 |
+| 失败后果 | 少一张图 | 该进的进不去，该拦的拦不住 |
+
+一句话概括：**你的系统是主数据源，每台设备都持有一份副本，你要保证副本最终一致。**
+
+## 领域模型
+
+模型设计错了，后面所有同步逻辑都会别扭。核心是五个概念：
+
+```csharp
+/// <summary>人员：权限的主体。</summary>
+public sealed class Person
+{
+    public Guid Id { get; init; }
+    public string PersonNo { get; init; } = default!;   // 工号，下发到设备的主键
+    public string Name { get; set; } = default!;
+    public DateOnly? ValidFrom { get; set; }
+    public DateOnly? ValidTo { get; set; }              // 离职/合同到期
+    public PersonStatus Status { get; set; }
+}
+
+/// <summary>凭证：证明"你是谁"的手段。一个人可以有多个。</summary>
+public sealed class Credential
+{
+    public Guid Id { get; init; }
+    public Guid PersonId { get; init; }
+    public CredentialType Type { get; init; }           // 卡 / 人脸 / 指纹 / 密码 / 二维码
+    public string Value { get; init; } = default!;      // 卡号、或人脸照片的存储路径
+    public bool IsActive { get; set; }
+}
+
+/// <summary>门：一个物理通行点，归属某台控制器的某个通道。</summary>
+public sealed class Door
+{
+    public Guid Id { get; init; }
+    public string Name { get; init; } = default!;
+    public Guid ControllerId { get; init; }
+    public int ChannelNo { get; init; }
+}
+
+/// <summary>时间段计划：什么时候允许通行。</summary>
+public sealed class TimeSchedule
+{
+    public Guid Id { get; init; }
+    public string Name { get; init; } = default!;
+    public List<TimeSlot> Slots { get; init; } = [];    // 按星期几 + 起止时刻
+}
+
+/// <summary>权限：人 × 门 × 时间段。这是要下发到设备的核心数据。</summary>
+public sealed class Permission
+{
+    public Guid PersonId { get; init; }
+    public Guid DoorId { get; init; }
+    public Guid TimeScheduleId { get; init; }
+}
+```
+
+两个设计要点：
+
+**用工号（`PersonNo`）而不是数据库主键做下发标识。** 设备侧的人员 ID 通常有长度和字符集限制（常见是数字或短字符串），`Guid` 塞不进去。而且工号对现场运维人员可读——他们要在设备上直接查人。
+
+**凭证和人员分离。** 一个人有卡、有人脸、可能还有指纹。合并成一张表会让"删掉某张卡但保留人脸"这种常规操作变得很别扭。
+
+## 对接方式
+
+| 方式 | 代表 | 特点 |
+|---|---|---|
+| **HTTP 接口** | 海康 ISAPI（JSON）、大华 HTTP | 首选。无位数问题、能用 Postman 测 |
+| **设备主动轮询** | 中控智慧 PUSH 协议 | 设备定时来你的服务领指令，天然穿透 NAT |
+| **厂商 SDK** | 海康 SDK、中控 standalone SDK | 功能最全，但要 P/Invoke |
+| **韦根 Wiegand** | 读卡器到控制器 | 底层协议，一般不需要你对接 |
+
+**中控智慧的 PUSH 协议值得单独说**，因为它的方向和其他设备相反：设备定时向你的 HTTP 服务发请求"有没有给我的指令"，你把待下发的指令放在响应里返回；设备也用 HTTP POST 把刷卡记录推给你。
+
+这个模式的好处很实际：**设备在任何 NAT 后面都能工作，你不需要能主动访问设备。** 代价是指令下发有延迟（取决于轮询间隔），且你要实现一套设备会来访问的接口。
+
+其余品牌基本都是"你主动访问设备"的模式。下面的设计对两种模式都适用，只是执行层不同。
+
+## 核心：下发同步的设计
+
+这是整篇的重点。直接写"调接口下发人员"是行不通的，因为下发会失败、设备会被人工改、断网期间的变更要补上。
+
+### 期望状态与实际状态
+
+借鉴声明式的思路：**系统记录"应该是什么"，同步器负责让设备"变成那样"。**
+
+```csharp
+/// <summary>
+/// 一条下发任务。表达"某个数据应该以某种状态存在于某台设备上"。
+/// </summary>
+public sealed class SyncTask
+{
+    public long Id { get; init; }
+
+    public Guid ControllerId { get; init; }
+    public SyncTargetType TargetType { get; init; }   // 人员 / 卡片 / 人脸 / 权限
+    public string TargetKey { get; init; } = default!; // 工号、卡号等业务键
+    public SyncOperation Operation { get; init; }      // Upsert / Delete
+
+    /// <summary>数据内容的快照，用于下发时构造请求。</summary>
+    public string PayloadJson { get; init; } = default!;
+
+    /// <summary>内容指纹，用于跳过无变化的重复下发。</summary>
+    public string ContentHash { get; init; } = default!;
+
+    public SyncStatus Status { get; set; }             // Pending / Succeeded / Failed
+    public int AttemptCount { get; set; }
+    public DateTimeOffset? NextAttemptAt { get; set; }
+    public string? LastError { get; set; }
+    public DateTimeOffset CreatedAt { get; init; }
+}
+
+public enum SyncStatus { Pending, Succeeded, Failed, Abandoned }
+public enum SyncOperation { Upsert, Delete }
+```
+
+业务操作只负责**产生任务**，不直接调设备：
+
+```csharp
+public sealed class PermissionService
+{
+    /// <summary>给某人授予某些门的权限。</summary>
+    public async Task GrantAsync(
+        Guid personId, IEnumerable<Guid> doorIds, Guid scheduleId, CancellationToken ct)
+    {
+        var person = await _db.People.FindAsync([personId], ct)
+            ?? throw new NotFoundException(nameof(Person), personId);
+
+        // 事务内同时写业务数据和同步任务，保证不会"授权了但没下发任务"
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
+        foreach (var doorId in doorIds)
+        {
+            _db.Permissions.Add(new Permission
+            {
+                PersonId = personId, DoorId = doorId, TimeScheduleId = scheduleId,
+            });
+
+            var door = await _db.Doors.FindAsync([doorId], ct);
+
+            // 一个权限可能涉及多台设备（一门两读、多门共用控制器）
+            await _syncTasks.EnqueueUpsertAsync(
+                door!.ControllerId, SyncTargetType.Permission, person.PersonNo,
+                BuildPermissionPayload(person, door, scheduleId), ct);
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+    }
+}
+```
+
+**业务写入和任务入队必须在同一个事务里。** 否则会出现"数据库里有权限但设备上没有"的静默不一致——最难查的一类问题。这本质上就是 [Outbox 模式](/posts/dotnet/aspnet-core-outbox-pattern)。
+
+### 执行下发
+
+一个后台服务消费任务。这里有几个必须处理对的细节：
+
+```csharp
+public sealed class SyncWorker : BackgroundService
+{
+    // 设备处理能力有限，同一台设备的任务必须串行
+    private static readonly TimeSpan[] Backoff =
+    [
+        TimeSpan.FromSeconds(10),
+        TimeSpan.FromMinutes(1),
+        TimeSpan.FromMinutes(5),
+        TimeSpan.FromMinutes(30),
+        TimeSpan.FromHours(2),
+    ];
+
+    private const int MaxAttempts = 8;
+
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            try
+            {
+                await ProcessBatchAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "同步批次执行失败");
+            }
+        }
+    }
+
+    private async Task ProcessBatchAsync(CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();   // BackgroundService 是单例，Scoped 服务要自己开 scope
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var now = DateTimeOffset.UtcNow;
+
+        // 按控制器分组：不同设备可以并行，同一设备必须串行
+        var groups = await db.SyncTasks
+            .Where(t => t.Status == SyncStatus.Pending
+                     && (t.NextAttemptAt == null || t.NextAttemptAt <= now))
+            .OrderBy(t => t.Id)
+            .Take(500)
+            .GroupBy(t => t.ControllerId)
+            .ToListAsync(ct);
+
+        // 限制并发设备数，避免同时轰炸整个网段
+        await Parallel.ForEachAsync(
+            groups,
+            new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
+            async (group, token) => await ProcessControllerAsync(group.Key, group.ToList(), token));
+    }
+
+    private async Task ProcessControllerAsync(
+        Guid controllerId, List<SyncTask> tasks, CancellationToken ct)
+    {
+        var client = await _clientFactory.CreateAsync(controllerId, ct);
+
+        // 同一设备内严格串行，且按依赖顺序排：
+        // 先建人员，再下发卡片和人脸，最后下发权限。顺序错了设备会拒绝。
+        foreach (var task in tasks.OrderBy(t => (int)t.TargetType))
+        {
+            if (ct.IsCancellationRequested) return;
+
+            try
+            {
+                await ExecuteAsync(client, task, ct);
+
+                task.Status = SyncStatus.Succeeded;
+                task.LastError = null;
+            }
+            catch (DeviceRejectedException ex)
+            {
+                // 设备明确拒绝（数据不合规、容量满），重试没意义
+                task.Status = SyncStatus.Abandoned;
+                task.LastError = ex.Message;
+
+                _logger.LogError(ex, "设备拒绝下发，任务放弃 {TaskId}", task.Id);
+                await _alerts.RaiseAsync($"下发被拒：{ex.Message}", ct);
+            }
+            catch (Exception ex)
+            {
+                // 网络类失败，退避重试
+                task.AttemptCount++;
+                task.LastError = ex.Message;
+
+                if (task.AttemptCount >= MaxAttempts)
+                {
+                    task.Status = SyncStatus.Failed;
+                    await _alerts.RaiseAsync(
+                        $"设备 {controllerId} 下发持续失败，需人工介入", ct);
+                }
+                else
+                {
+                    var delay = Backoff[Math.Min(task.AttemptCount - 1, Backoff.Length - 1)];
+                    task.NextAttemptAt = DateTimeOffset.UtcNow + delay;
+                }
+
+                // 同一设备已经失败，后面的任务大概率也失败，跳出留给下一轮
+                break;
+            }
+        }
+
+        await _db.SaveChangesAsync(ct);
+    }
+}
+```
+
+四个关键点，每一个都是踩过的坑：
+
+**同一设备必须串行。** 门禁控制器是嵌入式设备，并发请求会导致超时甚至重启。不同设备之间可以并行，但也要限制总并发数。
+
+**下发有依赖顺序。** 先建人员，再下发凭证和权限。反过来设备会返回"人员不存在"。删除时顺序相反：先撤权限，再删人员。
+
+**要区分"重试有用"和"重试没用"的失败。** 网络超时值得重试；"人脸照片不合规""容量已满"重试一万次也是同样结果，应该直接放弃并告警。混在一起会让失败任务永久占用重试配额。
+
+**持续失败必须告警。** 一台设备离线三天，权限全没下去，如果没人知道，就会在某天早上变成"一群人进不了门"的现场事故。
+
+### 全量校准
+
+增量下发不够。设备会被现场人员用管理界面直接改、会因固件升级丢数据、会在你的服务宕机期间漏掉变更。所以需要定期对账：
+
+```csharp
+/// <summary>
+/// 全量校准：拉取设备现有数据，和系统期望状态比对，生成补偿任务。
+/// 建议在业务低峰期执行（比如凌晨），因为它会给设备较大压力。
+/// </summary>
+public async Task ReconcileAsync(Guid controllerId, CancellationToken ct)
+{
+    var client = await _clientFactory.CreateAsync(controllerId, ct);
+
+    // 1. 拉设备侧现状
+    var onDevice = await client.ListPersonsAsync(ct);
+    var deviceMap = onDevice.ToDictionary(p => p.PersonNo);
+
+    // 2. 算系统侧期望
+    var expected = await GetExpectedPersonsAsync(controllerId, ct);
+    var expectedMap = expected.ToDictionary(p => p.PersonNo);
+
+    // 3. 缺失：期望有、设备没有 → 补下发
+    foreach (var (personNo, person) in expectedMap)
+    {
+        if (!deviceMap.TryGetValue(personNo, out var actual))
+        {
+            _logger.LogWarning("校准发现缺失人员 {PersonNo}@{Controller}", personNo, controllerId);
+            await _syncTasks.EnqueueUpsertAsync(controllerId, SyncTargetType.Person, personNo,
+                Serialize(person), ct);
+        }
+        else if (ComputeHash(actual) != ComputeHash(person))
+        {
+            // 4. 不一致：内容变了（改名、有效期变更）→ 覆盖下发
+            await _syncTasks.EnqueueUpsertAsync(controllerId, SyncTargetType.Person, personNo,
+                Serialize(person), ct);
+        }
+    }
+
+    // 5. 多余：设备有、期望没有 → 删除
+    //    这一步要格外小心，见下面的警告
+    foreach (var personNo in deviceMap.Keys.Except(expectedMap.Keys))
+    {
+        _logger.LogWarning("校准发现多余人员 {PersonNo}@{Controller}", personNo, controllerId);
+        await _syncTasks.EnqueueDeleteAsync(controllerId, SyncTargetType.Person, personNo, ct);
+    }
+}
+```
+
+:::warning 自动删除"多余数据"要有防护
+校准逻辑里的删除分支是双刃剑。如果因为一个查询 bug 导致"期望列表"算成了空，这段代码会**把所有设备上的人员全删掉**——后果是整栋楼的门禁失效。
+
+必须加防护：
+
+- **比例阈值**：待删除数量超过设备总人数的一定比例（比如 20%）时，只告警不执行
+- **期望集合非空校验**：期望列表为空时直接中止，不可能一台设备一个人都没有
+- **先影子运行**：新上线时只记录差异不执行删除，人工确认几轮后再开自动执行
+- **删除也走任务表**，可审计、可回溯
+
+这类"批量删除"的破坏力远大于漏下发，宁可保守。
+:::
+
+## 人脸下发
+
+人脸是失败率最高的一类下发，因为**设备对照片有硬性要求**：分辨率范围、文件大小上限、单人正脸、人脸占比、光照。
+
+**关键实践：在上传环节就校验，不要等到下发才发现。**
+
+```csharp
+public sealed class FacePhotoValidator
+{
+    // 具体限值以你的设备文档为准，各家差异很大
+    private const int MinWidth = 320;
+    private const int MaxWidth = 1080;
+    private const int MaxBytes = 200 * 1024;
+
+    public ValidationResult Validate(byte[] photo)
+    {
+        if (photo.Length > MaxBytes)
+            return ValidationResult.Fail($"照片超过 {MaxBytes / 1024}KB，请压缩");
+
+        // 只有 JPEG 被普遍支持，PNG 很多设备不认
+        if (!IsJpeg(photo))
+            return ValidationResult.Fail("请上传 JPEG 格式");
+
+        var (width, height) = ReadJpegSize(photo);
+
+        if (width < MinWidth || width > MaxWidth)
+            return ValidationResult.Fail($"宽度需在 {MinWidth}~{MaxWidth} 之间，当前 {width}");
+
+        return ValidationResult.Success;
+    }
+
+    private static bool IsJpeg(ReadOnlySpan<byte> data)
+        => data.Length > 3 && data[0] == 0xFF && data[1] == 0xD8 && data[^2] == 0xFF && data[^1] == 0xD9;
+}
+```
+
+另外两点：
+
+**保存设备返回的原始错误码。** 人脸下发失败的原因五花八门（检测不到人脸、多张人脸、角度过大、清晰度不足），设备一般会返回具体错误码。把它存进 `SyncTask.LastError`，运维才能给出"请重新拍一张正脸照"这样有用的提示，而不是"下发失败"。
+
+**人脸库容量远小于卡片容量。** 同一台设备可能支持几万张卡但只支持几千张人脸。做容量规划时要按人脸算，并在接近上限时告警。
+
+## 事件上报与补漏
+
+刷卡记录、人脸开门、门磁报警这些事件，获取方式有三种：
+
+| 方式 | 实时性 | 可靠性 | 说明 |
+|---|---|---|---|
+| **HTTP 侦听** | 实时 | 中 | 设备主动 POST 给你，首选 |
+| **SDK 布防回调** | 实时 | 中 | 需要 P/Invoke，回调铁律适用 |
+| **主动查询记录** | 分钟级 | **高** | 按游标拉取，能补断网期间的记录 |
+
+**关键结论：实时推送和主动拉取必须同时做。**
+
+推送解决实时性（门口显示"欢迎，张三"需要实时），但推送会丢——你的服务重启期间、网络断开期间的事件就没了。而这些记录**还存在设备本地**，必须靠主动拉取补回来。
+
+考勤、安防审计场景下"丢几条记录"是不能接受的，所以拉取不是可选项。
+
+```csharp
+/// <summary>按游标增量拉取设备事件，补齐推送丢失的部分。</summary>
+public sealed class EventCatchUpWorker : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(5));
+
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            foreach (var controller in await _controllers.GetActiveAsync(ct))
+            {
+                try
+                {
+                    await CatchUpAsync(controller, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "拉取事件失败 {Controller}", controller.Id);
+                }
+            }
+        }
+    }
+
+    private async Task CatchUpAsync(Controller controller, CancellationToken ct)
+    {
+        // 游标：上次成功拉到的位置。用设备侧的记录序号最可靠，
+        // 只能按时间查询的设备则记录时间戳，并回退一个安全窗口防止边界丢失
+        var cursor = await _cursors.GetAsync(controller.Id, ct);
+        var from = cursor?.LastEventTime.AddMinutes(-5) ?? DateTimeOffset.Now.AddDays(-1);
+
+        var client = await _clientFactory.CreateAsync(controller.Id, ct);
+
+        await foreach (var evt in client.QueryEventsAsync(from, DateTimeOffset.Now, ct))
+        {
+            // 去重：推送和拉取会重复，同一条记录也可能被设备重传。
+            // 用 设备号 + 设备侧记录序号 做唯一约束
+            var inserted = await _events.TryInsertAsync(new AccessEvent
+            {
+                ControllerId = controller.Id,
+                DeviceEventNo = evt.EventNo,     // 唯一键的一部分
+                PersonNo = evt.PersonNo,
+                DoorNo = evt.DoorNo,
+                EventType = evt.Type,
+                OccurredAt = evt.Time,
+                Source = EventSource.Polling,
+            }, ct);
+
+            if (inserted)
+            {
+                _logger.LogInformation("补拉到遗漏事件 {EventNo}@{Controller}",
+                    evt.EventNo, controller.Id);
+            }
+        }
+
+        await _cursors.UpdateAsync(controller.Id, DateTimeOffset.Now, ct);
+    }
+}
+```
+
+**去重靠数据库唯一约束，不要靠代码里的"先查再插"。** 后者在并发下必然漏。用 `设备ID + 设备侧记录号` 建唯一索引，插入冲突就当已存在。
+
+## 开门与联动
+
+远程开门是最简单的部分，通常一个 HTTP 请求：
+
+```csharp
+public async Task OpenDoorAsync(Guid doorId, string operatorId, CancellationToken ct)
+{
+    var door = await _doors.GetAsync(doorId, ct);
+    var client = await _clientFactory.CreateAsync(door.ControllerId, ct);
+
+    // 远程开门必须留痕：谁、什么时候、开了哪个门、为什么
+    // 这是审计的硬要求，不是可选功能
+    await _audit.LogAsync(new AuditEntry(
+        Action: "RemoteOpenDoor",
+        OperatorId: operatorId,
+        Target: door.Name,
+        At: DateTimeOffset.Now), ct);
+
+    await client.RemoteOpenAsync(door.ChannelNo, ct);
+}
+```
+
+值得注意的几个业务功能：
+
+**常开 / 常闭模式**：上班时段大门常开、夜间常闭。注意常开状态要能在断网后保持（设备本地的时间段计划），不要依赖你的服务定时下指令。
+
+**多人开门 / 双向门禁 / 反潜回**：金库、机房这类场所的要求。这些规则**要设置在设备上，不要在你的软件里判断**——软件判断意味着断网就失效。
+
+:::important 消防联动必须硬件级兜底
+火警时门要全部打开，这是生命安全要求。
+
+**绝对不能只靠软件实现**：你的服务可能宕机、网线可能烧断、交换机可能断电。正确做法是消防信号直接接入门禁控制器的报警输入端子或直接切断电控锁电源，由硬件保证在任何软件状态下都能开门。
+
+软件可以做联动的"增强"（记录、通知、联动摄像头抓图），但**不能是唯一实现路径**。这一条在方案评审时必须明确写清楚，出了事故这是责任问题。
+:::
+
+## 一致性与审计
+
+门禁数据涉及责任认定，三条底线：
+
+**通行记录只追加，不修改不删除。** 需要修正就追加一条修正记录并关联原记录。
+
+**权限变更全部留痕。** 谁在什么时间给谁授了什么权限、谁撤销的。事故调查时这是第一手资料。
+
+**离职失效的时效性要明确。** 这是容易被忽略的风险：人员离职后你把系统里的权限删了，但**设备上的数据还在，直到同步任务执行完成**。中间的窗口期，这个人依然能刷卡进门。
+
+高危场景要特殊处理：
+
+```csharp
+/// <summary>高优先级撤销：确认设备生效后才算完成。</summary>
+public async Task RevokeUrgentlyAsync(Guid personId, CancellationToken ct)
+{
+    var person = await _people.GetAsync(personId, ct);
+
+    // 1. 系统侧立即失效
+    person.Status = PersonStatus.Disabled;
+    await _db.SaveChangesAsync(ct);
+
+    // 2. 插队下发，不排在普通任务后面
+    var tasks = await _syncTasks.EnqueueUrgentDeleteAsync(person.PersonNo, ct);
+
+    // 3. 同步等待结果，明确告知操作者哪些设备还没生效
+    var pending = await _syncTasks.WaitForCompletionAsync(
+        tasks, timeout: TimeSpan.FromSeconds(30), ct);
+
+    if (pending.Count > 0)
+    {
+        // 不要静默成功。必须让操作者知道存在物理风险，
+        // 好让他去现场处理（比如临时锁门或人工值守）
+        throw new PartialRevocationException(
+            $"以下设备未确认撤销，人员仍可能通行：{string.Join(", ", pending)}");
+    }
+}
+```
+
+**"看起来成功了"是这类系统最危险的状态。** 撤销权限这种操作，要么确认全部设备生效，要么明确告知哪些没生效，不能含糊。
+
+:::details 常见问题速查 | 点开看门禁对接的高频坑
+**下发返回成功但设备上查不到人**
+下发顺序错了（先发权限后建人员），或者写到了另一个"人脸库/卡库"分区。按依赖顺序重发。
+
+**下发提示人员已存在**
+Upsert 没做对。多数设备的新增和修改是两个接口，要么先查再决定，要么用支持覆盖的接口。
+
+**批量下发几十人后设备无响应**
+并发太高把设备打死了。同一设备严格串行，必要时加请求间隔。
+
+**人脸下发一直失败**
+照片不合规。把设备返回的错误码记下来，在上传环节就做校验。
+
+**设备容量满了**
+人脸库容量远小于卡库。要做容量监控和接近上限的告警。
+
+**刷卡记录偶发丢失**
+只依赖了推送。必须加按游标的主动拉取补漏。
+
+**同一条刷卡记录出现两次**
+推送和拉取重复，或设备重传。用 `设备ID + 设备记录号` 建唯一约束。
+
+**断网恢复后记录时间全是恢复时刻**
+用了服务器接收时间当发生时间。必须用设备上报的事件时间，并保证设备 NTP 正常。
+
+**设备时间不对导致时间段权限失效**
+设备没配 NTP 或时区错。上线巡检必须核对每台设备的时间。
+
+**员工离职了还能进门**
+下发任务还在排队。高危撤销要插队并确认结果。
+
+**校准把人全删了**
+期望集合算错时的灾难。必须加比例阈值和非空校验。
+
+**中控设备一直不来取指令**
+PUSH 模式下设备是主动方。检查设备配置里的服务器地址端口、以及你的接口路径和响应格式是否符合它的协议。
+
+**换了台同型号设备后权限全没了**
+新设备是空的，需要触发一次全量下发。设备更换流程里要包含这一步。
+:::
+
+## 小结
+
+门禁对接的复杂度全部来自"设备必须离线可用"这一个约束：
+
+1. **它是数据同步问题，不是接口调用问题。** 系统是主数据源，每台设备持有副本
+2. **业务写入和同步任务必须同事务**，否则会静默不一致
+3. **同一设备串行、按依赖排序、区分可重试与不可重试的失败**
+4. **增量下发之外必须有全量校准**，但自动删除要有比例阈值防护
+5. **事件推送和主动拉取都要做**，只有拉取能补断网期间的记录
+6. **消防联动必须硬件兜底**，软件只做增强
+7. **撤销权限要确认生效**，"看起来成功"是最危险的状态
+
+下一篇 [设备适配层设计与现场可靠性](/posts/iot/device-layer-and-reliability) 是系列最后一篇，把前面六篇的东西收成一套能长期维护的工程结构——分层、模拟器、报文留存、看门狗、Windows Service 部署。

@@ -1,0 +1,632 @@
+---
+title: '指令下发与响应关联：超时、幂等与批量灰度'
+date: '2026-07-31'
+excerpt: '下发是异步的：三层"成功"的区别、多实例部署下响应被别的实例收到怎么办、超时为什么不等于失败、指令幂等的设计优先于重试控制、离线设备的三种策略，以及批量下发与 OTA 的灰度限流。'
+tags: ['iot', 'dotnet', 'mqtt', 'command', 'idempotency', 'ota']
+---
+
+# 指令下发与响应关联：超时、幂等与批量灰度
+
+上报是设备推给你，你只管接收。下发是反方向，而且**它的困难全部来自一个错配：调用方期望同步，现实是异步。**
+
+App 上点一下"打开空调"，用户期望立刻看到结果。但这条指令要经过你的服务 → Broker → 移动网络 → 设备，设备执行完再原路返回。中间任何一环可能慢、可能丢、可能设备根本不在线。
+
+这一篇讲怎么把这件事做对。
+
+:::tip 系列阅读顺序
+本文是 [云端 IoT 平台路线图](/posts/iot/cloud-iot-roadmap) 的最后一篇。上一篇 [设备影子](/posts/iot/device-shadow-online-state) 的 desired 机制是"离线设备也能接受指令"的基础，本文会接上。
+
+工业系列的 [私有 TCP 协议](/posts/iot/tcp-protocol-binary-parsing) 里讲过单进程内的请求应答关联，本文处理的是它的分布式版本。
+:::
+
+## 先分清四层"成功"
+
+这是最重要的认知。**"下发成功"这句话至少有四种含义：**
+
+| 层级 | 含义 | 能保证什么 |
+|---|---|---|
+| **1. 已受理** | 指令已落库/入队 | 不会丢，但设备可能还没收到 |
+| **2. 已投递** | 已发布到 Broker（收到 PUBACK） | Broker 收到了，设备可能离线 |
+| **3. 已送达** | 设备的 MQTT 栈收到了 | 设备收到了，可能还没执行 |
+| **4. 已执行** | 设备回复了执行结果 | **真正完成** |
+
+**绝大多数下发相关的 bug，都源于把前三层当成第四层。**
+
+典型症状：App 显示"操作成功"，用户回头一看灯还是关的——因为服务端在第 2 层就返回成功了。
+
+所以 API 设计上要明确表达层级：
+
+```csharp
+public enum CommandStatus
+{
+    Accepted,      // 第 1 层：已受理，设备离线或排队中
+    Sent,          // 第 2 层：已投递到 Broker
+    Acknowledged,  // 第 3 层：设备已收到
+    Succeeded,     // 第 4 层：设备执行成功
+    Failed,        // 设备执行失败（带错误码）
+    TimedOut,      // 超时未回复，结果未知
+    Expired,       // 排队超时，已放弃
+    Cancelled,     // 被主动取消
+}
+```
+
+**HTTP API 应该返回哪一层？** 我的建议：
+
+- **快速指令（开关、调节）**：等到第 4 层，超时上限 5~10 秒。用户能接受这个等待，而且拿到的是真结果
+- **慢指令（自检、重启、OTA）**：返回第 1 层 + 一个指令 ID，客户端通过轮询或 WebSocket 拿最终结果
+- **绝不要**在第 2 层返回 `200 OK` 却让 UI 显示"操作成功"
+
+## 请求响应关联
+
+### 单实例：等待表
+
+和工业系列一样的模式——请求 ID + `TaskCompletionSource` 字典：
+
+```csharp
+public sealed class CommandDispatcher
+{
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<CommandReply>> _pending = new();
+
+    public async Task<CommandReply> InvokeAsync(
+        long deviceId, string serviceId, object parameters,
+        TimeSpan timeout, CancellationToken ct)
+    {
+        var requestId = Guid.NewGuid().ToString("N");
+
+        // RunContinuationsAsynchronously：避免调用方的后续代码
+        // 在 MQTT 接收线程上同步执行，卡住整个接收循环
+        var tcs = new TaskCompletionSource<CommandReply>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        _pending[requestId] = tcs;
+
+        try
+        {
+            await PublishCommandAsync(deviceId, serviceId, requestId, parameters, ct);
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeout);
+
+            return await tcs.Task.WaitAsync(cts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // 超时：注意这里的结果是"未知"而不是"失败"，见下一节
+            return CommandReply.TimedOut(requestId);
+        }
+        finally
+        {
+            // 必须清理，否则超时的请求会永久占用内存
+            _pending.TryRemove(requestId, out _);
+        }
+    }
+
+    /// <summary>收到设备回复时调用（订阅 service/+/reply）。</summary>
+    public void OnReplyReceived(CommandReply reply)
+    {
+        if (_pending.TryRemove(reply.RequestId, out var tcs))
+        {
+            tcs.TrySetResult(reply);
+        }
+        else
+        {
+            // 没有对应的等待者：可能是已超时的请求现在才回复，
+            // 也可能是这个响应属于另一个服务实例。都要落库，不能丢
+            _logger.LogInformation("收到无主响应 {RequestId}，落库记录", reply.RequestId);
+            _commandStore.RecordLateReplyAsync(reply);
+        }
+    }
+}
+```
+
+### 多实例：响应可能被别的实例收到
+
+**这是云端场景比单进程多出来的核心难题。**
+
+```text
+实例 A 发出指令（等待表在 A 的内存里）
+  ↓
+设备执行完，回复到 service/xxx/reply
+  ↓
+Broker 推送给订阅者 —— 可能是实例 B！
+  ↓
+实例 B 找不到对应的等待者
+实例 A 一直等到超时
+```
+
+三种解法：
+
+| 方案 | 做法 | 取舍 |
+|---|---|---|
+| **异步化** | 不在 HTTP 请求里等待，返回指令 ID 让客户端查 | **最简单最可靠**，但改变了 API 语义 |
+| **响应转发** | 收到响应的实例通过 Redis Pub/Sub 广播，等待者所在实例接收 | 保留同步语义，多一个组件依赖 |
+| **粘性路由** | 按设备 ID 哈希，同一设备的所有消息只由固定实例处理 | 无额外组件，但要处理实例扩缩容时的重新分配 |
+
+**推荐组合**：慢指令走异步化，快指令走响应转发。
+
+响应转发的实现：
+
+```csharp
+public sealed class DistributedReplyRouter
+{
+    private readonly ISubscriber _redis;
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<CommandReply>> _local;
+
+    public async Task StartAsync(CancellationToken ct)
+    {
+        // 所有实例都订阅这个频道
+        await _redis.SubscribeAsync(RedisChannel.Literal("cmd-replies"), (_, message) =>
+        {
+            var reply = JsonSerializer.Deserialize<CommandReply>(message!)!;
+
+            // 只有持有等待者的实例会真正处理，其他实例忽略
+            if (_local.TryRemove(reply.RequestId, out var tcs))
+                tcs.TrySetResult(reply);
+        });
+    }
+
+    /// <summary>MQTT 收到设备回复时调用：先尝试本地，再广播。</summary>
+    public async Task OnMqttReplyAsync(CommandReply reply, CancellationToken ct)
+    {
+        // 本地命中就不用绕 Redis 一圈
+        if (_local.TryRemove(reply.RequestId, out var tcs))
+        {
+            tcs.TrySetResult(reply);
+            return;
+        }
+
+        // 本地没有，广播出去让其他实例处理
+        await _redis.PublishAsync(RedisChannel.Literal("cmd-replies"),
+            JsonSerializer.Serialize(reply));
+    }
+}
+```
+
+:::note MQTT 5 的原生请求响应支持
+MQTT 5 专门加了两个属性来支持请求响应模式：
+
+- **Response Topic**：请求方告诉设备"回复请发到这个 Topic"
+- **Correlation Data**：请求方带的关联标识，设备原样返回
+
+```csharp
+var message = new MqttApplicationMessageBuilder()
+    .WithTopic($"v1/{pk}/{dn}/service/{serviceId}/invoke")
+    .WithPayload(payload)
+    .WithResponseTopic($"v1/{pk}/{dn}/service/{serviceId}/reply")
+    .WithCorrelationData(Encoding.UTF8.GetBytes(requestId))
+    .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+    .Build();
+```
+
+它的好处是**关联标识在协议层而不是 payload 里**，平台侧可以在不解析业务 payload 的情况下路由响应。
+
+代价是要求设备侧支持 MQTT 5 并正确回传 Correlation Data。实际项目里我更倾向于**同时在 payload 里放 `id`**，因为设备侧的实现质量参差不齐——协议属性丢了还有 payload 兜底。
+:::
+
+## 超时不等于失败
+
+**这是下发设计里最容易做错的一处。**
+
+超时意味着"我没收到回复"，它可能是：
+
+- 指令没送到设备（**未执行**）
+- 指令送到了，设备正在执行（**执行中**）
+- 设备执行完了，回复在回程丢了（**已执行**）
+
+**三种情况在服务端完全无法区分。** 所以超时的结果是"未知"，不是"失败"。
+
+这个区别有实际后果：
+
+```csharp
+// ❌ 危险：把超时当失败然后自动重试
+var result = await _dispatcher.InvokeAsync(deviceId, "start_motor", p, timeout, ct);
+if (!result.IsSuccess)
+    await _dispatcher.InvokeAsync(deviceId, "start_motor", p, timeout, ct);   // 电机可能启动两次
+```
+
+正确做法是**按指令的幂等性决定能不能重试**：
+
+```csharp
+public async Task<CommandOutcome> ExecuteWithRetryAsync(
+    long deviceId, ServiceDefinition service, object parameters, CancellationToken ct)
+{
+    var result = await _dispatcher.InvokeAsync(
+        deviceId, service.Identifier, parameters, TimeSpan.FromSeconds(8), ct);
+
+    if (result.Status == CommandStatus.Succeeded)
+        return CommandOutcome.Success(result);
+
+    if (result.Status == CommandStatus.TimedOut)
+    {
+        // 幂等指令可以安全重试
+        if (service.IsIdempotent)
+            return await RetryAsync(deviceId, service, parameters, ct);
+
+        // 非幂等指令：不重试，把"未知"如实报告给调用方。
+        // 让用户看到"结果未知，请稍后查看设备状态"，
+        // 比悄悄重试导致电机启动两次好得多
+        return CommandOutcome.Unknown(result);
+    }
+
+    return CommandOutcome.Failure(result);
+}
+```
+
+UI 上也要如实表达。**"结果未知"是一个合法的状态**，不要为了界面好看把它显示成失败或成功。配合上一篇的影子机制，可以引导用户"查看设备当前状态"来确认实际结果。
+
+## 幂等设计优于重试控制
+
+处理重复执行有两条路：**控制重试**（难，因为网络的不确定性无法消除）和**让指令天然幂等**（容易）。
+
+优先选后者。方法就是**把"动作"改成"状态"**：
+
+| 非幂等设计 | 幂等设计 |
+|---|---|
+| `toggle_power`（切换开关） | `set_power(true)` |
+| `increase_brightness(10)` | `set_brightness(80)` |
+| `add_credit(100)` | `set_credit(500, version=42)` |
+| `open_door()` | `open_door(request_id)` + 设备侧去重 |
+
+**"切换"类指令是重复执行的头号来源**，因为执行两次的结果和执行一次完全相反。物模型设计时就应该避免它——这也是上一篇讲"能表达成设置某个值的用可写属性"的深层原因。
+
+对于本质上无法幂等的指令（开门、启动、拍照），靠**请求 ID + 设备侧去重**：
+
+```csharp
+// 设备侧伪代码：维护一个最近处理过的请求 ID 环形缓冲
+if (recentRequestIds.Contains(command.Id))
+{
+    // 重复指令：直接回复上次的结果，不再执行
+    PublishReply(command.Id, lastResults[command.Id]);
+    return;
+}
+
+recentRequestIds.Add(command.Id);
+var result = Execute(command);
+PublishReply(command.Id, result);
+```
+
+**这需要设备侧配合实现**，所以要写进设备接入规范。缓冲区大小按"可能的重传窗口"定，通常几十条就够。
+
+## 离线设备怎么处理
+
+三种策略，**按指令语义选择，不能一刀切**：
+
+| 策略 | 行为 | 适用指令 |
+|---|---|---|
+| **立即失败** | 返回"设备离线" | 需要即时反馈的操作（开门、拍照、对讲） |
+| **影子期望** | 写入 desired，上线自动同步 | **状态类属性设置**（目标温度、模式、亮度） |
+| **指令队列** | 落库排队，上线后按序下发 | 配置更新、OTA、非即时的服务调用 |
+
+判断依据是**"延迟几小时后执行还有意义吗"**：
+
+```csharp
+public async Task<CommandResult> DispatchAsync(
+    long deviceId, CommandRequest request, CancellationToken ct)
+{
+    var isOnline = await _presence.IsOnlineAsync(deviceId, ct);
+
+    if (isOnline)
+        return await SendNowAsync(deviceId, request, ct);
+
+    // 离线：按指令的离线策略分流
+    return request.OfflinePolicy switch
+    {
+        OfflinePolicy.FailFast =>
+            CommandResult.Failed("设备离线，请稍后重试"),
+
+        // 属性设置走影子，这是上一篇的机制
+        OfflinePolicy.Shadow =>
+            await _shadow.UpdateDesiredAsync(deviceId, request.ToProperties(), ct),
+
+        OfflinePolicy.Queue =>
+            await EnqueueAsync(deviceId, request, ct),
+
+        _ => CommandResult.Failed("未知的离线策略"),
+    };
+}
+```
+
+排队必须有两个限制，否则会变成问题：
+
+```csharp
+private async Task<CommandResult> EnqueueAsync(
+    long deviceId, CommandRequest request, CancellationToken ct)
+{
+    // 限制一：队列深度上限。
+    // 一台设备离线三个月，不该积压几万条指令
+    var depth = await _store.CountPendingAsync(deviceId, ct);
+
+    if (depth >= MaxQueueDepth)
+        return CommandResult.Failed($"设备离线指令已达上限（{MaxQueueDepth}）");
+
+    // 限制二：TTL。过期指令不再下发——
+    // 和影子的 desired 时效是同一个安全考虑
+    var command = new PendingCommand
+    {
+        DeviceId = deviceId,
+        ServiceId = request.ServiceId,
+        Payload = request.Payload,
+        ExpiresAt = DateTimeOffset.UtcNow + (request.Ttl ?? TimeSpan.FromHours(24)),
+        CreatedBy = request.OperatorId,     // 审计：谁下发的
+    };
+
+    await _store.EnqueueAsync(command, ct);
+    return CommandResult.Accepted(command.Id);
+}
+```
+
+## 指令要落库
+
+**每条指令都是一次审计事件**，尤其是能改变物理世界状态的指令（开门、启停设备）。必须可查询、可追溯。
+
+```csharp
+public sealed class DeviceCommand
+{
+    public Guid Id { get; init; }
+    public long DeviceId { get; init; }
+    public string ServiceId { get; init; } = default!;
+    public string PayloadJson { get; init; } = default!;
+
+    public CommandStatus Status { get; set; }
+
+    // 全链路时间戳：排查"哪一段慢了"的唯一依据
+    public DateTimeOffset CreatedAt { get; init; }
+    public DateTimeOffset? SentAt { get; set; }
+    public DateTimeOffset? RepliedAt { get; set; }
+
+    public int? ResultCode { get; set; }
+    public string? ResultMessage { get; set; }
+
+    /// <summary>审计：谁触发的。人工操作、自动化规则、还是第三方 API。</summary>
+    public string TriggerSource { get; init; } = default!;
+    public string? OperatorId { get; init; }
+}
+```
+
+有了这张表才能回答运维和客服天天问的问题：**"这台设备昨天晚上为什么自己开了？"** —— 查指令表，看到是某条自动化规则触发的，附带规则 ID 和当时的触发条件。
+
+## 批量下发
+
+场景：全网推送新配置、批量重启、OTA。**一万台设备的批量操作不能一次性发出去。**
+
+原因有三：Broker 的瞬时压力、设备同时响应造成的上行洪峰、以及最重要的——**如果新配置有问题，一次性下发就是一次性全网故障**。
+
+三个必须：
+
+```csharp
+public sealed class BatchCommandExecutor
+{
+    /// <summary>
+    /// 分批灰度下发。三个关键机制：限流、分批停顿、失败率熔断。
+    /// </summary>
+    public async Task<BatchResult> ExecuteAsync(
+        BatchCommandJob job, CancellationToken ct)
+    {
+        var devices = await _store.GetTargetDevicesAsync(job.Id, ct);
+
+        // 令牌桶限流：控制每秒下发速率，保护 Broker 和网络
+        using var limiter = new TokenBucketRateLimiter(
+            new TokenBucketRateLimiterOptions
+            {
+                TokenLimit = job.RatePerSecond,
+                TokensPerPeriod = job.RatePerSecond,
+                ReplenishmentPeriod = TimeSpan.FromSeconds(1),
+                QueueLimit = int.MaxValue,
+            });
+
+        int succeeded = 0, failed = 0;
+
+        // 灰度分批：先小批量验证，确认没问题再放大
+        foreach (var batch in devices.Chunk(job.BatchSize))
+        {
+            if (ct.IsCancellationRequested || job.IsCancelled)
+                return BatchResult.Cancelled(succeeded, failed);
+
+            foreach (var deviceId in batch)
+            {
+                using var lease = await limiter.AcquireAsync(1, ct);
+
+                var result = await _dispatcher.SendAsync(deviceId, job.Command, ct);
+
+                if (result.IsSuccess) succeeded++; else failed++;
+            }
+
+            // 熔断：失败率超阈值立即停止。
+            // 这是灰度的核心价值——把"全网故障"变成"一小批受影响"
+            var total = succeeded + failed;
+            if (total >= job.MinSampleForCircuitBreak)
+            {
+                var failureRate = (double)failed / total;
+
+                if (failureRate > job.MaxFailureRate)
+                {
+                    _logger.LogError("批量任务 {JobId} 失败率 {Rate:P1} 超阈值，自动中止",
+                        job.Id, failureRate);
+
+                    await _store.MarkAbortedAsync(job.Id, ct);
+                    await _alerts.RaiseAsync($"批量下发中止，失败率 {failureRate:P1}", ct);
+
+                    return BatchResult.Aborted(succeeded, failed);
+                }
+            }
+
+            // 批次间停顿：给设备响应留时间，也留出人工观察窗口
+            await Task.Delay(job.BatchInterval, ct);
+        }
+
+        return BatchResult.Completed(succeeded, failed);
+    }
+}
+```
+
+:::important 批量任务必须可中止
+这是批量下发最重要的一条。**你会需要它的**——推送了错误配置、发现新固件有 bug、或者只是下发速率把网络打满了。
+
+所以：任务状态要持久化（不能只在内存里）、要有一个能立即生效的取消开关、并且**取消要在每一批之间检查**而不是只在开始时检查。
+
+再加一条：**批量任务的目标列表要在开始时固化**，不要在执行过程中动态查询。否则任务执行的十分钟里新注册的设备会不会被包含，行为是不确定的。
+:::
+
+## OTA 是特例
+
+**固件升级不要走普通指令通道。** 固件是几百 KB 到几 MB 的二进制，MQTT 不适合传输大文件（会阻塞同一连接上的其他消息，且 Broker 内存压力大）。
+
+标准做法是**指令里只给下载地址**：
+
+```json
+{
+  "id": "ota-req-001",
+  "params": {
+    "version": "1.3.2",
+    "url": "https://ota.example.com/fw/thermostat-v1/1.3.2.bin",
+    "size": 524288,
+    "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "signature": "base64...",
+    "forceUpgrade": false
+  }
+}
+```
+
+设备自己用 HTTPS 拉取，校验哈希和签名后再刷写。
+
+OTA 的必备机制：
+
+| 机制 | 为什么必须 |
+|---|---|
+| **哈希校验** | 传输损坏的固件刷进去会变砖 |
+| **签名验证** | 防止 OTA 服务被劫持后刷入恶意固件 |
+| **断点续传** | 弱网设备下载几 MB 经常中断 |
+| **双分区 + 回滚** | 新固件启动失败要能自动回到旧版本 |
+| **电量/供电检查** | 刷写中断电会变砖，低电量时应拒绝升级 |
+| **进度上报** | 否则你不知道一万台设备升到哪了 |
+| **灰度分批** | 固件 bug 一次性推全网是灾难级事故 |
+| **防降级** | 阻止刷回有已知漏洞的旧版本 |
+
+```csharp
+public async Task<bool> CanUpgradeAsync(
+    long deviceId, string targetVersion, CancellationToken ct)
+{
+    var device = await _devices.GetAsync(deviceId, ct);
+
+    // 防降级：不允许刷回旧版本。
+    // 攻击者可能诱导设备回退到有已知漏洞的固件
+    if (SemanticVersion.Parse(targetVersion)
+            <= SemanticVersion.Parse(device.FirmwareVersion))
+    {
+        _logger.LogWarning("拒绝降级 {Device}：{Current} -> {Target}",
+            deviceId, device.FirmwareVersion, targetVersion);
+        return false;
+    }
+
+    // 升级路径校验：某些版本必须逐级升级，不能跳版本
+    if (!await _upgradePath.IsAllowedAsync(device.FirmwareVersion, targetVersion, ct))
+        return false;
+
+    // 电量检查：低电量设备刷写中断会变砖
+    var battery = await _shadow.GetReportedAsync(deviceId, "battery", ct);
+    if (battery?.GetInt32() is { } level && level < 50)
+    {
+        _logger.LogInformation("设备 {Device} 电量 {Level}% 过低，暂缓升级", deviceId, level);
+        return false;
+    }
+
+    return true;
+}
+```
+
+**OTA 是这条线上风险最高的功能。** 一次错误的全网推送可以让几万台设备变砖，而变砖的设备只能上门维修。所以灰度是硬性要求：先内部测试设备、再 1%、再 10%、观察 24 小时无异常才全量。
+
+## 必须有的指标
+
+```csharp
+// 按产品和固件版本分组是关键：
+// "某个固件版本的指令成功率断崖下跌"是最有价值的告警
+_commandTotal.Add(1,
+    new KeyValuePair<string, object?>("product", productKey),
+    new KeyValuePair<string, object?>("firmware", firmwareVersion),
+    new KeyValuePair<string, object?>("service", serviceId),
+    new KeyValuePair<string, object?>("status", status.ToString()));
+
+// 端到端时延：从受理到收到设备回复
+_commandLatency.Record(elapsed.TotalMilliseconds,
+    new KeyValuePair<string, object?>("product", productKey));
+```
+
+四个要看的指标：
+
+| 指标 | 关注点 |
+|---|---|
+| **成功率** | 按产品、固件版本、服务分组。某个维度突然下跌就是信号 |
+| **端到端 P99 时延** | 超过用户可接受范围（通常 3 秒）要优化 |
+| **超时率** | 持续偏高说明设备侧或网络有系统性问题 |
+| **离线排队深度** | 大量积压意味着设备连不上 |
+
+**按固件版本分组特别重要。** 新固件推了 10% 之后，如果这批设备的指令成功率明显低于其他版本，就该立即停止灰度——这比等用户投诉快得多。
+
+:::details 常见问题速查 | 点开看指令下发的高频坑
+**App 显示成功但设备没动作**
+在第 2 层（已投递 Broker）就返回了成功。要等到设备回复。
+
+**多实例部署后指令总是超时**
+响应被别的实例收到了。用异步化、Redis 转发或粘性路由。
+
+**指令偶尔被执行两次**
+超时后自动重试了非幂等指令。要么改成幂等设计，要么不重试。
+
+**电机启动了两次 / 开关状态反了**
+`toggle` 类指令重复执行。物模型设计阶段就该避免"切换"语义。
+
+**设备上线后执行了很久以前的指令**
+排队指令没有 TTL。和影子的 desired 时效是同一个问题。
+
+**一台设备离线很久，积压了几万条指令**
+队列没有深度上限。
+
+**批量下发把 Broker 打挂了**
+没有限流。用令牌桶控制每秒速率。
+
+**推了错配置想停但停不下来**
+批量任务不可中止，或取消状态只存在内存里。任务状态必须持久化。
+
+**批量任务执行期间新注册的设备行为不确定**
+目标列表没在开始时固化。
+
+**OTA 后一批设备变砖**
+没做灰度、没校验哈希、或没有回滚分区。这是最严重的事故类型。
+
+**OTA 进度不知道到哪了**
+没有进度上报 Topic。一万台设备的升级必须能观测。
+
+**客服问"设备为什么自己开了"答不上来**
+指令没落库，或没记录触发来源。审计信息是必需的。
+
+**超时的指令后来回复了，但没人处理**
+`OnReplyReceived` 找不到等待者时直接丢弃了。要落库记录。
+:::
+
+## 小结
+
+1. **分清四层"成功"**：已受理、已投递、已送达、已执行。绝大多数 bug 来自混淆它们
+2. **快指令等第 4 层，慢指令返回指令 ID + 异步查询**
+3. **多实例下响应可能被别的实例收到**，用异步化、Redis 转发或粘性路由解决
+4. **超时不等于失败，"未知"是第三种结果**，必须建模并如实告知用户
+5. **幂等设计优于重试控制**：把"切换"改成"设置为 X"
+6. **离线策略按指令语义选**：即时操作失败、状态设置走影子、配置类排队（带 TTL 和深度上限）
+7. **指令必须落库**，含全链路时间戳和触发来源，这是审计要求
+8. **批量下发三件套**：限流、灰度分批、失败率熔断，且必须可中止
+9. **OTA 不走 MQTT 传文件**，下发 URL + 哈希 + 签名，灰度是硬性要求
+10. **指标按固件版本分组**，新版本成功率下跌是最有价值的信号
+
+## 云端系列回顾
+
+七篇走完，回头看这条主线：
+
+- [MQTT 与 MQTTnet](/posts/iot/mqtt-mqttnet-basics) 建立了协议认知和最小闭环
+- [Topic 设计与 ACL](/posts/iot/mqtt-topic-auth-acl) 定下了不可轻易更改的两个决策
+- [物模型](/posts/iot/thing-model) 是让品类增长不再是线性工作量的关键抽象
+- [削峰与批量入库](/posts/iot/ingest-backpressure-batching) 解决了数据进得来但压不垮
+- [时序数据库](/posts/iot/timeseries-database) 解决了存得下、查得出
+- [设备影子与在线状态](/posts/iot/device-shadow-online-state) 处理了"设备不总在线"这个现实
+- 这一篇补上了反方向的控制链路
+
+如果你的项目还需要边缘侧对接现场设备（串口仪表、摄像头、门禁、PLC），那条线在 [.NET 对接工业设备路线图](/posts/iot/industrial-device-roadmap)。两条线合起来，一个完整的物联网系统的两端就都覆盖了。

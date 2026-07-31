@@ -56,6 +56,251 @@ app.Use(async (context, next) =>
 
 `next()` 表示继续执行后面的管道。如果不调用 `next()`，后续中间件不会执行。
 
+这段代码信息量比看上去大，下面逐个拆开讲。
+
+### app.Use 就是中间件吗
+
+这里要分清两个词：**中间件是概念，`app.Use` 是注册它的方法之一。**
+
+准确地说，一个中间件就是"接收 `HttpContext`、并且能决定是否调用下一环"的一段处理逻辑。ASP.NET Core 里有三种写法，它们注册出来的东西**在管道里地位完全一样**：
+
+```csharp
+// 写法 1：内联 lambda —— 最直观，适合几行的简单逻辑
+app.Use(async (context, next) =>
+{
+    Console.WriteLine("请求进入");
+    await next();
+});
+
+// 写法 2：独立的中间件类 —— 逻辑复杂、需要注入服务时用
+app.UseMiddleware<RequestTimingMiddleware>();
+
+// 写法 3：框架/库提供的 UseXxx() 扩展方法 —— 内部就是在调用上面两种之一
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseStaticFiles();
+```
+
+也就是说，`app.UseAuthentication()` 并不是什么特殊语法，它只是一个扩展方法，内部帮你 `UseMiddleware<AuthenticationMiddleware>()`。这和上一篇讲的 `builder.Services.AddXxx()` 是同一个套路：**`Use` 开头的扩展方法 = 往管道里加中间件**。
+
+:::note 两个容易混的点
+**`app.Use` 和 `builder.Services.Add...` 完全是两回事。** `Add` 是在 `Build()` 之前注册服务（谁能被注入），`Use` 是在 `Build()` 之后配置管道（请求经过什么）。写反位置会直接编译不过或抛异常。
+
+**不是所有 `Use` 开头的方法都是加中间件。** 少数 `UseXxx()` 是配置类方法，比如 `builder.WebHost.UseUrls()`、EF Core 的 `options.UseSqlServer()`，它们跟管道无关。判断标准看接收者：`app.UseXxx()` 才是中间件。
+:::
+
+### 执行顺序：注册顺序进，逆序出
+
+是的，请求方向严格按注册顺序执行。但完整的模型比"按顺序"多一层：**去程按注册顺序，回程按逆序**，因为每个中间件都把后面的整条管道"包"在自己的 `await next()` 里。这个结构通常被叫做洋葱模型。
+
+```csharp
+app.Use(async (context, next) =>
+{
+    Console.WriteLine("A 进");
+    await next();
+    Console.WriteLine("A 出");
+});
+
+app.Use(async (context, next) =>
+{
+    Console.WriteLine("B 进");
+    await next();
+    Console.WriteLine("B 出");
+});
+
+app.MapGet("/api/hello", () =>
+{
+    Console.WriteLine("Endpoint 执行");
+    return "Hello";
+});
+```
+
+访问 `/api/hello`，控制台输出：
+
+```text
+A 进
+B 进
+Endpoint 执行
+B 出
+A 出
+```
+
+注意 `A 出` 在最后 —— 第一个注册的中间件，它的"后半段"是最后执行的。理解这一点，你就明白为什么计时、日志、异常处理这类需要"包住全程"的中间件必须注册在最前面。
+
+```mermaid
+graph LR
+  R[Request] --> A1[A: next 之前]
+  A1 --> B1[B: next 之前]
+  B1 --> E[Endpoint]
+  E --> B2[B: next 之后]
+  B2 --> A2[A: next 之后]
+  A2 --> P[Response]
+```
+
+所以写在 `await next()` **之前**的代码，是在请求还没被处理时执行的（此时能改请求、能拦截）；写在 `await next()` **之后**的代码，是在响应已经生成后执行的（此时能读状态码、能记录耗时）。
+
+:::tip Map 写在哪里不影响中间件先执行
+初学者常有个疑问：如果我把 `app.MapGet(...)` 写在 `app.Use(...)` 前面，是不是 Endpoint 就先执行了？
+
+不会。`Map*` 注册的 Endpoint 不占管道位置，它由框架自动添加在管道**末尾**的终结点中间件负责执行。所以无论 `MapGet` 写在代码的哪一行，`app.Use` 注册的中间件都在它之前运行。
+
+但中间件之间的相对顺序是**严格按代码行顺序**的，这个必须自己排对。
+:::
+
+### 参数 context 和 next 是什么
+
+```csharp
+app.Use(async (HttpContext context, Func<Task> next) => { /* ... */ });
+```
+
+**`context` 是 `HttpContext`**，代表这一次请求的全部上下文，一个请求一个实例。常用成员：
+
+| 成员 | 用途 |
+|---|---|
+| `context.Request` | 读路径、方法、请求头、查询串、Body |
+| `context.Response` | 写状态码、响应头、响应体 |
+| `context.User` | 当前用户身份（由认证中间件填充） |
+| `context.Items` | 本次请求内的临时字典，中间件之间传数据用 |
+| `context.RequestServices` | 本次请求作用域的 DI 容器，可解析 Scoped 服务 |
+| `context.RequestAborted` | 客户端断开时会被取消的 `CancellationToken` |
+
+```csharp
+app.Use(async (context, next) =>
+{
+    // 读请求信息
+    var method = context.Request.Method;          // "GET"
+    var path = context.Request.Path;              // "/api/hello"
+    var ua = context.Request.Headers.UserAgent;   // 请求头
+    var page = context.Request.Query["page"];     // 查询参数 ?page=2
+
+    // 往 Items 里塞数据，后面的中间件或 Controller 可以取
+    context.Items["TraceId"] = Guid.NewGuid().ToString("N");
+
+    await next();
+
+    // 响应已生成，可以读状态码
+    Console.WriteLine($"{method} {path} -> {context.Response.StatusCode}");
+});
+```
+
+**`next` 是"后面整条管道"的引用**。调用它就把控制权交给下一个中间件；不调用就短路（后面单独有一节讲）。
+
+### 三个高频踩坑点
+
+**坑一：忘了 `await`**
+
+```csharp
+// ❌ 错误：没有 await，next() 返回的 Task 没人等
+app.Use(async (context, next) =>
+{
+    next();  // 编译器会给警告 CS4014
+    Console.WriteLine("这行会在后续管道还没跑完时就执行");
+});
+```
+
+后果是执行顺序错乱，严重时会出现"响应已经返回了，你的代码还在跑"、访问已释放的 `HttpContext` 抛异常。**只要调用 `next()`，就必须 `await`。**
+
+**坑二：在 `next()` 之后改状态码或响应头**
+
+```csharp
+// ❌ 大概率抛异常
+app.Use(async (context, next) =>
+{
+    await next();
+
+    context.Response.StatusCode = 500;                    // 抛 InvalidOperationException
+    context.Response.Headers["X-Trace"] = "abc";          // 同上
+});
+```
+
+报错内容是：
+
+```text
+System.InvalidOperationException: StatusCode cannot be set because the
+response has already started.
+```
+
+原因是 HTTP 协议里响应头必须先于响应体发送。后续管道一旦往 Body 写过东西，响应头就已经发出去了，改不了。正确做法是先判断：
+
+```csharp
+app.Use(async (context, next) =>
+{
+    // ✅ 想加响应头，就在 next() 之前注册回调，由框架在真正发送头之前调用
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers["X-Trace"] = Guid.NewGuid().ToString("N");
+        return Task.CompletedTask;
+    });
+
+    await next();
+
+    // ✅ 只读不写是安全的；确实要写就先判断 HasStarted
+    if (!context.Response.HasStarted)
+    {
+        context.Response.Headers["X-Elapsed"] = "0ms";
+    }
+});
+```
+
+**坑三：以为 `app.Use` 每个请求都会执行一遍**
+
+```csharp
+app.Use(async (context, next) =>   // ← 这一行：应用启动时只执行 1 次，用来注册
+{
+    // ← 这里面：每个请求执行 1 次
+    await next();
+});
+```
+
+`app.Use(...)` 本身是**启动期**的注册动作，整个应用生命周期只跑一次。传进去的那个 lambda 才是每个请求都执行。所以别在 lambda 外面做每请求的初始化，也别在 lambda 里做只需一次的重活（比如读配置文件、建连接池）。
+
+### .NET 7 之后推荐的重载
+
+`app.Use` 有两个重载，语义相同，性能有细微差别：
+
+```csharp
+// 旧重载：next 是 Func<Task>，调用时不传 context
+app.Use(async (context, next) =>
+{
+    await next();
+});
+
+// .NET 7+ 新增重载：next 是 RequestDelegate，调用时要传 context
+// 少一层闭包分配，官方推荐在性能敏感场景使用
+app.Use(async (context, next) =>
+{
+    await next(context);
+});
+```
+
+区别只有 `next()` 和 `next(context)` 这一处。只要你在 lambda 里调用了 `next`，两种写法都能编译，日常写哪种都行，看到别人代码里是 `next(context)` 不用疑惑。
+
+:::warning 完全不用 next 会报二义性错误
+新重载带来一个副作用：如果你在 `app.Use` 的 lambda 里**根本不使用** `next`，编译器无法判断你想用哪个重载，会直接报错：
+
+```text
+error CS0121: The call is ambiguous between the following methods or properties:
+'UseExtensions.Use(IApplicationBuilder, Func<HttpContext, Func<Task>, Task>)' and
+'UseExtensions.Use(IApplicationBuilder, Func<HttpContext, RequestDelegate, Task>)'
+```
+
+```csharp
+// ❌ CS0121：next 一次都没用到
+app.Use(async (context, next) =>
+{
+    await context.Response.WriteAsync("done");
+});
+
+// ✅ 压根不需要 next 的场景，本来就该用 app.Run
+app.Run(async context =>
+{
+    await context.Response.WriteAsync("done");
+});
+```
+
+官方给出的修复方式就是改用 `app.Run` —— 这在语义上也更准确：不调用 `next` 意味着这是一个终端中间件。参考 [官方破坏性变更说明](https://learn.microsoft.com/zh-cn/aspnet/core/breaking-changes/6/middleware-new-use-overload)。
+:::
+
 ## app.Run
 
 `app.Run` 会终止管道，通常用于最后处理请求。

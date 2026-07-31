@@ -83,23 +83,463 @@ if (builder.Environment.IsDevelopment())
 
 ## Services：注册服务
 
-`builder.Services` 是依赖注入容器的服务注册入口。
+`builder.Services` 是依赖注入容器的服务注册入口。这一节是初学者最容易含糊过去的地方，所以拆开慢慢讲。
+
+### 什么是“服务”
+
+在 ASP.NET Core 里，**服务（Service）就是被应用复用的功能对象**——发邮件的、读数据库的、算价格的、缓存数据的，都是服务。它们本质上就是普通的 C# 类，唯一的区别是：**它们的实例不由你手动 `new`，而是交给框架的依赖注入容器（DI Container）创建和管理。**
+
+对比一下就清楚了。不用 DI 时，你会这么写：
 
 ```csharp
-builder.Services.AddControllers();
+public class ProductController : ControllerBase
+{
+    // 自己 new：控制器和具体实现死死绑在一起
+    private readonly ProductService _service = new ProductService(new SqlConnection("..."));
+}
+```
+
+这么写有几个现实问题：
+
+- **换实现要改代码**：想把 `ProductService` 换成 `CachedProductService`，得挨个文件改 `new`。
+- **难测试**：单元测试里没法塞一个假的实现进去。
+- **依赖链会传染**：`ProductService` 需要连接串，`ProductController` 就被迫也要知道连接串。
+- **生命周期没人管**：谁负责释放数据库连接？什么时候释放？
+
+用 DI 之后，变成“声明我需要什么，框架负责给我”：
+
+```csharp
+public class ProductController : ControllerBase
+{
+    private readonly IProductService _service;
+
+    // 构造函数注入：我只声明"我需要一个 IProductService"
+    // 具体给我哪个实现、什么时候创建、什么时候释放，都由容器决定
+    public ProductController(IProductService service)
+    {
+        _service = service;
+    }
+
+    [HttpGet]
+    public IActionResult GetAll() => Ok(_service.GetAll());
+}
+```
+
+而“具体给哪个实现”这件事，就是在 `Program.cs` 的 `builder.Services` 里**注册**决定的：
+
+```csharp
 builder.Services.AddScoped<IProductService, ProductService>();
+// 以后想换实现，只改这一行：
+// builder.Services.AddScoped<IProductService, CachedProductService>();
 ```
 
-常见服务注册：
+### builder.Services 到底是什么
+
+`builder.Services` 的类型是 `IServiceCollection`，你可以把它理解成一张**登记表**。表里每一行叫 `ServiceDescriptor`，记录三件事：
+
+| 记录项 | 含义 | 例子 |
+|---|---|---|
+| ServiceType | 别人来要的类型 | `IProductService` |
+| ImplementationType | 实际给出的类型 | `ProductService` |
+| Lifetime | 生命周期 | `Scoped` |
+
+关键点：**注册阶段只是往表里写字，不会创建任何实例。** 真正创建实例要等到 `builder.Build()` 之后、有人向容器索要服务时。
+
+这张表是可以直接看的：
 
 ```csharp
-builder.Services.AddControllers();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
-builder.Services.AddMemoryCache();
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddScoped<IProductService, ProductService>();
+
+// 注册阶段的登记表可以直接遍历
+foreach (var d in builder.Services)
+{
+    if (d.ServiceType.Name.Contains("ProductService"))
+    {
+        Console.WriteLine($"{d.ServiceType.Name} -> {d.ImplementationType?.Name} [{d.Lifetime}]");
+        // 输出：IProductService -> ProductService [Scoped]
+    }
+}
+
+Console.WriteLine($"当前已注册服务数：{builder.Services.Count}");
+// 一个空的 webapi 项目也有一两百条，因为框架自己注册了大量服务
 ```
 
-服务必须在 `builder.Build()` 之前注册。`Build()` 之后服务容器基本就构建完成了。
+### `builder.Services.` 点出来的方法都是内置的吗
+
+不全是。IDE 里点出来的一长串 `AddXxx`，其实来自三个不同的地方，它们**全都是 `IServiceCollection` 的扩展方法**（`public static ... this IServiceCollection services`）。也就是说，你能点出什么，取决于**项目引用了哪些包、文件里 `using` 了哪些命名空间**。
+
+**第一类：DI 框架自带的基础方法**
+
+只有这几个是真正的“原语”，来自 `Microsoft.Extensions.DependencyInjection.Abstractions`：
+
+```csharp
+builder.Services.AddSingleton<IFoo, Foo>();
+builder.Services.AddScoped<IFoo, Foo>();
+builder.Services.AddTransient<IFoo, Foo>();
+```
+
+你自己写的服务，基本都用这三个注册。
+
+**第二类：框架/库提供的“功能包装”方法**
+
+像 `AddControllers()`、`AddMemoryCache()`、`AddDbContext<T>()` 这种，名字读起来像“开启某个功能”。它们内部其实就是帮你批量调用了一堆 `AddSingleton` / `AddScoped` / `AddTransient`。比如 `AddControllers()` 一次性注册了 MVC 需要的模型绑定器、Action 调用器、结果格式化器等几十个服务。
+
+它们来自哪里，有的开箱可用，有的需要装 NuGet 包：
+
+| 方法 | 来源 | 是否需要额外装包 |
+|---|---|---|
+| `AddSingleton` / `AddScoped` / `AddTransient` | DI 抽象层 | 否 |
+| `AddControllers` / `AddControllersWithViews` | ASP.NET Core MVC | 否（共享框架自带） |
+| `AddMemoryCache` | `Microsoft.Extensions.Caching.Memory` | 否 |
+| `AddHttpClient` | `Microsoft.Extensions.Http` | ASP.NET Core 项目否；控制台项目需要 |
+| `AddHttpContextAccessor` | ASP.NET Core | 否 |
+| `AddAuthentication` / `AddAuthorization` | ASP.NET Core | 否 |
+| `AddSwaggerGen` | `Swashbuckle.AspNetCore` | **需要** |
+| `AddDbContext<T>` | `Microsoft.EntityFrameworkCore` | **需要** |
+| `AddOpenApi` | `Microsoft.AspNetCore.OpenApi` | .NET 9 模板默认已引用 |
+
+:::note 关于 AddEndpointsApiExplorer 和 AddSwaggerGen
+`AddSwaggerGen()` 不是 ASP.NET Core 内置的，它来自第三方库 Swashbuckle，只是长期被官方模板使用，所以很多人以为是内置的。
+
+从 .NET 9 开始，`dotnet new webapi` 模板不再引入 Swashbuckle，改用官方的 `builder.Services.AddOpenApi()` + `app.MapOpenApi()`。如果你的模板生成的是 `AddOpenApi()`，那是正常的，不要照抄旧教程去装 Swashbuckle。
+
+`AddEndpointsApiExplorer()` 是内置的（用于向 API 描述层暴露 Minimal API 的元数据），在使用 Swashbuckle 时通常和它一起写。
+:::
+
+**第三类：你自己写的扩展方法**
+
+既然 `Add*` 只是扩展方法，你完全可以自己写一个，把项目里一堆注册收拢起来，让 `Program.cs` 保持干净：
+
+```csharp
+// Extensions/ServiceCollectionExtensions.cs
+namespace ProductApi.Extensions;
+
+public static class ServiceCollectionExtensions
+{
+    // 注意第一个参数的 this 关键字，这是扩展方法的写法
+    public static IServiceCollection AddProductServices(this IServiceCollection services)
+    {
+        services.AddScoped<IProductService, ProductService>();
+        services.AddScoped<IProductValidator, ProductValidator>();
+        services.AddSingleton<IPriceCalculator, PriceCalculator>();
+
+        return services; // 返回自身，支持链式调用
+    }
+}
+```
+
+```csharp
+// Program.cs
+using ProductApi.Extensions; // 少了这个 using，就点不出 AddProductServices
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddProductServices(); // 自己写的方法，和内置方法用起来毫无区别
+```
+
+### 扩展方法是怎么"挂"到 builder.Services 上的
+
+这里有个初学者普遍的误解：以为写了扩展方法之后，`IServiceCollection` 这个接口就"多"了一个方法，或者以为框架在运行时做了什么动态关联。**都不是，这纯粹是编译期的语法糖。**
+
+`builder.Services.AddProductServices()` 这行，编译器实际生成的是一次普通的静态方法调用：
+
+```csharp
+// 你写的
+builder.Services.AddProductServices();
+
+// 编译器实际生成的等价代码
+ServiceCollectionExtensions.AddProductServices(builder.Services);
+```
+
+`IServiceCollection` 接口本身没有任何变化，它从来就没有 `AddProductServices` 这个成员。你能用点号调用它，是因为编译器在解析 `xxx.AddProductServices()` 时，除了查 `IServiceCollection` 自身的成员，还会额外去**当前 `using` 范围内的所有静态类**里找“首参数带 `this IServiceCollection`”的静态方法。找到了就允许这么写。
+
+所以要让一个扩展方法能被点出来，四个条件缺一不可：
+
+| 条件 | 缺失后的结果 |
+|---|---|
+| 类必须是 `static` | 编译报错，`this` 修饰符只能用在静态类的方法上 |
+| 方法必须是 `static` | 同上 |
+| 首参数必须带 `this` | 变成普通静态方法，只能 `Xxx.Method(services)` 这样调 |
+| 命名空间必须在作用域内 | 编译器不去那个类里找，点不出来也编译不过 |
+
+最后一条就是示例里 `using ProductApi.Extensions;` 的作用。把它删掉，代码立刻编译失败：
+
+```text
+error CS1061: 'IServiceCollection' does not contain a definition for
+'AddProductServices' and no accessible extension method
+'AddProductServices' accepting a first argument of type
+'IServiceCollection' could be found (are you missing a using directive?)
+```
+
+报错信息最后那句 “are you missing a using directive?” 就是在提示你可能少了命名空间引用。
+
+:::tip 为什么装完 NuGet 包不用手写 using 就能点出 Add 方法
+微软（以及大部分第三方库）有个约定：不管扩展方法的实现代码放在哪个包、哪个物理文件里，都故意把命名空间声明为 `Microsoft.Extensions.DependencyInjection`。EF Core 的 `AddDbContext`、Swashbuckle 的 `AddSwaggerGen` 都是这么做的。
+
+而在 Web 项目中，这个命名空间由 SDK 的隐式 global using 自动引入了，所以你装完包就能直接点出来。
+
+自己写扩展方法时也可以沿用这个约定 —— 把命名空间写成 `Microsoft.Extensions.DependencyInjection`，`Program.cs` 里连 using 都不用加。代价是可读性变差（别人不容易看出这是你的项目代码），团队里怎么选可以自行权衡。
+:::
+
+:::warning 同名扩展方法会冲突
+如果两个不同命名空间里都定义了 `AddProductServices(this IServiceCollection)`，而你同时 `using` 了它们，编译器无法判断该用哪个，会报 `CS0121` 二义性错误。这时只能退回显式静态调用：
+
+```csharp
+ProductApi.Extensions.ServiceCollectionExtensions.AddProductServices(builder.Services);
+```
+:::
+
+:::tip 怎么判断一个 Add 方法是哪来的
+在方法名上按 `F12`（转到定义）或 `Ctrl + 单击`，Visual Studio / Rider 会显示它所在的程序集和命名空间。这是最可靠的判断方式，比猜要准。
+:::
+
+### 每个服务都需要注册吗
+
+不是。**只有需要通过依赖注入拿到的类型，才需要注册。** 下面这些不用：
+
+- **静态工具类**：`public static class StringHelper`，直接调用即可。
+- **DTO、实体、请求/响应模型**：`Product`、`CreateProductRequest` 这些是数据载体，由模型绑定或你自己 `new`，不进容器。
+- **值对象、枚举、简单结构体**：同上。
+- **框架已经帮你注册好的服务**：`CreateBuilder()` 内部已经注册了一批常用服务，直接注入就能用。
+
+框架默认注册好、可以直接注入的常见服务：
+
+| 服务 | 用途 |
+|---|---|
+| `IConfiguration` | 读配置 |
+| `ILogger<T>` / `ILoggerFactory` | 写日志 |
+| `IWebHostEnvironment` / `IHostEnvironment` | 判断环境、拿根目录 |
+| `IHostApplicationLifetime` | 监听应用启动/停止事件 |
+| `IServiceProvider` | 容器本身 |
+| `IOptions<T>` / `IOptionsSnapshot<T>` | 强类型配置（需配合 `Configure<T>`） |
+
+```csharp
+public class ProductService : IProductService
+{
+    private readonly ILogger<ProductService> _logger;
+    private readonly IConfiguration _config;
+
+    // 这两个都没在 Program.cs 里注册过，但可以直接注入
+    public ProductService(ILogger<ProductService> logger, IConfiguration config)
+    {
+        _logger = logger;
+        _config = config;
+    }
+}
+```
+
+有个例外值得记一下：`IHttpContextAccessor` **不是**默认注册的，要用得先 `builder.Services.AddHttpContextAccessor();`。
+
+还有一个容易困惑的点：**Controller 本身不需要注册**。`AddControllers()` 之后，控制器由 MVC 的 Controller 激活器负责创建（构造函数参数仍从容器解析），所以你不用写 `AddScoped<ProductController>()`。
+
+如果忘了注册一个真正需要注入的服务，程序**能编译通过**，但运行到该处会抛异常：
+
+```text
+System.InvalidOperationException: Unable to resolve service for type
+'ProductApi.Services.IProductService' while attempting to activate
+'ProductApi.Controllers.ProductController'.
+```
+
+看到 `Unable to resolve service for type X`，第一反应就是去 `Program.cs` 检查 X 有没有注册。
+
+### 生命周期是每次都要自己选吗
+
+分两种情况：
+
+- **用 `AddSingleton` / `AddScoped` / `AddTransient` 注册自己的服务时，必须选**——方法名本身就是生命周期，没有默认值。
+- **用 `AddControllers()`、`AddDbContext<T>()` 这类包装方法时，不需要你选**——方法内部已经替每个服务定好了。比如 `AddDbContext<T>()` 默认按 `Scoped` 注册 `DbContext`。
+
+选哪个的判断标准和常见陷阱，下一节展开讲。这里先记住：**自己的服务不确定选哪个时，先用 `Scoped`**，它最符合 Web 请求的处理模型。
+
+### 注册服务的几种写法
+
+从最常用到偶尔用得上，循序看：
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+// 1. 最常用：接口 -> 实现。别人注入 IProductService，容器给 ProductService
+builder.Services.AddScoped<IProductService, ProductService>();
+
+// 2. 没有接口时，直接注册具体类型。别人注入 ReportGenerator 即可
+builder.Services.AddScoped<ReportGenerator>();
+
+// 3. 工厂委托：实例创建需要额外逻辑或依赖其他服务时用
+builder.Services.AddSingleton<IPriceCalculator>(sp =>
+{
+    // sp 是 IServiceProvider，可以从容器里取别的服务
+    var config = sp.GetRequiredService<IConfiguration>();
+    var rate = config.GetValue<decimal>("Pricing:TaxRate");
+    return new PriceCalculator(rate);
+});
+
+// 4. 注册一个已有实例（只能是 Singleton，因为实例就一个）
+builder.Services.AddSingleton<IClock>(new SystemClock());
+
+// 5. 同一接口注册多个实现：全部保留，可以按集合注入
+builder.Services.AddScoped<INotifier, EmailNotifier>();
+builder.Services.AddScoped<INotifier, SmsNotifier>();
+```
+
+多实现注册的解析规则要单独说明，这是很多人踩过的坑：
+
+```csharp
+public class OrderService
+{
+    // 注入单个：拿到的是"最后注册的那一个"，即 SmsNotifier
+    public OrderService(INotifier notifier) { }
+}
+
+public class OrderService2
+{
+    // 注入集合：拿到全部两个，顺序与注册顺序一致
+    public OrderService2(IEnumerable<INotifier> notifiers)
+    {
+        foreach (var n in notifiers) n.Send("订单已创建");
+    }
+}
+```
+
+如果你想“只在还没注册过时才注册”（写可复用的库时常见），用 `TryAdd` 系列：
+
+```csharp
+using Microsoft.Extensions.DependencyInjection.Extensions;
+
+// 已存在 INotifier 的注册时，这行什么都不做，不会变成两个实现
+builder.Services.TryAddScoped<INotifier, EmailNotifier>();
+```
+
+:::note .NET 8+ 的键控服务
+如果确实需要“同一接口按名字取不同实现”，.NET 8 引入了键控服务（Keyed Services）：
+
+```csharp
+builder.Services.AddKeyedScoped<INotifier, EmailNotifier>("email");
+builder.Services.AddKeyedScoped<INotifier, SmsNotifier>("sms");
+```
+
+```csharp
+public class OrderService(
+    [FromKeyedServices("email")] INotifier emailNotifier)
+{
+    // 明确拿到 EmailNotifier
+}
+```
+
+.NET 8 以下版本没有这个能力，只能自己写工厂类分发。
+:::
+
+### 从定义到使用的完整例子
+
+把上面的知识点串成一个能跑的最小项目。三个文件：
+
+```csharp
+// Services/IProductService.cs
+namespace ProductApi.Services;
+
+public record Product(int Id, string Name, decimal Price);
+
+public interface IProductService
+{
+    IEnumerable<Product> GetAll();
+    Product? GetById(int id);
+}
+
+public class ProductService : IProductService
+{
+    // ILogger<T> 由框架默认注册，直接注入
+    private readonly ILogger<ProductService> _logger;
+
+    private static readonly List<Product> Store =
+    [
+        new(1, "键盘", 299m),
+        new(2, "显示器", 1299m)
+    ];
+
+    public ProductService(ILogger<ProductService> logger) => _logger = logger;
+
+    public IEnumerable<Product> GetAll()
+    {
+        _logger.LogInformation("查询全部商品，共 {Count} 条", Store.Count);
+        return Store;
+    }
+
+    public Product? GetById(int id) => Store.FirstOrDefault(p => p.Id == id);
+}
+```
+
+```csharp
+// Controllers/ProductsController.cs
+using Microsoft.AspNetCore.Mvc;
+using ProductApi.Services;
+
+namespace ProductApi.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class ProductsController : ControllerBase
+{
+    private readonly IProductService _service;
+
+    // 构造函数注入，容器会自动传入 ProductService 实例
+    public ProductsController(IProductService service) => _service = service;
+
+    [HttpGet]
+    public IActionResult GetAll() => Ok(_service.GetAll());
+
+    [HttpGet("{id:int}")]
+    public IActionResult GetById(int id)
+        => _service.GetById(id) is { } product ? Ok(product) : NotFound();
+}
+```
+
+```csharp
+// Program.cs
+using ProductApi.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();          // 框架包装方法：开启 MVC 控制器
+builder.Services.AddScoped<IProductService, ProductService>(); // 自己的服务
+
+var app = builder.Build();
+
+app.MapControllers();
+
+app.Run();
+```
+
+跑起来访问 `GET /api/products`，就能看到 JSON 列表，同时控制台会打印 `ProductService` 写的日志——这说明容器确实帮你创建了实例并注入了 `ILogger<ProductService>`。
+
+### 注册必须在 Build 之前
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddScoped<IProductService, ProductService>(); // ✅ 正确位置
+
+var app = builder.Build();
+
+builder.Services.AddScoped<IOtherService, OtherService>();     // ❌ 运行时抛异常
+```
+
+`Build()` 会依据登记表把容器（`IServiceProvider`）构建出来，之后 `builder.Services` 变为只读，再改会抛 `InvalidOperationException`。所以顺序上记牢：**`Build()` 之前只做“注册服务 + 读配置”，`Build()` 之后只做“配置管道 + 映射 Endpoint”。**
+
+:::details 常见报错速查 | 点开看几个高频异常的原因
+**`Unable to resolve service for type 'X' while attempting to activate 'Y'`**
+`X` 没注册。去 `Program.cs` 补上 `AddScoped<X, XImpl>()`。
+
+**`Cannot consume scoped service 'X' from singleton 'Y'`**
+Singleton 服务依赖了 Scoped 服务，生命周期不匹配。见下一节说明。
+
+**`Some services are not able to be constructed`**
+`Build()` 时的验证阶段发现某个服务的依赖链有问题，异常内层信息会指出具体是哪个服务。
+
+**`A suitable constructor for type 'X' could not be located`**
+`X` 没有公共构造函数，或构造函数里有容器无法提供的参数（比如 `string`、`int` 这类原始类型）。这种情况改用工厂委托注册。
+:::
 
 ## DI 服务生命周期
 

@@ -1,0 +1,730 @@
+---
+title: '物模型：属性、事件、服务三要素'
+date: '2026-07-31'
+excerpt: 'IoT 平台最重要的抽象：把所有设备能力统一成属性、事件、服务，用 JSON 定义。含类型系统、上报数据校验、属性值存储方案对比、前端动态渲染与规则引擎的通用化，以及物模型的兼容性演进。'
+tags: ['iot', 'dotnet', 'thing-model', 'schema', 'validation']
+nextPost: 'iot/ingest-backpressure-batching'
+---
+
+# 物模型：属性、事件、服务三要素
+
+如果只从这个系列学一个概念，就是这个。
+
+物模型（Thing Model）解决的是一个必然会出现的问题：**设备品类会不断增加。** 今天接温控器，明天接水表，后天接门磁、烟感、电表、空气净化器。如果每个品类都要写一套接口、建一套表、做一套前端页面，工作量是线性增长的，而且永远做不完——因为品类只会越来越多。
+
+物模型的思路是**把"设备有什么能力"从代码里抽出来，变成数据**。之后新增品类只是新增一份 JSON 定义，代码一行不改。
+
+阿里云物联网平台、涂鸦都叫"物模型"，Matter 里对应的是 Cluster 和 Attribute，本质是同一件事。
+
+:::tip 系列阅读顺序
+本文是 [云端 IoT 平台路线图](/posts/iot/cloud-iot-roadmap) 的第三篇。上一篇 [Topic 设计与 ACL](/posts/iot/mqtt-topic-auth-acl) 里有个结论"一次上报打包所有属性，不要一个属性一个 Topic"，这一篇是它的自然延续。
+:::
+
+## 不用物模型会怎样
+
+先看清代价。假设你要接三个品类，用"每类一套"的做法：
+
+```csharp
+// ❌ 每个品类一个 Controller、一个实体、一张表、一套前端页面
+public class ThermostatController { public void SetTemperature(decimal t) { } }
+public class WaterMeterController { public void ReadTotal() { } }
+public class SmokeDetectorController { public void Test() { } }
+
+public class ThermostatData { public decimal Temperature { get; set; } /* ... */ }
+public class WaterMeterData { public decimal TotalVolume { get; set; } /* ... */ }
+```
+
+问题不在于代码量，而在于**每一个横向功能都要乘以品类数**：
+
+| 横向功能 | 每加一个品类要做什么 |
+|---|---|
+| 设备详情页 | 新写一个页面 |
+| 数据存储 | 新建一张表 |
+| 历史曲线 | 新写一套查询 |
+| 规则引擎 | 新加一批条件判断分支 |
+| 语音助手对接 | 每个平台各写一遍映射 |
+| 开放 API | 新增一组接口 |
+
+六个横向功能 × 二十个品类 = 一百二十份重复工作。**这就是很多 IoT 项目做到第十个品类就动不了的原因。**
+
+## 三要素
+
+物模型把所有设备能力归成三类，就三类：
+
+| 要素 | 定义 | 方向 | 例子 |
+|---|---|---|---|
+| **属性 Property** | 设备的**状态**，有当前值 | 上报 + 可能可写 | 温度、开关、亮度、目标温度 |
+| **事件 Event** | 设备主动通知的**一次性发生** | 只上报 | 滤芯耗尽、检测到移动、故障告警 |
+| **服务 Service** | 云端可**调用的方法** | 下发 + 响应 | 自检、复位、启动洗涤程序 |
+
+### 属性还是事件？
+
+这是初学最容易混的地方。判断标准：**"当前值"这个说法成立吗？**
+
+- 温度 → "当前温度是 25℃" 成立 → **属性**
+- 门被打开 → "当前门被打开" 不成立（打开是一个瞬间发生的事）→ **事件**
+
+再给两个易错的：
+
+**"设备离线"是属性还是事件？** 是属性（在线状态有当前值），但离线**这个动作**可以额外产生一个事件用于告警。两者不冲突，很多平台同时提供。
+
+**"温度超限"是属性还是事件？** 温度是属性，"温度超限"是事件。区别在于：属性告诉你现在多少度，事件告诉你"刚刚发生了越界这件事"，并且事件是不可错过的——如果只有属性，云端在两次上报之间的短暂超限就看不到。
+
+### 服务还是可写属性？
+
+也常混。判断标准：**有没有"执行过程"？**
+
+- 设置目标温度到 26℃ → 就是改一个值 → **可写属性**
+- 启动一次自检 → 有执行过程、有结果 → **服务**
+
+经验法则：**能表达成"把某个值改成 X"的用可写属性，其余用服务。** 可写属性的好处是天然幂等（设两次和设一次结果相同），服务通常不幂等，需要额外处理。
+
+## 类型系统
+
+每个属性要声明类型和约束。一套够用的类型集合：
+
+| 类型 | 约束项 | 用途 |
+|---|---|---|
+| `int` | min、max、step、unit | 亮度、档位、计数 |
+| `float` / `double` | min、max、step、unit、precision | 温度、电压、流量 |
+| `bool` | 两个状态的显示名 | 开关、在线 |
+| `enum` | 枚举项及显示名 | 模式（制冷/制热/送风） |
+| `text` | maxLength | 设备名、固件版本 |
+| `date` | 格式 | 生产日期、上次维护 |
+| `struct` | 子属性列表 | 复合数据（位置 = 经度 + 纬度） |
+| `array` | 元素类型、最大长度 | 多路数据（八路温度探头） |
+
+**约束不是可选项，它们有实际用途：**
+
+- **min/max** 用于校验上报数据（固件 bug 可能上报 −999℃）和限制下发值
+- **unit** 让前端不用硬编码单位，也让不同设备的数据可比
+- **step** 让前端滑块的步进正确（亮度 1~100 步进 1，温度 16~30 步进 0.5）
+- **precision** 决定显示几位小数，避免 `25.300000001`
+- **enum 项** 让前端自动生成下拉框，且中英文显示名可以随语言切换
+
+## 一份完整的物模型
+
+以智能温控器为例：
+
+```json
+{
+  "productKey": "thermostat-v1",
+  "version": "1.2",
+  "properties": [
+    {
+      "identifier": "temperature",
+      "name": "当前温度",
+      "accessMode": "r",
+      "dataType": { "type": "float", "min": -40, "max": 85, "unit": "℃", "precision": 1 }
+    },
+    {
+      "identifier": "humidity",
+      "name": "当前湿度",
+      "accessMode": "r",
+      "dataType": { "type": "float", "min": 0, "max": 100, "unit": "%", "precision": 1 }
+    },
+    {
+      "identifier": "target_temperature",
+      "name": "目标温度",
+      "accessMode": "rw",
+      "dataType": { "type": "float", "min": 16, "max": 30, "step": 0.5, "unit": "℃", "precision": 1 }
+    },
+    {
+      "identifier": "power",
+      "name": "开关",
+      "accessMode": "rw",
+      "dataType": { "type": "bool", "trueName": "开", "falseName": "关" }
+    },
+    {
+      "identifier": "mode",
+      "name": "运行模式",
+      "accessMode": "rw",
+      "dataType": {
+        "type": "enum",
+        "items": [
+          { "value": 0, "name": "制冷" },
+          { "value": 1, "name": "制热" },
+          { "value": 2, "name": "送风" },
+          { "value": 3, "name": "自动" }
+        ]
+      }
+    },
+    {
+      "identifier": "firmware_version",
+      "name": "固件版本",
+      "accessMode": "r",
+      "dataType": { "type": "text", "maxLength": 32 }
+    }
+  ],
+  "events": [
+    {
+      "identifier": "high_temperature",
+      "name": "高温告警",
+      "type": "alert",
+      "outputData": [
+        {
+          "identifier": "current",
+          "name": "当前温度",
+          "dataType": { "type": "float", "unit": "℃" }
+        },
+        {
+          "identifier": "threshold",
+          "name": "告警阈值",
+          "dataType": { "type": "float", "unit": "℃" }
+        }
+      ]
+    },
+    {
+      "identifier": "sensor_fault",
+      "name": "传感器故障",
+      "type": "error",
+      "outputData": [
+        {
+          "identifier": "code",
+          "name": "故障码",
+          "dataType": { "type": "int" }
+        }
+      ]
+    }
+  ],
+  "services": [
+    {
+      "identifier": "self_check",
+      "name": "自检",
+      "inputData": [],
+      "outputData": [
+        {
+          "identifier": "passed",
+          "name": "是否通过",
+          "dataType": { "type": "bool" }
+        }
+      ]
+    },
+    {
+      "identifier": "set_schedule",
+      "name": "设置定时计划",
+      "inputData": [
+        {
+          "identifier": "start_hour",
+          "name": "开始小时",
+          "dataType": { "type": "int", "min": 0, "max": 23 }
+        },
+        {
+          "identifier": "target",
+          "name": "目标温度",
+          "dataType": { "type": "float", "min": 16, "max": 30 }
+        }
+      ],
+      "outputData": []
+    }
+  ]
+}
+```
+
+几个约定值得注意：
+
+**`identifier` 是机器用的，`name` 是人看的。** 前者进 Topic、进数据库、进 API，必须是稳定的小写下划线标识符，**永不修改**；后者随时可以改，还能做多语言。
+
+**`accessMode`**：`r` 只读、`rw` 可读写。前端靠它决定渲染只读文本还是可交互控件。
+
+**事件的 `type`**：`info` / `alert` / `error`，用于告警分级和通知策略。
+
+## C# 侧建模
+
+```csharp
+public sealed class ThingModel
+{
+    public string ProductKey { get; init; } = default!;
+    public string Version { get; init; } = default!;
+    public List<PropertyDefinition> Properties { get; init; } = [];
+    public List<EventDefinition> Events { get; init; } = [];
+    public List<ServiceDefinition> Services { get; init; } = [];
+
+    // 查找是热路径（每条上报消息都要查），预建索引
+    private Dictionary<string, PropertyDefinition>? _propertyIndex;
+
+    public PropertyDefinition? FindProperty(string identifier)
+    {
+        _propertyIndex ??= Properties.ToDictionary(p => p.Identifier, StringComparer.Ordinal);
+        return _propertyIndex.GetValueOrDefault(identifier);
+    }
+}
+
+public sealed class PropertyDefinition
+{
+    public string Identifier { get; init; } = default!;
+    public string Name { get; init; } = default!;
+    public AccessMode AccessMode { get; init; }
+    public DataTypeDefinition DataType { get; init; } = default!;
+
+    public bool IsWritable => AccessMode == AccessMode.ReadWrite;
+}
+
+public sealed class DataTypeDefinition
+{
+    public string Type { get; init; } = default!;
+
+    public double? Min { get; init; }
+    public double? Max { get; init; }
+    public double? Step { get; init; }
+    public int? Precision { get; init; }
+    public string? Unit { get; init; }
+    public int? MaxLength { get; init; }
+    public List<EnumItem>? Items { get; init; }
+}
+```
+
+物模型本身要缓存，不要每条消息都查库：
+
+```csharp
+public sealed class ThingModelRegistry
+{
+    private readonly IMemoryCache _cache;
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    public async Task<ThingModel?> GetAsync(string productKey, CancellationToken ct)
+    {
+        // 物模型变更频率极低（发布新版本时才变），
+        // 缓存命中率接近 100%，这是必要的优化
+        return await _cache.GetOrCreateAsync($"tm:{productKey}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30);
+
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var record = await db.ThingModels
+                .Where(m => m.ProductKey == productKey && m.IsActive)
+                .OrderByDescending(m => m.Version)
+                .FirstOrDefaultAsync(ct);
+
+            return record is null ? null : JsonSerializer.Deserialize<ThingModel>(record.Json);
+        });
+    }
+
+    /// <summary>发布新版本物模型后必须调用，否则要等缓存过期才生效。</summary>
+    public void Invalidate(string productKey) => _cache.Remove($"tm:{productKey}");
+}
+```
+
+## 校验上报数据
+
+**这一步不能省。** 三个现实原因：
+
+- **固件有 bug**：传感器故障时上报 `-999`、`65535` 这类明显无效的值
+- **数据可能被伪造**：ACL 只能限制"哪台设备能发哪个 Topic"，管不了 payload 内容
+- **类型会漂移**：固件升级后可能把 `25.5` 改成上报字符串 `"25.5"`
+
+不校验的后果是脏数据进库，之后所有统计、告警、图表都受影响，而且**很难追溯是什么时候开始坏的**。
+
+```csharp
+public sealed class PropertyValidator
+{
+    public ValidationOutcome Validate(
+        ThingModel model, string identifier, JsonElement value)
+    {
+        var definition = model.FindProperty(identifier);
+
+        // 未定义的属性：可能是固件比物模型新，也可能是伪造数据
+        if (definition is null)
+            return ValidationOutcome.Unknown($"物模型中未定义属性 {identifier}");
+
+        var dt = definition.DataType;
+
+        return dt.Type switch
+        {
+            "int" => ValidateNumber(value, dt, isInteger: true),
+            "float" or "double" => ValidateNumber(value, dt, isInteger: false),
+            "bool" => ValidateBool(value),
+            "enum" => ValidateEnum(value, dt),
+            "text" => ValidateText(value, dt),
+            _ => ValidationOutcome.Invalid($"不支持的类型 {dt.Type}"),
+        };
+    }
+
+    private static ValidationOutcome ValidateNumber(
+        JsonElement value, DataTypeDefinition dt, bool isInteger)
+    {
+        if (value.ValueKind != JsonValueKind.Number)
+            return ValidationOutcome.Invalid($"期望数字，实际是 {value.ValueKind}");
+
+        if (!value.TryGetDouble(out var d))
+            return ValidationOutcome.Invalid("数值超出可表示范围");
+
+        // NaN 和无穷会污染后续所有聚合计算，必须拦掉
+        if (double.IsNaN(d) || double.IsInfinity(d))
+            return ValidationOutcome.Invalid("数值非法（NaN 或无穷）");
+
+        if (isInteger && d != Math.Floor(d))
+            return ValidationOutcome.Invalid("期望整数，收到小数");
+
+        // 范围校验：这一条能拦掉传感器故障时的 -999 之类
+        if (dt.Min is { } min && d < min)
+            return ValidationOutcome.OutOfRange($"低于下限 {min}（实际 {d}）");
+
+        if (dt.Max is { } max && d > max)
+            return ValidationOutcome.OutOfRange($"高于上限 {max}（实际 {d}）");
+
+        return ValidationOutcome.Valid;
+    }
+
+    private static ValidationOutcome ValidateEnum(JsonElement value, DataTypeDefinition dt)
+    {
+        if (value.ValueKind != JsonValueKind.Number)
+            return ValidationOutcome.Invalid("枚举值应为数字");
+
+        var v = value.GetInt32();
+
+        return dt.Items?.Any(i => i.Value == v) == true
+            ? ValidationOutcome.Valid
+            : ValidationOutcome.Invalid($"枚举值 {v} 不在定义范围内");
+    }
+}
+```
+
+### 校验失败怎么处理
+
+**不同失败原因要不同处理，一律丢弃是错的：**
+
+```csharp
+private async Task HandlePropertyPostAsync(
+    DeviceContext device, JsonElement properties, CancellationToken ct)
+{
+    var model = await _registry.GetAsync(device.ProductKey, ct);
+    if (model is null)
+    {
+        _logger.LogError("产品 {ProductKey} 无物模型定义", device.ProductKey);
+        return;
+    }
+
+    var accepted = new Dictionary<string, JsonElement>();
+
+    foreach (var prop in properties.EnumerateObject())
+    {
+        var outcome = _validator.Validate(model, prop.Name, prop.Value);
+
+        switch (outcome.Kind)
+        {
+            case OutcomeKind.Valid:
+                accepted[prop.Name] = prop.Value;
+                break;
+
+            case OutcomeKind.OutOfRange:
+                // 超范围：大概率是传感器故障。丢弃这个值，但要产生设备健康告警——
+                // 静默丢弃会让"传感器坏了"这件事永远没人知道
+                _logger.LogWarning("属性超范围 {Device}.{Prop}：{Reason}",
+                    device.DeviceName, prop.Name, outcome.Message);
+                await _deviceHealth.ReportAnomalyAsync(device.Id, prop.Name, outcome.Message, ct);
+                break;
+
+            case OutcomeKind.Unknown:
+                // 未定义属性：可能是固件比物模型新。
+                // 存到"未识别数据"里而不是丢掉，方便事后补物模型定义
+                await _unknownData.RecordAsync(device.Id, prop.Name, prop.Value.ToString(), ct);
+                break;
+
+            case OutcomeKind.Invalid:
+                // 类型错误：固件 bug 或伪造数据，直接拒绝并计数
+                _logger.LogWarning("属性非法 {Device}.{Prop}：{Reason}",
+                    device.DeviceName, prop.Name, outcome.Message);
+                break;
+        }
+    }
+
+    // 部分属性合法就处理这部分，不要因为一个属性错了丢掉整条消息
+    if (accepted.Count > 0)
+        await _propertyStore.SaveAsync(device.Id, accepted, ct);
+}
+```
+
+两个关键判断：**部分接受**（一个属性错不影响其他属性）和**未定义属性要留档**（否则固件先上线、物模型后补的场景会丢数据）。
+
+## 属性值怎么存
+
+物模型是动态的，存储方案就不能是"一个属性一个列"。三种方案：
+
+| 方案 | 结构 | 优点 | 缺点 |
+|---|---|---|---|
+| **宽表** | 每个属性一列 | 查询直观、索引好建 | **加品类要改表结构**，与物模型的初衷矛盾 |
+| **窄表（EAV）** | `device_id, key, value, ts` | 完全动态 | 行数爆炸、跨属性查询要多次 join |
+| **JSON 列** | `device_id, payload jsonb, ts` | 灵活、单条读取快 | 跨设备聚合查询慢 |
+
+**实践中的组合方案最好用：**
+
+```text
+最新值快照  →  关系库的 JSON 列（每设备一行，覆盖更新）
+              用途：App 打开设备详情、状态查询
+              特点：读多写多但数据量恒定 = 设备数
+
+历史数据    →  时序数据库（窄表结构）
+              用途：历史曲线、统计报表
+              特点：只追加、按时间范围查、量极大
+```
+
+最新值快照的实现：
+
+```csharp
+public sealed class DevicePropertySnapshot
+{
+    public Guid DeviceId { get; init; }
+
+    /// <summary>所有属性的最新值，JSON 存储。PostgreSQL 用 jsonb。</summary>
+    public string PropertiesJson { get; set; } = "{}";
+
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+public async Task SaveAsync(
+    Guid deviceId, Dictionary<string, JsonElement> values, CancellationToken ct)
+{
+    var snapshot = await _db.Snapshots.FindAsync([deviceId], ct);
+
+    if (snapshot is null)
+    {
+        snapshot = new DevicePropertySnapshot { DeviceId = deviceId };
+        _db.Snapshots.Add(snapshot);
+    }
+
+    // 合并而不是替换：这次只上报了温度，湿度的旧值要保留。
+    // 设备经常做增量上报（只发变化的属性），整体覆盖会丢数据。
+    var merged = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+        snapshot.PropertiesJson) ?? [];
+
+    foreach (var (key, value) in values)
+        merged[key] = value;
+
+    snapshot.PropertiesJson = JsonSerializer.Serialize(merged);
+    snapshot.UpdatedAt = DateTimeOffset.UtcNow;
+
+    await _db.SaveChangesAsync(ct);
+}
+```
+
+**合并而非覆盖**是这里最容易写错的地方。设备通常只上报变化的属性以省流量，整体覆盖会把没上报的属性清掉。
+
+历史数据落时序库的部分是下一篇的内容。
+
+## 消息格式
+
+配合上一篇的 Topic 规范，三类消息的 payload：
+
+**属性上报** → `v1/{pk}/{dn}/property/post`
+
+```json
+{
+  "id": "a1b2c3d4",
+  "ts": 1785456000000,
+  "properties": {
+    "temperature": 25.5,
+    "humidity": 48.2,
+    "mode": 1
+  }
+}
+```
+
+**事件上报** → `v1/{pk}/{dn}/event/high_temperature/post`
+
+```json
+{
+  "id": "e5f6a7b8",
+  "ts": 1785456010000,
+  "params": {
+    "current": 42.3,
+    "threshold": 40.0
+  }
+}
+```
+
+**服务调用** → `v1/{pk}/{dn}/service/self_check/invoke`
+
+```json
+{
+  "id": "req-9c8d7e6f",
+  "params": {}
+}
+```
+
+**服务响应** → `v1/{pk}/{dn}/service/self_check/reply`
+
+```json
+{
+  "id": "req-9c8d7e6f",
+  "code": 200,
+  "data": { "passed": true }
+}
+```
+
+统一的字段约定：`id` 用于幂等去重和请求响应关联、`ts` 是设备侧时间戳（毫秒）、`code` 用类 HTTP 语义。
+
+:::note 用设备时间还是服务端时间
+两个都要存。
+
+**设备时间（`ts`）** 是数据真正产生的时刻，弱网补传时尤其重要——设备断网半小时后重连，一次性补传的数据都用服务端时间的话，就全挤在同一时刻了。
+
+**服务端接收时间**用于排查延迟和识别设备时钟异常。
+
+设备时钟不可信是常态（没电池、没 NTP）。所以要加一道校验：**设备时间和服务端时间偏差超过阈值时，用服务端时间并标记异常**，否则一台时钟跑到 2099 年的设备会污染整个时间序列。
+:::
+
+## 物模型带来的三个红利
+
+抽象的价值要落到具体收益上，这三个是最实在的。
+
+### 一、前端动态渲染
+
+API 同时返回物模型和当前值，前端按类型自动生成控件：
+
+```csharp
+app.MapGet("/api/devices/{id}/panel", async (
+    Guid id, IDeviceService devices, ThingModelRegistry registry, CancellationToken ct) =>
+{
+    var device = await devices.GetAsync(id, ct);
+    var model = await registry.GetAsync(device.ProductKey, ct);
+    var snapshot = await devices.GetSnapshotAsync(id, ct);
+
+    // 前端拿到这份数据就能渲染出完整面板，
+    // 不需要为每个品类写一个页面组件
+    return Results.Ok(new
+    {
+        device = new { device.Id, device.Name, device.Online },
+        properties = model!.Properties.Select(p => new
+        {
+            p.Identifier,
+            p.Name,
+            p.AccessMode,
+            p.DataType,                                  // 前端靠它决定控件类型
+            value = snapshot.GetValue(p.Identifier),
+        }),
+        services = model.Services.Select(s => new { s.Identifier, s.Name, s.InputData }),
+    });
+});
+```
+
+前端的映射规则很简单：`bool` → 开关、`enum` → 下拉框、带 min/max 的数字 → 滑块、`text` 只读 → 文本。**加一百个品类，前端代码不变。**
+
+### 二、规则引擎通用化
+
+自动化规则的条件不再是"如果温度大于 30"（写死了属性名），而是"如果 `{属性标识符}` `{操作符}` `{值}`"：
+
+```csharp
+public sealed record Condition(string PropertyIdentifier, string Operator, JsonElement Value);
+
+public bool Evaluate(Condition condition, DevicePropertySnapshot snapshot)
+{
+    var current = snapshot.GetValue(condition.PropertyIdentifier);
+    if (current is null) return false;
+
+    return condition.Operator switch
+    {
+        ">" => current.Value.GetDouble() > condition.Value.GetDouble(),
+        "<" => current.Value.GetDouble() < condition.Value.GetDouble(),
+        "==" => JsonElement.DeepEquals(current.Value, condition.Value),
+        _ => false,
+    };
+}
+```
+
+一套代码支持所有品类的所有属性。规则配置界面也能从物模型自动生成可选属性列表。
+
+### 三、生态对接一次到位
+
+对接小爱、天猫精灵、Alexa 时，工作变成"平台的能力模型 ↔ 你的物模型"的映射：
+
+```csharp
+// Alexa 的 PowerController 接口 → 你的 power 属性
+// 一份映射表覆盖所有品类，而不是每个品类写一遍
+private static readonly Dictionary<string, string> AlexaCapabilityMap = new()
+{
+    ["Alexa.PowerController"] = "power",
+    ["Alexa.ThermostatController.targetSetpoint"] = "target_temperature",
+    ["Alexa.TemperatureSensor.temperature"] = "temperature",
+    ["Alexa.BrightnessController"] = "brightness",
+};
+```
+
+**这是物模型最能体现价值的地方。** 没有物模型的话，每接一个语音平台就要为每个品类写一遍映射，是品类数 × 平台数的乘法。
+
+## 物模型的演进
+
+物模型自己也要版本管理。按兼容性分成两类变更：
+
+| 变更 | 兼容性 | 处理 |
+|---|---|---|
+| 新增属性/事件/服务 | ✅ 兼容 | 直接发新版本，老固件不受影响 |
+| 修改 `name`、单位显示 | ✅ 兼容 | 直接改 |
+| 放宽 min/max 范围 | ✅ 兼容 | 直接改 |
+| **收紧 min/max** | ⚠️ 有风险 | 老设备的正常值可能变成"超范围" |
+| **删除属性** | ❌ 不兼容 | 老固件还在上报，会进"未识别数据" |
+| **改 `identifier`** | ❌ 不兼容 | 等于删除 + 新增，历史数据断裂 |
+| **改数据类型** | ❌ 不兼容 | 校验会全部失败 |
+
+两条实践原则：
+
+**`identifier` 一旦发布就永不修改。** 它是数据库里的键、历史数据的关联依据、第三方 API 的契约。要改显示名就改 `name`，那个可以随便改。
+
+**不兼容变更要走版本共存。** 物模型版本和设备固件版本关联，服务端按设备当前固件版本选择用哪个版本校验：
+
+```csharp
+public async Task<ThingModel?> GetForDeviceAsync(Device device, CancellationToken ct)
+{
+    // 设备上报的固件版本决定它遵循哪个物模型版本，
+    // 这样新旧固件可以长期共存，不必等全网 OTA 完成
+    var modelVersion = await _compatibility.ResolveAsync(
+        device.ProductKey, device.FirmwareVersion, ct);
+
+    return await GetAsync(device.ProductKey, modelVersion, ct);
+}
+```
+
+:::details 常见问题速查 | 点开看物模型设计的高频坑
+**属性和事件分不清**
+判断"当前值"这个说法是否成立。温度成立（属性），门被打开不成立（事件）。
+
+**服务和可写属性分不清**
+能表达成"把某个值改成 X"的用可写属性，有执行过程的用服务。
+
+**设备只上报了部分属性，其他属性的值被清空了**
+快照更新时用了覆盖而不是合并。设备增量上报是常态。
+
+**上报了但值没进库**
+被校验拦了。检查日志里的超范围/类型错误，也可能是物模型里根本没定义这个属性。
+
+**传感器坏了上报 -999，系统静默丢弃，没人知道**
+超范围要产生设备健康告警，不能只丢弃。
+
+**固件先上线，物模型还没加对应属性，数据丢了**
+未定义属性要落"未识别数据"表，不要直接丢。
+
+**统计报表里出现 NaN**
+校验没拦 NaN 和无穷。这两个值会污染所有后续聚合。
+
+**改了属性的 identifier，历史数据查不到了**
+identifier 是数据键，发布后不能改。要改显示名就改 name。
+
+**一台设备时钟跑到 2099 年，把时间序列图表拉坏了**
+设备时间要做偏差校验，超阈值用服务端时间并标记异常。
+
+**每条上报消息都查库拿物模型，数据库压力很大**
+物模型必须缓存，它的变更频率极低。
+
+**新增品类时前端还是要写新页面**
+说明前端没有按 dataType 动态渲染，而是硬编码了属性名。物模型的红利没拿到。
+
+**枚举值上报了一个物模型里没有的数字**
+固件和物模型不同步。校验会拦住，但要检查是不是固件升级了而物模型没更新。
+:::
+
+## 小结
+
+物模型是 IoT 平台的地基，它把"品类增长"从线性工作量变成了配置工作：
+
+1. **三要素就够**：属性（有当前值）、事件（一次性发生）、服务（有执行过程）
+2. **约束不是装饰**：min/max 用于校验和限值，unit/step/precision 让前端不用硬编码
+3. **`identifier` 永不修改**，`name` 随便改
+4. **必须校验上报数据**，且要区分处理：超范围报健康告警、未定义留档、类型错拒绝
+5. **部分接受**，一个属性错不影响其他属性
+6. **快照用 JSON 列 + 合并更新，历史进时序库**
+7. **红利要落地**：前端动态渲染、规则引擎通用化、生态映射一次到位
+8. **不兼容变更走版本共存**，按设备固件版本选物模型版本
+
+下一篇 [削峰、背压与批量入库](/posts/iot/ingest-backpressure-batching) 讲数据链路：一万台设备每秒上报，直接写库必然崩。`Channel` 缓冲、批量写入、什么时候该引入消息队列、以及背压策略怎么选。

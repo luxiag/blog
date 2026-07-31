@@ -1,0 +1,687 @@
+---
+title: '设备适配层设计与现场可靠性：从能跑到能长期维护'
+date: '2026-07-31'
+excerpt: '把设备对接代码收成可维护的工程结构：四层架构与依赖方向、配置驱动的设备工厂、设备状态与健康检查、三个层次的模拟器、报文留存、看门狗自愈、Windows Service 部署与上线清单。'
+tags: ['iot', 'dotnet', 'architecture', 'windows-service', 'reliability']
+---
+
+# 设备适配层设计与现场可靠性：从能跑到能长期维护
+
+前七篇解决的是"怎么连上设备"。这一篇解决的是另一个问题：**三年后换个人接手，这套代码还能不能改。**
+
+这类项目的生命周期很长——一套称重系统装上去用五年、十年是常态。期间会发生：仪表坏了换个牌子、相机升级换代、甲方加一个新厂区、原来的开发离职。**如果厂商 SDK 的调用散落在窗体的按钮事件里，任何一个变化都是重写。**
+
+这一篇讲怎么避免这个结局。
+
+:::tip 系列阅读顺序
+本文是 [.NET 对接工业设备路线图](/posts/iot/industrial-device-roadmap) 的最后一篇，会把前七篇散落的抽象收拢成一套完整结构。建议读完前面几篇再看这里，否则会觉得有些约束没来由。
+:::
+
+## 四层架构
+
+前面每一篇都在用同一套分层，这里完整说清：
+
+```text
+┌─────────────────────────────────────────────┐
+│ 业务层                                       │
+│ 过磅流程、通行规则、报表、单据                │
+│ 只依赖领域接口和领域事件                      │
+└─────────────────────────────────────────────┘
+                     ↓ 依赖
+┌─────────────────────────────────────────────┐
+│ 领域接口层（抽象）                            │
+│ IWeighingIndicator / ICamera /              │
+│ IAccessController / IPeripheralController   │
+│ 不含任何厂商概念                              │
+└─────────────────────────────────────────────┘
+                     ↑ 实现
+┌─────────────────────────────────────────────┐
+│ 设备适配层                                    │
+│ ToledoIndicator / IsapiCamera / HikSdkCamera│
+│ 一个品牌一个实现，负责协议翻译和错误转换       │
+└─────────────────────────────────────────────┘
+                     ↓ 使用
+┌─────────────────────────────────────────────┐
+│ 通信与互操作层                                │
+│ IDeviceChannel（串口/TCP）、NativeMethods    │
+│ internal，只被适配层引用                      │
+└─────────────────────────────────────────────┘
+```
+
+每层的**禁令**比职责更重要，因为它们才是防止腐化的东西：
+
+| 层 | 禁令 |
+|---|---|
+| 业务层 | 不出现 `SerialPort`、`Marshal`、`IntPtr`、厂商错误码 |
+| 领域接口层 | 不出现 `userId`、`handle`、`channelId` 这类 SDK 概念 |
+| 设备适配层 | 不写业务规则（判稳阈值可配，但"该不该抬杆"不在这里） |
+| 通信互操作层 | 不知道业务的存在，`NativeMethods` 标 `internal` |
+
+解决方案结构可以直接映射这四层：
+
+```text
+src/
+  Weighing.Domain/            领域模型、接口、事件（无外部依赖）
+  Weighing.Application/       业务流程、状态机、单据服务
+  Weighing.Devices.Abstractions/  IDeviceChannel、通用基类
+  Weighing.Devices.Toledo/    托利多仪表适配
+  Weighing.Devices.Hikvision/ 海康相机与门禁适配
+  Weighing.Devices.Simulator/ 模拟实现（关键，见下文）
+  Weighing.Infrastructure/    EF Core、Outbox、文件存储
+  Weighing.Host/              Windows Service 宿主 + 配置组装
+```
+
+**依赖方向只能向内。** `Weighing.Domain` 不引用任何设备项目，设备项目引用 `Domain` 里的接口去实现。这样"加一个品牌"就是新增一个项目，不碰任何已有代码。
+
+## 领域接口怎么设计
+
+接口设计的成败在于**有没有泄漏 SDK 概念**。对比一下：
+
+```csharp
+// ❌ 泄漏了实现细节：userId 是海康 SDK 的登录句柄，
+// channelId 的 101 编码规则也是海康特有的
+public interface ICamera
+{
+    Task<byte[]> CaptureAsync(int userId, int channelId);
+}
+
+// ✅ 只表达业务意图。谁登录、怎么编码通道，是适配层内部的事
+public interface ICamera
+{
+    string DeviceId { get; }
+    Task<byte[]> CaptureAsync(CameraChannel channel, CancellationToken ct = default);
+}
+
+/// <summary>用领域类型代替裸整数，避免调用方传错。</summary>
+public readonly record struct CameraChannel(int Number, bool SubStream = false)
+{
+    public static CameraChannel Main(int number = 1) => new(number);
+    public static CameraChannel Sub(int number = 1) => new(number, true);
+}
+```
+
+判断标准很简单：**把这个接口给一个完全不知道海康存在的人看，他能理解吗？** 能，就是干净的。
+
+错误也要转换成领域异常，别让厂商错误码穿到业务层：
+
+```csharp
+// 适配层负责翻译
+catch (SdkException ex) when (ex.ErrorCode == 7)
+{
+    throw new DeviceOfflineException(DeviceId, ex);
+}
+```
+
+## 配置驱动的设备工厂
+
+"换品牌只改配置"要靠工厂实现。.NET 8 的键控服务让这件事很自然：
+
+```csharp
+// 每个品牌注册成一个键
+builder.Services.AddKeyedTransient<IWeighingIndicator, ToledoIndicator>("toledo");
+builder.Services.AddKeyedTransient<IWeighingIndicator, Xk3190Indicator>("xk3190");
+builder.Services.AddKeyedTransient<IWeighingIndicator, SimulatedIndicator>("simulator");
+
+// 工厂按配置取
+builder.Services.AddSingleton<IWeighingIndicatorFactory, WeighingIndicatorFactory>();
+
+public sealed class WeighingIndicatorFactory : IWeighingIndicatorFactory
+{
+    private readonly IServiceProvider _sp;
+    private readonly DeviceOptions _options;
+
+    public IWeighingIndicator Create(string scaleId)
+    {
+        var config = _options.Scales.FirstOrDefault(s => s.Id == scaleId)
+            ?? throw new ConfigurationException($"未配置磅秤 {scaleId}");
+
+        // 配置里写 "toledo"，这里就拿到 ToledoIndicator
+        var indicator = _sp.GetRequiredKeyedService<IWeighingIndicator>(config.Brand);
+        indicator.Configure(config);
+
+        return indicator;
+    }
+}
+```
+
+对应的配置：
+
+```json
+{
+  "Devices": {
+    "Scales": [
+      {
+        "Id": "scale-01",
+        "Name": "1号磅",
+        "Brand": "toledo",
+        "ChannelType": "SerialPort",
+        "PortName": "COM3",
+        "BaudRate": 9600,
+        "StabilityWindowSize": 15,
+        "StabilityToleranceKg": 10
+      }
+    ],
+    "Cameras": [
+      { "Id": "cam-01", "Brand": "isapi", "Host": "192.168.10.64", "Channel": 1 }
+    ]
+  }
+}
+```
+
+**现场可调的参数一定要外置。** 判稳窗口、容差、超时、重试次数、IP 端口——这些在现场调试时会反复改，改一次就要重新编译部署是不可接受的。配置的组织方式参考 [Options 模式](/posts/dotnet/aspnet-core-options)。
+
+:::warning 设备密码不要明文写在 appsettings
+`appsettings.json` 会进版本库、会被复制、会被截图发到工作群里。相机和门禁的密码放在这里等于公开。
+
+可选方案，按现场条件挑：
+
+- **环境变量**：最简单，配置系统原生支持覆盖
+- **Windows DPAPI**（`ProtectedData`）：加密后存文件，只有本机能解
+- **独立的凭据文件 + 文件系统 ACL**：只允许服务账号读
+
+至少要做到密码不进版本库。这类项目的设备一旦被入侵，影响是物理世界的。
+:::
+
+## 设备状态与健康检查
+
+现场运维最常问的是"哪台设备有问题"。所以每个设备实现都要暴露统一的状态：
+
+```csharp
+public enum DeviceState
+{
+    Offline,      // 未连接
+    Connecting,   // 正在连接
+    Online,       // 正常
+    Degraded,     // 能用但有问题（比如零点漂移超限）
+    Faulted,      // 故障
+}
+
+public interface IDeviceStatus
+{
+    string DeviceId { get; }
+    string DisplayName { get; }
+    DeviceState State { get; }
+
+    /// <summary>最后一次成功通信的时间。判断设备是否"真的还活着"靠这个。</summary>
+    DateTimeOffset? LastSuccessAt { get; }
+
+    string? LastError { get; }
+}
+```
+
+接进 ASP.NET Core 健康检查，就能被运维系统统一监控：
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddCheck<DeviceHealthCheck>("devices", tags: ["device"]);
+
+public sealed class DeviceHealthCheck : IHealthCheck
+{
+    private readonly IDeviceRegistry _registry;
+
+    public Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context, CancellationToken ct = default)
+    {
+        var devices = _registry.GetAll();
+
+        var offline = devices.Where(d => d.State is DeviceState.Offline or DeviceState.Faulted)
+                             .Select(d => d.DisplayName)
+                             .ToList();
+
+        // 附上每台设备的明细，运维打开页面就能定位
+        var data = devices.ToDictionary(
+            d => d.DeviceId,
+            d => (object)new { d.State, d.LastSuccessAt, d.LastError });
+
+        if (offline.Count == 0)
+            return Task.FromResult(HealthCheckResult.Healthy("全部设备在线", data));
+
+        // 核心设备（磅秤）离线是 Unhealthy，辅助设备（LED屏）离线只是 Degraded
+        var critical = offline.Intersect(_registry.CriticalDeviceNames).Any();
+
+        return Task.FromResult(critical
+            ? HealthCheckResult.Unhealthy($"关键设备离线：{string.Join(", ", offline)}", data: data)
+            : HealthCheckResult.Degraded($"辅助设备离线：{string.Join(", ", offline)}", data: data));
+    }
+}
+```
+
+健康检查的完整用法见 [健康检查](/posts/dotnet/aspnet-core-health-checks)。
+
+**区分关键设备和辅助设备很重要。** LED 屏坏了业务能继续，磅秤断了必须立刻有人处理。全部报同一个级别会让告警失去意义，最后没人看。
+
+## 模拟器：这个系列最实用的一节
+
+现场调试机会稀缺是这类项目的根本约束。**模拟器不是"有空再做"的东西，它决定了你的开发效率上限。**
+
+三个层次，成本递增、保真度也递增：
+
+### 层次一：Fake 实现（内存级）
+
+直接实现领域接口，不涉及任何真实通信。用于单元测试和业务逻辑开发：
+
+```csharp
+public sealed class FakeWeighingIndicator : IWeighingIndicator
+{
+    private readonly Channel<WeightReading> _channel = Channel.CreateUnbounded<WeightReading>();
+
+    public DeviceState State { get; private set; } = DeviceState.Online;
+
+    public IAsyncEnumerable<WeightReading> ReadingsAsync(CancellationToken ct)
+        => _channel.Reader.ReadAllAsync(ct);
+
+    /// <summary>测试代码用这个精确控制"设备"的行为。</summary>
+    public void Emit(decimal weight, bool stable = true)
+        => _channel.Writer.TryWrite(new WeightReading(weight, stable, "kg"));
+
+    /// <summary>模拟一次完整的车辆上磅：爬升 → 稳定。</summary>
+    public async Task SimulateVehicleAsync(decimal target, int frames = 20)
+    {
+        for (int i = 1; i <= frames; i++)
+            Emit(target * i / frames, stable: false);
+
+        for (int i = 0; i < 20; i++)
+            Emit(target, stable: true);
+
+        await Task.Yield();
+    }
+}
+```
+
+这一层让**过磅状态机可以完整地单元测试**——超时分支、异常分支、防作弊判定，全都能覆盖，而这些在真机上极难构造。
+
+### 层次二：协议级模拟器（独立进程）
+
+按真实协议在真实的串口/TCP 上通信，你的主程序完全不知道对面是模拟器。第一篇给过串口版本，TCP 版本同理。
+
+**这一层的价值在于能测试通信层本身**：拆帧是否正确、断线重连是否生效、超时是否合理。而且它能**故意作恶**，这是真机做不到的：
+
+```csharp
+public sealed class MisbehavingDeviceSimulator
+{
+    public MisbehaviorMode Mode { get; set; } = MisbehaviorMode.None;
+
+    private async Task SendFrameAsync(Stream stream, byte[] frame, CancellationToken ct)
+    {
+        switch (Mode)
+        {
+            case MisbehaviorMode.SplitFrame:
+                // 一帧拆两次发，中间停顿：验证拆帧器
+                await stream.WriteAsync(frame.AsMemory(0, frame.Length / 2), ct);
+                await Task.Delay(300, ct);
+                await stream.WriteAsync(frame.AsMemory(frame.Length / 2), ct);
+                break;
+
+            case MisbehaviorMode.CorruptChecksum:
+                frame[^1] ^= 0xFF;                      // 验证校验逻辑
+                await stream.WriteAsync(frame, ct);
+                break;
+
+            case MisbehaviorMode.Garbage:
+                // 先发一段垃圾再发正常帧：验证能否重新同步到帧头
+                await stream.WriteAsync(new byte[] { 0x00, 0xFF, 0x13, 0x37 }, ct);
+                await stream.WriteAsync(frame, ct);
+                break;
+
+            case MisbehaviorMode.HalfFrameThenSilence:
+                // 发半帧然后不说话：验证超时机制
+                await stream.WriteAsync(frame.AsMemory(0, frame.Length / 2), ct);
+                break;
+
+            case MisbehaviorMode.SuddenDisconnect:
+                stream.Close();                          // 验证重连
+                break;
+
+            default:
+                await stream.WriteAsync(frame, ct);
+                break;
+        }
+    }
+}
+```
+
+**能扛住这五种作恶的代码，上现场才踏实。** 这些场景在真实现场都会发生，只是不知道哪天发生。
+
+### 层次三：录制回放（保真度最高）
+
+去现场时录一份真实报文，回来无限次回放。**这是性价比最高的一层**，因为它保留了真实设备的所有怪癖——那些文档里没写、你也想不到的行为。
+
+录制格式尽量简单，能用文本编辑器看：
+
+```text
+# 格式：相对毫秒偏移 | 方向 | Hex
+0      | RX | 53542C47532C2B20202030302E306B670D0A
+203    | RX | 53542C47532C2B20203132332E356B670D0A
+399    | RX | 55532C47532C2B20203435362E326B670D0A
+```
+
+```csharp
+public sealed class ReplayChannel : IDeviceChannel
+{
+    private readonly IReadOnlyList<RecordedFrame> _frames;
+    private readonly bool _loop;
+    private readonly double _speed;      // 1.0 原速，10.0 十倍速回放
+    private int _index;
+
+    public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct)
+    {
+        while (true)
+        {
+            if (_index >= _frames.Count)
+            {
+                if (!_loop) return 0;    // 播完，等价于对端关闭
+                _index = 0;
+            }
+
+            var frame = _frames[_index];
+            var previous = _index > 0 ? _frames[_index - 1].OffsetMs : 0;
+            _index++;
+
+            // 按原始时序回放，这样判稳、超时这些和时间相关的逻辑才能被真实验证
+            var wait = TimeSpan.FromMilliseconds((frame.OffsetMs - previous) / _speed);
+            if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
+
+            if (frame.Direction != FrameDirection.Rx) continue;   // 只回放设备发来的
+
+            frame.Data.CopyTo(buffer);
+            return frame.Data.Length;
+        }
+    }
+}
+```
+
+**按原始时序回放是关键**，不能一次性全灌进去。判稳算法、超时判定都和时间强相关，压缩时序会让测试失去意义。支持倍速是为了快速跑回归。
+
+### 用配置切换
+
+```json
+{
+  "Devices": {
+    "Mode": "Replay",
+    "ReplayFile": "recordings/2026-07-15-scale01.log",
+    "ReplaySpeed": 5.0
+  }
+}
+```
+
+```csharp
+// 组装时按模式选择实现，业务代码毫不知情
+builder.Services.AddSingleton<IDeviceChannel>(sp =>
+{
+    var opt = sp.GetRequiredService<IOptions<DeviceOptions>>().Value;
+
+    return opt.Mode switch
+    {
+        DeviceMode.Real => new SerialPortChannel(opt.ToSerialOptions()),
+        DeviceMode.Simulate => new SimulatedChannel(),
+        DeviceMode.Replay => new ReplayChannel(opt.ReplayFile!, opt.ReplaySpeed),
+        _ => throw new ConfigurationException($"未知设备模式 {opt.Mode}"),
+    };
+});
+```
+
+:::important 生产环境必须禁用模拟模式
+模拟模式留在生产配置里是重大风险——一个配置失误就会让系统"称出"假重量，还看不出异常。
+
+加一道硬保护：
+
+```csharp
+if (env.IsProduction() && opt.Mode != DeviceMode.Real)
+{
+    throw new InvalidOperationException(
+        "生产环境不允许使用模拟或回放模式");
+}
+```
+
+启动时直接崩掉，比静默跑假数据安全得多。
+:::
+
+## 报文留存：证据链
+
+前面每一篇都在强调这件事，这里说清怎么做。
+
+**报文不要混进应用日志。** 量级差好几个数量级——一台仪表每秒 5 帧，一天四十多万条。混在一起会把有用的业务日志冲掉，也会让日志查询变慢。
+
+独立成一条通道：
+
+```csharp
+public interface IFrameRecorder
+{
+    void Record(string deviceId, FrameDirection direction, ReadOnlySpan<byte> data);
+}
+
+public sealed class FileFrameRecorder : IFrameRecorder, IAsyncDisposable
+{
+    private readonly Channel<FrameRecord> _queue =
+        Channel.CreateBounded<FrameRecord>(new BoundedChannelOptions(10_000)
+        {
+            // 记录挤压时丢最旧的。记录重要，但绝不能因为写盘慢而阻塞采集
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
+
+    public void Record(string deviceId, FrameDirection direction, ReadOnlySpan<byte> data)
+    {
+        // 采集线程只做入队，不碰文件 IO
+        _queue.Writer.TryWrite(new FrameRecord(
+            deviceId, direction, data.ToArray(), DateTimeOffset.Now));
+    }
+
+    /// <summary>后台单线程批量落盘，按设备和日期分文件。</summary>
+    private async Task WriteLoopAsync(CancellationToken ct)
+    {
+        await foreach (var record in _queue.Reader.ReadAllAsync(ct))
+        {
+            var path = Path.Combine(_root, record.DeviceId,
+                $"{record.Timestamp:yyyy-MM-dd}.log");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+            // Hex 和可打印 ASCII 双份：Hex 用于精确分析，ASCII 用于肉眼扫读
+            var line = $"{record.Timestamp:HH:mm:ss.fff} " +
+                       $"{(record.Direction == FrameDirection.Tx ? "TX" : "RX")} " +
+                       $"{Convert.ToHexString(record.Data)} " +
+                       $"| {ToPrintableAscii(record.Data)}";
+
+            await File.AppendAllTextAsync(path, line + Environment.NewLine, ct);
+        }
+    }
+}
+```
+
+配套三件事：
+
+**保留期与压缩。** 按业务要求定（涉及结算的通常半年到一年），过期的先压缩再归档。一天四十万行文本压缩比很高。
+
+**脱敏。** 报文里可能含设备密码、身份证号、人脸数据。落盘前要按协议位置做掩码处理，尤其是登录帧。
+
+**容量监控。** 磁盘写满会让整个服务停摆。留存目录要纳入监控，并设置"磁盘剩余不足时停止记录但继续业务"的降级策略——留证重要，但不能因为留不了证就把业务停掉。
+
+## 看门狗与自愈
+
+现场没有运维值守，程序必须自己扛住绝大多数问题。三层防护：
+
+**第一层：进程内重连。** 前面几篇都实现了——通道断了自动重连、指数退避、状态告警。这解决 90% 的问题。
+
+**第二层：进程级重启。** 进程真的崩了（原生 SDK 崩溃、`AccessViolationException`）时，靠 Windows 服务的失败恢复策略自动拉起：
+
+```bash
+:: 崩溃后 60 秒重启，连续三次失败后每天重置计数
+sc failure "WeighingService" reset= 86400 actions= restart/60000/restart/60000/restart/60000
+```
+
+**第三层：外部看门狗。** 进程没崩但卡死了（死锁、原生库假死）——这种情况服务恢复策略也救不了，因为进程还"活着"。靠心跳文件 + 外部检查：
+
+```csharp
+public sealed class HeartbeatWriter : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "heartbeat.txt");
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            // 心跳必须由"真正干活的循环"驱动才有意义。
+            // 这里检查采集是否还在推进，而不是无条件写时间戳——
+            // 否则采集卡死了心跳照样正常，看门狗就形同虚设。
+            if (_collector.LastReadingAt > DateTimeOffset.Now.AddMinutes(-2))
+            {
+                await File.WriteAllTextAsync(path, DateTimeOffset.Now.ToString("O"), ct);
+            }
+        }
+    }
+}
+```
+
+外部用一个计划任务或独立小程序检查文件修改时间，超过阈值就重启服务。
+
+:::note 关于定期重启
+有些项目会配"每天凌晨自动重启服务"。这看起来是掩盖问题，但在这类项目里是务实的选择——**厂商 SDK 的内存泄漏你修不了**，源码不在你手上。
+
+前提是要说清楚：重启窗口要选业务空闲时段、重启前必须确认没有进行中的业务（比如有车在磅上就延后）、并且这是兜底不是免责——泄漏点该查还是要查。
+:::
+
+## Windows Service 部署
+
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+
+// 让程序能作为 Windows 服务运行（需要 Microsoft.Extensions.Hosting.WindowsServices 包）
+builder.Services.AddWindowsService(options =>
+{
+    options.ServiceName = "WeighingService";
+});
+
+// Windows 服务没有控制台，日志必须落文件。
+// Microsoft.Extensions.Logging 本身不带文件 Provider，需要 Serilog / NLog 之类
+builder.Services.AddSerilog(config => config
+    .WriteTo.File("logs/app-.log", rollingInterval: RollingInterval.Day, retainedFileCountLimit: 30)
+    .WriteTo.EventLog("WeighingService", manageEventSource: false));
+
+builder.Services.AddHostedService<WeighingCollectorService>();
+builder.Services.AddHostedService<WeighingHostService>();
+builder.Services.AddHostedService<HeartbeatWriter>();
+
+var host = builder.Build();
+await host.RunAsync();
+```
+
+安装与配置：
+
+```bash
+:: 注意 binPath 的等号后面必须有空格，这是 sc.exe 的语法
+sc create "WeighingService" binPath= "C:\App\Weighing.Host.exe" start= delayed-auto
+sc description "WeighingService" "地磅称重服务"
+sc failure "WeighingService" reset= 86400 actions= restart/60000/restart/60000/restart/60000
+sc start "WeighingService"
+```
+
+几个容易踩的部署细节：
+
+**用 `delayed-auto` 而不是 `auto`。** 开机时网络栈、USB 转串口驱动可能还没就绪，延迟启动能避免大量启动失败。
+
+**服务账号权限。** 默认的 `LocalSystem` 权限过大。够用的最小配置通常是 `NetworkService` 加上串口访问和日志目录的写权限。别为了省事直接用 `LocalSystem`。
+
+**单实例互斥。** 双击 exe 手动启动一次、服务里又跑着一个，两个进程抢同一个串口，表现是"数据时好时坏"，极难排查：
+
+```csharp
+using var mutex = new Mutex(initiallyOwned: true, @"Global\WeighingService", out bool isFirst);
+
+if (!isFirst)
+{
+    Console.Error.WriteLine("程序已在运行中（可能是 Windows 服务），本次启动退出");
+    return 1;
+}
+```
+
+**32 位发布别忘了。** 如果依赖 32 位 SDK，发布命令要带上目标平台，否则 `dotnet publish` 可能产出 AnyCPU 或 x64：
+
+```bash
+dotnet publish -c Release -r win-x86 --self-contained false
+```
+
+**工作目录。** Windows 服务的工作目录是 `system32`，不是 exe 所在目录。所有相对路径都要用 `AppContext.BaseDirectory` 拼，否则配置文件、SDK 目录、日志目录全找不到。这是最常见的"本地跑得好、装成服务就报错"的原因。
+
+## 本地优先与断网降级
+
+收个尾，把前面提到的降级原则统一说清：
+
+```text
+业务链路（必须本地闭环）
+  设备 → 采集 → 业务处理 → 本地数据库 → 放行/开门
+                                ↓
+                          Outbox 表
+                                ↓
+同步链路（可以慢、可以断）
+                          后台服务 → 中心系统
+```
+
+三条规则：
+
+1. **业务链路不依赖任何远程服务。** 订单、白名单、权限这些数据提前同步到本地，业务时只查本地
+2. **写本地库是唯一的强一致操作**，成功即可对现场放行
+3. **上行同步走 Outbox**，失败自动重试，实现细节见 [Outbox 模式](/posts/dotnet/aspnet-core-outbox-pattern)
+
+时钟也要交代一句：**本机必须配 NTP。** 跨天单据、时间段权限、抓图时间戳都依赖它，而工控机的主板电池没电导致时间跑飞是真实会发生的事。
+
+## 上线清单
+
+这类项目上线前逐条过一遍，能避免绝大多数返工：
+
+**设备侧**
+
+- 所有设备 IP、端口、账号密码已记入台账（密码不在代码和版本库里）
+- 所有设备时间已对齐 NTP，时区正确
+- 所有 SDK 的位数一致，并已确认进程平台目标
+- SDK 附属 DLL 和子目录完整复制，VC++ 运行库已装
+- 设备默认密码已修改，设备网段与办公网隔离
+
+**软件侧**
+
+- 生产配置中模拟/回放模式已禁用，且有启动时硬校验
+- 所有现场可调参数（判稳、超时、重试）已外置到配置
+- 报文留存已开启，保留期和清理任务已配置
+- 磁盘容量监控已配置（报文 + 抓图两个目录）
+- 健康检查端点可访问，关键设备与辅助设备已分级
+- 单实例互斥已启用
+- 相对路径全部基于 `AppContext.BaseDirectory`
+
+**可靠性**
+
+- 拔网线、断电、拔串口线三个动作各测一次，确认能自动恢复
+- 服务失败恢复策略已配置（`sc failure`）
+- 心跳文件 + 外部看门狗已就位
+- 断网场景下完整业务流程实测通过
+- 重启服务后未完成单据能正确恢复
+
+**交付物**
+
+- 设备台账、网络拓扑图、部署文档
+- 配置项说明（每个参数的含义和调整建议）
+- 常见故障处理手册（给甲方运维，不是给开发看的）
+- 报文录制文件（后续排查和回归的基础）
+
+## 小结与系列回顾
+
+这一篇的核心结论：**可维护性来自约束，不是来自努力。**
+
+1. **四层架构，依赖方向向内**，每层的禁令比职责更重要
+2. **领域接口不能泄漏 SDK 概念**，判断标准是"不知道海康的人能不能看懂"
+3. **配置驱动的工厂**，换品牌只加实现不改业务
+4. **模拟器分三层**，录制回放性价比最高，生产环境必须硬禁用
+5. **报文独立通道留存**，不阻塞采集、要脱敏、要有保留期
+6. **看门狗分三层**，心跳必须由真正干活的循环驱动
+7. **业务链路本地闭环**，中心系统只接收结果
+
+整个系列走完，回头看这条主线：
+
+- [串口通信与拆帧](/posts/iot/serial-port-communication) 建立了"读取与解析分离"的模型和通道抽象
+- [私有 TCP 协议](/posts/iot/tcp-protocol-binary-parsing) 补上了长连接的生命周期管理
+- [Modbus 协议](/posts/iot/modbus-protocol) 覆盖了最普及的标准协议与轮询调度
+- [P/Invoke 对接 SDK](/posts/iot/pinvoke-vendor-sdk) 打通了厂商原生库这道关
+- [地磅称重](/posts/iot/weighbridge-integration) 落到了判稳算法和过磅状态机
+- [摄像头对接](/posts/iot/camera-integration) 讲清了按需求选路线的决策
+- [门禁对接](/posts/iot/access-control-integration) 处理了离线可用带来的数据同步问题
+- 这一篇把它们收成了一套能交付、能维护的工程结构
+
+技术细节会随设备型号变化，但这些结构性的东西是通用的。下次拿到一份陌生的设备文档，你应该已经知道从哪里下手了。

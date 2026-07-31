@@ -1,0 +1,557 @@
+---
+title: '摄像头对接：ISAPI 抓图、RTSP 取流与车牌识别一体机'
+date: '2026-07-31'
+excerpt: '按需求选择摄像头对接路线：HTTP 接口抓图、RTSP 预览与逐帧处理、ONVIF 跨品牌、厂商 SDK 报警上传，以及车牌识别一体机的接入与图片存储策略。'
+tags: ['iot', 'dotnet', 'camera', 'isapi', 'rtsp', 'onvif', 'anpr']
+nextPost: 'iot/access-control-integration'
+---
+
+# 摄像头对接：ISAPI 抓图、RTSP 取流与车牌识别一体机
+
+摄像头对接最容易犯的错误，是**一上来就去搞 SDK 或者自己解 RTSP 流**。
+
+实际上这里的成本差距能到十倍：同样是"过磅时抓一张图存档"这个需求，用 HTTP 接口是三行代码，用厂商 SDK 是几百行 `Marshal`，自己实现 RTSP + H.264 解码则是一个月的工作量还不一定稳定。
+
+所以这一篇的核心不是某个 API 的用法，而是**先把需求分类，再决定用哪条路线**。
+
+:::tip 系列阅读顺序
+本文是 [.NET 对接工业设备路线图](/posts/iot/industrial-device-roadmap) 的第六篇。如果最后确实要走厂商 SDK 路线，需要 [P/Invoke 对接厂商 SDK](/posts/iot/pinvoke-vendor-sdk) 的基础，尤其是回调那一节。
+:::
+
+## 第一步：需求分类决定路线
+
+先对照这张表确认你到底要什么，再往下看：
+
+| 需求 | 推荐路线 | 工作量 |
+|---|---|---|
+| 抓一张图存档 | **厂商 HTTP 接口**（ISAPI 等） | 极小，一个 HTTP GET |
+| 界面上看实时画面 | **RTSP + LibVLCSharp** | 小，控件拖上去配个地址 |
+| 逐帧取图做图像处理 | **OpenCvSharp / FFmpeg** | 中 |
+| 修改相机配置 | **厂商 HTTP 接口** | 小，XML/JSON 提交 |
+| 跨品牌统一取流、云台 | **ONVIF** | 中 |
+| 云台精细控制、录像回放、对讲 | **厂商 SDK**（P/Invoke） | 大 |
+| 移动侦测/IO 报警主动上传 | **HTTP 侦听** 优先，SDK 兜底 | 小 / 大 |
+| 车牌识别 | **识别一体机**（相机自己识别） | 小 |
+| 视频录像存储 | **NVR**，不要自己做 | 零 |
+
+两条能省掉大量工作的判断：
+
+**录像交给 NVR。** 不要试图用程序接收视频流并存文件。NVR 是专门干这个的硬件，几百块钱起，稳定性远超你自己写的。你的系统只存"抓图"和"事件"。
+
+**车牌识别交给相机。** 识别一体机内置算法，直接把车牌号推给你。自己拉流跑模型不仅工作量大，识别率还打不过专用设备。
+
+## 路线一：HTTP 接口（首选）
+
+海康的 **ISAPI** 是被严重低估的一套接口。它是标准 HTTP + XML，覆盖抓图、配置、通道信息、事件订阅，甚至门禁人员下发。大华也有类似的 HTTP API。
+
+**没有位数问题、没有 DLL 依赖、能用浏览器直接测。** 只要需求能用它满足，就不要动 SDK。
+
+### 认证方式
+
+ISAPI 默认用 **HTTP Digest 认证**。`HttpClient` 原生支持，只要配好凭据：
+
+```csharp
+using System.Net;
+
+// 注册命名的 HttpClient，凭据放在 Handler 上
+builder.Services.AddHttpClient("hikvision")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    {
+        // Digest 认证是"先 401 拿挑战、再带响应重试"的流程，
+        // HttpClient 会自动完成，你只需要提供凭据
+        Credentials = new NetworkCredential("admin", "your-password"),
+
+        // 设备一般用自签名证书，走 HTTPS 时需要放宽校验。
+        // 生产环境建议改成校验固定指纹，而不是无脑返回 true。
+        ServerCertificateCustomValidationCallback =
+            HttpClientHandler.DangerousAcceptAnyServerCertificateValidator,
+    });
+```
+
+`IHttpClientFactory` 的用法和连接池注意事项参考 [HttpClientFactory](/posts/dotnet/aspnet-core-httpclient-factory)。
+
+### 抓图
+
+```csharp
+public sealed class IsapiCamera
+{
+    private readonly IHttpClientFactory _factory;
+    private readonly string _baseUrl;   // 如 http://192.168.1.64
+
+    /// <summary>
+    /// 抓取一帧 JPEG。
+    /// channelId 的编码规则：通道号 * 100 + 码流类型（1=主码流，2=子码流）。
+    /// 例如 101 = 通道 1 主码流，202 = 通道 2 子码流。
+    /// </summary>
+    public async Task<byte[]> CaptureAsync(int channelId = 101, CancellationToken ct = default)
+    {
+        var client = _factory.CreateClient("hikvision");
+
+        var url = $"{_baseUrl}/ISAPI/Streaming/channels/{channelId}/picture";
+
+        using var response = await client.GetAsync(url, ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            // 设备的错误信息在 XML body 里，一定要读出来，否则排查全靠猜
+            var body = await response.Content.ReadAsStringAsync(ct);
+            throw new CameraException(
+                $"抓图失败 HTTP {(int)response.StatusCode}：{body}");
+        }
+
+        return await response.Content.ReadAsByteArrayAsync(ct);
+    }
+}
+```
+
+就这么多。**这是"抓图存档"需求的完整实现。**
+
+调试也很方便——直接把 URL 贴进浏览器，弹认证框输入账号密码就能看到图。这一步能立刻分清是设备问题还是代码问题。
+
+### 查询与配置
+
+其他 ISAPI 接口是同样的模式，返回 XML：
+
+```csharp
+/// <summary>读取设备基本信息，可用于连通性检查和型号识别。</summary>
+public async Task<DeviceInfo> GetDeviceInfoAsync(CancellationToken ct = default)
+{
+    var client = _factory.CreateClient("hikvision");
+
+    var xml = await client.GetStringAsync($"{_baseUrl}/ISAPI/System/deviceInfo", ct);
+
+    var doc = XDocument.Parse(xml);
+    var ns = doc.Root!.GetDefaultNamespace();   // ISAPI 的 XML 带默认命名空间，容易忽略
+
+    return new DeviceInfo(
+        Model: doc.Root.Element(ns + "model")?.Value ?? "",
+        SerialNumber: doc.Root.Element(ns + "serialNumber")?.Value ?? "",
+        FirmwareVersion: doc.Root.Element(ns + "firmwareVersion")?.Value ?? "");
+}
+```
+
+:::tip 怎么摸清一台设备支持哪些 ISAPI 接口
+两个办法比翻文档快：
+
+1. 访问 `/ISAPI/System/capabilities`，设备会返回自己的能力集
+2. 用浏览器开发者工具录制一遍**设备自带 Web 管理界面**的操作。那个界面本身就是调 ISAPI 的，你想做的功能它基本都有，照抄请求即可
+
+第二个办法尤其管用——不管什么品牌、文档写得多烂，Web 界面能做的事你就一定能做。
+:::
+
+## 路线二：RTSP 取流
+
+**先明确一点：抓单张图不要用 RTSP。** RTSP 要等到第一个关键帧才能解出画面，通常要 1~3 秒；而 ISAPI 抓图是几十毫秒。用 RTSP 抓图既慢又复杂。
+
+RTSP 的正确用途是**连续画面**：界面预览、逐帧图像处理。
+
+### URL 格式
+
+各家格式固定，查一下就有：
+
+```text
+海康：rtsp://user:password@192.168.1.64:554/Streaming/Channels/101
+大华：rtsp://user:password@192.168.1.108:554/cam/realmonitor?channel=1&subtype=0
+```
+
+海康的通道编码规则和 ISAPI 一致；大华的 `subtype=0` 是主码流、`1` 是子码流。
+
+:::warning 密码里的特殊字符
+URL 里的密码含 `@`、`:`、`/`、`#` 会把 URL 结构破坏掉。必须 URL 编码：
+
+```csharp
+var url = $"rtsp://{Uri.EscapeDataString(user)}:{Uri.EscapeDataString(password)}@{ip}:554/Streaming/Channels/101";
+```
+
+这是"参数都对但连不上"的常见原因之一。
+:::
+
+### 界面预览：LibVLCSharp
+
+不要自己实现 RTSP 协议和 H.264/H.265 解码。用 VLC 的封装，几行配置就能播：
+
+```bash
+dotnet add package LibVLCSharp
+dotnet add package LibVLCSharp.WPF
+dotnet add package VideoLAN.LibVLC.Windows
+```
+
+```csharp
+using LibVLCSharp.Shared;
+
+public sealed class RtspPlayer : IDisposable
+{
+    private readonly LibVLC _libVlc;
+    private readonly MediaPlayer _player;
+
+    public RtspPlayer()
+    {
+        Core.Initialize();
+
+        _libVlc = new LibVLC(
+            // 强制走 TCP：UDP 在有丢包的现场网络下会花屏
+            "--rtsp-tcp",
+            // 降低缓冲，实时性优先（默认 1000ms 对监控太高）
+            "--network-caching=300");
+
+        _player = new MediaPlayer(_libVlc);
+    }
+
+    /// <summary>把 VideoView 控件的 MediaPlayer 属性绑定到这个实例即可显示。</summary>
+    public MediaPlayer Player => _player;
+
+    public void Play(string rtspUrl)
+    {
+        using var media = new Media(_libVlc, rtspUrl, FromType.FromLocation);
+        _player.Play(media);
+    }
+
+    public void Dispose()
+    {
+        _player.Stop();
+        _player.Dispose();
+        _libVlc.Dispose();
+    }
+}
+```
+
+两个参数值得记住：`--rtsp-tcp` 解决花屏，`--network-caching` 控制延迟。默认配置在监控场景下体验很差。
+
+### 逐帧处理：OpenCvSharp
+
+需要对画面做处理（比如自己判断车辆是否在位）时：
+
+```csharp
+using OpenCvSharp;
+
+public static async Task ProcessFramesAsync(
+    string rtspUrl, CancellationToken ct)
+{
+    using var capture = new VideoCapture(rtspUrl, VideoCaptureAPIs.FFMPEG);
+
+    // 缓冲区设为 1，只处理最新帧。
+    // 否则处理速度跟不上时会积压，画面越来越滞后
+    capture.Set(VideoCaptureProperties.BufferSize, 1);
+
+    if (!capture.IsOpened())
+        throw new CameraException("无法打开 RTSP 流，检查地址、密码编码和网络");
+
+    using var frame = new Mat();
+
+    while (!ct.IsCancellationRequested)
+    {
+        if (!capture.Read(frame) || frame.Empty())
+        {
+            // 断流是常态，不是异常。退出让外层重连
+            break;
+        }
+
+        // 处理这一帧……
+        await Task.Yield();
+    }
+}
+```
+
+**断流必须当成常态处理。** 网络抖动、相机重启、码流切换都会导致 `Read` 返回 false。外层要有重连循环，退避策略参考 [私有 TCP 协议](/posts/iot/tcp-protocol-binary-parsing) 那篇的实现。
+
+## 路线三：ONVIF（跨品牌时用）
+
+ONVIF 是行业标准协议，基于 SOAP。价值在于**一套代码对接多个品牌**：设备发现、获取取流地址、云台控制、基础配置都有标准接口。
+
+典型用法是三步：
+
+1. **WS-Discovery 发现设备**：往组播地址 `239.255.255.250:3702` 发 UDP 探测包，设备回应自己的服务地址
+2. **调 Media 服务的 `GetStreamUri`** 拿到 RTSP 地址，不用硬编码各家的 URL 格式
+3. **调 PTZ 服务**做云台控制
+
+.NET 侧的做法是用厂商提供的 WSDL 生成 SOAP 客户端（`dotnet-svcutil` 或 CoreWCF）。
+
+:::note ONVIF 的现实情况
+标准是好的，但**各家实现的完整度差异很大**。同一个 `GetStreamUri` 调用，有的返回带认证信息的完整 URL，有的返回不带端口的地址，有的直接不支持某些 Profile。
+
+实际项目里常见的策略是**混合**：用 ONVIF 做设备发现和取流地址获取（这两个最标准），特色功能（智能分析、报警配置）走厂商接口。
+
+如果你的项目只用一个品牌，**直接用厂商 HTTP 接口比 ONVIF 省事**，不用为了"标准"付 SOAP 的复杂度。
+:::
+
+## 路线四：厂商 SDK（最后选择）
+
+只在前面三条路都做不到时才用。真正必须用 SDK 的场景不多：
+
+- 实时取流数据回调（自己处理裸流）
+- 云台的精细控制（预置点、巡航、三维定位）
+- 录像回放与下载
+- 语音对讲
+- 部分设备的报警布防上传
+
+对接方式完全遵循 [第三篇](/posts/iot/pinvoke-vendor-sdk) 的规则。这里只强调**报警回调**这一处，因为它是摄像头 SDK 里最常用也最容易出事的部分：
+
+```csharp
+// 报警回调的四条铁律在这里全部适用
+private readonly AlarmCallback _callback;   // ① 字段持有，防 GC 回收
+
+private void OnAlarm(int command, IntPtr alarmer,
+                     IntPtr alarmInfo, uint bufferLength, IntPtr user)
+{
+    try   // ② 全包 try/catch，异常绝不能穿越到原生栈
+    {
+        // ③ 指针立即拷贝，回调返回后就失效
+        var info = Marshal.PtrToStructure<ALARM_INFO>(alarmInfo);
+
+        // ④ 只入队，不做 IO。抓图、写库都交给消费者
+        _writer.TryWrite(new CameraEvent(info.Channel, DateTimeOffset.Now));
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "报警回调异常");
+    }
+}
+```
+
+:::tip 报警上传优先用 HTTP 侦听
+海康、大华的设备都支持在配置里填一个 **HTTP 侦听地址**，事件发生时设备主动 POST 到你的接口。
+
+这条路完全绕开了 SDK：你只需要写一个普通的 ASP.NET Core 端点接收即可。**没有 P/Invoke、没有回调保活问题、没有位数限制**，而且天然支持多台设备推到同一个服务。
+
+配置位置一般在设备 Web 界面的"网络 → 高级配置 → HTTP 侦听"。能用这个就不要用 SDK 的报警布防。
+:::
+
+## 车牌识别一体机
+
+这是地磅和停车场场景的核心设备，也是本篇最实用的一节。
+
+**它的价值在于把识别工作从你这里拿走了。** 相机内置算法，识别完把结果推给你。你不用碰任何图像算法，识别率还比自己拉流跑模型高。
+
+常见设备是海康的 ITC 卡口相机、臻识、捷顺等。输出方式有三种：**HTTP POST 推送**（最省事）、TCP 推送、SDK 回调。优先选 HTTP。
+
+### 接收识别结果
+
+设备一般以 `multipart/form-data` 推送，一部分是 JSON 结果，一部分是抓拍图片。用 Minimal API 写个端点即可：
+
+```csharp
+app.MapPost("/api/anpr/push", async (
+    HttpRequest request,
+    IPlateEventQueue queue,
+    ISnapshotStorage storage,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    // 不同厂商的字段名不一样，务必抓一次真实请求确认
+    var form = await request.ReadFormAsync(ct);
+
+    var plateNo = form["plateNo"].ToString();
+    var confidence = int.TryParse(form["confidence"], out var c) ? c : 0;
+
+    if (string.IsNullOrWhiteSpace(plateNo))
+    {
+        logger.LogWarning("收到空车牌推送，字段：{Keys}", string.Join(",", form.Keys));
+        return Results.BadRequest();
+    }
+
+    // 抓拍图先落盘，只把路径带进业务
+    string? snapshotPath = null;
+    if (form.Files.Count > 0)
+    {
+        await using var stream = form.Files[0].OpenReadStream();
+        snapshotPath = await storage.SaveAsync(stream, plateNo, ct);
+    }
+
+    await queue.EnqueueAsync(new PlateRecognizedEvent(
+        PlateNo: plateNo,
+        Confidence: confidence,
+        RecognizedAt: DateTimeOffset.Now,
+        SnapshotPath: snapshotPath), ct);
+
+    // 部分设备要求返回特定内容才认为推送成功，否则会一直重推。
+    // 具体格式查设备手册。
+    return Results.Ok(new { result = "success" });
+})
+.AllowAnonymous();   // 设备不会带你的 JWT
+```
+
+:::warning 这个端点必须做访问控制
+`AllowAnonymous` 是必要的（设备不支持你的认证体系），但**不能就这么裸奔**。任何人只要能访问到这个地址，就能伪造车牌事件——在停车场场景里等于伪造放行凭据，在地磅场景里等于伪造过磅单据。
+
+至少要做到：
+
+- **只监听内网网卡**，不要暴露到公网
+- **校验来源 IP** 在相机白名单内（中间件里判断 `RemoteIpAddress`）
+- 如果设备支持，在推送 URL 里带一个足够长的随机 token 并校验
+- 记录所有推送来源，异常 IP 要告警
+
+这是这类系统最容易被忽略的攻击面。
+:::
+
+### 置信度与人工确认
+
+识别结果一定带置信度，**不要无条件采信**：
+
+```csharp
+public PlateDecision Evaluate(PlateRecognizedEvent evt)
+{
+    return evt.Confidence switch
+    {
+        // 高置信度：自动放行
+        >= 90 => PlateDecision.Accept,
+
+        // 中等：接受但标记，需要事后可追溯
+        >= 70 => PlateDecision.AcceptWithWarning,
+
+        // 低置信度：转人工确认，绝不自动放行
+        _ => PlateDecision.ManualReview,
+    };
+}
+```
+
+阈值要按现场实测调。夜间、雨雪、车牌污损时置信度会明显下降，直接自动放行会出事故。**任何自动决策都要留人工兜底通道。**
+
+### 触发方式
+
+识别的触发有几种，要和现场确认清楚用哪种，否则会出现"车来了不识别"或者"没车也在推":
+
+- **视频触发**：相机自己检测到车辆运动就识别。最省事，但容易误触发（路过的车也识别）
+- **IO 触发**：地感线圈或光栅给相机一个信号，相机才识别。准确，需要接线
+- **主动触发**：你的程序通过接口让相机拍一次。可控性最好，适合过磅这种明确时机的场景
+
+地磅场景推荐 **IO 触发或主动触发**，避免旁边路过的车污染当前过磅单据。
+
+## 图片存储策略
+
+抓图会迅速累积，先算一下量再定方案：
+
+```text
+每次过磅 4 张图 × 每天 300 车 × 200KB ≈ 240MB/天 ≈ 7GB/月
+```
+
+三条原则：
+
+**不要存数据库。** 二进制大字段会让备份、迁移、查询全部变慢。**存文件系统，数据库只存路径。**
+
+**按日期分目录。** 单目录文件过多会让文件系统操作变慢，也不便于按时间清理：
+
+```csharp
+public sealed class FileSnapshotStorage : ISnapshotStorage
+{
+    private readonly string _rootPath;
+
+    public async Task<string> SaveAsync(
+        Stream content, string tag, CancellationToken ct)
+    {
+        var now = DateTimeOffset.Now;
+
+        // 按 年/月/日 分层，便于按天清理和归档
+        var relativeDir = Path.Combine(
+            now.ToString("yyyy"), now.ToString("MM"), now.ToString("dd"));
+
+        var dir = Path.Combine(_rootPath, relativeDir);
+        Directory.CreateDirectory(dir);
+
+        // 文件名带时间和业务标识，出问题时靠文件名就能定位
+        var safeTag = string.Concat(tag.Where(char.IsLetterOrDigit));
+        var fileName = $"{now:HHmmss}_{safeTag}_{Guid.NewGuid():N}.jpg";
+
+        var fullPath = Path.Combine(dir, fileName);
+
+        await using var fs = File.Create(fullPath);
+        await content.CopyToAsync(fs, ct);
+
+        // 返回相对路径入库，这样迁移根目录时不用改数据
+        return Path.Combine(relativeDir, fileName).Replace('\\', '/');
+    }
+}
+```
+
+**留存期要和业务确认并自动清理。** 地磅这类涉及结算的场景通常要求半年到一年。写个后台服务按天扫描删除过期目录，同时**清理前要确认归档策略**——直接删掉客户要举证的图，比磁盘满更严重。
+
+## 统一抽象
+
+按第三篇的分层，业务层只认领域接口：
+
+```csharp
+public interface ICamera
+{
+    string DeviceId { get; }
+
+    /// <summary>抓一帧 JPEG。</summary>
+    Task<byte[]> CaptureAsync(int channel = 1, CancellationToken ct = default);
+
+    /// <summary>连通性检查，用于健康检查和上线巡检。</summary>
+    Task<bool> PingAsync(CancellationToken ct = default);
+
+    /// <summary>取流地址，交给播放控件用。</summary>
+    string GetStreamUrl(int channel = 1, bool subStream = false);
+}
+```
+
+`IsapiCamera`、`DahuaHttpCamera`、`OnvifCamera`、`HikSdkCamera` 各自实现，配置决定用哪个。这样"客户换了个牌子的相机"就只是加一个实现类。
+
+## 现场部署要注意的
+
+代码之外，这几件事没做好会在现场吃大亏：
+
+**网络带宽要算。** 1080p H.264 主码流约 4Mbps，H.265 约 2Mbps。8 路 1080p 同时预览就是 32Mbps，跑在百兆网上加上其他业务流量就会开始丢包。**预览用子码流、需要清晰画面时才切主码流**是标准做法。
+
+**相机走独立网段或 VLAN。** 和办公网混在一起，一台电脑中毒或者一次大文件传输就可能影响监控。
+
+**时间必须同步。** 抓图时间戳是举证依据，相机和服务器都要配 NTP。见过因为相机时间差了两小时导致纠纷时图片对不上单据的案例。
+
+**改掉默认密码。** 出厂默认密码是公开信息，监控设备被入侵的案例大多源于此。同时**不要把设备直接映射到公网**——需要远程访问就走 VPN。
+
+**记录设备台账。** IP、型号、序列号、安装位置、通道号、密码（存密码管理器不要写代码里）。设备一多，没台账排查就是灾难。
+
+:::details 常见问题速查 | 点开看摄像头对接的高频坑
+**ISAPI 返回 401**
+Digest 认证没配好，或密码错。用浏览器访问同一个 URL 验证凭据是否正确。
+
+**ISAPI 返回 403 但密码正确**
+设备可能锁定了账号（多次错误登录），或该功能需要更高权限的账号。等锁定解除或用管理员账号。
+
+**抓图很慢（几秒）**
+用 RTSP 抓图了。改用 ISAPI 的 picture 接口。
+
+**RTSP 参数都对但连不上**
+密码含特殊字符没做 URL 编码，或 554 端口被防火墙拦了。
+
+**RTSP 画面花屏**
+UDP 传输丢包。加 `--rtsp-tcp` 强制走 TCP。
+
+**预览延迟好几秒**
+缓冲设置太大。调 `--network-caching`，监控场景 300ms 左右合适。
+
+**多路预览时卡顿**
+带宽不够或解码吃不住。预览统一用子码流。
+
+**OpenCvSharp 打不开 RTSP**
+缺 FFmpeg 原生库。确认 `OpenCvSharp4.runtime.win` 包已引用且 DLL 在输出目录。
+
+**处理速度跟不上，画面越来越滞后**
+帧在缓冲区积压。设 `BufferSize = 1` 只取最新帧。
+
+**车牌推送收不到**
+设备配置里的推送地址填错（注意要填服务器 IP 不是 localhost）、端口没开防火墙、或者你的服务只监听了 localhost。
+
+**车牌推送收到了但字段是空的**
+字段名和你假设的不一样。抓一次真实请求把所有字段打出来看。
+
+**同一辆车被推送多次**
+视频触发模式下的正常现象。业务层要做去重（同车牌 + 短时间窗口内只处理一次）。
+
+**夜间识别率明显下降**
+补光灯没开或角度不对，属于安装问题。软件侧要把低置信度结果转人工。
+
+**磁盘满了**
+抓图没有清理策略。上线第一天就要把清理服务配好。
+:::
+
+## 小结
+
+摄像头对接的关键决策在动手之前：
+
+1. **先分类需求再选路线**，成本差距能到十倍
+2. **HTTP 接口（ISAPI）能满足的绝不用 SDK**，没有位数问题、能用浏览器测
+3. **抓图用 HTTP，连续画面才用 RTSP**，RTSP 抓单图是常见的错误选择
+4. **录像交给 NVR，识别交给一体机**，这两件事不要自己做
+5. **车牌推送端点必须做来源控制**，否则等于把放行凭据敞开
+6. **图片存文件系统 + 按日期分目录 + 自动清理**，数据库只存路径
+
+下一篇 [门禁对接](/posts/iot/access-control-integration) 的技术难点和摄像头完全不同——不在通信，而在**人员权限的下发同步**：设备要离线可用，就必须把权限存到设备本地，于是"同步"成了整个系统最复杂的部分。

@@ -1,0 +1,523 @@
+---
+title: '时序数据库：为什么关系库扛不住 IoT 数据'
+date: '2026-07-31'
+excerpt: 'IoT 数据的四个特征如何击穿关系库的假设、时序库的列存压缩与时间分区原理、InfluxDB/TDengine/TimescaleDB 选型对比、tag 基数这个头号陷阱、降采样分层保留，以及 .NET 的接入代码。'
+tags: ['iot', 'dotnet', 'timeseries', 'timescaledb', 'influxdb', 'tdengine']
+nextPost: 'iot/device-shadow-online-state'
+---
+
+# 时序数据库：为什么关系库扛不住 IoT 数据
+
+上一篇解决了"写得进去"的问题。这一篇解决"存得下、查得出"的问题。
+
+很多项目的时间线是这样的：上线时用 PostgreSQL 存遥测，一切正常。三个月后表长到几亿行，写入开始变慢、历史曲线要转圈十几秒、想删旧数据发现 `DELETE` 跑一晚上还没完、磁盘也快满了。
+
+**这不是数据库选错了，而是用错了。** 关系库是为 OLTP 设计的，而 IoT 遥测数据的特征几乎和 OLTP 的假设完全相反。
+
+:::tip 系列阅读顺序
+本文是 [云端 IoT 平台路线图](/posts/iot/cloud-iot-roadmap) 的第五篇。上一篇 [削峰与批量入库](/posts/iot/ingest-backpressure-batching) 的批量写入是这一篇的前提——时序库的写入性能优势必须靠批量才能发挥出来。
+:::
+
+## IoT 数据的四个特征
+
+先看清数据长什么样，选型结论是它的自然推论：
+
+| 特征 | IoT 遥测 | 典型 OLTP 业务 |
+|---|---|---|
+| 写读比 | **写远多于读**，可能 100:1 | 读多于写 |
+| 变更模式 | **只追加，从不更新** | 频繁 UPDATE |
+| 查询模式 | **按时间范围 + 设备**，几乎总带时间条件 | 按主键、按各种维度 |
+| 数据价值 | **随时间快速衰减**，昨天的秒级数据没人看 | 长期等价值 |
+| 单条重要性 | 低，丢一条不影响趋势 | 高，每条都要准 |
+
+**"只追加"和"总带时间条件"这两条是时序库全部优化的立足点。** 不用支持任意行的 UPDATE，就能用列存和激进压缩；查询总带时间范围，就能按时间分区并直接跳过无关分区。
+
+## 关系库具体输在哪
+
+假设每秒 1000 条、每条 5 个属性，用窄表存储（`device_id, property_key, value, ts`），一天就是 4.3 亿行。
+
+**一、索引的写放大**
+
+B+ 树索引在数据量大时，每次插入都可能触发页分裂，且插入位置随机（`device_id` 维度）。表越大，索引越深，写入越慢。**表变大导致写入变慢，这是关系库存时序数据最难受的一点**——它是自我恶化的。
+
+**二、行存导致的读放大**
+
+查"某设备最近一小时的温度"时，行存必须把整行读出来（包含 `property_key`、`ts` 等所有列），再丢掉不需要的部分。列存只读 `value` 列。**属性一多，浪费的比例越高。**
+
+**三、压缩率低**
+
+关系库按页压缩通用数据。时序数据的特点是**同一列的相邻值高度相似**（时间戳等差、温度缓变），列存加上专门算法能达到十倍以上压缩比，行存做不到。
+
+**四、删除旧数据代价极高**
+
+```sql
+-- 关系库里删 30 天前的数据：扫描 + 逐行删 + 写 WAL + 留下碎片
+DELETE FROM telemetry WHERE ts < NOW() - INTERVAL '30 days';
+```
+
+几亿行的 `DELETE` 可能跑几小时，期间锁竞争、WAL 暴涨、磁盘反而先满。删完还要 `VACUUM` 回收空间。
+
+**时序库里这是 O(1) 操作**：数据按时间分区存放，删旧数据就是 drop 掉整个分区，等于删文件。
+
+**五、聚合查询要全量扫描**
+
+"过去 30 天每小时平均温度"这类查询，关系库要扫 30 天的原始数据现算。时序库有预聚合（连续聚合），查的是已经算好的小时表。**差距是数量级的。**
+
+## 时序库做了什么
+
+### 数据模型
+
+时序库的通用模型是四元组：
+
+```text
+measurement（表/指标名）+ tags（索引维度）+ fields（数值）+ timestamp
+```
+
+```text
+measurement: telemetry
+tags:        device_id=SN001, product_key=thermostat-v1, property=temperature
+fields:      value=25.5
+timestamp:   1785456000000
+```
+
+**tags 被索引、用于过滤和分组；fields 不被索引、只存值。** 这个区分是后面所有设计决策的基础。
+
+### 三项核心优化
+
+**列式存储 + 类型化压缩**
+
+同一列的数据连续存放，可以用针对性的算法：
+
+| 数据 | 算法 | 原理 |
+|---|---|---|
+| 时间戳 | delta-of-delta | 固定间隔上报时，二阶差分几乎全是 0 |
+| 浮点数 | Gorilla（XOR） | 相邻温度值的位模式高度相似，异或后前导零很多 |
+| 字符串 tag | 字典编码 | 设备 ID 重复出现，存字典下标而不是原文 |
+
+组合下来十倍压缩比是常态。
+
+**按时间自动分区**
+
+数据按时间切成块（chunk / shard），带来三个好处：查询能直接跳过时间范围外的块、写入总是落在最新块（内存友好、无随机 IO）、删除旧数据变成 drop 分区。
+
+**预聚合与自动降采样**
+
+后台持续把原始数据聚合成分钟、小时粒度。查历史曲线时直接读聚合结果。
+
+## 三个选型
+
+| | **TimescaleDB** | **InfluxDB** | **TDengine** |
+|---|---|---|---|
+| 本质 | PostgreSQL 扩展 | 专用时序库 | 专用时序库（国产） |
+| 查询语言 | **标准 SQL** | Flux / InfluxQL / SQL(v3) | **类 SQL** |
+| .NET 生态 | **Npgsql + EF Core 直接可用** | 官方 client | 官方 connector |
+| 关系能力 | **完整，可 JOIN 元数据表** | 弱 | 有限 |
+| 高基数容忍 | **好**（用 PG 索引） | v1/v2 差，v3 改善 | **好**（一设备一子表） |
+| 运维复杂度 | 低（就是 PostgreSQL） | 中 | 中 |
+| 生态工具 | PG 全套生态 | Grafana 一等支持 | Grafana 支持 |
+| 适合 | **已用 PG、需要 JOIN、团队熟 SQL** | 纯监控指标、云托管 | 国内项目、超大设备量 |
+
+**我的建议：如果你已经在用 PostgreSQL，先上 TimescaleDB。**
+
+理由是它的迁移成本近乎为零——还是那个数据库、那套连接串、那套 EF Core 代码、那套备份方案，只是给表加一个 hypertable 属性。而 InfluxDB 和 TDengine 都要引入新组件、新客户端、新运维知识，还失去了和业务表 JOIN 的能力。
+
+只有在这些情况下才值得换：设备量到十万级以上、纯指标场景不需要关系能力、或者团队已经有对应的运维经验。
+
+:::note ClickHouse 算不算
+ClickHouse 不是时序库，是列式 OLAP 数据库，但因为列存 + 压缩 + 极快的聚合，经常被用来存时序数据。
+
+它的强项是**海量数据的复杂分析查询**，弱项是缺少时序专用功能（连续聚合、保留策略要自己实现）、不擅长高频小批量写入（需要攒大批）、以及不支持高并发的点查。
+
+如果你的场景是"存全量数据 + 做复杂分析"而不是"实时看板 + 告警"，它值得评估。
+:::
+
+## 数据模型设计：tag 基数是头号陷阱
+
+这是时序库用错的最常见原因，值得单独讲。
+
+**tag 被索引，所以每个 tag 值的组合会产生一个独立的"时间序列"。** 序列数（cardinality）= 各 tag 取值数的乘积：
+
+```text
+device_id (10,000) × property (10) × region (5) = 500,000 个序列
+```
+
+InfluxDB 1.x/2.x 的索引结构在序列数达到百万级时，内存占用和查询性能会显著恶化。这就是著名的"高基数问题"。
+
+**绝对不能做 tag 的：**
+
+```text
+❌ message_id / trace_id      每条消息一个新值，序列数无上限
+❌ timestamp 的字符串形式      同上
+❌ 温度值本身                  连续值，基数爆炸
+❌ 用户输入的自由文本          不可控
+```
+
+**判断标准很简单：这个字段的取值集合是有限且稳定的吗？** 是就可以做 tag，否则只能做 field。
+
+`device_id` 是个边界情况：它的基数等于设备数。一万台没问题，一百万台在 InfluxDB 上就要谨慎——这时 TDengine 的"一设备一子表"模型或 TimescaleDB 的普通索引反而更合适。
+
+### 推荐模型
+
+结合上一篇的物模型，我推荐的结构（以 TimescaleDB 为例）：
+
+```sql
+CREATE TABLE telemetry (
+    ts            TIMESTAMPTZ      NOT NULL,
+    device_id     BIGINT           NOT NULL,   -- 用数字 ID 而非字符串，省空间也快
+    property_key  SMALLINT         NOT NULL,   -- 属性字典化，见下面说明
+    value_num     DOUBLE PRECISION,            -- 数值型属性
+    value_text    TEXT                          -- 文本型属性（少见，可为空）
+);
+
+-- 转成 hypertable，按 7 天分块。
+-- 分块大小的经验法则：最近一个块要能装进内存
+SELECT create_hypertable('telemetry', 'ts', chunk_time_interval => INTERVAL '7 days');
+
+-- 查询几乎总是"某设备某属性的时间范围"，索引要匹配这个模式
+CREATE INDEX ix_telemetry_device_prop_ts
+    ON telemetry (device_id, property_key, ts DESC);
+
+-- 开启压缩：把老数据按设备+属性分段压缩
+ALTER TABLE telemetry SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'device_id, property_key',
+    timescaledb.compress_orderby   = 'ts DESC'
+);
+
+-- 7 天前的数据自动压缩
+SELECT add_compression_policy('telemetry', INTERVAL '7 days');
+```
+
+三个设计决策的理由：
+
+**`device_id` 用数字。** 字符串序列号每行都要存几十字节，一天四亿行差别巨大。数字 ID 和序列号的映射放关系库的设备表里。
+
+**`property_key` 字典化成 `SMALLINT`。** 物模型里的 `identifier` 是字符串（`temperature`），在时序表里存成整数，映射关系放物模型表。这一项能省下大量空间。
+
+**数值和文本分列。** 绝大多数属性是数值，单独用 `DOUBLE PRECISION` 列压缩效果好；文本属性很少，允许为空不影响。
+
+:::warning 不要用 JSON 列存时序数据
+把整条上报的 JSON 塞进一列看起来很方便（不用管属性变化），但代价很大：
+
+- **压缩效果差**：JSON 里混杂了键名、结构字符和不同类型的值，破坏了列存"同类值相邻"的前提
+- **无法用时序库的聚合**：`AVG(value)` 变成要先解析 JSON
+- **索引不好建**：按属性过滤只能走 JSON 表达式索引
+
+JSON 列适合存最新值快照（上一篇的做法，每设备一行），**不适合存历史时序数据**。
+:::
+
+## .NET 接入
+
+### TimescaleDB
+
+写入直接用上一篇的 `COPY`，因为它就是 PostgreSQL：
+
+```csharp
+public sealed class TimescaleTelemetryWriter
+{
+    private readonly NpgsqlDataSource _dataSource;
+    private readonly IPropertyKeyMap _keyMap;   // identifier 到 SMALLINT 的映射，带缓存
+
+    public async Task WriteBatchAsync(
+        IReadOnlyList<TelemetryPoint> points, CancellationToken ct)
+    {
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+
+        await using var writer = await conn.BeginBinaryImportAsync(
+            "COPY telemetry (ts, device_id, property_key, value_num, value_text) " +
+            "FROM STDIN (FORMAT BINARY)", ct);
+
+        foreach (var p in points)
+        {
+            await writer.StartRowAsync(ct);
+            await writer.WriteAsync(p.Timestamp, NpgsqlDbType.TimestampTz, ct);
+            await writer.WriteAsync(p.DeviceId, NpgsqlDbType.Bigint, ct);
+            await writer.WriteAsync(_keyMap.ToId(p.PropertyKey), NpgsqlDbType.Smallint, ct);
+
+            if (p.NumericValue is { } n)
+                await writer.WriteAsync(n, NpgsqlDbType.Double, ct);
+            else
+                await writer.WriteNullAsync(ct);
+
+            if (p.TextValue is { } t)
+                await writer.WriteAsync(t, NpgsqlDbType.Text, ct);
+            else
+                await writer.WriteNullAsync(ct);
+        }
+
+        await writer.CompleteAsync(ct);
+    }
+}
+```
+
+查询用 `time_bucket` 做降采样，这是 TimescaleDB 最常用的函数：
+
+```csharp
+public async Task<List<AggregatePoint>> QueryHourlyAsync(
+    long deviceId, string propertyKey,
+    DateTimeOffset from, DateTimeOffset to, CancellationToken ct)
+{
+    const string sql = """
+        SELECT time_bucket('1 hour', ts) AS bucket,
+               AVG(value_num)  AS avg_value,
+               MIN(value_num)  AS min_value,
+               MAX(value_num)  AS max_value,
+               COUNT(*)        AS sample_count
+        FROM telemetry
+        WHERE device_id = @deviceId
+          AND property_key = @propertyKey
+          AND ts >= @from AND ts < @to
+        GROUP BY bucket
+        ORDER BY bucket;
+        """;
+
+    // 注意：时间条件必须写在 WHERE 里，
+    // 这样 TimescaleDB 才能做分区裁剪（只扫相关的 chunk）。
+    // 漏掉时间条件会退化成全表扫描。
+    await using var conn = await _dataSource.OpenConnectionAsync(ct);
+    await using var cmd = new NpgsqlCommand(sql, conn);
+
+    cmd.Parameters.AddWithValue("deviceId", deviceId);
+    cmd.Parameters.AddWithValue("propertyKey", _keyMap.ToId(propertyKey));
+    cmd.Parameters.AddWithValue("from", from);
+    cmd.Parameters.AddWithValue("to", to);
+
+    var result = new List<AggregatePoint>();
+    await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+    while (await reader.ReadAsync(ct))
+    {
+        result.Add(new AggregatePoint(
+            reader.GetDateTime(0),
+            reader.IsDBNull(1) ? null : reader.GetDouble(1),
+            reader.IsDBNull(2) ? null : reader.GetDouble(2),
+            reader.IsDBNull(3) ? null : reader.GetDouble(3),
+            reader.GetInt64(4)));
+    }
+
+    return result;
+}
+```
+
+**时间条件必须出现在 `WHERE` 里**，这是时序库性能的关键。漏了它，分区裁剪失效，查询会扫描所有历史分区。
+
+### InfluxDB
+
+```bash
+dotnet add package InfluxDB.Client
+```
+
+```csharp
+// 本例基于 InfluxDB 2.x 的客户端。
+// InfluxDB 3 的架构和 API 变化很大，迁移前要确认版本。
+public sealed class InfluxTelemetryWriter : IAsyncDisposable
+{
+    private readonly InfluxDBClient _client;
+    private readonly string _bucket;
+    private readonly string _org;
+
+    public async Task WriteBatchAsync(
+        IReadOnlyList<TelemetryPoint> points, CancellationToken ct)
+    {
+        var writeApi = _client.GetWriteApiAsync();
+
+        var data = points.Select(p => PointData
+            .Measurement("telemetry")
+
+            // tags：会被索引，只放取值有限的维度
+            .Tag("device_id", p.DeviceId.ToString())
+            .Tag("property", p.PropertyKey)
+
+            // fields：实际数值，不被索引
+            .Field("value", p.NumericValue ?? 0d)
+
+            .Timestamp(p.Timestamp.UtcDateTime, WritePrecision.Ms))
+            .ToList();
+
+        // 客户端内部会合并成 Line Protocol 批量提交
+        await writeApi.WritePointsAsync(data, _bucket, _org, ct);
+    }
+}
+```
+
+### TDengine
+
+TDengine 的"超级表 + 子表"模型比较特殊，值得一提：**每台设备一张子表**，子表继承超级表的结构，tags 存在子表元数据里。
+
+```sql
+-- 超级表定义结构和 tags
+CREATE STABLE telemetry (
+    ts        TIMESTAMP,
+    value     DOUBLE
+) TAGS (
+    device_sn    BINARY(32),
+    product_key  BINARY(32),
+    property     BINARY(32)
+);
+
+-- 每个「设备 + 属性」一张子表，自动继承结构
+CREATE TABLE d_SN001_temperature USING telemetry
+    TAGS ('SN001', 'thermostat-v1', 'temperature');
+```
+
+这个设计让**单设备的数据在物理上连续存放**，查单设备极快，而且天然规避了高基数索引问题。代价是子表数量等于设备数 × 属性数，建表要自动化。
+
+## 降采样与分层保留
+
+这是控制存储成本的核心手段。原则很简单：**数据越老，粒度越粗。**
+
+```text
+原始数据（秒级）    保留 7 天
+分钟聚合           保留 30 天
+小时聚合           保留 1 年
+天聚合             永久
+```
+
+TimescaleDB 的连续聚合会自动维护这些视图：
+
+```sql
+-- 分钟级连续聚合。TimescaleDB 会增量维护，不是每次查询都重算
+CREATE MATERIALIZED VIEW telemetry_1min
+WITH (timescaledb.continuous) AS
+SELECT time_bucket('1 minute', ts) AS bucket,
+       device_id,
+       property_key,
+       AVG(value_num) AS avg_value,
+       MIN(value_num) AS min_value,
+       MAX(value_num) AS max_value,
+       COUNT(*)       AS sample_count
+FROM telemetry
+GROUP BY bucket, device_id, property_key;
+
+-- 刷新策略：每分钟把最近一小时内的新数据聚合进去。
+-- start_offset 要大于可能的乱序到达窗口（弱网设备会补传旧数据）
+SELECT add_continuous_aggregate_policy('telemetry_1min',
+    start_offset => INTERVAL '1 hour',
+    end_offset   => INTERVAL '1 minute',
+    schedule_interval => INTERVAL '1 minute');
+
+-- 原始表 7 天后自动删除（drop 分区，非常快）
+SELECT add_retention_policy('telemetry', INTERVAL '7 days');
+
+-- 分钟聚合表保留 30 天
+SELECT add_retention_policy('telemetry_1min', INTERVAL '30 days');
+```
+
+:::important 保留策略是不可逆的
+`add_retention_policy` 会**真的删除数据**，删了就没了。上线前必须和业务确认：
+
+- **原始数据到底要保留多久？** 有些行业有法规要求（能耗、环保监测数据可能要求存数年）
+- **需不需要归档？** 删除前先导出到对象存储（S3、OSS）比直接删安全，成本也低
+- **降采样够不够？** 如果业务需要回溯原始秒级数据做事故分析，7 天可能太短
+
+我见过删完才发现客户需要半年原始数据的项目。**这个决定要写进需求文档，不能开发自己拍。**
+:::
+
+查询时按时间范围自动选表：
+
+```csharp
+/// <summary>
+/// 按查询跨度选择合适的数据源：跨度大就查粗粒度，
+/// 既快又不会返回几十万个点让前端画不出来。
+/// </summary>
+private static string ResolveSource(DateTimeOffset from, DateTimeOffset to)
+{
+    var span = to - from;
+
+    return span switch
+    {
+        _ when span <= TimeSpan.FromHours(6)  => "telemetry",        // 原始
+        _ when span <= TimeSpan.FromDays(7)   => "telemetry_1min",
+        _ when span <= TimeSpan.FromDays(90)  => "telemetry_1hour",
+        _                                      => "telemetry_1day",
+    };
+}
+```
+
+**这个自动选择很重要。** 前端图表最多能显示几百到一千个点，查一年的秒级数据既慢又没意义。按跨度选粒度让查询时间基本恒定。
+
+## 双库并存的一致性
+
+典型架构是**元数据在关系库、测点在时序库**：
+
+```text
+PostgreSQL（或关系库部分）
+  ├─ 设备表（设备号、产品、归属、状态）
+  ├─ 物模型表
+  ├─ 最新值快照（JSON 列）
+  └─ 告警、单据等业务数据
+
+时序库
+  └─ 历史测点
+```
+
+三条实践原则：
+
+**不要在两库之间做分布式事务。** 遥测数据不值得为此付代价。写时序库失败就记日志 + 计数，让监控发现，不要回滚业务操作。
+
+**关联查询在应用层拼接。** "查这个厂区所有设备的平均温度"：先从关系库查出设备 ID 列表，再拿这批 ID 去时序库聚合。**如果用 TimescaleDB，这一步可以直接 JOIN**，这是它相比专用时序库最实际的优势。
+
+**最新值不要查时序库。** "取每台设备的最新温度"在时序库里是相对昂贵的查询（要按设备分组取最后一条）。用上一篇的快照表，一次简单查询就拿到全部。
+
+```csharp
+// ❌ 从时序库取最新值：设备多时很慢
+// SELECT DISTINCT ON (device_id) * FROM telemetry ORDER BY device_id, ts DESC;
+
+// ✅ 从快照表取：每设备一行，普通索引查询
+var snapshots = await _db.Snapshots
+    .Where(s => deviceIds.Contains(s.DeviceId))
+    .ToListAsync(ct);
+```
+
+:::details 常见问题速查 | 点开看时序库的高频坑
+**查询很慢，明明只查了一小时数据**
+`WHERE` 里没有时间条件，或时间条件被函数包裹（如 `WHERE DATE(ts) = ...`）导致分区裁剪失效。时间条件要直接比较列。
+
+**InfluxDB 内存暴涨**
+高基数 tag。检查是不是把 message_id、trace_id 之类放进了 tag。
+
+**写入越来越慢**
+批量太小，或索引过多。时序表通常只需要一个匹配查询模式的复合索引。
+
+**磁盘增长比预期快很多**
+没开压缩，或 `device_id` 用了长字符串、属性名没字典化。
+
+**删除旧数据锁表很久**
+用了 `DELETE`。改用保留策略/drop 分区。
+
+**连续聚合里少了最近几分钟的数据**
+`end_offset` 的作用（避免聚合还在写入的时间窗口）。这是设计使然，实时数据要查原始表。
+
+**弱网设备补传的旧数据没进聚合表**
+`start_offset` 小于乱序窗口。要按最大可能的补传延迟设置。
+
+**前端图表卡死**
+返回了几十万个点。按查询跨度选粒度，或在 SQL 里做降采样。
+
+**取所有设备最新值很慢**
+在时序库里做了 `DISTINCT ON` / `LAST`。用快照表。
+
+**换了时序库后没法 JOIN 设备表了**
+专用时序库的固有限制。如果 JOIN 需求多，TimescaleDB 是更合适的选择。
+
+**数据删了才发现业务需要**
+保留策略上线前没确认。这是不可逆的，必须写进需求。
+
+**时间戳时区混乱**
+统一用 UTC 存储，展示时才转本地时区。混存时区的数据几乎无法修复。
+:::
+
+## 小结
+
+1. **IoT 数据的"只追加 + 总带时间条件"**，是时序库所有优化的立足点
+2. **关系库最难受的是"表变大导致写入变慢"**，这是自我恶化的
+3. **已用 PostgreSQL 就上 TimescaleDB**：迁移成本近乎为零，还保留 JOIN 能力
+4. **tag 基数是头号陷阱**：取值集合有限且稳定的才能做 tag
+5. **`device_id` 用数字、属性名字典化**，一天上亿行时这两项省的空间很可观
+6. **不要用 JSON 列存历史时序数据**，它破坏了列存压缩的前提
+7. **时间条件必须直接写在 `WHERE` 里**，否则分区裁剪失效
+8. **分层保留 + 连续聚合**，按查询跨度自动选粒度
+9. **保留策略不可逆**，上线前必须和业务确认并考虑归档
+10. **最新值查快照表，不查时序库**
+
+下一篇 [设备影子与在线状态](/posts/iot/device-shadow-online-state) 讲心跳和 LWT 怎么组合成可靠的在线判定、状态抖动怎么抑制、以及"期望状态"和"上报状态"为什么必须分开存。

@@ -1,0 +1,800 @@
+---
+title: 'P/Invoke 对接厂商 SDK：结构体、回调与位数匹配'
+date: '2026-07-31'
+excerpt: '用 .NET 对接海康、大华、中控这类只提供 C/C++ DLL 的厂商 SDK：位数匹配、DLL 加载、结构体映射与对齐、GBK 字符串、回调委托保活、句柄生命周期，以及分层封装。'
+tags: ['iot', 'dotnet', 'pinvoke', 'interop', 'marshal', 'sdk']
+nextPost: 'iot/weighbridge-integration'
+---
+
+# P/Invoke 对接厂商 SDK：结构体、回调与位数匹配
+
+摄像头、门禁、指纹仪、身份证读卡器这些设备，厂商一般不给你 HTTP 接口，而是给一个压缩包：几个 `.dll`、一堆 `.h` 头文件、一份《开发指南》PDF，外加一个 C++ 或 Delphi 写的 Demo。
+
+你的任务就是把这些翻译成 C#。这一篇讲的是这个翻译过程里所有会让你卡住的地方——它们高度集中，且每一个都有确定的解法。
+
+:::tip 系列阅读顺序
+本文是 [.NET 对接工业设备路线图](/posts/iot/industrial-device-roadmap) 的第四篇。它和前面几篇相对独立，可以直接读。
+
+**这一篇是整个系列的分水岭。** 过了 P/Invoke 这关，海康、大华、中控、臻识的 SDK 对你来说就只是查文档的差别。
+:::
+
+## 三个必须先建立的概念
+
+**托管与非托管**
+
+C# 代码运行在 CLR 里，内存由 GC 管理，对象位置可能被移动。C++ 的 DLL 运行在同一个进程里，但对内存的假设完全不同——地址固定、生命周期由程序员控制。P/Invoke 就是在这两个世界之间搭桥。
+
+**封送（Marshaling）**
+
+跨过这座桥时，数据需要"翻译"：C# 的 `string` 是 UTF-16 且带长度头，C 的 `char*` 是零结尾字节序列；C# 的 `bool` 是 1 字节，Win32 的 `BOOL` 是 4 字节整数。CLR 自动做这些转换的过程就叫封送。**绝大多数 P/Invoke 问题，本质都是封送规则和 C++ 头文件不一致。**
+
+**调用约定（Calling Convention）**
+
+参数怎么入栈、谁负责清栈。Windows SDK 基本都是 `StdCall`，跨平台库通常是 `Cdecl`。**约定写错的表现是调用后栈损坏，可能立刻崩，也可能几十次调用后才崩**——所以看头文件确认，不要猜。头文件里的 `WINAPI`、`__stdcall`、`CALLBACK` 都表示 StdCall。
+
+## 第一关：位数匹配
+
+这是最先撞的墙，几乎每个人都撞过：
+
+```text
+System.BadImageFormatException: 无法加载文件或程序集
+"HCNetSDK.dll"。试图加载格式不正确的程序。
+```
+
+原因只有一个：**32 位进程只能加载 32 位 DLL，64 位进程只能加载 64 位 DLL，没有例外。** 而大量国产 SDK 只提供 32 位版本。
+
+先确认 DLL 的位数。最方便的办法是用 VS 自带的开发者命令提示符：
+
+```bash
+dumpbin /headers HCNetSDK.dll | findstr machine
+```
+
+输出 `14C machine (x86)` 是 32 位，`8664 machine (x64)` 是 64 位。
+
+然后把项目锁死到对应位数，写在 `.csproj` 里：
+
+```xml
+<PropertyGroup>
+  <TargetFramework>net8.0-windows</TargetFramework>
+
+  <!-- SDK 是 32 位，进程也必须是 32 位 -->
+  <PlatformTarget>x86</PlatformTarget>
+
+  <!-- 发布时同样锁定，否则 dotnet publish 可能出 AnyCPU -->
+  <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+</PropertyGroup>
+```
+
+运行时可以加一道自检，避免部署到错误环境后才发现：
+
+```csharp
+// IntPtr.Size 为 4 表示 32 位进程，8 表示 64 位
+if (IntPtr.Size != 4)
+{
+    throw new PlatformNotSupportedException(
+        "本程序依赖 32 位设备 SDK，必须以 x86 运行。当前是 64 位进程。");
+}
+```
+
+:::warning 一个进程无法同时用 32 位和 64 位 SDK
+真实项目里会遇到：摄像头 SDK 只有 32 位，门禁 SDK 只有 64 位。**这在一个进程里无解。**
+
+唯一的出路是**拆进程**：把其中一个 SDK 包进独立的宿主程序，主程序通过命名管道、gRPC 或本地 HTTP 和它通信。
+
+这个决定要在架构阶段就做，等到写完再拆代价很大。所以拿到 SDK 的第一件事就是检查所有 DLL 的位数是否一致。
+:::
+
+## 第二关：DLL 加载路径
+
+第二个高频错误：
+
+```text
+System.DllNotFoundException: 无法加载 DLL "HCNetSDK.dll"
+或它的某一个依赖项。
+```
+
+**注意"或它的某一个依赖项"这半句。** 十次里有八次，文件明明在，问题出在依赖上——厂商 SDK 通常不是一个孤立 DLL，而是一整套：主 DLL 依赖几个核心库，可能还要求一个 `Com` 或 `HCNetSDKCom` 子目录原样保留。
+
+排查用 [Dependencies](https://github.com/lucasg/Dependencies)（Dependency Walker 的现代替代品）打开主 DLL，红色标记的就是缺失项。常见缺失项是 **Visual C++ 运行库**，装一下对应版本的 `vc_redist` 即可。
+
+确认文件齐全后，让程序能找到它们。推荐把 SDK 放在输出目录的子文件夹里保持整洁，然后显式告诉运行时去哪找。
+
+现代做法是 `NativeLibrary.SetDllImportResolver`：
+
+```csharp
+using System.Runtime.InteropServices;
+
+internal static class SdkLoader
+{
+    private static bool _initialized;
+
+    public static void Initialize()
+    {
+        if (_initialized) return;
+
+        var sdkDir = Path.Combine(AppContext.BaseDirectory, "sdk", "hik");
+
+        // 注册解析器：本程序集里所有找不到的原生库都来这里找一次
+        NativeLibrary.SetDllImportResolver(
+            typeof(SdkLoader).Assembly,
+            (libraryName, assembly, searchPath) =>
+            {
+                var path = Path.Combine(sdkDir, libraryName);
+
+                if (NativeLibrary.TryLoad(path, out var handle))
+                    return handle;
+
+                return IntPtr.Zero;   // 返回 Zero 表示交回默认解析逻辑
+            });
+
+        // 有些 SDK 内部会用相对路径加载自己的附属 DLL，
+        // 这种情况必须同时把目录加进搜索路径
+        SetDllDirectory(sdkDir);
+
+        _initialized = true;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetDllDirectory(string path);
+}
+```
+
+配套在 `.csproj` 里保证 SDK 文件被复制到输出目录：
+
+```xml
+<ItemGroup>
+  <None Include="sdk\hik\**\*" CopyToOutputDirectory="PreserveNewest"
+        Link="sdk\hik\%(RecursiveDir)%(Filename)%(Extension)" />
+</ItemGroup>
+```
+
+:::note SDK 的目录结构不要动
+厂商 SDK 里的子目录（海康的 `HCNetSDKCom`、大华的相关目录）**必须原样保留**，因为主 DLL 会按硬编码的相对路径去加载它们。
+
+我见过不少项目把所有 DLL 平铺到根目录，结果登录能成功、取流一定失败——就是子目录里的组件没被加载。
+:::
+
+## 第三关：函数声明
+
+先建立类型映射表，翻译头文件时对照着来：
+
+| C/C++ | C# | 说明 |
+|---|---|---|
+| `BYTE` / `unsigned char` | `byte` | |
+| `char` | `sbyte` | 当数值用时 |
+| `WORD` / `unsigned short` | `ushort` | |
+| `SHORT` | `short` | |
+| `DWORD` / `unsigned int` / `UINT` | `uint` | |
+| `LONG` / `int` | `int` | Windows 上 `LONG` 是 32 位 |
+| `LONGLONG` / `__int64` | `long` | |
+| `float` / `double` | `float` / `double` | |
+| `BOOL` | `int`（推荐）或 `bool` + `MarshalAs` | 4 字节 |
+| `bool`（C++ 原生） | `byte` + `MarshalAs(UnmanagedType.U1)` | 1 字节 |
+| `char*`（输入） | `byte[]` 或 `string` | 中文见下节 |
+| `char*`（输出） | `byte[]` 或 `StringBuilder` | |
+| `void*` / `HANDLE` / `LPVOID` | `IntPtr` | |
+| `struct*` | `ref` 结构体 或 `IntPtr` | |
+| 函数指针 | `delegate` | 见回调一节 |
+
+一个典型声明（以海康风格为例，实际签名请对照你手上的头文件）：
+
+```csharp
+using System.Runtime.InteropServices;
+
+internal static class NativeMethods
+{
+    private const string Dll = "HCNetSDK.dll";
+
+    // BOOL NET_DVR_Init();
+    [DllImport(Dll, CallingConvention = CallingConvention.StdCall)]
+    public static extern int NET_DVR_Init();
+
+    // BOOL NET_DVR_Cleanup();
+    [DllImport(Dll, CallingConvention = CallingConvention.StdCall)]
+    public static extern int NET_DVR_Cleanup();
+
+    // LONG NET_DVR_Login_V40(...) —— 返回用户 ID，-1 表示失败
+    [DllImport(Dll, CallingConvention = CallingConvention.StdCall)]
+    public static extern int NET_DVR_Login_V40(
+        ref NET_DVR_USER_LOGIN_INFO loginInfo,
+        ref NET_DVR_DEVICEINFO_V40 deviceInfo);
+
+    // DWORD NET_DVR_GetLastError();
+    [DllImport(Dll, CallingConvention = CallingConvention.StdCall)]
+    public static extern uint NET_DVR_GetLastError();
+}
+```
+
+三个实践建议：
+
+**用 `int` 接 `BOOL` 而不是 `bool`。** `BOOL` 是 4 字节整数，`bool` 的封送在不同位置（参数 vs 结构体字段）规则不完全一致，用 `int` 判断 `!= 0` 最省心，也能保留厂商用返回值传递额外信息的可能。
+
+**声明层放在 `internal static class NativeMethods` 里。** 这是 .NET 的约定，也让"哪些是原生调用"一目了然。业务代码永远不直接碰这个类。
+
+**别用 `SetLastError = true` 去取厂商错误码。** 厂商 SDK 一般有自己的 `GetLastError` 函数（如上面的 `NET_DVR_GetLastError`），Win32 的 `Marshal.GetLastWin32Error()` 取不到它。只有调用 Win32 API 时才需要 `SetLastError`。
+
+:::note .NET 7+ 的 LibraryImport
+.NET 7 起有了源生成器版本的 `[LibraryImport]`，编译期生成封送代码，性能更好且支持 AOT：
+
+```csharp
+internal static partial class NativeMethods
+{
+    [LibraryImport("HCNetSDK.dll")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
+    public static partial int NET_DVR_Init();
+}
+```
+
+注意方法必须是 `partial`，类也必须是 `partial`。它对复杂封送（尤其是含固定数组的结构体）支持不如 `DllImport` 宽松，对接老 SDK 时经常还是 `DllImport` 更省事。**两者可以在同一个项目里混用**，不用一次性迁移。
+:::
+
+## 第四关：结构体映射
+
+这是错误率最高的一环，因为**错了不一定报错，只是数据不对**。
+
+### 布局与对齐
+
+```csharp
+// C++:
+// typedef struct {
+//     DWORD dwSize;
+//     BYTE  sDeviceAddress[129];
+//     WORD  wPort;
+//     BYTE  sUserName[64];
+//     BYTE  sPassword[64];
+// } NET_DVR_USER_LOGIN_INFO;
+
+[StructLayout(LayoutKind.Sequential)]
+public struct NET_DVR_USER_LOGIN_INFO
+{
+    public uint dwSize;
+
+    // 固定长度数组必须显式标注长度，否则会被当成指针（4/8 字节）
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 129)]
+    public byte[] sDeviceAddress;
+
+    public ushort wPort;
+
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 64)]
+    public byte[] sUserName;
+
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 64)]
+    public byte[] sPassword;
+}
+```
+
+四条铁律：
+
+1. **字段顺序必须和头文件完全一致**，一个都不能少、不能换位。哪怕是文档里写"保留字段"的 `byte[] byRes`，也必须声明出来占位
+2. **固定长度数组必须写 `SizeConst`**。不写就会被当成指针封送，后面所有字段全部错位
+3. **注意对齐**。MSVC 默认按成员自身大小对齐（最大 8 字节）。如果头文件里有 `#pragma pack(1)`，C# 这边必须写 `[StructLayout(LayoutKind.Sequential, Pack = 1)]`
+4. **`dwSize` 这类字段要自己填**。很多 SDK 用它做版本兼容，不填就是 0，函数会直接返回参数错误
+
+### 用 SizeOf 验证，这是最有效的排查手段
+
+```csharp
+// C++ 侧 sizeof(NET_DVR_USER_LOGIN_INFO) 的值在头文件或文档里能查到，
+// 也可以让厂商 Demo 打印一次
+var actual = Marshal.SizeOf<NET_DVR_USER_LOGIN_INFO>();
+Console.WriteLine($"托管侧大小：{actual}");
+
+// 写成断言，结构体改动时立刻发现
+Debug.Assert(actual == 264, $"结构体大小不匹配，期望 264，实际 {actual}");
+```
+
+**大小对不上，就一定有字段声明错了。** 这一步能在五分钟内定位问题，比对着运行结果猜半天高效得多。建议给每个结构体都写一条这样的断言，放在启动自检里。
+
+### 数组字段的初始化
+
+带 `ByValArray` 的结构体在 C# 里创建后数组字段是 `null`，直接传给原生函数会抛异常。要么手动初始化，要么写个工厂方法：
+
+```csharp
+public static NET_DVR_USER_LOGIN_INFO CreateLoginInfo(
+    string ip, ushort port, string user, string password)
+{
+    var info = new NET_DVR_USER_LOGIN_INFO
+    {
+        sDeviceAddress = new byte[129],
+        sUserName = new byte[64],
+        sPassword = new byte[64],
+        wPort = port,
+    };
+
+    info.dwSize = (uint)Marshal.SizeOf<NET_DVR_USER_LOGIN_INFO>();
+
+    // 定长字节数组的赋值：编码后拷进去，注意不能超长
+    WriteFixedString(info.sDeviceAddress, ip);
+    WriteFixedString(info.sUserName, user);
+    WriteFixedString(info.sPassword, password);
+
+    return info;
+}
+
+private static void WriteFixedString(byte[] target, string value)
+{
+    var bytes = Encoding.ASCII.GetBytes(value);
+
+    if (bytes.Length >= target.Length)
+        throw new ArgumentException($"内容超长，最大 {target.Length - 1} 字节");
+
+    Array.Clear(target);                       // 保证零结尾
+    bytes.CopyTo(target, 0);
+}
+```
+
+### 联合体
+
+头文件里的 `union` 用 `LayoutKind.Explicit` + `FieldOffset` 表达，多个字段指向同一偏移：
+
+```csharp
+[StructLayout(LayoutKind.Explicit)]
+public struct AlarmData
+{
+    [FieldOffset(0)] public uint AlarmType;
+
+    // 下面两个共用同一块内存，按 AlarmType 决定读哪个
+    [FieldOffset(4)] public int IntValue;
+    [FieldOffset(4)] public float FloatValue;
+}
+```
+
+## 第五关：字符串与中文编码
+
+设备名、人员姓名、通道名带中文时，这里是必踩的坑。
+
+**不要用 `CharSet.Ansi` 直接映射 `string` 去处理中文。** `Ansi` 用的是操作系统当前的 ANSI 代码页：在中文 Windows 上恰好是 GBK，看起来能用；换到英文系统或改了区域设置，立刻乱码。这种"在我机器上没问题"的 bug 在客户现场很难查。
+
+**可靠做法是全程用 `byte[]`，自己控制编码。** 先注册代码页提供程序（.NET Core 之后不再内置 GBK）：
+
+```bash
+dotnet add package System.Text.Encoding.CodePages
+```
+
+```csharp
+// 程序启动时注册一次
+Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
+public static class SdkEncoding
+{
+    public static readonly Encoding Gbk = Encoding.GetEncoding("GBK");
+
+    /// <summary>从定长字节数组读出字符串，截断到第一个 \0。</summary>
+    public static string ReadString(ReadOnlySpan<byte> buffer)
+    {
+        int end = buffer.IndexOf((byte)0);
+        if (end < 0) end = buffer.Length;
+        return Gbk.GetString(buffer[..end]).Trim();
+    }
+
+    /// <summary>写入定长字节数组，保证零结尾。</summary>
+    public static void WriteString(Span<byte> target, string value)
+    {
+        target.Clear();
+        var bytes = Gbk.GetBytes(value);
+        var count = Math.Min(bytes.Length, target.Length - 1);
+        bytes.AsSpan(0, count).CopyTo(target);
+    }
+}
+```
+
+输出参数如果 SDK 要求传缓冲区，`StringBuilder` 也可以，但只适用于纯 ASCII 场景：
+
+```csharp
+// DWORD NET_DVR_GetSDKVersion(char* pVersion, DWORD dwLength);
+[DllImport(Dll)]
+public static extern uint GetSdkVersion(StringBuilder buffer, uint length);
+
+var sb = new StringBuilder(256);
+GetSdkVersion(sb, 256);
+Console.WriteLine(sb.ToString());
+```
+
+## 第六关：回调函数
+
+这是整个 P/Invoke 里**最容易写出"跑几小时后随机崩溃"的地方**。设备报警、刷卡事件、取流数据都通过回调传给你。
+
+### 声明与注册
+
+```csharp
+// C++: typedef void (CALLBACK *MSGCallBack)(
+//          LONG lCommand, NET_DVR_ALARMER* pAlarmer,
+//          char* pAlarmInfo, DWORD dwBufLen, void* pUser);
+
+[UnmanagedFunctionPointer(CallingConvention.StdCall)]
+public delegate void AlarmCallback(
+    int command,
+    IntPtr alarmer,
+    IntPtr alarmInfo,
+    uint bufferLength,
+    IntPtr user);
+
+[DllImport(Dll, CallingConvention = CallingConvention.StdCall)]
+public static extern int NET_DVR_SetDVRMessageCallBack_V31(
+    AlarmCallback callback, IntPtr user);
+```
+
+### 铁律一：委托必须用字段持有
+
+```csharp
+public sealed class AlarmReceiver : IDisposable
+{
+    // ❗ 必须用字段保存，不能是局部变量
+    private readonly AlarmCallback _callback;
+
+    public AlarmReceiver()
+    {
+        _callback = OnAlarm;                    // 字段持有，GC 不会回收
+        NativeMethods.NET_DVR_SetDVRMessageCallBack_V31(_callback, IntPtr.Zero);
+    }
+
+    private void OnAlarm(int command, IntPtr alarmer,
+                         IntPtr alarmInfo, uint bufferLength, IntPtr user)
+    {
+        // ...
+    }
+
+    public void Dispose()
+    {
+        // 注销回调后委托才真正可以被回收
+        NativeMethods.NET_DVR_SetDVRMessageCallBack_V31(null!, IntPtr.Zero);
+    }
+}
+```
+
+为什么？把委托传给原生代码时，CLR 生成一个**函数指针**（stub）交过去。但 **GC 完全不知道原生侧还持有这个指针**。如果 C# 这边只是个局部变量：
+
+```csharp
+// ❌ 这段代码能编译、能运行、能收到几次回调，然后随机崩溃
+public void Start()
+{
+    var callback = new AlarmCallback(OnAlarm);   // 局部变量
+    NativeMethods.NET_DVR_SetDVRMessageCallBack_V31(callback, IntPtr.Zero);
+}   // 方法返回，callback 失去引用
+```
+
+方法返回后委托没有任何托管引用，下一次 GC 就会回收它，stub 随之失效。**设备再触发回调，就是调用一段已被释放的内存**——表现是几分钟到几小时后的 `AccessViolationException` 或 `ExecutionEngineException`，进程直接死掉，而且**默认无法用 try/catch 捕获**，堆栈也基本没有参考价值。
+
+这个 bug 的恶劣之处在于**它和你的业务逻辑毫无关联，且复现时间随机**。见过为它排查一周的项目，所以这条务必记牢。
+
+如果对象生命周期不好保证，也可以用 `GCHandle` 显式钉住：
+
+```csharp
+private GCHandle _callbackHandle;
+
+_callback = OnAlarm;
+_callbackHandle = GCHandle.Alloc(_callback);   // 显式保持存活
+
+// 释放时
+if (_callbackHandle.IsAllocated) _callbackHandle.Free();
+```
+
+### 铁律二：回调里绝不能抛异常
+
+异常从托管代码穿越到原生栈是未定义行为，一般直接崩进程。**整个回调体必须包在 try/catch 里**：
+
+```csharp
+private void OnAlarm(int command, IntPtr alarmer,
+                     IntPtr alarmInfo, uint bufferLength, IntPtr user)
+{
+    try
+    {
+        HandleAlarm(command, alarmInfo, bufferLength);
+    }
+    catch (Exception ex)
+    {
+        // 回调里唯一能做的就是记录，绝不能让异常逃出去
+        _logger.LogError(ex, "报警回调处理失败，command={Command}", command);
+    }
+}
+```
+
+### 铁律三：指针只在回调期间有效
+
+回调参数里的 `IntPtr` 指向原生侧的临时缓冲区，**回调一返回就可能被复用或释放**。必须在回调内立即拷贝：
+
+```csharp
+private void HandleAlarm(int command, IntPtr alarmInfo, uint bufferLength)
+{
+    // 结构体：立即封送成托管对象
+    var info = Marshal.PtrToStructure<NET_DVR_ALARMINFO>(alarmInfo);
+
+    // 原始字节：立即拷贝
+    var buffer = new byte[bufferLength];
+    Marshal.Copy(alarmInfo, buffer, 0, (int)bufferLength);
+
+    // ❌ 绝对不要把 alarmInfo 这个 IntPtr 存起来稍后再用
+}
+```
+
+### 铁律四：回调在非托管线程上，要立刻脱手
+
+回调是设备 SDK 自己的线程调过来的，不是线程池线程。在里面做耗时操作（写库、调 HTTP）会**阻塞 SDK 的内部线程**，后果是丢事件甚至 SDK 内部队列溢出。同时也不能直接碰 UI 控件。
+
+正确做法：**拷贝数据、丢进队列、立即返回**，剩下的交给消费者：
+
+```csharp
+public sealed class AlarmReceiver
+{
+    private readonly AlarmCallback _callback;
+    private readonly ChannelWriter<AlarmEvent> _writer;
+
+    private void OnAlarm(int command, IntPtr alarmer,
+                         IntPtr alarmInfo, uint bufferLength, IntPtr user)
+    {
+        try
+        {
+            // 只做两件事：拷贝 + 入队，全程无 IO、无锁等待
+            var info = Marshal.PtrToStructure<NET_DVR_ALARMINFO>(alarmInfo);
+
+            var evt = new AlarmEvent(
+                Command: command,
+                DeviceIp: SdkEncoding.ReadString(info.sDeviceIp),
+                Timestamp: DateTimeOffset.Now);
+
+            if (!_writer.TryWrite(evt))
+            {
+                // 队列满了要记日志，这是重要的告警信号
+                _logger.LogWarning("报警队列已满，丢弃事件 {Command}", command);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "报警回调异常");
+        }
+    }
+}
+```
+
+消费端用一个 `BackgroundService` 从 `Channel` 里取事件慢慢处理，这样 SDK 线程永远不会被业务拖慢。
+
+## 第七关：句柄与内存生命周期
+
+### SDK 的初始化和清理必须成对
+
+```csharp
+public sealed class HikSdk : IDisposable
+{
+    private static readonly object InitLock = new();
+    private static bool _initialized;
+
+    public HikSdk()
+    {
+        // SDK 的 Init/Cleanup 通常是全进程唯一的，且不保证线程安全
+        lock (InitLock)
+        {
+            if (!_initialized)
+            {
+                if (NativeMethods.NET_DVR_Init() == 0)
+                    throw new SdkException("SDK 初始化失败", NativeMethods.NET_DVR_GetLastError());
+
+                _initialized = true;
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (InitLock)
+        {
+            if (_initialized)
+            {
+                NativeMethods.NET_DVR_Cleanup();
+                _initialized = false;
+            }
+        }
+    }
+}
+```
+
+:::warning Cleanup 的调用时机
+很多 SDK 要求：**所有连接必须先注销，最后才能调用 `Cleanup`**，顺序反了会崩在 SDK 内部。
+
+而且 `Cleanup` 一般是全进程级的，多个设备管理器实例各自调用会互相踢掉。用单例 + 引用计数管理，别让每个设备对象都去 Init/Cleanup。
+:::
+
+### 用 SafeHandle 管理登录句柄
+
+登录返回的用户 ID 必须在退出时注销，否则设备侧会积累无效会话（有些设备有连接数上限，泄漏几次就登不上了）。用 `SafeHandle` 交给 CLR 管理生命周期：
+
+```csharp
+using Microsoft.Win32.SafeHandles;
+
+// 注意基类选择：海康登录成功返回的 userId 从 0 开始，0 是合法值，
+// 失败才返回 -1。所以要用 SafeHandleMinusOneIsInvalid，
+// 用 SafeHandleZeroOrMinusOneIsInvalid 会把第一个会话误判成无效。
+public sealed class DeviceSession : SafeHandleMinusOneIsInvalid
+{
+    private DeviceSession(int userId) : base(ownsHandle: true)
+    {
+        SetHandle(new IntPtr(userId));
+    }
+
+    public int UserId => handle.ToInt32();
+
+    public static DeviceSession Login(string ip, ushort port, string user, string pwd)
+    {
+        var loginInfo = CreateLoginInfo(ip, port, user, pwd);
+        var deviceInfo = new NET_DVR_DEVICEINFO_V40();
+
+        int userId = NativeMethods.NET_DVR_Login_V40(ref loginInfo, ref deviceInfo);
+
+        if (userId < 0)
+            throw new SdkException("登录失败", NativeMethods.NET_DVR_GetLastError());
+
+        return new DeviceSession(userId);
+    }
+
+    protected override bool ReleaseHandle()
+        => NativeMethods.NET_DVR_Logout(handle.ToInt32()) != 0;
+}
+```
+
+```csharp
+// using 保证异常路径下也会注销
+using var session = DeviceSession.Login("192.168.1.64", 8000, "admin", "pwd");
+CaptureJpeg(session.UserId, channel: 1);
+```
+
+### 手动分配的内存要在 finally 里释放
+
+需要给 SDK 传输出缓冲区时：
+
+```csharp
+public static byte[] CaptureJpeg(int userId, int channel, int bufferSize = 512 * 1024)
+{
+    IntPtr buffer = Marshal.AllocHGlobal(bufferSize);
+    try
+    {
+        uint written = 0;
+        var param = new NET_DVR_JPEGPARA { wPicSize = 0xFF, wPicQuality = 0 };
+
+        if (NativeMethods.NET_DVR_CaptureJPEGPicture_NEW(
+                userId, channel, ref param, buffer, (uint)bufferSize, ref written) == 0)
+        {
+            throw new SdkException("抓图失败", NativeMethods.NET_DVR_GetLastError());
+        }
+
+        var result = new byte[written];
+        Marshal.Copy(buffer, result, 0, (int)written);
+        return result;
+    }
+    finally
+    {
+        Marshal.FreeHGlobal(buffer);   // 异常路径也要释放
+    }
+}
+```
+
+## 分层封装：让业务代码看不见 P/Invoke
+
+上面所有代码都不该出现在业务层。三层结构：
+
+```text
+领域接口层    ICamera / IAccessController
+                （业务只认这一层，可替换、可 Mock）
+                        ↑
+安全包装层    HikCamera：SafeHandle、异常、GBK 转换、Channel 事件
+                        ↑
+原生声明层    NativeMethods：DllImport、结构体、委托
+                （internal，业务代码永远不引用）
+```
+
+领域接口保持干净，完全不暴露 SDK 概念：
+
+```csharp
+public interface ICamera : IAsyncDisposable
+{
+    string DeviceId { get; }
+    bool IsConnected { get; }
+
+    Task ConnectAsync(CancellationToken ct);
+
+    /// <summary>抓一张图，返回 JPEG 字节。</summary>
+    Task<byte[]> CaptureAsync(int channel, CancellationToken ct);
+
+    /// <summary>设备事件流（移动侦测、IO 报警等）。</summary>
+    IAsyncEnumerable<CameraEvent> ReadEventsAsync(CancellationToken ct);
+}
+```
+
+错误码统一转成异常，别让业务层去判断 `== 0`：
+
+```csharp
+public sealed class SdkException : Exception
+{
+    public uint ErrorCode { get; }
+
+    public SdkException(string message, uint errorCode)
+        : base($"{message}（错误码 {errorCode}: {DescribeError(errorCode)}）")
+        => ErrorCode = errorCode;
+
+    // 把文档里的错误码表抄进来，排查时能省大量时间
+    private static string DescribeError(uint code) => code switch
+    {
+        1 => "用户名密码错误",
+        3 => "SDK 未初始化",
+        7 => "网络连接失败，设备不在线或网络不通",
+        29 => "设备不支持此操作",
+        _ => "未知错误，请查阅 SDK 文档",
+    };
+}
+```
+
+这样分层的收益很直接：换品牌只加一个 `DahuaCamera` 实现；单元测试注入 `FakeCamera`；上面几百行 `Marshal` 代码被彻底隔离在一个文件里。
+
+:::tip 优先看看有没有 HTTP 接口
+在动手写 P/Invoke 之前，先花十分钟确认设备是否支持 HTTP 接口。海康的 **ISAPI** 覆盖了抓图、配置、门禁人员下发等大量功能，大华也有类似接口。
+
+一个 `GET /ISAPI/Streaming/channels/101/picture` 就能拿到 JPEG，比上面几十行 `Marshal.AllocHGlobal` 省事得多，还没有位数和依赖问题。
+
+**只在 HTTP 接口做不到时才用 SDK**：实时取流、云台精细控制、报警主动上传、录像回放。这个判断能省掉你一半的工作量。
+:::
+
+## 调试与排障
+
+原生崩溃的调试体验很差，所以要靠"提前设防"而不是"事后调试"：
+
+**1. 启动自检**：把所有结构体的 `Marshal.SizeOf` 断言集中在一个自检方法里，启动时跑一遍。结构体声明错误在这里就会暴露。
+
+**2. 开启本机代码调试**：VS 项目属性 → 调试 → 勾选"启用本机代码调试"。这样崩在 SDK 内部时至少能看到原生调用栈。
+
+**3. 每个原生调用都记日志**：入参、返回值、错误码。原生崩溃通常没有可用堆栈，日志里的"最后一次成功调用"就是你唯一的线索。
+
+**4. 先跑通厂商 Demo**：拿到 SDK 先用厂商自带的 C++ 或 C# Demo 连一次设备。**如果 Demo 也连不上，那是设备、网络或权限问题，不是你的代码问题。** 这一步能避免大量无效排查。
+
+**5. 对照 `pinvoke.net`**：Win32 API 的声明可以直接查现成的，不用自己翻 MSDN 猜类型。
+
+:::details 常见问题速查 | 点开看 P/Invoke 的高频坑
+**`BadImageFormatException`**
+32/64 位不匹配。用 `dumpbin /headers` 确认 DLL 位数，把 `PlatformTarget` 改成对应值。
+
+**`DllNotFoundException` 但文件明明在**
+依赖项缺失。用 Dependencies 工具查，常见是 VC++ 运行库没装，或 SDK 子目录被打平了。
+
+**调用能成功但数据全是乱的**
+结构体字段声明错了。用 `Marshal.SizeOf` 和 C++ 的 `sizeof` 对比，八成对不上。
+
+**结构体大小差几个字节**
+对齐问题。看头文件有没有 `#pragma pack`，对应设置 `Pack`。
+
+**固定数组后面的字段全错**
+`ByValArray` 忘了写 `SizeConst`，数组被当成指针封送了。
+
+**函数返回参数错误但参数看着都对**
+`dwSize` 字段没填。很多 SDK 靠它判断结构体版本。
+
+**中文变成问号或方块**
+GBK 编码问题。用 `byte[]` + 显式 GBK，不要用 `CharSet.Ansi` + `string`。
+
+**运行几小时后进程无声无息地死掉**
+回调委托被 GC 回收了。用字段持有或 `GCHandle.Alloc`。这是最典型的症状。
+
+**回调触发几次后崩溃，堆栈指向 SDK 内部**
+同上，或者回调里抛了异常穿越到原生栈。回调体必须全包 try/catch。
+
+**回调里拿到的数据有时正常有时错乱**
+`IntPtr` 存起来延后使用了。必须在回调内立即 `Marshal.Copy` / `PtrToStructure`。
+
+**事件偶发丢失**
+回调里做了耗时操作，阻塞了 SDK 内部线程。改成拷贝 + 入队立即返回。
+
+**跑一段时间后登录失败**
+会话泄漏，没注销就退出。用 `SafeHandle` 或确保 `Logout` 在 `finally` 里。
+
+**退出时崩在 SDK 内部**
+`Cleanup` 调用时还有未注销的连接。先注销所有连接，最后 `Cleanup`。
+:::
+
+## 小结
+
+P/Invoke 对接厂商 SDK 的难点是集中的，掌握这七关基本就通了：
+
+1. **位数必须匹配**，且一个进程里所有 SDK 位数必须一致，否则只能拆进程
+2. **`DllNotFoundException` 多数是依赖缺失**，不是文件不存在
+3. **结构体用 `Marshal.SizeOf` 验证**，这是性价比最高的排查手段
+4. **中文全程走 `byte[]` + 显式 GBK**，别依赖系统代码页
+5. **回调委托必须字段持有**，这是最隐蔽也最致命的一个坑
+6. **回调里只做拷贝和入队**，异常全包、指针立即拷贝、绝不阻塞
+7. **分三层封装**，让业务代码完全看不见 `Marshal`
+
+下一篇 [地磅称重对接](/posts/iot/weighbridge-integration) 进入实战：把串口拆帧、判稳算法和过磅状态机落到一套完整的称重流程里。

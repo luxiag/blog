@@ -1,0 +1,720 @@
+---
+title: '私有 TCP 协议与二进制解析：把厂商文档翻译成代码'
+date: '2026-07-31'
+excerpt: '厂商只给一份通信协议文档时怎么做：帧结构建模、Span 二进制解析、BCD 与定点小数、CRC 校验、请求应答关联与超时、心跳保活、断线重连、以及设备反向连接的服务端实现。'
+tags: ['iot', 'dotnet', 'tcp', 'socket', 'pipelines', 'crc']
+nextPost: 'iot/modbus-protocol'
+---
+
+# 私有 TCP 协议与二进制解析：把厂商文档翻译成代码
+
+大量国产硬件不提供 SDK，只给你一份《XX 设备通信协议 V1.2.pdf》。文档里有一张帧结构表、一段 CRC 说明、几个功能码定义，剩下的全靠你自己实现。
+
+这一篇讲的就是这个过程：**怎么把一份协议文档系统地翻译成可维护的代码**，以及围绕长连接必须处理的四件事——请求应答关联、心跳保活、断线重连、设备反向连接。
+
+:::tip 系列阅读顺序
+本文是 [.NET 对接工业设备路线图](/posts/iot/industrial-device-roadmap) 的第二篇。上一篇 [串口通信与设备协议拆帧](/posts/iot/serial-port-communication) 建立的拆帧模型和 `IDeviceChannel` 抽象在本文会直接复用，建议先读。
+:::
+
+## TCP 和串口的相同与不同
+
+**相同的部分是最重要的部分**：TCP 也是字节流，也没有消息边界，**拆帧逻辑完全可以复用**。所谓"TCP 粘包问题"从来不是 TCP 的 bug，而是把字节流当消息流用的认知错误。上一篇的三种拆帧器在这里一行都不用改。
+
+不同的部分是 TCP 多出来的三个麻烦：
+
+| 问题 | 表现 | 应对 |
+|---|---|---|
+| **半开连接** | 对端断电/拔网线，你的 socket 仍显示已连接，读操作一直不返回 | 应用层心跳 + 读超时 |
+| **Nagle 延迟** | 小帧发出去，对端 40ms 后才收到 | `NoDelay = true` |
+| **连接状态管理** | 需要处理连接、断开、重连，串口只需处理开关 | 重连退避 + 状态通知 |
+
+半开连接是这三个里最坑的。**`Socket.Connected` 属性完全不可信**——它只反映最后一次 IO 操作的结果，不代表对端还活着。判断连接是否有效的唯一可靠方式是"最近是否成功收发过数据"。
+
+## 第一步：把文档翻译成帧结构
+
+拿到协议文档，先做的不是写代码，而是把帧结构画成表。典型的私有协议长这样：
+
+```text
++------+------+--------+--------+------+--------+------+
+| 帧头 | 长度 | 设备号 | 功能码 | 序号 | 数据   | 校验 |
+| 0x68 | 2字节| 6字节  | 1字节  | 2字节| N字节  |CRC16 |
++------+------+--------+--------+------+--------+------+
+   0      1-2    3-8       9      10-11  12...    尾2字节
+```
+
+翻译文档时必须逐项确认这七件事，任何一项猜错都会浪费你半天：
+
+| 要确认的 | 常见坑 |
+|---|---|
+| **长度字段的计量范围** | 是整帧长度？还是只算数据段？含不含校验？ |
+| **字节序** | 大端（网络序）还是小端。国产协议两种都有，甚至同一份协议里混用 |
+| **数值编码** | 纯二进制、BCD 码、还是 ASCII 数字字符串 |
+| **小数处理** | 通常是定点：传 `1235` 表示 `123.5`，放大倍数看文档 |
+| **校验范围** | 从哪个字节算到哪个字节，含不含帧头 |
+| **校验算法** | CRC16 有十几种变体，参数不同结果完全不同 |
+| **转义规则** | 数据里出现帧头字节 `0x68` 时是否要转义 |
+
+:::warning 文档和实际行为不一致是常态
+这类项目里最耗时的部分就是这个。手册说大端，实测是小端；手册说 CRC 从第 1 字节算，实测从第 0 字节算。
+
+**唯一的解法是拿一帧真实报文做逆向验证**：让设备发一帧，把原始字节打出来，手工按文档算一遍校验，对不上就换假设试。所以原始报文落盘不是"锦上添花"，是这类项目的开发前提。
+:::
+
+## 第二步：二进制读写
+
+手写 `buffer[3] << 8 | buffer[4]` 这种代码可读性极差，而且偏移量一旦有变动就要全改。建议封装一个游标式读取器：
+
+```csharp
+using System.Buffers.Binary;
+
+/// <summary>顺序读取二进制帧的游标。ref struct 保证不会逃逸到堆上。</summary>
+public ref struct SpanReader
+{
+    private readonly ReadOnlySpan<byte> _span;
+    private int _position;
+
+    public SpanReader(ReadOnlySpan<byte> span)
+    {
+        _span = span;
+        _position = 0;
+    }
+
+    public int Position => _position;
+    public int Remaining => _span.Length - _position;
+
+    public byte ReadByte() => _span[_position++];
+
+    public ushort ReadUInt16BigEndian()
+    {
+        var value = BinaryPrimitives.ReadUInt16BigEndian(_span[_position..]);
+        _position += 2;
+        return value;
+    }
+
+    public ushort ReadUInt16LittleEndian()
+    {
+        var value = BinaryPrimitives.ReadUInt16LittleEndian(_span[_position..]);
+        _position += 2;
+        return value;
+    }
+
+    public uint ReadUInt32BigEndian()
+    {
+        var value = BinaryPrimitives.ReadUInt32BigEndian(_span[_position..]);
+        _position += 4;
+        return value;
+    }
+
+    public ReadOnlySpan<byte> ReadBytes(int count)
+    {
+        var slice = _span.Slice(_position, count);
+        _position += count;
+        return slice;
+    }
+
+    public void Skip(int count) => _position += count;
+}
+```
+
+有了它，解析代码就能和文档表格一一对应，读起来像在读协议：
+
+```csharp
+public readonly record struct DeviceFrame(
+    string DeviceNo,
+    byte FunctionCode,
+    ushort Sequence,
+    byte[] Payload);
+
+public static DeviceFrame ParseFrame(ReadOnlySpan<byte> frame)
+{
+    var reader = new SpanReader(frame);
+
+    reader.Skip(1);                                  // 帧头 0x68
+    ushort length = reader.ReadUInt16BigEndian();    // 长度
+    string deviceNo = ParseBcd(reader.ReadBytes(6)); // 设备号，BCD 码
+    byte function = reader.ReadByte();               // 功能码
+    ushort sequence = reader.ReadUInt16BigEndian();  // 序号
+
+    int payloadLength = length - 9;                  // 长度含设备号+功能码+序号
+    byte[] payload = reader.ReadBytes(payloadLength).ToArray();
+
+    return new DeviceFrame(deviceNo, function, sequence, payload);
+}
+```
+
+### BCD 码
+
+工业协议里表号、日期、金额大量用 BCD：一个字节的高 4 位和低 4 位各表示一个十进制数字。字节 `0x23` 表示十进制 `23`，而不是 `35`。
+
+```csharp
+/// <summary>BCD 字节数组转数字字符串。0x12 0x34 -> "1234"</summary>
+public static string ParseBcd(ReadOnlySpan<byte> bcd)
+{
+    var chars = new char[bcd.Length * 2];
+
+    for (int i = 0; i < bcd.Length; i++)
+    {
+        chars[i * 2] = (char)('0' + (bcd[i] >> 4));      // 高 4 位
+        chars[i * 2 + 1] = (char)('0' + (bcd[i] & 0x0F)); // 低 4 位
+    }
+
+    return new string(chars);
+}
+
+/// <summary>数字字符串转 BCD。"1234" -> 0x12 0x34</summary>
+public static byte[] ToBcd(string digits)
+{
+    if (digits.Length % 2 != 0) digits = "0" + digits;   // 补齐偶数位
+
+    var result = new byte[digits.Length / 2];
+    for (int i = 0; i < result.Length; i++)
+    {
+        result[i] = (byte)(((digits[i * 2] - '0') << 4) | (digits[i * 2 + 1] - '0'));
+    }
+    return result;
+}
+```
+
+BCD 时间戳（`YYMMDDHHmmss`，6 字节）也很常见：
+
+```csharp
+public static DateTime ParseBcdTimestamp(ReadOnlySpan<byte> bcd)
+{
+    var s = ParseBcd(bcd);   // "260731143025"
+
+    return new DateTime(
+        2000 + int.Parse(s[..2]),      // 年（协议通常只给两位）
+        int.Parse(s[2..4]),            // 月
+        int.Parse(s[4..6]),            // 日
+        int.Parse(s[6..8]),            // 时
+        int.Parse(s[8..10]),           // 分
+        int.Parse(s[10..12]));         // 秒
+}
+```
+
+### 定点小数
+
+协议里几乎不会传浮点数，都是"放大整数倍"。文档会写"重量，单位 0.1kg"：
+
+```csharp
+// 收到 0x0000_04D3 = 1235，实际是 123.5 kg
+uint raw = reader.ReadUInt32BigEndian();
+decimal weight = raw / 10m;     // 用 decimal，不要用 double
+
+// 温度这类可能为负的，要先转成有符号
+short rawTemp = unchecked((short)reader.ReadUInt16BigEndian());
+decimal temperature = rawTemp / 10m;   // -25.3 ℃
+```
+
+**用 `decimal` 而不是 `double`。** 涉及重量、金额、电量的场景，二进制浮点的精度误差会累积成对账差异。
+
+### 位域标志
+
+状态字节常把多个开关压在一个字节里。文档会给位定义表：
+
+```csharp
+[Flags]
+public enum DeviceStatus : byte
+{
+    None        = 0,
+    Running     = 1 << 0,   // bit0 运行中
+    Fault       = 1 << 1,   // bit1 故障
+    DoorOpen    = 1 << 2,   // bit2 门开
+    OverWeight  = 1 << 3,   // bit3 超载
+    Calibrating = 1 << 4,   // bit4 标定模式
+}
+
+var status = (DeviceStatus)reader.ReadByte();
+
+if (status.HasFlag(DeviceStatus.Fault))
+{
+    _logger.LogWarning("设备故障，状态字 {Status}", status);
+}
+```
+
+用 `[Flags]` 枚举而不是一堆 `bool` 字段，日志输出会自动展开成 `Running, DoorOpen` 这样的可读形式，排查时很省事。
+
+## 第三步：校验算法
+
+文档里写"CRC16"是不够的，CRC16 有十几种变体。**必须确认初值、多项式、是否反转、输出是否异或**。三种最常见的：
+
+```csharp
+/// <summary>CRC-16/MODBUS：初值 0xFFFF，多项式 0x8005 反转为 0xA001</summary>
+public static ushort Crc16Modbus(ReadOnlySpan<byte> data)
+{
+    ushort crc = 0xFFFF;
+    foreach (byte b in data)
+    {
+        crc ^= b;
+        for (int i = 0; i < 8; i++)
+            crc = (crc & 1) != 0 ? (ushort)((crc >> 1) ^ 0xA001) : (ushort)(crc >> 1);
+    }
+    return crc;
+}
+
+/// <summary>CRC-16/CCITT-FALSE：初值 0xFFFF，多项式 0x1021，不反转</summary>
+public static ushort Crc16CcittFalse(ReadOnlySpan<byte> data)
+{
+    ushort crc = 0xFFFF;
+    foreach (byte b in data)
+    {
+        crc ^= (ushort)(b << 8);
+        for (int i = 0; i < 8; i++)
+            crc = (crc & 0x8000) != 0 ? (ushort)((crc << 1) ^ 0x1021) : (ushort)(crc << 1);
+    }
+    return crc;
+}
+
+/// <summary>累加和校验：国产协议里非常常见，取低 8 位</summary>
+public static byte CheckSum(ReadOnlySpan<byte> data)
+{
+    byte sum = 0;
+    foreach (byte b in data) sum += b;   // byte 加法自然溢出截断，就是取低 8 位
+    return sum;
+}
+```
+
+:::tip 校验算不对时的排查顺序
+拿一帧文档里的示例报文（好的文档都会给），按这个顺序试：
+
+1. **换算法**：Modbus / CCITT-FALSE / CCITT-TRUE / XMODEM 都试一遍
+2. **换范围**：含帧头 / 不含帧头 / 从长度字段开始 / 到数据段结束
+3. **换端序**：校验值本身在帧里可能是大端也可能是小端
+4. **实在不行**用在线 CRC 计算器逐个参数组合比对
+
+这四步能覆盖 95% 的情况。别在这里死磕逻辑，它就是个试参数的过程。
+:::
+
+## 第四步：请求应答关联
+
+这是私有 TCP 协议比串口多出来的核心复杂度。你调用 `SendAsync` 想拿到设备的回复，但 TCP 上收到的帧是异步到达的，你得把"回来的帧"和"发出的请求"对上。
+
+### 情况一：设备是严格半双工的
+
+大量老设备一次只能处理一个请求，必须一问一答。这种情况**用信号量把请求串行化**，最简单也最可靠：
+
+```csharp
+private readonly SemaphoreSlim _lock = new(1, 1);
+
+public async Task<DeviceFrame> RequestAsync(
+    byte[] request, TimeSpan timeout, CancellationToken ct)
+{
+    // 同一时刻只允许一个请求在飞
+    await _lock.WaitAsync(ct);
+    try
+    {
+        // 清掉上一轮可能残留的帧，避免拿到过期响应
+        while (_pendingFrames.Reader.TryRead(out _)) { }
+
+        await _channel.WriteAsync(request, ct);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+
+        return await _pendingFrames.Reader.ReadAsync(cts.Token);
+    }
+    finally
+    {
+        _lock.Release();
+    }
+}
+```
+
+**串行化不是性能妥协，是协议要求。** 对半双工设备并发发请求，只会导致响应错配——你会拿到别人的数据，而且不报错。这类 bug 极难发现。
+
+### 情况二：协议带序号，支持并发
+
+如果帧里有序号（Sequence/MessageId）字段，就能并发。用 `TaskCompletionSource` 做等待表：
+
+```csharp
+using System.Collections.Concurrent;
+
+public sealed class DeviceClient
+{
+    private readonly ConcurrentDictionary<ushort, TaskCompletionSource<DeviceFrame>> _pending = new();
+
+    public async Task<DeviceFrame> RequestAsync(
+        byte functionCode, byte[] payload, TimeSpan timeout, CancellationToken ct)
+    {
+        ushort seq = NextSequence();
+
+        // RunContinuationsAsynchronously 很关键：
+        // 否则 SetResult 会在读取循环的线程上同步执行调用方的后续代码，
+        // 业务代码里一个耗时操作就会卡住整个接收循环
+        var tcs = new TaskCompletionSource<DeviceFrame>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        if (!_pending.TryAdd(seq, tcs))
+            throw new InvalidOperationException($"序号 {seq} 冲突，可能有请求泄漏");
+
+        try
+        {
+            await _channel.WriteAsync(BuildFrame(seq, functionCode, payload), ct);
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeout);
+
+            // 等待响应，超时或取消都会抛 OperationCanceledException
+            return await tcs.Task.WaitAsync(cts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException($"设备响应超时，功能码 0x{functionCode:X2}，序号 {seq}");
+        }
+        finally
+        {
+            // 无论成功失败都要摘掉，否则字典会一直涨
+            _pending.TryRemove(seq, out _);
+        }
+    }
+
+    /// <summary>读取循环里收到完整帧后调用。</summary>
+    private void OnFrameReceived(DeviceFrame frame)
+    {
+        if (_pending.TryRemove(frame.Sequence, out var tcs))
+        {
+            tcs.TrySetResult(frame);      // 是某个请求的响应
+        }
+        else
+        {
+            // 没有对应请求：设备主动上报（刷卡、告警、状态变化）
+            _uplinkWriter.TryWrite(frame);
+        }
+    }
+
+    // 用 int 做计数器再截断成 ushort，Interlocked 不支持 ushort
+    private int _sequenceCounter;
+
+    private ushort NextSequence()
+        => (ushort)(Interlocked.Increment(ref _sequenceCounter) & 0xFFFF);
+}
+```
+
+两个容易漏的细节：
+
+- **`finally` 里必须移除等待项**，否则超时的请求会永久留在字典里，运行几天就是内存泄漏
+- **没匹配上的帧不能丢弃**，它们是设备主动上报，往往是最重要的业务事件（刷卡、告警、过磅完成）
+
+## 第五步：心跳与保活
+
+前面说过半开连接：对端断电时你的读操作会一直挂着，`Connected` 还是 `true`。不处理的话，现场表现就是"设备明明断了，系统显示在线，数据却再也不来了"。
+
+**两层保活，都要做。**
+
+### 应用层心跳（必须有）
+
+按协议定义的心跳帧定期发，并要求收到响应：
+
+```csharp
+private async Task HeartbeatLoopAsync(CancellationToken ct)
+{
+    // PeriodicTimer 不会因为处理耗时而漂移堆积，比 Task.Delay 循环更合适
+    using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+
+    while (await timer.WaitForNextTickAsync(ct))
+    {
+        try
+        {
+            await RequestAsync(FunctionCodes.Heartbeat, [], TimeSpan.FromSeconds(5), ct);
+            _missedHeartbeats = 0;
+        }
+        catch (Exception ex) when (ex is TimeoutException or IOException or SocketException)
+        {
+            _missedHeartbeats++;
+            _logger.LogWarning("心跳失败 {Count} 次", _missedHeartbeats);
+
+            // 连续失败判定连接已死，主动断开触发重连
+            if (_missedHeartbeats >= 3)
+            {
+                _logger.LogError("心跳连续失败，主动断开连接");
+                await DisconnectAsync();
+                return;
+            }
+        }
+    }
+}
+```
+
+**连续 N 次失败才判死，不要一次失败就断。** 现场网络抖动很常见，一次超时就重连会导致连接反复抖动，反而更糟。
+
+### TCP KeepAlive（补充）
+
+操作系统层面的探测，能兜住一部分应用层没覆盖的场景。.NET Core 3.0 之后可以直接设置参数：
+
+```csharp
+var socket = client.Client;
+
+socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+
+// 空闲 30 秒后开始探测
+socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 30);
+// 每次探测间隔 5 秒
+socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 5);
+// 失败 3 次判定断开
+socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 3);
+```
+
+:::note 为什么不能只靠 TCP KeepAlive
+它只能确认"TCP 链路通"，不能确认"设备的应用程序还活着"。设备程序卡死但系统还在响应网络的情况在嵌入式设备上并不少见——TCP KeepAlive 一切正常，业务实际已经停了。
+
+**应用层心跳验证的是业务可用性，这是它不可替代的原因。**
+
+另外现场防火墙、NAT 网关经常会掐掉长时间无数据的连接，应用层心跳同时也在维持这条通路。
+:::
+
+## 第六步：断线重连
+
+现场一定会断，重连策略要考虑三点：**退避、抖动、清场**。
+
+```csharp
+public sealed class ResilientDeviceClient : BackgroundService
+{
+    private static readonly TimeSpan[] BackoffSteps =
+    [
+        TimeSpan.FromSeconds(1),
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(5),
+        TimeSpan.FromSeconds(10),
+        TimeSpan.FromSeconds(30),
+    ];
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        int attempt = 0;
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await _channel.ConnectAsync(stoppingToken);
+
+                attempt = 0;                       // 连上了就重置退避
+                _logger.LogInformation("设备已连接");
+                OnConnectionStateChanged(true);
+
+                // 读取循环和心跳循环并行跑，任意一个结束就说明连接出问题了
+                using var linked = CancellationTokenSource
+                    .CreateLinkedTokenSource(stoppingToken);
+
+                var readTask = ReadLoopAsync(linked.Token);
+                var heartbeatTask = HeartbeatLoopAsync(linked.Token);
+
+                await Task.WhenAny(readTask, heartbeatTask);
+                await linked.CancelAsync();        // 让另一个也退出
+
+                // 必须观察两个 Task 的异常，否则会变成未观察异常
+                try { await Task.WhenAll(readTask, heartbeatTask); }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "读取或心跳循环退出");
+                }
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "设备连接异常");
+            }
+
+            // 清场：断开时必须让所有等待中的请求立即失败，
+            // 否则它们可能被新连接上的响应错误匹配
+            FailAllPending(new IOException("连接已断开"));
+            OnConnectionStateChanged(false);
+            await _channel.DisposeAsync();
+
+            var delay = BackoffSteps[Math.Min(attempt, BackoffSteps.Length - 1)];
+            attempt++;
+
+            // 加随机抖动：多台设备同时掉线时避免同一秒集体重连打爆网络
+            delay += TimeSpan.FromMilliseconds(Random.Shared.Next(0, 1000));
+
+            _logger.LogInformation("{Delay} 后重连（第 {Attempt} 次）", delay, attempt);
+
+            try { await Task.Delay(delay, stoppingToken); }
+            catch (OperationCanceledException) { break; }
+        }
+    }
+
+    private void FailAllPending(Exception error)
+    {
+        foreach (var (seq, tcs) in _pending)
+        {
+            if (_pending.TryRemove(seq, out _))
+                tcs.TrySetException(error);
+        }
+    }
+}
+```
+
+**"清场"这一步最容易漏。** 不清的话，断线时挂着的请求会等到超时才失败；更糟的是如果序号在新连接上被复用，一个新响应可能会去唤醒旧连接的等待者，数据就错到了别的业务上。
+
+## 反向连接：设备主动连你
+
+很多设备的工作模式是**设备作为客户端主动连服务端**（尤其是设备在 NAT 后面、IP 不固定时）。这时你要写的是 `TcpListener`：
+
+```csharp
+public sealed class DeviceServer : BackgroundService
+{
+    private readonly ConcurrentDictionary<string, DeviceConnection> _connections = new();
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var listener = new TcpListener(IPAddress.Any, 4001);
+        listener.Start();
+        _logger.LogInformation("设备接入服务已启动，监听 4001");
+
+        try
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                var client = await listener.AcceptTcpClientAsync(stoppingToken);
+                client.NoDelay = true;
+
+                // 每个连接独立处理，不要 await，否则会阻塞后续接入
+                _ = HandleClientAsync(client, stoppingToken);
+            }
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    private async Task HandleClientAsync(TcpClient client, CancellationToken ct)
+    {
+        var remote = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+        string? deviceNo = null;
+
+        try
+        {
+            using (client)
+            {
+                var stream = client.GetStream();
+
+                // 关键：连接建立后必须先完成设备注册，拿到设备号
+                // 在此之前不要接受任何业务指令
+                deviceNo = await AuthenticateAsync(stream, ct);
+
+                var connection = new DeviceConnection(deviceNo, client);
+
+                // 同一设备重连时踢掉旧连接（设备异常重启很常见）
+                if (_connections.TryRemove(deviceNo, out var old))
+                {
+                    _logger.LogWarning("设备 {DeviceNo} 重复连接，断开旧连接", deviceNo);
+                    await old.DisposeAsync();
+                }
+
+                _connections[deviceNo] = connection;
+                _logger.LogInformation("设备 {DeviceNo} 已接入，来自 {Remote}", deviceNo, remote);
+
+                await connection.RunAsync(ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "设备连接处理结束 {Remote}", remote);
+        }
+        finally
+        {
+            if (deviceNo is not null)
+            {
+                _connections.TryRemove(deviceNo, out _);
+                _logger.LogInformation("设备 {DeviceNo} 已断开", deviceNo);
+            }
+        }
+    }
+
+    /// <summary>按设备号下发指令。业务层只认设备号，不关心连接细节。</summary>
+    public async Task<DeviceFrame> SendToDeviceAsync(
+        string deviceNo, byte functionCode, byte[] payload, CancellationToken ct)
+    {
+        if (!_connections.TryGetValue(deviceNo, out var connection))
+            throw new DeviceOfflineException(deviceNo);
+
+        return await connection.RequestAsync(functionCode, payload, TimeSpan.FromSeconds(10), ct);
+    }
+}
+```
+
+反向连接模式下的几个必答问题：
+
+- **鉴权**：不能任何人连上来都当合法设备。至少要校验设备号在册，理想情况是共享密钥挑战应答
+- **重复连接**：设备异常重启后旧连接可能还没超时，必须踢旧留新
+- **僵尸连接清理**：定时扫描最后活跃时间，超过阈值主动断开
+- **离线下发**：设备不在线时的指令要排队还是直接失败，这是业务决策，要明确
+- **连接数上限**：加个上限，防止异常情况下连接数打爆内存
+
+:::warning 监听端口的安全边界
+设备接入端口一旦暴露到公网，任何人都能连上来发帧。**私有协议通常没有加密和鉴权设计**，等于把设备控制权敞开。
+
+务必只监听内网网卡、用防火墙限制来源 IP，或者在外层套 VPN。如果确实需要公网接入，至少要做设备鉴权 + TLS，不要指望私有协议本身的"隐晦性"提供任何安全保障。
+:::
+
+## 调试手段
+
+这类协议调试有三件套，缺一件效率就差一个数量级：
+
+**1. 抓包（Wireshark）**
+
+判断"是我没收到还是设备没发"的唯一手段。过滤器 `tcp.port == 4001`，右键 Follow TCP Stream 能看到完整字节流。这一步能直接排除掉一半的"设备不响应"问题——很多时候设备发了，是你的拆帧丢了。
+
+**2. 双向模拟器**
+
+用上一篇的思路写一个模拟设备：能按协议应答、能主动上报、**能故意作恶**（发半帧、发错校验、发完不响应、突然断开）。协议实现的健壮性只能靠这个验证。
+
+**3. 原始报文落盘**
+
+按天滚动，Hex 和 ASCII 双份，收发都记，带时间戳。这不只是调试用——现场纠纷时它是你唯一的证据。
+
+```csharp
+// 在通道层统一记录，业务层不用关心
+_logger.LogTrace("TX {Time:HH:mm:ss.fff} {Hex}",
+    DateTime.Now, Convert.ToHexString(data.Span));
+```
+
+:::details 常见问题速查 | 点开看私有 TCP 协议的高频坑
+**收到的数据比发的少 / 多**
+拆帧没做对。TCP 不保证一次 `Read` 对应一次 `Write`。回到上一篇的拆帧器。
+
+**小帧发出去对端 40ms 后才收到**
+Nagle 算法 + 延迟 ACK。设 `client.NoDelay = true`，两端都要设。
+
+**`SocketException: 10054` 远程主机强迫关闭了一个现有的连接**
+对端进程崩了或强制断开。这是正常现象，重连逻辑要能处理，不要当成致命错误。
+
+**`SocketException: 10061` 目标计算机积极拒绝**
+对端端口没监听。查设备 IP、端口、以及设备是不是要求先注册。
+
+**`Socket.Connected` 是 true 但收不到数据**
+半开连接。这个属性不可信，靠应用层心跳判断。
+
+**解析出来的数值大得离谱或是负数**
+字节序搞反了。`0x0102` 大端是 258，小端是 513。先拿已知值验证端序。
+
+**校验总是不通过**
+按前面的四步排查：换算法、换范围、换端序、用在线工具比对参数。
+
+**运行几天后内存持续增长**
+等待表（`_pending`）没清理，或拆帧缓冲区遇到脏数据无限增长。两处都要有上限保护。
+
+**多设备场景下偶发数据串到别的设备**
+序号复用 + 断线没清场。断开时必须让所有等待中的请求立即失败。
+
+**设备重启后就再也连不上**
+旧连接没清理，端口/设备号被占。服务端要实现"踢旧留新"。
+:::
+
+## 小结
+
+私有 TCP 协议对接的工作量分布，和很多人的预期是反的：**协议解析只占三成，剩下七成在连接生命周期管理上。**
+
+四条核心结论：
+
+1. **拆帧逻辑和串口完全一致**，所谓粘包问题是认知问题不是技术问题
+2. **`Socket.Connected` 不可信**，半开连接只能靠应用层心跳发现
+3. **请求应答必须显式关联**：半双工设备用信号量串行化，带序号的协议用等待表 + 超时 + `finally` 清理
+4. **断线时要清场**，否则旧请求会被新连接的响应错误唤醒
+
+下一篇 [Modbus 协议实战](/posts/iot/modbus-protocol) 转向标准协议：本篇的 CRC16 和请求应答关联会在那里直接派上用场，而寄存器模型、地址偏移和轮询调度是它特有的部分。
