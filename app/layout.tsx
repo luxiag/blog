@@ -69,8 +69,9 @@ export default function RootLayout({
     <html lang="zh-CN" suppressHydrationWarning className={`${inter.variable} ${ibmPlexMono.variable} ${notoSerifSC.variable}`}>
       <body className="antialiased overflow-x-hidden" style={{ backgroundColor: 'var(--background)' }}>
         <RulerLayout>
-          <Header />
-          <main className="overflow-x-hidden">{children}</main>
+          <Header>
+            <main className="overflow-x-hidden">{children}</main>
+          </Header>
         </RulerLayout>
       </body>
     </html>

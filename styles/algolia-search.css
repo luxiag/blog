@@ -725,23 +725,49 @@
 
 /* ========== Responsive Adjustments ========== */
 @media (max-width: 640px) {
+  .DocSearch-Container {
+    padding: 0;
+    background-color: rgba(255, 255, 255, 1);
+    overflow: hidden;
+  }
+  
+  .dark .DocSearch-Container {
+    background-color: oklch(0.15 0 0);
+  }
+  
   .DocSearch-Modal {
-    margin: 12px;
+    margin: 0;
     max-width: none;
-    max-height: calc(100vh - 24px);
-    border-radius: 12px;
+    width: 100vw;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+    border: none;
+    border-bottom: 1px solid oklch(0.145 0 0);
+    overflow: hidden;
+  }
+  
+  .dark .DocSearch-Modal {
+    border-bottom-color: oklch(0.3 0 0);
   }
   
   .DocSearch-SearchBar {
     padding: 12px 16px;
+    border-radius: 0;
+  }
+  
+  .DocSearch-Form {
+    border-radius: 8px;
   }
   
   .DocSearch-Dropdown {
     padding: 0 16px 16px;
+    max-height: calc(100vh - 140px);
+    overflow-x: hidden;
   }
   
   .DocSearch-Footer {
-    padding: 10px 16px;
+    display: none;
   }
   
   .DocSearch-Button {

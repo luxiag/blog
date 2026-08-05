@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { getPostData, getAllPostSlugs, extractToc, getSeriesPosts } from '@/lib/markdown';
 import MDXComponents from '@/components/MDXComponents';
 import TableOfContents from '@/components/TableOfContents';
+import PostContentWrapper from '@/components/PostContentWrapper';
 import Link from 'next/link';
 import Image from 'next/image';
 import { logger } from '@/lib/logger';
@@ -56,9 +57,10 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
   const currentSlug = slugParts.join('/');
 
   return (
-    <div className="min-h-screen bg-[#f5f5f5] font-sans text-[oklch(0.145_0_0)] selection:bg-orange-500/20">
-      <PageTitle title={post.title} />
-      <TableOfContents toc={toc} seriesPosts={seriesPosts} currentSlug={currentSlug} />
+    <PostContentWrapper toc={toc} seriesPosts={seriesPosts} currentSlug={currentSlug}>
+      <div className="min-h-screen bg-[#f5f5f5] font-sans text-[oklch(0.145_0_0)] selection:bg-orange-500/20">
+        <PageTitle title={post.title} />
+        <TableOfContents toc={toc} seriesPosts={seriesPosts} currentSlug={currentSlug} />
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-12">
         {/* Nav */}
@@ -148,5 +150,6 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
         </nav>
       </div>
     </div>
+    </PostContentWrapper>
   );
 }

@@ -4,7 +4,7 @@ export default function RulerLayout({ children }: { children: React.ReactNode })
   const rulerTicks = Array.from({ length: 7 });
 
   return (
-    <div className="min-h-screen relative overflow-x-hidden">
+    <div className="min-h-screen relative">
       <div
         className="fixed top-6 bottom-6 left-6 hidden lg:flex flex-col items-center justify-between z-40"
       >
@@ -33,7 +33,7 @@ export default function RulerLayout({ children }: { children: React.ReactNode })
         ))} */}
       </div>
 
-      <div className="px-2 sm:px-4 lg:px-16">
+      <div className=" sm:px-4 lg:px-16">
         <div
           className="max-w-[1400px] mx-auto lg:border-x border-solid border-neutral-900 dark:border-neutral-100 min-h-screen"
         >

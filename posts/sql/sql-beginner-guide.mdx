@@ -28,6 +28,12 @@ SQL（Structured Query Language）是**关系型数据库**的通用语言。你
 
 > 说明：不同数据库（MySQL / PostgreSQL / SQL Server / SQLite）在语法细节上有差异。本文以"通用 SQL 思维"为主，关键差异会单独标注。
 
+:::tip 阅读方式：遇到还没讲的关键字不用慌
+SQL 的知识点是互相咬合的——讲"怎么写数据"就难免用到"怎么查数据"，讲建表就会提到后面才细讲的约束。所以本文有少量**前向引用**。
+
+处理方式是：**第一次出现的地方给你够用的一句话解释 + 标注它在第几节详细展开**。看到 `（详见 9. JOIN）` 这样的标注，说明当下只需要理解个大意，不必停下来深挖。
+:::
+
 ---
 
 ## 1. 先建立 SQL 的整体认知
@@ -121,43 +127,59 @@ SQL 的核心是：**用集合（set）的方式处理数据**。
 
 ## 3. 示例数据
 
-为方便演示，假设你有以下表：
+为方便演示，假设你有以下表。这是一个简化的电商模型：用户下订单，一个订单包含多个商品。
+
+先看每一行列定义的固定结构，后面所有建表语句都是这个套路：
+
+```text
+  created_at    TIMESTAMP     NOT NULL
+  ─────────     ─────────     ────────
+    列名         数据类型       约束（可选，可以有多个）
+```
+
+**数据类型**在上一节已经讲过（`BIGINT`、`VARCHAR(50)`、`DECIMAL(10,2)`、`TIMESTAMP`）。**约束**是这一节新出现的东西，下面代码里的注释先给你一句话理解，第 4 节会逐个详细展开：
 
 ```sql
 CREATE TABLE users (
-  id        BIGINT PRIMARY KEY,
-  name      VARCHAR(50) NOT NULL,
-  email     VARCHAR(200) NOT NULL,
-  created_at TIMESTAMP NOT NULL
+  id         BIGINT PRIMARY KEY,     -- PRIMARY KEY：主键，值唯一且不为空，用来定位某一行
+  name       VARCHAR(50) NOT NULL,   -- NOT NULL：这一列必须有值，不能留空
+  email      VARCHAR(200) NOT NULL,
+  created_at TIMESTAMP NOT NULL      -- 注册时间
 );
 
 CREATE TABLE products (
   id    BIGINT PRIMARY KEY,
   name  VARCHAR(100) NOT NULL,
-  price DECIMAL(10,2) NOT NULL
+  price DECIMAL(10,2) NOT NULL       -- 金额用 DECIMAL，不用浮点（见 2.1）
 );
 
 CREATE TABLE orders (
   id         BIGINT PRIMARY KEY,
-  user_id    BIGINT NOT NULL,
-  status     VARCHAR(20) NOT NULL,
+  user_id    BIGINT NOT NULL,        -- 指向 users.id，表示"这个订单属于谁"
+  status     VARCHAR(20) NOT NULL,   -- 订单状态，如 'PAID'、'SHIPPED'
   created_at TIMESTAMP NOT NULL
 );
 
 CREATE TABLE order_items (
-  order_id   BIGINT NOT NULL,
-  product_id BIGINT NOT NULL,
-  quantity   INT NOT NULL,
-  unit_price DECIMAL(10,2) NOT NULL,
-  PRIMARY KEY (order_id, product_id)
+  order_id   BIGINT NOT NULL,        -- 指向 orders.id
+  product_id BIGINT NOT NULL,        -- 指向 products.id
+  quantity   INT NOT NULL,           -- 买了几件
+  unit_price DECIMAL(10,2) NOT NULL, -- 下单那一刻的单价（快照，见下方说明）
+  PRIMARY KEY (order_id, product_id) -- 复合主键：两列合起来唯一，见 4.2
 );
 ```
 
 你不需要立刻跑起来，先理解结构：
 
-- `users` 一对多 `orders`
-- `orders` 一对多 `order_items`
-- `products` 一对多 `order_items`
+- `users` 一对多 `orders` —— 一个用户可以有多个订单，靠 `orders.user_id` 关联
+- `orders` 一对多 `order_items` —— 一个订单可以有多个商品行，靠 `order_items.order_id` 关联
+- `products` 一对多 `order_items` —— 一个商品可以出现在多个订单里
+
+:::note 两个设计细节，现在看不懂可以先跳过
+**为什么 `order_items` 的主键是两列？** 因为单看 `order_id` 会重复（一个订单有多行商品），单看 `product_id` 也会重复（一个商品被多个订单买）。但"订单 1001 + 商品 5"这个组合只应该出现一次。这种由多列共同构成的主键叫**复合主键**，4.2 节会讲。
+
+**为什么 `order_items` 要存 `unit_price`，`products` 里不是已经有 `price` 了吗？** 因为商品价格会变。如果订单只关联商品 ID、金额去查 `products.price`，那明天商品涨价，昨天的历史订单金额就跟着变了。所以下单时要把当时的单价**快照**下来。这类"看起来冗余但必须冗余"的设计在 17 节还会提到。
+:::
 
 ---
 
@@ -177,12 +199,39 @@ CREATE DATABASE IF NOT EXISTS mydb;
 
 ```sql
 CREATE TABLE users (
-  id         BIGINT PRIMARY KEY,
-  name       VARCHAR(50) NOT NULL,
-  email      VARCHAR(200) NOT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  --  列名        数据类型          约束/默认值
+  id         BIGINT           PRIMARY KEY,   -- 主键：唯一标识每一行
+  name       VARCHAR(50)      NOT NULL,      -- 必填：插入时不能不给值
+  email      VARCHAR(200)     NOT NULL,
+  created_at TIMESTAMP        DEFAULT CURRENT_TIMESTAMP  -- 不给值时自动填当前时间
 );
 ```
+
+`PRIMARY KEY` 和 `NOT NULL` 在上一节见过了，`DEFAULT` 是新的：**插入数据时如果没给这一列提供值，就用默认值填上。**（所有约束会在下一节 4.2 逐个展开。）
+
+而 `CURRENT_TIMESTAMP` 不是约束，是数据库内置的一个**函数**，返回执行那一刻的当前时间（等价写法还有 `NOW()`，完整的日期函数见 8.3）。所以 `DEFAULT CURRENT_TIMESTAMP` 连起来读就是"这一列默认填入当前时间"：
+
+```sql
+-- 只给了 id、name、email，没有给 created_at
+INSERT INTO users (id, name, email) VALUES (1, '张三', 'zhang@example.com');
+
+-- 查出来 created_at 已经被数据库自动填好了
+SELECT * FROM users;
+-- id | name | email             | created_at
+--  1 | 张三 | zhang@example.com | 2026-01-22 14:30:05
+```
+
+这是记录"创建时间"的标准做法——**让数据库自己填，而不是在应用代码里传当前时间**。好处是不管数据从哪来（后端代码、脚本、手工 SQL），时间一定会被记上，且用的是同一台数据库的时钟，不会因为多台应用服务器时间不一致而错乱。
+
+:::tip 顺带一提：自动记录"更新时间"
+MySQL 可以再加一句 `ON UPDATE CURRENT_TIMESTAMP`，这样每次这一行被 `UPDATE` 时该列会自动刷新：
+
+```sql
+updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+```
+
+PostgreSQL 没有这个语法，需要用触发器实现。
+:::
 
 **修改表结构（ALTER TABLE）**
 
@@ -236,11 +285,45 @@ CREATE TABLE users (
 
 ```sql
 CREATE TABLE users (
-  id   INT AUTO_INCREMENT,  -- MySQL 用 AUTO_INCREMENT，PG 用 SERIAL
+  id   INT AUTO_INCREMENT,  -- 自增：不用自己指定 id，插入时数据库自动给下一个数字
   name VARCHAR(50),
-  PRIMARY KEY (id)
+  PRIMARY KEY (id)          -- 表级写法：等价于写在 id 后面的 PRIMARY KEY
 );
 ```
+
+主键有两种等价的写法，选哪个只是风格问题：
+
+```sql
+id INT PRIMARY KEY          -- 列级：跟在列定义后面，简洁
+-- 或
+PRIMARY KEY (id)            -- 表级：单独一行，复合主键时必须用这种
+```
+
+`AUTO_INCREMENT` 是 MySQL 的自增语法，PostgreSQL 用 `SERIAL` 或 `GENERATED ALWAYS AS IDENTITY`，SQL Server 用 `IDENTITY(1,1)`。作用都一样：插入时不用管 `id`，数据库自动递增分配。
+
+**复合主键：多列合起来才唯一**
+
+第 3 节的 `order_items` 用的就是这个。当单独一列无法唯一标识一行时，用多列组合：
+
+```sql
+CREATE TABLE order_items (
+  order_id   BIGINT NOT NULL,
+  product_id BIGINT NOT NULL,
+  quantity   INT NOT NULL,
+  -- 单看 order_id 会重复（一个订单多行商品），
+  -- 单看 product_id 也会重复（一个商品被多个订单买），
+  -- 但两者的组合必须唯一：同一个订单里同一个商品只能有一行
+  PRIMARY KEY (order_id, product_id)
+);
+```
+
+复合主键**只能用表级写法**，没法写在某一列后面——因为它不属于任何单独一列。
+
+:::tip 复合主键的列顺序有讲究
+`PRIMARY KEY (order_id, product_id)` 和 `PRIMARY KEY (product_id, order_id)` 在"唯一性"上完全等价，但**性能不同**：主键自带索引，而索引遵循"最左前缀"规律。
+
+前者能高效支持"查某个订单的所有商品行"，后者能高效支持"查某个商品被哪些订单买过"。按你的主要查询方向决定顺序，具体原理见 15.2 节。
+:::
 
 **FOREIGN KEY：引用完整性**
 
@@ -250,7 +333,9 @@ CREATE TABLE users (
 CREATE TABLE orders (
   id      BIGINT PRIMARY KEY,
   user_id BIGINT NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(id)
+  -- FOREIGN KEY (user_id)：声明当前表中的 user_id 列是一个外键。
+  -- REFERENCES users(id)：指定这个外键参照的是 users 表中的 id 列（即主键）。
+  FOREIGN KEY (user_id) REFERENCES users(id) 
 );
 ```
 
@@ -280,6 +365,14 @@ CREATE TABLE users (
 
 ## 5. 写数据：INSERT / UPDATE / DELETE
 
+表建好了，先往里放数据——因为没有数据，下一节的查询就没东西可查。
+
+:::note 这一节会用到几个"后面才细讲"的东西
+写数据经常要配合查询：把一批数据从旧表搬到新表、用另一张表的值更新当前表。所以本节会提前出现 `SELECT`、`WHERE`、`JOIN`、`CASE WHEN`。
+
+每处都会用一句话说明它在做什么，**你只需要看懂"这条语句做了什么事"，不用现在就掌握写法**。对应的详细章节：`SELECT` / `WHERE` 见 6 节、`JOIN` 见 9 节、`CASE WHEN` 见 8.4。
+:::
+
 ### 5.1 INSERT
 
 ```sql
@@ -295,21 +388,24 @@ INSERT INTO users (id, name, email, created_at) VALUES
 
 **INSERT ... SELECT：从查询结果批量插入**
 
-把一张表的数据"搬"到另一张表，或者把查询结果作为新数据插入：
+前面的 `VALUES` 是"我直接给你具体的值"，这里是"值从另一个查询的结果里来"——把 `VALUES (...)` 换成一条 `SELECT` 就行：
 
 ```sql
--- 把旧表的数据搬到新表
+-- 把 2025 年以前注册的用户搬进备份表。
+-- SELECT 部分先查出符合条件的行（详见 6 节），
+-- 查出多少行就插入多少行，不用自己循环
 INSERT INTO users_backup (id, name, email)
-SELECT id, name, email
+SELECT id, name, email          -- 这三列要和上面 INSERT 的列一一对应
 FROM users
-WHERE created_at < '2025-01-01';
+WHERE created_at < '2025-01-01'; -- WHERE 是过滤条件，详见 6.3
 
--- 创建表时顺便灌数据（部分数据库支持）
+-- 建表并直接灌入查询结果（部分数据库支持）：
+-- 表结构由 SELECT 的结果自动推导出来，不用自己写列定义
 CREATE TABLE active_users AS
 SELECT * FROM users WHERE is_active = true;
 ```
 
-这在数据迁移、备份、创建汇总表时非常常用。
+这在数据迁移、备份、创建汇总表时非常常用。**关键点是列的顺序和数量要对应**——`INSERT` 里写了三列，`SELECT` 就要吐出三列，且类型能匹配上。
 
 ### 5.2 UPDATE
 
@@ -323,38 +419,62 @@ WHERE id = 1001;
 
 **UPDATE ... JOIN：跨表更新**
 
-用另一张表的值来更新当前表，非常实用：
+要更新的值来自**另一张表**时用这个写法。这里提前用到了 `JOIN`——一句话理解：**`JOIN` 就是按一个关联条件把两张表的行配对起来**，这样就能一边读 `users` 的数据、一边写进 `orders`（详见 9 节）。
 
 ```sql
--- MySQL 写法：根据 users 表的最新邮箱更新 orders 表的冗余字段
-UPDATE orders o
-JOIN users u ON u.id = o.user_id
-SET o.user_name = u.name
-WHERE o.user_name IS NULL;
+-- 需求：把订单里冗余存的用户名，用 users 表里的真实姓名补上
 
--- PostgreSQL / SQL Server 写法（FROM 子句）
+-- MySQL 写法
+UPDATE orders o                    -- o 是 orders 的别名，简化后面的引用
+JOIN users u ON u.id = o.user_id   -- 配对规则：订单的 user_id 等于用户的 id
+SET o.user_name = u.name           -- 把配对到的那个用户的 name 写进订单
+WHERE o.user_name IS NULL;         -- 只补还没值的行。IS NULL 见 6.3
+
+-- PostgreSQL / SQL Server 写法（用 FROM 子句表达同一件事）
 UPDATE orders
 SET user_name = u.name
 FROM users u
-WHERE orders.user_id = u.id AND orders.user_name IS NULL;
+WHERE orders.user_id = u.id        -- 配对规则挪到了 WHERE 里
+  AND orders.user_name IS NULL;
 ```
+
+:::warning 判空必须用 IS NULL，不能用 = NULL
+`WHERE o.user_name = NULL` 永远匹配不到任何行，哪怕真的有空值。原因是 `NULL` 表示"未知"，和任何值比较的结果都是"未知"而不是"真"。
+
+这是 SQL 最经典的坑之一，6.3 节会详细讲。现在只要记住：**判空用 `IS NULL` / `IS NOT NULL`。**
+:::
 
 :::tip MySQL vs PG 的 UPDATE JOIN 语法不同
 MySQL 用 `UPDATE ... JOIN ... SET`，PG 用 `UPDATE ... SET ... FROM ...`。跨数据库开发时要注意这个差异。
 :::
 
-批量更新不同值可以用 `CASE WHEN`：
+**一条语句给不同行设不同值：CASE WHEN**
+
+普通 `UPDATE` 一次只能把所有匹配行设成**同一个值**。要给不同的行设不同的值，可以用 `CASE WHEN`——它相当于 SQL 里的 `if / else if`，按条件返回不同结果（详见 8.4）：
 
 ```sql
--- 根据不同 ID 设置不同的名字
+-- 一条语句更新三个人的名字，而不是发三条 UPDATE
 UPDATE users
-SET name = CASE id
-  WHEN 1 THEN 'new_name1'
-  WHEN 2 THEN 'new_name2'
+SET name = CASE id           -- 看 id 的值，分情况返回不同的名字
+  WHEN 1 THEN 'new_name1'    -- id = 1 时用这个
+  WHEN 2 THEN 'new_name2'    -- id = 2 时用这个
   WHEN 3 THEN 'new_name3'
 END
-WHERE id IN (1, 2, 3);
+WHERE id IN (1, 2, 3);       -- IN 表示"等于其中任意一个"，见 6.3
 ```
+
+:::warning CASE 没匹配上会返回 NULL
+如果 `WHERE` 的范围比 `CASE` 覆盖的范围大，没匹配到任何 `WHEN` 的行会得到 `NULL`——也就是**把原来的值清空了**。
+
+比如上面的语句如果写成 `WHERE id IN (1, 2, 3, 4)`，`id = 4` 那行的 `name` 会变成 `NULL`。稳妥的做法是给 `CASE` 加一个 `ELSE name`（保持原值）：
+
+```sql
+SET name = CASE id
+  WHEN 1 THEN 'new_name1'
+  ELSE name        -- 兜底：没匹配上就保持原值不动
+END
+```
+:::
 
 ### 5.3 DELETE
 
@@ -385,12 +505,43 @@ ORDER BY 排序列
 LIMIT n;
 ```
 
-一个常见的顺序认知：
+先认清每个子句负责什么：
 
-- 你写的时候通常是 `SELECT -> FROM -> WHERE ...`
-- 数据库执行时的逻辑顺序更像 `FROM -> WHERE -> GROUP BY -> HAVING -> SELECT -> ORDER BY -> LIMIT`
+| 子句 | 作用 | 本文位置 |
+|---|---|---|
+| `SELECT` | 要哪些列（输出的形状） | 6.2 |
+| `FROM` | 从哪张表取 | 本节 |
+| `WHERE` | 过滤掉不要的行 | 6.3 |
+| `ORDER BY` | 结果怎么排序 | 6.4 |
+| `LIMIT` | 只取前 n 行 | 6.4 |
 
-理解逻辑顺序可以帮你解释很多"为什么不能在 WHERE 里用别名"等问题。
+**一个很重要的顺序认知**：你书写的顺序和数据库执行的顺序不一样。
+
+```text
+书写顺序：SELECT → FROM → WHERE → GROUP BY → HAVING → ORDER BY → LIMIT
+执行顺序：FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT
+          ↑                                    ↑
+       先确定数据来源                    列和别名到这一步才存在
+```
+
+（`GROUP BY` 和 `HAVING` 是分组统计用的，见 7 节，现在只需知道它们在这个顺序里的位置。）
+
+这个执行顺序能解释一类很常见的报错——**为什么 `WHERE` 里不能用 `SELECT` 定义的别名**：
+
+```sql
+-- ❌ 报错：WHERE 执行时，别名 total 还不存在
+SELECT price * quantity AS total FROM order_items WHERE total > 100;
+
+-- ✅ 要么把表达式重写一遍
+SELECT price * quantity AS total FROM order_items WHERE price * quantity > 100;
+```
+
+而 `ORDER BY` 里**可以**用别名，因为它在 `SELECT` 之后执行：
+
+```sql
+-- ✅ 这样是合法的
+SELECT price * quantity AS total FROM order_items ORDER BY total DESC;
+```
 
 ### 6.2 选择列、别名与去重
 
@@ -550,9 +701,69 @@ INSERT INTO orders VALUES (101, 'PAID', '2026-01-01'), (102, 'SHIPPED', '2026-01
 
 ## 7. 聚合统计：GROUP BY 与 HAVING
 
+前面的查询都是"**一行进、一行出**"——过滤掉不要的行，剩下的原样返回。这一节开始做**统计**：把多行"压缩"成一行，算出总数、总和、平均值。
+
 ### 7.1 聚合函数
 
-`COUNT`、`SUM`、`AVG`、`MIN`、`MAX`。
+聚合函数的特点是**吃进多行，吐出一个值**：
+
+| 函数 | 作用 | 说明 |
+|---|---|---|
+| `COUNT(*)` | 有多少行 | 统计行数，包括含 NULL 的行 |
+| `COUNT(列)` | 这一列有多少个非空值 | **会跳过 NULL**，这是和 `COUNT(*)` 的关键区别 |
+| `SUM(列)` | 求和 | 只能用于数值列 |
+| `AVG(列)` | 平均值 | 同样跳过 NULL（分母也不算它） |
+| `MIN(列)` / `MAX(列)` | 最小值 / 最大值 | 数值、日期、字符串都可以 |
+
+不带分组时，整张表被当成一个大组，返回一行：
+
+```sql
+-- 全表统计：6 行订单，总金额 880
+SELECT COUNT(*) AS 订单数, SUM(amount) AS 总金额, AVG(amount) AS 平均金额
+FROM orders;
+```
+
+| 订单数 | 总金额 | 平均金额 |
+|---|---|---|
+| 6 | 880 | 146.67 |
+
+**GROUP BY：分组统计**
+
+上面是"全表一个总数"。更常见的需求是"**每个**用户的订单数"——这就要用 `GROUP BY` 指定按哪一列分组：
+
+```sql
+SELECT user_id, COUNT(*) AS 订单数, SUM(amount) AS 总金额
+FROM orders
+GROUP BY user_id;      -- 按 user_id 分组：user_id 相同的行归为一组
+```
+
+它做的事情可以这样理解——先按 `user_id` 把行分堆，再对每一堆分别算聚合：
+
+```text
+原始数据                        分组后                     输出
+user_id  amount
+   1      100    ┐
+   1      200    ├─ user_id=1 这一堆 → COUNT=3, SUM=450  → 1, 3, 450
+   1      150    ┘
+   2       50    ┐
+   2       80    ┴─ user_id=2 这一堆 → COUNT=2, SUM=130  → 2, 2, 130
+   3      300    ── user_id=3 这一堆 → COUNT=1, SUM=300  → 3, 1, 300
+```
+
+**结果是几行，取决于分组列有几个不同的值。** 上面 `user_id` 有 3 个不同值，所以输出 3 行。
+
+:::warning COUNT(*) 和 COUNT(列) 不一样
+这是面试和实际排查里都高频出现的点：
+
+```sql
+-- 假设 5 行数据里，email 有 2 行是 NULL
+SELECT COUNT(*),      -- 5：数的是"行"
+       COUNT(email)   -- 3：数的是"email 有值的行"
+FROM users;
+```
+
+想统计行数就用 `COUNT(*)`，想统计"某个字段填了多少"才用 `COUNT(列)`。
+:::
 
 export const aggregateInitSql = `
 CREATE TABLE orders (id INT, user_id INT, status TEXT, amount INT);
@@ -570,6 +781,8 @@ INSERT INTO orders VALUES (101, 1, 'PAID', 100), (102, 1, 'PAID', 200), (103, 2,
 ### 7.2 分组拼接：GROUP_CONCAT / STRING_AGG
 
 有时你需要把分组内的多个值拼成一个字符串——比如"查出每个用户的标签列表"。
+
+<Glossary term="MySQL 选择了 GROUP_CONCAT 这个名字，用 SEPARATOR 关键字来指定分隔符。">GROUP_CONCAT</Glossary> 和 <Glossary term="PostgreSQL 和 SQL Server 选择了 STRING_AGG 这个名字（AGG 是 Aggregate 聚合的缩写），直接把分隔符当作第二个参数传进去，比如 STRING_AGG(字段名, '分隔符')。">STRING_AGG</Glossary> 就是 SQL 里的 join() 方法。它把分组后属于同一个组的多个值，像穿糖葫芦一样，用逗号（或其他符号）串成一个大字符串。
 
 ```sql
 -- MySQL：GROUP_CONCAT
@@ -610,12 +823,162 @@ GROUP BY user_id;
 
 ### 7.3 GROUP BY 的规则（非常重要）
 
-当你写 `GROUP BY` 时：
+一条规则："**`SELECT` 里出现的列，要么是分组列，要么被聚合函数包着。**"
 
-- `SELECT` 里的非聚合列必须出现在 `GROUP BY` 里（严格 SQL）
-- 某些数据库（如 MySQL 在特定模式）可能"放宽"，但结果不可预测，不建议依赖
+原因回到 7.1 的分组示意图：分组后每一组只输出一行，而组内的非分组列有多个不同值，数据库不知道该给你哪一个。
+
+```sql
+-- ❌ 错误 GROUP BY 会把 user_id 合并为一个，但是分组里有多个 status，该显示哪个？
+SELECT user_id, status, COUNT(*)
+FROM orders
+GROUP BY user_id;
+
+-- ✅ 方案一：把 status 也加进分组（变成"按用户+状态"统计）
+SELECT user_id, status, COUNT(*)
+FROM orders
+GROUP BY user_id, status;
+
+-- ✅ 方案二：用聚合函数明确"要哪一个"
+SELECT user_id, MAX(status), COUNT(*)
+FROM orders
+GROUP BY user_id;
+```
+::: details GROUP BY 的严格模式
+---
+
+### 1. 生活中的类比：公司汇报
+
+假设你是老板，你让HR去统计**每个部门**的员工人数。
+这就相当于 SQL 里的：`GROUP BY 部门`
+
+HR 给你交上来一份报表，每个部门占一行：
+
+| 部门 | 人数 |
+|------|------|
+| 销售部 | 5 |
+| 研发部 | 10 |
+
+这很完美。但现在，你突然跟 HR 说：**“除了人数，顺便把该部门的『员工姓名』也给我写上。”**
+
+HR 就懵了：**销售部有 5 个人，一行里只能写一个名字，我该写谁的？写张三？写李四？** 
+
+这就是报错的原因！
+
+---
+
+### 2. 回到 SQL：为什么报错？
+
+看这段报错的代码：
+```sql
+-- ❌ 错误：一个 user_id 分组里有多个 status，该显示哪个？
+SELECT user_id, status, COUNT(*)
+FROM orders
+GROUP BY user_id;
+```
+
+假设原始数据是这样的：
+
+| user_id | status | order_id |
+|---------|--------|----------|
+| 1       | 已付款 | 101      |
+| 1       | 已发货 | 102      |
+| 2       | 已付款 | 103      |
+
+当你写 `GROUP BY user_id` 时，数据库把用户1的两条记录“揉”成了一个组，要输出成**一行**。
+- `user_id`：都是1，没问题，输出1。
+- `COUNT(*)`：组里有2条记录，没问题，输出2。
+- **`status`：组里有"已付款"和"已发货"两个值，但结果表只有一格！数据库不知道该把"已付款"放进去，还是把"已发货"放进去，于是直接报错罢工！**
+
+---
+
+### 3. 怎么解决？两种方案
+
+既然数据库不知道该选哪个，你就必须**明确告诉它**怎么选。这就是你贴的代码里的 ✅ 方案一 和 ✅ 方案二。
+
+#### ✅ 方案一：把 status 也加进分组（细化分组）
+
+```sql
+SELECT user_id, status, COUNT(*)
+FROM orders
+GROUP BY user_id, status;
+```
+
+**你的指令**：“既然一个用户有多个状态，那我们就把用户和状态**组合**起来分组！”
+
+**数据库的动作**：
+- (用户1, 已付款) 算一组 👉 1条记录
+- (用户1, 已发货) 算一组 👉 1条记录
+- (用户2, 已付款) 算一组 👉 1条记录
+
+**结果**：不再有冲突了，因为每一组里的 user_id 和 status 都是唯一的！
+
+| user_id | status | COUNT(*) |
+|---------|--------|----------|
+| 1       | 已付款 | 1        |
+| 1       | 已发货 | 1        |
+| 2       | 已付款 | 1        |
+
+#### ✅ 方案二：用聚合函数明确“要哪一个”
+
+```sql
+SELECT user_id, MAX(status), COUNT(*)
+FROM orders
+GROUP BY user_id;
+```
+
+**你的指令**：“我还是只想按用户分组（每个用户一行），对于 status，你给我挑一个**最大的**就行！”
+
+**数据库的动作**：
+- 轮到用户1的组，status 有"已付款"和"已发货"。数据库按照字典序比较（已发货 > 已付款），选出了"已发货"。
+
+**结果**：冲突解决了！数据库通过聚合函数把多个值硬生生压成了一个值。
+
+| user_id | MAX(status) | COUNT(*) |
+|---------|-------------|----------|
+| 1       | 已发货      | 2        |
+| 2       | 已付款      | 1        |
+
+*(注：除了 MAX，你也可以用 MIN、GROUP_CONCAT 等，只要能把多个值变成一个值就行)*
+
+---
+
+:::
+
+MySQL 在某些配置下会**放行**第一种写法，随便返回一个 `status`。这是它的历史遗留行为，结果不可预测，不要依赖——换个数据库或改个配置就会报错。
 
 ### 7.4 HAVING：对分组后的结果再过滤
+
+需求：只看"下单 2 次以上"的用户。你可能会想写 `WHERE COUNT(*) >= 2`，但这样会报错：
+
+```sql
+-- ❌ 报错：WHERE 执行时还没分组，COUNT(*) 根本还不存在
+SELECT user_id, COUNT(*) FROM orders
+WHERE COUNT(*) >= 2
+GROUP BY user_id;
+
+-- ✅ 用 HAVING：它在分组之后执行，能看到聚合结果
+SELECT user_id, COUNT(*) AS 订单数 FROM orders
+GROUP BY user_id
+HAVING COUNT(*) >= 2;
+```
+
+这正是 6.1 讲的执行顺序在起作用：`WHERE → GROUP BY → HAVING`。**`WHERE` 在分组前跑，所以看不到聚合值；`HAVING` 在分组后跑，所以可以。**
+
+两者经常配合使用，各管一段：
+
+```sql
+SELECT user_id, COUNT(*) AS 订单数, SUM(amount) AS 总金额
+FROM orders
+WHERE status = 'PAID'        -- 先筛行：只统计已支付的订单
+GROUP BY user_id             -- 再分组
+HAVING SUM(amount) > 300;    -- 最后筛组：只要总金额超 300 的用户
+```
+
+:::tip 能写在 WHERE 里就别写在 HAVING 里
+上面的 `status = 'PAID'` 也能写成 `HAVING status = 'PAID'`（某些数据库允许），但**性能会差**：`WHERE` 在分组前就把行过滤掉了，参与分组的数据更少；`HAVING` 是先把所有行都分好组、算完聚合，再扔掉不要的组。
+
+判断标准：**条件只和单行有关就用 `WHERE`，涉及聚合值才用 `HAVING`。**
+:::
 
 <SqlSimulator
   initialSql={aggregateInitSql}
@@ -625,10 +988,7 @@ GROUP BY user_id;
   description="WHERE 过滤行，HAVING 过滤分组后的结果"
 />
 
-区别：
-
-- `WHERE` 过滤"行"
-- `HAVING` 过滤"分组后的结果"
+一句话记住区别：**`WHERE` 过滤"行"，`HAVING` 过滤"组"。**
 
 ---
 
@@ -767,7 +1127,40 @@ FROM users
 JOIN orders ON users.id = orders.user_id;
 ```
 
+JOIN 有几种类型，区别只有一句话：**配不上对的行，留不留？**
+
+| 类型 | 配不上对的行怎么办 |
+|---|---|
+| `INNER JOIN` | 两边都必须配上，配不上的**全部丢掉** |
+| `LEFT JOIN` | **保留左表**（`FROM` 后那张）的全部行，右边配不上就填 `NULL` |
+| `RIGHT JOIN` | 保留右表的全部行，左边配不上就填 `NULL` |
+| `FULL JOIN` | 两边都保留，各自配不上的都填 `NULL`（MySQL 不支持） |
+
+下面的练习用这份数据，注意其中两个"配不上对"的行：
+
+- **David（id=4）没有任何订单** —— 左表有、右表无
+- **订单 105 的 `user_id=5`，但没有 id=5 的用户** —— 右表有、左表无
+
 ### 9.1 INNER JOIN（只保留匹配到的）
+
+`INNER JOIN` 只输出两边都配上对的行。`JOIN` 是它的简写，写 `JOIN` 就等于 `INNER JOIN`：
+
+```sql
+SELECT u.name, o.id AS order_id, o.amount
+FROM users u                        -- u 是别名，让后面引用更短
+JOIN orders o ON u.id = o.user_id;  -- ON 后面是配对规则
+```
+
+| name | order_id | amount |
+|---|---|---|
+| Alice | 101 | 100 |
+| Alice | 102 | 200 |
+| Bob | 103 | 50 |
+| Charlie | 104 | 300 |
+
+**注意结果里没有 David，也没有订单 105。** 因为它们各自在另一张表里找不到搭档，被 `INNER JOIN` 丢掉了。
+
+另外注意 **Alice 出现了两次**——她有两个订单，配对结果就是两行。这是 JOIN 最常引起误解的地方：**结果行数由"配对成功的组合数"决定，不是由某一张表的行数决定。**
 
 export const joinInitSql = `
 CREATE TABLE users (id INT, name TEXT, city TEXT);
@@ -787,6 +1180,36 @@ INSERT INTO orders VALUES (101, 1, 'PAID', 100), (102, 1, 'PAID', 200), (103, 2,
 
 ### 9.2 LEFT JOIN（主表全保留）
 
+把上面的 `JOIN` 换成 `LEFT JOIN`，其他一个字不改：
+
+```sql
+SELECT u.name, o.id AS order_id, o.amount
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id;
+```
+
+| name | order_id | amount |
+|---|---|---|
+| Alice | 101 | 100 |
+| Alice | 102 | 200 |
+| Bob | 103 | 50 |
+| Charlie | 104 | 300 |
+| David | `NULL` | `NULL` |
+
+**多出来的就是 David 那一行。** 他没有订单，但因为在左表（`users`）里，`LEFT JOIN` 保留了他，右表的列用 `NULL` 补齐。
+
+这个特性有个非常常用的推论——**查"没有关联数据的行"**：
+
+```sql
+-- 查出从未下单的用户：LEFT JOIN 之后，筛出右表为 NULL 的行
+SELECT u.name
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+WHERE o.id IS NULL;         -- 配不上对的行，右表列才会是 NULL
+```
+
+这是 SQL 里的常见套路，记住它能解决一大类"查缺失/查未做过某事的人"的需求。
+
 <SqlSimulator
   initialSql={joinInitSql}
   defaultQuery="SELECT * FROM users u LEFT JOIN orders o ON u.id = o.user_id;"
@@ -795,7 +1218,13 @@ INSERT INTO orders VALUES (101, 1, 'PAID', 100), (102, 1, 'PAID', 200), (103, 2,
   description="保留左表所有记录，右表无匹配则为 NULL"
 />
 
-这能查出"没有订单的用户"（`order_id` 会是 `NULL`）。
+:::warning LEFT JOIN 之后统计要用 COUNT(列) 而不是 COUNT(*)
+上面练习的答案用的是 `COUNT(o.id)` 而不是 `COUNT(*)`，这是有意的。
+
+David 那一行虽然订单列全是 `NULL`，但它**确实是一行**，所以 `COUNT(*)` 会数成 1——结果就变成"David 有 1 个订单"，这是错的。而 `COUNT(o.id)` 会跳过 `NULL`，正确返回 0。
+
+这正是 7.1 讲的 `COUNT(*)` 与 `COUNT(列)` 的区别，在 `LEFT JOIN` 场景下会真实咬人。
+:::
 
 ### 9.3 RIGHT JOIN（右表全保留）
 
