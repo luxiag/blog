@@ -11,8 +11,8 @@ tags: ['SQL', 'Database', 'Tutorial', 'Backend']
 这是一条循序渐进的学习路线，建议按顺序阅读：
 
 1. **Part 1 · 入门指南（本文）** —— 建立 SQL 心智模型，掌握数据类型、建表、写入、查询、聚合、函数、连接、子查询、事务、索引的基础
-2. [Part 2 · 实战练习（一）：基础巩固](/posts/sql/sql-exercises) —— 10 道在线可运行题，巩固单表与双表基础
-3. [Part 3 · 实战练习（二）：进阶应用](/posts/sql/sql-practice-lab) —— 21 道电商数据集题，覆盖 CTE、窗口函数与报表
+2. [Part 2 · 实战练习（一）：基础业务](/posts/sql/sql-exercises) —— 15 道在线可运行题，覆盖日常业务 SQL
+3. [Part 3 · 实战练习（二）：复杂业务](/posts/sql/sql-practice-lab) —— 12 道题挑战 CTE、窗口函数与报表
 4. [Part 4 · 进阶：执行计划、索引原理与查询优化](/posts/sql/sql-advanced-performance) —— 从「会写」到「写得快」的方法论（数据库中立）
 5. [Part 5 · PostgreSQL 深度实战](/posts/postgresql/postgresql-guide) —— 把进阶知识落到一个具体的、功能最完善的数据库上
 
@@ -844,6 +844,7 @@ FROM orders
 GROUP BY user_id;
 ```
 ::: details GROUP BY 的严格模式
+
 ---
 
 ### 1. 生活中的类比：公司汇报
@@ -2264,8 +2265,8 @@ LIMIT 10;
 
 读懂语法只是第一步，真正的内化来自**动手写**和**理解背后的原理**。本系列接下来的路线：
 
-- 想立刻巩固基础？去 [Part 2 · 实战练习（一）：基础巩固](/posts/sql/sql-exercises)，10 道题全部在浏览器里可运行、可对答案。
-- 想挑战更接近真实业务的题？去 [Part 3 · 实战练习（二）：进阶应用](/posts/sql/sql-practice-lab)，用一套电商数据集把 JOIN、子查询、CTE、窗口函数、报表都练一遍。
+- 想立刻巩固基础？去 [Part 2 · 实战练习（一）：基础业务](/posts/sql/sql-exercises)，15 道题全部在浏览器里可运行、可对答案。
+- 想挑战更复杂的业务场景？去 [Part 3 · 实战练习（二）：复杂业务](/posts/sql/sql-practice-lab)，用一套电商数据集把 CTE、窗口函数、对账、报表都练一遍。
 - 已经能写出正确查询，想让它**跑得快**？去 [Part 4 · 进阶：执行计划、索引原理与查询优化](/posts/sql/sql-advanced-performance)，这一篇会把"为什么慢、怎么变快"讲透。
 
 > 学习建议：不要一口气读完所有内容。先把本文的概念过一遍，立刻去 Part 2/3 动手，遇到"为什么这么写"的疑问，再回到对应章节或进入 Part 4。

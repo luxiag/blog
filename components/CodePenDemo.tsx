@@ -241,8 +241,8 @@ export default function CodePenDemo({ children, code, title = "Live Demo", heigh
             className={`absolute inset-0 flex flex-col bg-neutral-100 dark:bg-neutral-900 overflow-hidden transition-opacity duration-200 ${activeTab === 'preview' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
               }`}
           >
-            <div className="flex-1 relative w-full h-full overflow-auto flex items-center justify-center p-4">
-              <LivePreview className="flex justify-center items-center w-full h-full" />
+            <div className="flex-1 relative w-full h-full overflow-hidden">
+              <LivePreview className="w-full h-full" />
             </div>
             {/* Error overlay at bottom */}
             <LiveError className="absolute bottom-0 left-0 right-0 max-h-[200px] overflow-auto bg-red-900/90 text-red-100 p-3 text-xs font-mono backdrop-blur-sm border-t border-red-700" />
