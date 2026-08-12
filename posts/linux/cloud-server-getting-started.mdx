@@ -1,14 +1,14 @@
 ---
 title: '云服务器入门：从购买、连接到安全加固'
 date: '2026-02-09'
-excerpt: '学会了 Linux 命令，下一步就是把它用在真实的云服务器上。本文从购买一台云服务器讲起，带你完成 SSH 远程连接、密钥登录、用户与 sudo 权限管理，再到防火墙配置与基础安全加固，让你拥有一台既能用、又安全的服务器。'
+excerpt: '学会了 Linux 命令，下一步就是把它用在真实的云服务器上。本文从购买一台云服务器讲起，带你完成 SSH 远程连接、密钥登录、用户与 sudo 权限管理，再到防火墙配置与基础安全加固，为后续部署建立可继续完善的安全基础。'
 tags: ['linux', 'server', 'cloud', 'ssh', 'security', 'devops']
-nextPost: 'linux/cloud-server-environment-setup'
+nextPost: 'linux/networking-and-disk'
 ---
 
 # 云服务器入门：从购买、连接到安全加固
 
-在前面的文章中，我们已经从零开始掌握了 Linux 的[文件系统、基础命令、权限管理](/posts/linux/linux-fundamentals)，也学会了用[管道、重定向与文本三剑客](/posts/linux/linux-fundamentals)组合命令，还学会了用[Shell 脚本](/posts/linux/shell-scripting)把命令串成可复用的自动化工具。但这些操作大多是在本地或虚拟机里练习的。
+在上一篇[《Shell 脚本编程》](/posts/linux/shell-scripting)中，我们把 Linux 命令串成了可复用的自动化工具；更早的[《深入浅出 Linux》](/posts/linux/linux-fundamentals)则建立了文件系统、命令与权限基础。但这些操作大多是在本地或虚拟机里练习的。
 
 真正的考验是：**当你拥有一台远在千里之外、只能通过网络访问的云服务器时，你该如何安全地登录它、管理它？**
 
@@ -19,7 +19,7 @@ nextPost: 'linux/cloud-server-environment-setup'
 3. 建立合理的用户体系，告别一直用 root 的坏习惯
 4. 配置防火墙，做好基础安全加固
 
-读完本文，你会得到一台**可以放心暴露在公网、用来部署项目**的服务器。
+读完本文，你将完成云服务器的基础连接与安全配置，并了解后续部署前还需要持续检查和加固的环节。
 
 ---
 
@@ -375,7 +375,7 @@ chmod 600 /home/deploy/.ssh/authorized_keys
 
 ## 5. SSH 安全加固
 
-默认配置的服务器一旦暴露在公网，几乎**几分钟内就会被自动化脚本扫描和尝试爆破** 22 端口的 root 密码。我们来堵上这些口子。
+默认配置的服务器一旦暴露在公网，几乎**几分钟内就会被自动化脚本扫描和尝试爆破** 22 端口的 root 密码。我们来减少可攻击面，但也要记住：任何单项配置都不能保证服务器绝对安全。
 
 SSH 服务端的配置文件是 `/etc/ssh/sshd_config`。用编辑器打开它：
 
@@ -383,40 +383,42 @@ SSH 服务端的配置文件是 `/etc/ssh/sshd_config`。用编辑器打开它�
 sudo nano /etc/ssh/sshd_config
 ```
 
+如果准备修改 SSH 端口，必须先在**云厂商安全组**和已启用的 **UFW/其他防火墙**中放行新端口，并暂时保留旧端口规则。例如计划使用 2222 时，可先执行 `sudo ufw allow 2222/tcp`；不要先关闭 22 端口，否则配置稍有问题就可能失去远程入口。
+
 找到（或新增）以下几项关键配置：
 
 ```text
 # 1. 禁止 root 直接通过 SSH 登录（强制走普通用户 + sudo）
 PermitRootLogin no
 
-# 2. 禁用密码登录，只允许密钥登录（彻底杜绝密码爆破）
+# 2. 禁用密码登录，只允许密钥登录（避免密码被暴力破解）
 PasswordAuthentication no
 
-# 3. （可选）修改默认端口，避开绝大多数针对 22 的扫描
+# 3. （可选）修改默认端口只能减少自动扫描噪声，不是安全措施
 Port 2222
 ```
 
 :::warning 改配置前务必先确认密钥能登录！
-在执行 `PasswordAuthentication no` 之前，**一定要先确保新用户的密钥登录是正常工作的**，否则禁用密码后你可能把自己彻底锁在门外。稳妥做法：保持当前 SSH 会话不要断开，另开一个新终端测试登录，确认成功后再继续。
+在执行 `PasswordAuthentication no` 之前，**一定要先确保新用户的密钥登录是正常工作的**。整个修改过程中保持当前 SSH 会话不要断开，把它作为回退通道。
 :::
 
-修改保存后，重启 SSH 服务使其生效：
+修改保存后，不要直接重启服务。先检查配置语法，检查通过后再平滑重载 Ubuntu 的 `ssh` 服务：
 
 ```bash
-# 新版本 Ubuntu/Debian 服务名为 ssh
-sudo systemctl restart ssh
+# 没有输出且退出码为 0 才表示配置通过；失败时不要 reload
+sudo sshd -t
 
-# 部分系统服务名为 sshd
-sudo systemctl restart sshd
+# Ubuntu/Debian 的 OpenSSH 服务名为 ssh
+sudo systemctl reload ssh
 ```
 
-如果修改了端口，之后连接需要带上 `-p`：
+保留当前会话，另开一个新终端验证密钥登录和 `sudo`。如果修改了端口，新会话需要带上 `-p`：
 
 ```bash
 ssh -p 2222 deploy@123.45.67.89
 ```
 
-（在 `~/.ssh/config` 里改一下 `Port 2222` 就能继续用 `ssh myserver`。）
+确认新会话能正常登录后，才能关闭旧会话；如果确实修改了端口，此时再按需移除防火墙和安全组中的旧端口规则。（在 `~/.ssh/config` 里改一下 `Port 2222`，之后仍可使用 `ssh myserver`。）
 
 ---
 
@@ -605,21 +607,35 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 ```
 
 :::note swappiness：何时使用 swap
-`swappiness` 控制内核使用 swap 的倾向，范围 0-100：
-- 值越高，越积极使用 swap（节省内存，但可能拖慢速度）
-- 值越低，越倾向保留内存中的数据（性能更好，但 OOM 风险更高）
+`swappiness` 控制内核回收匿名内存页、使用 swap 的倾向。可用范围和默认值取决于当前内核与发行版，不要把某个固定范围、默认值或“服务器通用推荐值”套到所有机器上。一般来说，值较高会让内核更积极考虑 swap，值较低会降低这种倾向，但实际效果还受内核实现、内存压力和工作负载影响。
 
-查看当前值：`cat /proc/sys/vm/swappiness`（默认 60）
-
-对于服务器，建议设为 10——尽量用物理内存，只在快 OOM 时才动用 swap：
+先查看当前配置并观察一段时间：
 
 ```bash
-# 临时修改
-sudo sysctl vm.swappiness=10
+# 查看当前值
+sysctl vm.swappiness
 
-# 永久修改
-echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
+# 观察内存、swap 换入换出（si/so）与系统压力
+free -h
+vmstat 1
 ```
+
+是否调整以及调整到什么值，应结合**内核版本、发行版、应用延迟、内存余量、swap I/O 和 OOM 记录**决定。先临时修改并持续观测，确认适合当前负载后再持久化：
+
+```bash
+# 交互输入经过观测和压测后确定的值，不在脚本中写死
+read -r -p "请输入评估后的 swappiness 值: " SWAPPINESS_VALUE
+[[ "$SWAPPINESS_VALUE" =~ ^[0-9]+$ ]] || { echo "必须输入整数" >&2; exit 1; }
+
+# 临时修改，重启后失效
+sudo sysctl "vm.swappiness=${SWAPPINESS_VALUE}"
+
+# 验证稳定后再持久化；独立配置文件便于回滚
+printf 'vm.swappiness=%s\n' "$SWAPPINESS_VALUE" \
+  | sudo tee /etc/sysctl.d/99-swappiness.conf
+```
+
+如果调整后延迟、换页或 OOM 情况变差，删除该独立配置文件并恢复原值，再继续观测。其他内核参数也应遵循同样原则：**先确认当前系统支持的语义和取值，再基于实际负载调优。**
 :::
 
 ---
@@ -664,4 +680,4 @@ sudo ufw status
 - **连接排错**：用 `ssh -vvv` 定位问题，按"网络→防火墙→服务→权限"的顺序排查。
 - **基础配置**：主机名、时区与 NTP、swap 安全气囊——看似琐碎，但不做会出大问题。
 
-现在你有了一台干净、安全、可控的服务器。下一篇《[网络排查与磁盘管理](/posts/linux/networking-and-disk)》，我们将为服务器打通"血管"（网络排查工具链）和整理好"仓库"（磁盘分区与挂载），确保请求能到达、数据有地方存。
+现在你已经完成了云服务器的基础连接与安全配置，但公网主机仍需要持续更新、监控和加固。下一篇《[网络排查与磁盘管理](/posts/linux/networking-and-disk)》，我们将为服务器打通"血管"（网络排查工具链）和整理好"仓库"（磁盘分区与挂载），确保请求能到达、数据有地方存。

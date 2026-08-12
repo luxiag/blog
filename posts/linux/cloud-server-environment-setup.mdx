@@ -1,16 +1,16 @@
 ---
 title: '云服务器环境搭建：运行时、数据库与 Nginx'
 date: '2026-02-10'
-excerpt: '有了一台安全的服务器，接下来要把它变成能跑项目的"生产环境"。本文系统讲解如何安装并管理 Node.js / Python 运行时、MySQL 与 Redis 数据库，以及作为流量入口的 Nginx，并解释 systemd、反向代理、HTTPS 等关键概念，为项目部署铺好最后一段路。'
+excerpt: '网络与磁盘准备就绪后，接下来为服务器安装项目所需的基础环境。本文系统讲解如何安装并管理 Node.js / Python 运行时、MySQL 与 Redis 数据库，以及作为流量入口的 Nginx，并解释 systemd、反向代理、HTTPS 等关键概念，为后续项目部署打好基础。'
 tags: ['linux', 'server', 'nginx', 'mysql', 'redis', 'nodejs', 'devops']
-nextPost: 'linux/networking-and-disk'
+nextPost: 'linux/project-deployment-in-practice'
 ---
 
 # 云服务器环境搭建：运行时、数据库与 Nginx
 
-在上一篇《[云服务器入门](/posts/linux/cloud-server-getting-started)》中，我们拿到了一台干净、安全的服务器，并完成了密钥登录、用户管理和防火墙加固。但此时它还是一张"白纸"——只有操作系统，没有任何能运行你项目的环境。
+在上一篇《[网络排查与磁盘管理](/posts/linux/networking-and-disk)》中，我们已经掌握了网络排查方法，并把磁盘、挂载和扩容这些基础设施准备妥当。但此时服务器仍缺少运行项目所需的语言运行时、数据库和流量入口。
 
-这篇文章的目标，就是把这张白纸变成一个**完整的生产环境**。我们会按"一个 Web 请求从外到内的路径"来组织内容，这样你能清楚每个组件在系统里扮演什么角色：
+这篇文章的目标，是搭好一个**可用于后续部署的基础运行环境**。它并不等于完整的生产环境：高可用、监控告警、备份恢复演练、容量规划和发布回滚等能力，还需要结合业务继续建设。本文会按"一个 Web 请求从外到内的路径"来组织内容，让你清楚每个组件在系统里扮演什么角色：
 
 ```mermaid
 graph LR
@@ -57,29 +57,37 @@ sudo apt update && sudo apt upgrade -y
 直接用 `apt install nodejs` 装到的版本通常很旧。更好的方式是用 **nvm（Node Version Manager）**，它能让你自由切换 Node 版本，互不干扰。
 
 ```bash
-# 1. 安装 nvm（脚本来自官方仓库）
+# 1. 安装经过团队验证的 nvm 版本（示例版本，不要盲目替换成 latest）
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
 
 # 2. 让当前终端立即加载 nvm（或重新登录一次）
 source ~/.bashrc
 
-# 3. 安装最新的 LTS 版本 Node.js
-nvm install --lts
+# 3. 示例：安装并固定经过项目验证的 Node.js 20.18.1
+# 实际版本优先读取 package.json 的 engines、.nvmrc，并以 CI/预发布验证结果为准
+nvm install 20.18.1
+nvm alias default 20.18.1
+nvm use 20.18.1
 
 # 4. 验证
 node -v
 npm -v
 ```
 
-:::tip 为什么不用 root 装 nvm？
-nvm 把 Node 装在**当前用户的家目录**下（`~/.nvm`），这正符合上一篇"用普通用户 deploy 操作"的原则——你的应用运行时归属于业务用户，而不需要 root 权限，更安全也更易管理。
+:::tip 版本以项目约束和验证结果为准
+本文用经过验证的 Node.js 20.18.1 演示，不表示所有项目都应使用这个版本。部署前依次检查 `package.json` 中的 `engines`、仓库中的 `.nvmrc`、包管理器锁文件，以及 CI/预发布环境验证结果；升级运行时也应先验证依赖兼容性，而不是直接安装“最新版本”。
 :::
 
-如果项目要用 `pnpm` 或 `yarn`，可以通过 Node 自带的 `corepack` 一键启用：
+:::tip 为什么不用 root 装 nvm？
+nvm 把 Node 装在**当前用户的家目录**下（`~/.nvm`），这正符合上一篇“用普通用户 deploy 操作”的原则——你的应用运行时归属于业务用户，而不需要 root 权限，更安全也更易管理。
+:::
+
+如果项目使用 `pnpm`，可以通过 Node 自带的 `corepack` 启用经过验证的版本。下面固定使用 pnpm 9.15.4 演示；实际版本应优先遵循 `package.json` 的 `packageManager` 字段和现有锁文件：
 
 ```bash
 corepack enable
-corepack prepare pnpm@latest --activate
+corepack prepare pnpm@9.15.4 --activate
+pnpm --version
 ```
 
 ### 2.2 安装 Python（用系统自带 + venv）
@@ -187,28 +195,41 @@ bind 127.0.0.1 ::1
 
 修改后重启：`sudo systemctl restart redis-server`。
 
-### 3.3 Redis 持久化：别让缓存数据丢了
+### 3.3 Redis 持久化：根据数据角色做选择
 
-Redis 是内存数据库，默认数据只存在内存中，重启就没了。生产环境必须配置持久化，否则一次意外重启就能让你丢失所有缓存数据。
+Redis 的主要数据在内存中，但是否需要落盘取决于它在系统中的角色：
 
-Redis 提供两种持久化方式：
+- 如果 Redis 只保存**可以从数据库或上游重新生成的缓存**，可以选择关闭持久化，换取更简单的磁盘管理；同时要确认缓存重建不会压垮上游。
+- 如果 Redis 保存会话、队列状态或其他**不能轻易重建的数据**，就应评估 RDB、AOF、副本和备份恢复方案，不能把“缓存”当成不需要保护的数据。
+
+Redis 提供两种主要持久化方式：
 
 | 方式 | 原理 | 优点 | 缺点 |
 | :--- | :--- | :--- | :--- |
-| **RDB** | 定时把内存快照写入磁盘 | 恢复快，文件紧凑 | 可能丢失最近几分钟的数据 |
-| **AOF** | 把每条写命令追加到日志文件 | 最多丢 1 秒数据 | 文件更大，恢复较慢 |
+| **RDB** | 定时把内存快照写入磁盘 | 恢复快，文件紧凑 | 故障时可能丢失最近一次快照后的写入 |
+| **AOF** | 把写命令追加到日志文件 | 可按同步策略缩小数据丢失窗口 | 文件通常更大，恢复与重写成本更高 |
 
-Ubuntu 默认开启了 RDB。建议同时开启 AOF 以获得更好的数据安全：
+Ubuntu/Debian 软件包的常见配置会启用 RDB 快照，但**最终是否启用以及快照周期必须以当前发行版的 `/etc/redis/redis.conf` 为准**，不要只凭经验假定。可以先检查：
+
+```bash
+# 查看 RDB 保存规则；没有 save 规则通常表示未配置定期快照
+sudo grep -E '^[[:space:]]*save[[:space:]]' /etc/redis/redis.conf
+
+# 查看 AOF 配置
+sudo grep -E '^[[:space:]]*(appendonly|appendfsync)[[:space:]]' /etc/redis/redis.conf
+```
+
+如果数据角色要求更小的故障丢失窗口，可以在评估磁盘性能后启用 AOF：
 
 ```text
 # 编辑 /etc/redis/redis.conf
-
-# 开启 AOF
 appendonly yes
 
-# 每秒同步一次（兼顾性能和安全）
+# 通常每秒发起一次同步，在性能和数据安全之间折中
 appendfsync everysec
 ```
+
+`appendfsync everysec` 表示 Redis 通常按秒请求同步，但操作系统调度、存储缓存、虚拟化层和突发故障都可能扩大实际丢失窗口，**不能承诺绝对最多只丢 1 秒数据**。对数据安全有严格要求时，要结合存储语义、复制、备份和恢复演练验证目标。
 
 修改后 `sudo systemctl restart redis-server`。验证 AOF 是否生效：
 
@@ -441,7 +462,7 @@ sudo ln -s /etc/nginx/sites-available/api /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-Nginx 的匹配规则是：请求到达后，优先匹配 `server_name` 与请求头中 `Host` 字段一致的 `server` 块。如果都不匹配，走默认站点（`sites-enabled` 中按字母序第一个，或显式标记 `default_server` 的）。
+Nginx 的匹配规则是：请求到达后，会结合监听地址/端口与 `server_name` 选择 `server` 块。如果没有任何 `server_name` 匹配，就使用该监听地址和端口上的默认服务器。应通过 `listen 80 default_server;`（HTTPS 对应 `listen 443 ssl default_server;`）显式声明默认站点，而不要依赖 `sites-enabled` 文件名或字母顺序；未显式声明时的隐式默认行为也与配置加载后的 server 顺序有关，不适合作为部署约定。
 
 ### 4.6 Nginx 常见错误排错
 
@@ -489,14 +510,35 @@ sudo tail -f /var/log/nginx/access.log
 sudo tail -f /var/log/nginx/error.log
 ```
 
-默认的访问日志格式包含：客户端 IP、请求方法与路径、状态码、响应大小、耗时等。结合第一篇学的 `awk`，可以快速分析：
+Nginx 常见的 `combined` 访问日志包含客户端 IP、请求行、状态码、响应大小、Referer 和 User-Agent，**默认并不包含请求耗时或上游响应耗时**。如果要按耗时分析，应先在 `http` 块（通常位于 `/etc/nginx/nginx.conf`）显式定义格式，再让站点使用它：
+
+```nginx
+http {
+    # 末尾两个字段固定写成 rt=... 和 urt=...，便于脚本稳定解析
+    log_format timed_combined '$remote_addr - $remote_user [$time_local] '
+                              '"$request" $status $body_bytes_sent '
+                              '"$http_referer" "$http_user_agent" '
+                              'rt=$request_time urt=$upstream_response_time';
+
+    access_log /var/log/nginx/access.log timed_combined;
+
+    # 其他 include 配置保持原样
+}
+```
+
+修改后先执行 `sudo nginx -t`，通过后再执行 `sudo systemctl reload nginx`。上面的格式中，状态码仍是第 9 列，`rt=` 是倒数第二列，`urt=` 是最后一列：
 
 ```bash
 # 统计每个状态码出现的次数
 awk '{print $9}' /var/log/nginx/access.log | sort | uniq -c | sort -nr
 
-# 找出耗时最长的 10 个请求（默认格式最后一列是耗时）
-awk '{print $NF, $0}' /var/log/nginx/access.log | sort -nr | head -n 10
+# 按 rt= 请求总耗时排序，输出耗时最长的 10 条
+awk '{for (i=1; i<=NF; i++) if ($i ~ /^rt=/) {split($i, a, "="); print a[2], $0}}' \
+  /var/log/nginx/access.log | sort -nr | head -n 10
+
+# 单独观察 urt= 上游响应耗时；无上游时可能记录为 -
+awk '{for (i=1; i<=NF; i++) if ($i ~ /^urt=/) print $i}' \
+  /var/log/nginx/access.log | sort | uniq -c
 ```
 
 ---
@@ -547,7 +589,39 @@ sudo systemctl disable nginx     # 取消开机自启
 
 ### 6.2 把自己的 Node 应用做成 systemd 服务
 
-新建一个服务单元文件：
+systemd 启动服务时**不会加载交互式 shell 的 `~/.bashrc`，也不会自动初始化 nvm**。因此不要在 `ExecStart` 中写 `/home/deploy/.nvm/versions/node/v20.x.x/...` 这类无法执行的占位路径。一个稳定做法是：由项目维护固定入口脚本，在脚本中显式加载并选择已经验证的 Node 版本。
+
+先创建完整的启动脚本：
+
+```bash
+sudo install -d -o deploy -g deploy /home/deploy/myapp/bin
+
+sudo tee /home/deploy/myapp/bin/start.sh > /dev/null <<'EOF'
+#!/bin/bash
+set -Eeuo pipefail
+
+# systemd 不加载 ~/.bashrc，因此在非交互环境中显式初始化 nvm
+export NVM_DIR="/home/deploy/.nvm"
+if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+  echo "nvm.sh not found: $NVM_DIR/nvm.sh" >&2
+  exit 1
+fi
+. "$NVM_DIR/nvm.sh"
+
+cd /home/deploy/myapp
+
+# 与前文一致：使用项目已经验证的精确版本；实际项目可改为读取 .nvmrc
+nvm use 20.18.1 > /dev/null
+
+# 用 exec 让 Node 接收 systemd 发出的停止和重启信号
+exec node server.js
+EOF
+
+sudo chown deploy:deploy /home/deploy/myapp/bin/start.sh
+sudo chmod 750 /home/deploy/myapp/bin/start.sh
+```
+
+再创建服务单元文件：
 
 ```bash
 sudo nano /etc/systemd/system/myapp.service
@@ -558,20 +632,22 @@ sudo nano /etc/systemd/system/myapp.service
 ```ini
 [Unit]
 Description=My Node.js App
-# 声明依赖：在网络就绪后再启动
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 # 用普通用户运行，而不是 root（安全！）
 User=deploy
 Group=deploy
-# 项目所在目录
 WorkingDirectory=/home/deploy/myapp
-# 启动命令（用 which node 查到 node 的绝对路径填进来）
-ExecStart=/home/deploy/.nvm/versions/node/v20.x.x/bin/node server.js
+
+# 指向项目维护的稳定启动入口，不依赖版本目录占位符
+ExecStart=/home/deploy/myapp/bin/start.sh
+
 # 崩溃后自动重启
-Restart=always
+Restart=on-failure
 RestartSec=5
+
 # 注入环境变量
 Environment=NODE_ENV=production
 Environment=PORT=3000
@@ -579,6 +655,10 @@ Environment=PORT=3000
 [Install]
 WantedBy=multi-user.target
 ```
+
+:::note 另一种做法：使用稳定系统路径
+如果团队把经过验证的 Node 安装到 `/usr/bin/node` 等稳定系统路径，也可以直接写 `ExecStart=/usr/bin/node /home/deploy/myapp/server.js`，从而完全避开 nvm。只有在服务单元中通过 `Environment=PATH=/明确/列出的/bin:/usr/bin:/bin` 固定了可执行文件搜索路径时，才考虑使用 `/usr/bin/env node`；不要依赖登录用户的交互式 PATH。
+:::
 
 让它生效并启动：
 
@@ -616,11 +696,11 @@ sudo journalctl -u myapp --since today
 
 ## 总结
 
-经过这一篇，你的服务器已经从一张白纸变成了一个**完整可用的生产环境**。我们按照请求流转的路径把各组件串了起来：
+经过这一篇，你的服务器已经具备了**承载后续部署的基础运行环境**。这仍不是完整生产体系：上线前还要结合业务补齐监控告警、备份与恢复演练、高可用、容量规划、安全策略和发布回滚。本文按照请求流转的路径串起了这些基础组件：
 
-- **运行时**：用 `nvm` 管理 Node.js、用 `venv` 隔离 Python，让应用代码能跑起来。
-- **数据库**：安装 MySQL 与 Redis，遵循**最小权限**和**绝不暴露公网**两条铁律；MySQL 备份与 utf8mb4 字符集、Redis AOF 持久化都不容忽视。
-- **Nginx**：作为流量入口，理解并配置**反向代理**，托管静态资源，多站点配置，常见错误排错；再用 **Certbot** 一键上 HTTPS。
-- **systemd**：把 Nginx、数据库乃至**你自己的应用**都管理成开机自启、崩溃自愈的可靠服务，并用 `journalctl` 查日志。
+- **运行时**：用 `nvm` 管理经过项目约束与验证的 Node.js 版本、用 `venv` 隔离 Python，让应用代码能跑起来。
+- **数据库**：安装 MySQL 与 Redis，遵循**最小权限**和**绝不暴露公网**两条铁律；MySQL 要规划备份与 utf8mb4 字符集，Redis 则按数据能否重建决定关闭持久化或配置 RDB/AOF，并验证实际恢复目标。
+- **Nginx**：作为流量入口，理解并配置**反向代理**，托管静态资源，多站点配置，常见错误排错；再用 **Certbot** 配置 HTTPS。
+- **systemd**：把 Nginx、数据库乃至**你自己的应用**都管理成开机自启、故障重启的服务，通过稳定启动脚本明确运行时环境，并用 `journalctl` 查日志。
 
-至此，环境万事俱备。下一篇《[系统运维与安全](/posts/linux/system-ops-and-security)》，我们将为这台跑着服务的服务器装上"仪表盘"和"安保系统"——日志查询、定时任务、性能监控与安全加固，让它从"能跑"变成"能放心跑"。
+基础环境准备好后，下一篇《[项目部署实战](/posts/linux/project-deployment-in-practice)》将把应用真正部署到服务器上，串联代码发布、依赖安装、进程启动、反向代理与上线验证。

@@ -1,14 +1,14 @@
 ---
 title: '系统运维与安全：日志、定时任务、监控与加固'
 date: '2026-02-12'
-excerpt: '服务器跑起来了不等于万事大吉——日志要能查、任务要定时跑、性能要盯着、安全漏洞要堵。本文系统讲解 journalctl 日志系统、crontab 与 systemd timer、资源监控工具链、Fail2ban 防暴力破解，以及自动更新与入侵检测基础，让你的服务器从"能跑"变成"能放心跑"。'
+excerpt: '项目部署完成不等于可以放任运行——日志要能查、任务要定时跑、性能要持续观察、安全风险要分层降低。本文系统讲解 journalctl、crontab 与 systemd timer、资源监控、Fail2ban、自动更新与入侵检测基础。'
 tags: ['linux', 'devops', 'monitoring', 'security', 'systemd', 'cron', 'fail2ban']
-nextPost: 'linux/project-deployment-in-practice'
+nextPost: 'linux/production-readiness-and-architecture'
 ---
 
 # 系统运维与安全：日志、定时任务、监控与加固
 
-在上一篇《[云服务器环境搭建](/posts/linux/cloud-server-environment-setup)》中，我们给服务器装好了 Node.js、Python、MySQL、Redis 和 Nginx，用 systemd 把它们托管为可靠的服务。此时你的服务器已经"能跑了"——但"能跑"和"能放心跑"之间，还差着一整层运维能力。
+在上一篇《[项目部署实战](/posts/linux/project-deployment-in-practice)》中，我们用 PM2、Docker 与 GitHub Actions 跑通了单机部署。应用已经"能跑了"，但要长期运行，还需要日志、备份、监控和分层防御；这些措施只能降低风险，不能作出绝对安全或永不故障的承诺。
 
 这是所谓的 **Day 2 问题**：Day 1 把东西搭起来，Day 2 开始才会遇到真正的麻烦——
 
@@ -17,16 +17,16 @@ nextPost: 'linux/project-deployment-in-practice'
 - 内存明明还有，进程却被杀了？→ **监控**
 - SSH 端口开放不到一天，已经有上千次暴力破解尝试？→ **安全**
 
-这四个问题恰好对应运维的四大支柱：**可观测性（日志）、自动化（定时任务）、警觉性（监控）、防御性（安全）**。本文就围绕这四大支柱展开，让你从"搭好环境"进阶到"稳稳当当运行"。
+这四个问题恰好对应运维的四大支柱：**可观测性（日志）、自动化（定时任务）、警觉性（监控）、防御性（安全）**。本文就围绕这四大支柱展开，帮助你从“服务已经上线”走向“能够持续观察、维护并验证”。
 
 ```mermaid
 graph LR
-  A[Day 1: 环境就绪] --> B[日志系统<br/>出了事能查]
-  A --> C[定时任务<br/>重复活自动干]
-  A --> D[性能监控<br/>出事前能发现]
-  A --> E[安全加固<br/>不让坏人进来]
-  B & C & D & E --> F[Day 2+: 稳定运行]
-  F --> G[下一篇: 项目部署]
+  A[应用已上线] --> B[日志系统<br/>出了事能查]
+  A --> C[定时任务<br/>重复工作自动执行]
+  A --> D[性能监控<br/>尽早发现异常]
+  A --> E[安全加固<br/>分层降低风险]
+  B & C & D & E --> F[Day 2+: 持续维护]
+  F --> G[下一篇: 生产就绪与架构]
 ```
 
 :::note 环境约定
@@ -466,30 +466,66 @@ grep CRON /var/log/syslog | tail -20
 
 **完整示例：每日 MySQL 备份脚本 + cron 任务**
 
+不要在命令行、脚本变量或 crontab 中写数据库密码。先为逻辑备份创建最低权限账号；下面针对示例中的 InnoDB 单库且不导出存储过程，具体权限仍要按 MySQL 版本、存储引擎和备份方式评估：
+
+```sql
+CREATE USER 'backup'@'localhost' IDENTIFIED BY 'replace-with-a-strong-secret';
+GRANT SELECT, SHOW VIEW, TRIGGER, EVENT ON myapp.* TO 'backup'@'localhost';
+```
+
+创建客户端配置并限制为仅部署用户可读：
+
+```ini
+# /home/deploy/.my-backup.cnf
+[client]
+user=backup
+password=replace-with-a-strong-secret
+host=localhost
+```
+
 ```bash
-#!/bin/bash
+chmod 600 /home/deploy/.my-backup.cnf
+```
+
+脚本使用 `pipefail` 检查 `mysqldump | gzip` 两端，先写临时文件，通过 `gzip -t` 后再在同一文件系统原子改名；只有成功产出后才清理旧备份：
+
+```bash
+#!/usr/bin/env bash
 # /home/deploy/scripts/backup-mysql.sh
 
+set -Eeuo pipefail
+umask 077
 export PATH="/usr/local/bin:/usr/bin:/bin"
 
 BACKUP_DIR="/home/deploy/backups/mysql"
+MYSQL_CNF="/home/deploy/.my-backup.cnf"
 RETENTION_DAYS=7
-MYSQL_USER="backup"
-MYSQL_PASS="your-secure-password"
-DATE=$(date +%Y%m%d_%H%M%S)
+DATE="$(date +%Y%m%d_%H%M%S)"
+FINAL="$BACKUP_DIR/myapp_${DATE}.sql.gz"
+TEMP=""
+
+cleanup() {
+  if [ -n "$TEMP" ]; then
+    rm -f -- "$TEMP"
+  fi
+}
+trap cleanup EXIT
 
 mkdir -p "$BACKUP_DIR"
+TEMP="$(mktemp "$BACKUP_DIR/.myapp_${DATE}.XXXXXX.tmp")"
 
-mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASS" --all-databases \
-  | gzip > "$BACKUP_DIR/all_databases_${DATE}.sql.gz"
+mysqldump --defaults-extra-file="$MYSQL_CNF" \
+  --single-transaction --quick --skip-lock-tables --no-tablespaces myapp \
+  | gzip -c > "$TEMP"
 
-if [ $? -eq 0 ]; then
-  echo "[$DATE] MySQL backup succeeded" >> /var/log/backup.log
-  find "$BACKUP_DIR" -name "*.sql.gz" -mtime +$RETENTION_DAYS -delete
-  echo "[$DATE] Old backups cleaned (retention: ${RETENTION_DAYS}d)" >> /var/log/backup.log
-else
-  echo "[$DATE] ERROR: MySQL backup failed!" >> /var/log/backup.log
-fi
+gzip -t "$TEMP"
+mv -f "$TEMP" "$FINAL"
+TEMP=""
+
+# 备份和压缩校验都成功后，才执行保留策略
+find "$BACKUP_DIR" -type f -name 'myapp_*.sql.gz' \
+  -mtime "+$RETENTION_DAYS" -delete
+printf '[%s] backup completed: %s\n' "$DATE" "$FINAL"
 ```
 
 ```bash
@@ -497,9 +533,21 @@ chmod +x /home/deploy/scripts/backup-mysql.sh
 ```
 
 ```cron
-# crontab -e
-0 2 * * * /home/deploy/scripts/backup-mysql.sh
+# crontab -e：任务行不包含数据库密码
+0 2 * * * /home/deploy/scripts/backup-mysql.sh >> /home/deploy/backups/backup.log 2>&1
 ```
+
+还要定期做**恢复演练**：把备份恢复到隔离的临时库，检查表数量、关键查询或校验和，不要直接覆盖生产库。恢复应使用单独、受控且具有写权限的凭据：
+
+```bash
+set -o pipefail
+gzip -dc /home/deploy/backups/mysql/myapp_20260212_020000.sql.gz \
+  | mysql --defaults-extra-file=/home/deploy/.my-restore.cnf myapp_restore
+mysql --defaults-extra-file=/home/deploy/.my-restore.cnf \
+  -NBe 'SELECT COUNT(*) FROM myapp_restore.orders;'
+```
+
+最后把备份加密复制到另一台主机、区域或对象存储，并监控复制结果。本机唯一副本无法覆盖磁盘损坏、误删或主机失陷。
 
 ### 2.2 systemd timer：现代替代方案
 
@@ -838,17 +886,17 @@ MemoryHigh=450M
 
 ---
 
-## 4. 安全加固：堵住常见的漏洞
+## 4. 安全加固：降低常见风险
 
-监控和日志是"被动防御"——出了事能发现。安全加固则是"主动防御"——尽量让坏事不发生。一台暴露在公网上的服务器，默认配置下远比你想象的脆弱。
+监控和日志帮助发现问题，安全加固则通过最小权限、补丁和访问控制降低攻击成功率。公网服务器不存在“一次配置就绝对安全”，需要持续更新、监测与演练。
 
 ### 4.1 Fail2ban：防暴力破解
 
 **问题背景：** 把一台服务器放到公网，SSH 端口 22 开放，几小时内就会出现大量暴力破解尝试：
 
 ```bash
-# 查看有多少次失败的 SSH 登录尝试
-sudo grep "Failed password" /var/log/auth.log | wc -l
+# awk 在零匹配时仍输出单个整数 0
+sudo awk '/Failed password/ { count++ } END { print count + 0 }' /var/log/auth.log
 # 输出可能是：3847
 
 # 看看是谁在尝试
@@ -1071,15 +1119,16 @@ Unattended-Upgrade::Allowed-Origins {
 // 自动清理不再需要的包
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 
-// 自动重启（如果更新了内核等需要重启的包）
-Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "03:00";
+// 默认不让安全更新自行重启主机
+Unattended-Upgrade::Automatic-Reboot "false";
+// 只有纳入维护窗口与编排后，才考虑设置重启时间
+// Unattended-Upgrade::Automatic-Reboot-Time "03:00";
 
 // 邮件通知（可选）
 // Unattended-Upgrade::Mail "your-email@example.com";
 ```
 
-**建议：只自动安装安全更新**，常规更新手动处理，因为常规更新可能引入不兼容的变化。
+**建议：只自动安装安全更新**，常规更新经过测试后再安排。`Automatic-Reboot` 默认保持 `false`：单机应在维护窗口内确认备份、告知影响并人工重启；高可用集群则要先排空流量、确认副本健康，再按节点滚动重启并观察指标。补丁安装成功不代表重启可以不经编排。
 
 **查看自动更新日志：**
 
@@ -1147,21 +1196,16 @@ w
 ls -la /usr/bin/passwd /usr/bin/sudo /usr/sbin/sshd
 ```
 
-**Rootkit 检测工具：**
+**Rootkit 检测工具（有限辅助）：**
 
 ```bash
-# 安装
 sudo apt install rkhunter chkrootkit -y
-
-# 运行 chkrootkit
 sudo chkrootkit
-
-# 运行 rkhunter（更全面）
 sudo rkhunter --update
 sudo rkhunter --check
 ```
 
-rkhunter 的报告在 `/var/log/rkhunter.log` 中。
+这些工具主要按已知特征、文件属性和常见异常做检查，既可能误报，也可能被高权限攻击者绕过。它们的输出只能作为调查线索，**不能证明系统是干净的**；应结合集中日志、文件完整性基线、云平台审计和离线取证。`rkhunter` 的本机报告通常位于 `/var/log/rkhunter.log`，但主机失陷后本机报告本身也不应被单独信任。
 
 **重要原则：如果确认被入侵，重建而非"清理"**
 
@@ -1172,7 +1216,7 @@ rkhunter 的报告在 `/var/log/rkhunter.log` 中。
 1. **立即隔离**：断开网络（或只允许你的 IP 访问）
 2. **保留证据**：在重建前，把 `/var/log/`、`/home/`、`/root/` 打包备份（用于事后分析攻击路径）
 3. **重建系统**：从干净镜像重新安装
-4. **修补漏洞**：分析被入侵的原因，在新系统上堵住同样的漏洞
+4. **修补根因**：分析入侵路径，在新系统上修复同类风险并验证控制措施
 
 :::details 入侵迹象速查表
 | 迹象 | 检查命令 |
@@ -1183,7 +1227,7 @@ rkhunter 的报告在 `/var/log/rkhunter.log` 中。
 | 不认识的 SSH 公钥 | `cat ~/.ssh/authorized_keys` |
 | 不认识的用户账号 | `grep "sh$" /etc/passwd` |
 | 异常网络连接 | `ss -tnp`、`netstat -tnp` |
-| 系统文件被篡改 | `rkhunter --check`、`chkrootkit` |
+| 文件完整性异常线索 | 软件包校验、可信基线；`rkhunter` / `chkrootkit` 仅作辅助 |
 | 异常登录记录 | `last`、`lastb`、`/var/log/auth.log` |
 :::
 
@@ -1194,16 +1238,11 @@ rkhunter 的报告在 `/var/log/rkhunter.log` 中。
 前面的知识都是碎片化的——日志用 journalctl、监控用 top/vmstat、安全用 fail2ban……真正出问题时，你需要**快速全面地了解系统状态**。下面这个巡检脚本把所有检查项串起来，一个命令出完整报告：
 
 ```bash
-#!/bin/bash
+#!/usr/bin/env bash
 # /home/deploy/scripts/server-healthcheck.sh
 # 一键巡检脚本 —— 可以手动运行，也可以用 cron/systemd timer 定期运行
 
-set -euo pipefail
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
+set -Eeuo pipefail
 
 WARN_THRESHOLD_DISK=80
 WARN_THRESHOLD_MEM=85
@@ -1212,65 +1251,66 @@ WARN_THRESHOLD_LOAD_MULTI=2
 report=""
 warnings=0
 
+# 外部命令输出不可信：仅保留可打印 ASCII，并限制长度；不执行、不 eval
+sanitize_text() {
+  LC_ALL=C tr -cd '\11\40-\133\135-\176' | head -c 200
+}
+
 section() {
-  report+="\n━━━ $1 ━━━\n"
+  report+=$'\n'"━━━ $1 ━━━"$'\n'
 }
 
 ok() {
-  report+="${GREEN}[OK]${NC} $1\n"
+  report+="[OK] $1"$'\n'
 }
 
 warn() {
-  report+="${YELLOW}[WARN]${NC} $1\n"
+  report+="[WARN] $1"$'\n'
   warnings=$((warnings + 1))
 }
 
 fail() {
-  report+="${RED}[FAIL]${NC} $1\n"
+  report+="[FAIL] $1"$'\n'
   warnings=$((warnings + 1))
 }
 
-hostname=$(hostname)
-timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-uptime_info=$(uptime -p)
-load1=$(awk '{print $1}' /proc/loadavg)
-load5=$(awk '{print $2}' /proc/loadavg)
-load15=$(awk '{print $3}' /proc/loadavg)
-cpu_cores=$(nproc)
+hostname_safe="$(hostname | sanitize_text)"
+timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+uptime_safe="$(uptime -p | sanitize_text)"
+read -r load1 load5 load15 _ < /proc/loadavg
+cpu_cores="$(nproc)"
 
-report+="╔══════════════════════════════════════╗\n"
-report+="║  服务器巡检报告                      ║\n"
-report+="╚══════════════════════════════════════╝\n"
-report+="主机: ${hostname}  时间: ${timestamp}\n"
-report+="运行: ${uptime_info}\n\n"
+report+="服务器巡检报告"$'\n'
+report+="主机: ${hostname_safe}  时间: ${timestamp}"$'\n'
+report+="运行: ${uptime_safe}"$'\n'
 
 section "1. 系统负载"
-load_threshold=$(echo "$cpu_cores * $WARN_THRESHOLD_LOAD_MULTI" | bc)
-report+="负载: ${load1} / ${load5} / ${load15}  (CPU 核数: ${cpu_cores})\n"
-if awk "BEGIN{exit !($load1 > $load_threshold)}"; then
+load_threshold="$(awk -v cores="$cpu_cores" -v multiple="$WARN_THRESHOLD_LOAD_MULTI" \
+  'BEGIN { printf "%.2f", cores * multiple }')"
+report+="负载: ${load1} / ${load5} / ${load15}  (CPU 核数: ${cpu_cores})"$'\n'
+if awk -v load="$load1" -v threshold="$load_threshold" \
+  'BEGIN { exit !(load > threshold) }'; then
   warn "1 分钟负载 ${load1} 超过阈值 ${load_threshold}"
 else
   ok "1 分钟负载正常 (${load1})"
 fi
 
 section "2. 内存"
-mem_info=$(free -m | head -2)
-mem_total=$(echo "$mem_info" | awk '/Mem:/{print $2}')
-mem_used=$(echo "$mem_info" | awk '/Mem:/{print $3}')
-mem_available=$(echo "$mem_info" | awk '/Mem:/{print $7}')
-mem_pct=$(echo "scale=1; $mem_used * 100 / $mem_total" | bc)
+read -r mem_total mem_used mem_available < <(
+  free -m | awk '/^Mem:/ { print $2, $3, $7 }'
+)
+mem_pct="$(awk -v used="$mem_used" -v total="$mem_total" \
+  'BEGIN { if (total > 0) printf "%.1f", used * 100 / total; else print "0.0" }')"
+report+="总计: ${mem_total}MB  已用: ${mem_used}MB (${mem_pct}%)  可用: ${mem_available}MB"$'\n'
 
-report+="总计: ${mem_total}MB  已用: ${mem_used}MB (${mem_pct}%)  可用: ${mem_available}MB\n"
-
-if awk "BEGIN{exit !($mem_pct > $WARN_THRESHOLD_MEM)}"; then
+if awk -v pct="$mem_pct" -v threshold="$WARN_THRESHOLD_MEM" \
+  'BEGIN { exit !(pct > threshold) }'; then
   warn "内存使用率 ${mem_pct}% 超过 ${WARN_THRESHOLD_MEM}%"
 else
   ok "内存使用率 ${mem_pct}%"
 fi
 
-swap_info=$(free -m | awk '/Swap:/{print $2, $3, $4}')
-swap_total=$(echo $swap_info | awk '{print $1}')
-swap_used=$(echo $swap_info | awk '{print $2}')
+read -r swap_total swap_used _ < <(free -m | awk '/^Swap:/ { print $2, $3, $4 }')
 if [ "$swap_total" -gt 0 ] && [ "$swap_used" -gt 0 ]; then
   warn "Swap 已使用 ${swap_used}MB / ${swap_total}MB"
 else
@@ -1278,13 +1318,12 @@ else
 fi
 
 section "3. 磁盘"
-df_output=$(df -h --output=target,pcent,used,size | grep -v tmpfs | grep -v devtmpfs | tail -n +2)
-while IFS= read -r line; do
-  mount=$(echo "$line" | awk '{print $1}')
-  pct=$(echo "$line" | awk '{print $2}' | tr -d '%')
-  used=$(echo "$line" | awk '{print $3}')
-  total=$(echo "$line" | awk '{print $4}')
-  report+="  ${mount}: ${used}/${total} (${pct}%)\n"
+df_output="$(df -h --output=target,pcent,used,size | \
+  awk 'NR > 1 && $1 !~ /^(tmpfs|devtmpfs)$/ { print }')"
+while read -r mount pct_with_sign used total; do
+  [ -n "${mount:-}" ] || continue
+  pct="${pct_with_sign%%%}"
+  report+="  ${mount}: ${used}/${total} (${pct}%)"$'\n'
   if [ "$pct" -ge "$WARN_THRESHOLD_DISK" ]; then
     warn "${mount} 磁盘使用率 ${pct}% 超过 ${WARN_THRESHOLD_DISK}%"
   fi
@@ -1292,57 +1331,66 @@ done <<< "$df_output"
 ok "磁盘检查完成"
 
 section "4. 服务状态"
-services="nginx mysql redis-server sshd"
-for svc in $services; do
+services=(nginx mysql redis-server ssh)
+for svc in "${services[@]}"; do
   if systemctl is-active --quiet "$svc" 2>/dev/null; then
     ok "${svc} 正在运行"
+  elif systemctl list-unit-files "$svc.service" --no-legend 2>/dev/null | \
+    awk -v unit="$svc.service" '$1 == unit { found=1 } END { exit !found }'; then
+    fail "${svc} 未运行"
   else
-    if systemctl list-unit-files | grep -q "^${svc}.service"; then
-      fail "${svc} 未运行！"
-    else
-      report+="  ${svc} 未安装（跳过）\n"
-    fi
+    report+="  ${svc} 未安装（跳过）"$'\n'
   fi
 done
 
 section "5. SSH 安全"
-failed_logins=$(grep "Failed password" /var/log/auth.log 2>/dev/null | wc -l || echo "0")
-report+="最近失败登录尝试: ${failed_logins} 次\n"
+# awk 在零匹配时仍只输出一个整数 0，避免 grep 在 set -e 下的退出码陷阱
+failed_logins="$(awk '/Failed password/ { count++ } END { print count + 0 }' \
+  /var/log/auth.log 2>/dev/null || printf '0\n')"
+report+="最近失败登录尝试: ${failed_logins} 次"$'\n'
 if [ "$failed_logins" -gt 100 ]; then
-  warn "失败登录次数较多 (${failed_logins})，考虑检查 Fail2ban 是否生效"
+  warn "失败登录次数较多 (${failed_logins})，请检查来源与 Fail2ban 状态"
 else
-  ok "失败登录次数正常 (${failed_logins})"
+  ok "失败登录计数未超过示例阈值 (${failed_logins})"
 fi
 
 section "6. OOM 事件"
-oom_count=$(dmesg 2>/dev/null | grep -ci "oom\|out of memory\|killed process" || echo "0")
+dmesg_output="$(dmesg 2>/dev/null || true)"
+oom_count="$(awk 'BEGIN { IGNORECASE=1 }
+  /oom|out of memory|killed process/ { count++ }
+  END { print count + 0 }' <<< "$dmesg_output")"
 if [ "$oom_count" -gt 0 ]; then
-  warn "发现 ${oom_count} 条 OOM 记录，请检查内存使用情况"
-  dmesg 2>/dev/null | grep -i "killed process" | tail -3 | while read -r line; do
-    report+="  ${line}\n"
-  done
+  warn "发现 ${oom_count} 条 OOM 相关记录，请检查内存与原始可信日志"
 else
-  ok "无 OOM 事件"
+  ok "未在当前可读内核日志中发现 OOM 记录"
 fi
 
 section "7. Fail2ban"
 if systemctl is-active --quiet fail2ban 2>/dev/null; then
   ok "Fail2ban 正在运行"
-  banned_count=$(sudo fail2ban-client status sshd 2>/dev/null | grep "Banned IP" | grep -oP '\d+' || echo "0")
-  report+="  当前 SSH 封禁 IP 数: ${banned_count}\n"
+  fail2ban_output="$(sudo -n fail2ban-client status sshd 2>/dev/null || true)"
+  banned_count="$(awk -F: '/Currently banned/ {
+      gsub(/[^0-9]/, "", $2); print ($2 == "" ? 0 : $2); found=1
+    }
+    END { if (!found) print 0 }' <<< "$fail2ban_output")"
+  report+="  当前 SSH 封禁 IP 数: ${banned_count}"$'\n'
 else
   warn "Fail2ban 未运行"
 fi
 
-report+="\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+report+=$'\n'"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"$'\n'
 if [ "$warnings" -gt 0 ]; then
-  report+="${RED}发现 ${warnings} 个警告，请及时处理！${NC}\n"
+  report+="发现 ${warnings} 个需检查项目"$'\n'
 else
-  report+="${GREEN}系统状态良好，无异常${NC}\n"
+  report+="本次巡检未发现超过示例阈值的项目"$'\n'
 fi
 
-echo -e "$report"
+printf '%s' "$report"
 ```
+
+:::warning 日志与命令输出都是不可信输入
+脚本只汇总计数，并对主机名等文本做控制字符过滤。把巡检结果发送到邮件、聊天工具或网页时，继续按目标格式转义并脱敏，限制长度；不要 `eval` 日志内容，不要把输出拼成 shell 命令，也不要直接拼接 HTML。原始日志可能包含终端控制字符、伪造换行、令牌、Cookie 或个人信息。
+:::
 
 设置权限：
 
@@ -1405,10 +1453,10 @@ journalctl -u server-healthcheck.service --since "1 hour ago"
 | **可观测性** | 出了事能查 | journalctl、/var/log、logrotate |
 | **自动化** | 重复活不用人干 | crontab、systemd timer |
 | **警觉性** | 出事前能发现 | top/htop、vmstat、iostat、巡检脚本 |
-| **防御性** | 不让坏人进来 | Fail2ban、SELinux/AppArmor、unattended-upgrades |
+| **防御性** | 降低常见攻击风险 | Fail2ban、SELinux/AppArmor、unattended-upgrades |
 
-这四个支柱环环相扣：日志让你能排障，定时任务让备份和巡检自动执行，监控让问题早发现，安全加固让攻击者难以入侵。一个没有日志的服务器出故障时只能猜，一个没有定时备份的服务器丢数据时只能哭，一个没有监控的服务器宕机时只能等用户投诉，一个没有安全加固的服务器被入侵时只能重建。
+这四个支柱环环相扣：日志提供排障证据，定时任务让备份和巡检按计划执行，监控帮助更早发现异常，安全加固用于分层降低风险。它们都需要告警、抽查和演练来验证，不能因为“配置过一次”就假设持续有效。
 
-现在，你的服务器终于从"能跑"变成了"能放心跑"——环境搭好了、日志记着了、任务定时跑着了、性能盯着了、漏洞堵上了。是时候把项目真正部署上去了。
+现在，这台服务器已经具备基础的 Day 2 运维能力，但单机仍有故障域、容量和恢复时间等边界。下一阶段要把这些操作经验提升为可度量、可演练的生产工程能力。
 
-下一篇《[项目部署实战](/posts/linux/project-deployment-in-practice)》，我们将完整演示从代码到上线的三种方式：手动部署、Docker 容器化、以及 CI/CD 自动化，把整个 Linux 系列收束为一条完整的闭环。
+下一篇《[生产就绪与架构](/posts/linux/production-readiness-and-architecture)》，我们将从非功能需求、故障域、高可用、容量规划、健康检查和故障演练出发，继续完善生产就绪设计。

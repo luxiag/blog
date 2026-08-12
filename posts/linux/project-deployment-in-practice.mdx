@@ -1,22 +1,16 @@
 ---
 title: '项目部署实战：从代码到上线（含 Docker 与 CI/CD）'
 date: '2026-02-11'
-excerpt: '环境备好了，是时候把项目真正搬上线了。本文以一个 Node.js 应用为例，完整演示三种部署方式：手动部署、Docker 容器化部署、以及用 GitHub Actions 实现自动化 CI/CD，并配套日志、备份与回滚等运维实践，把整个 Linux 系列收束为一条完整闭环。'
+excerpt: '环境备好了，是时候把项目真正搬上线了。本文以一个 Node.js 应用为例，演示手动部署、Docker 容器化与 GitHub Actions 自动交付，建立单机部署基础，并为后续生产工程学习做好准备。'
 tags: ['linux', 'server', 'docker', 'cicd', 'deployment', 'devops', 'nginx']
+nextPost: 'linux/system-ops-and-security'
 ---
 
 # 项目部署实战：从代码到上线
 
-这是 Linux 系列的收官之作。回顾一下我们的学习路径：
+在上一篇《[云服务器环境搭建](/posts/linux/cloud-server-environment-setup)》中，我们准备好了 Node.js、数据库与 Nginx。现在要把应用真正放到服务器上，建立一套可重复、可检查、可回退的**单机部署基础**。
 
-1. 《[深入浅出 Linux](/posts/linux/linux-fundamentals)》——从基础命令到管道与文本三剑客；
-2. 《[Shell 脚本编程](/posts/linux/shell-scripting)》——让 Linux 替你干活；
-3. 《[云服务器入门](/posts/linux/cloud-server-getting-started)》——连接、用户与安全加固；
-4. 《[网络排查与磁盘管理](/posts/linux/networking-and-disk)》——服务器的血管和仓库；
-5. 《[云服务器环境搭建](/posts/linux/cloud-server-environment-setup)》——运行时、数据库与 Nginx；
-6. 《[系统运维与安全](/posts/linux/system-ops-and-security)》——日志、定时任务、监控与加固。
-
-现在，我们手握一台安全、环境齐备的服务器，终于要把项目**真正搬上线**了。本文将循序渐进地讲解三种部署方式，它们代表了从"手工作坊"到"现代工业化"的演进：
+本文会循序渐进地讲解三种部署方式，它们代表了从手动理解原理，到容器化交付，再到自动化发布的演进：
 
 ```mermaid
 graph TD
@@ -64,9 +58,27 @@ app.get('/', (req, res) => {
   res.send('Hello from my deployed app!');
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.get('/healthz', (req, res) => {
+  res.status(200).json({ status: 'ok' });
 });
+
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  // 配合 PM2 的 wait_ready：确认监听成功后再接收流量
+  if (process.send) process.send('ready');
+});
+
+// 收到退出信号后停止接收新连接，等待已有请求结束
+function shutdown(signal) {
+  console.log(`${signal} received, shutting down gracefully`);
+  server.close((error) => {
+    process.exit(error ? 1 : 0);
+  });
+  setTimeout(() => process.exit(1), 9000).unref();
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
 ```
 
 ---
@@ -108,8 +120,8 @@ rsync -avz --exclude 'node_modules' ./myapp/ deploy@123.45.67.89:~/myapp/
 ```bash
 cd ~/myapp
 
-# 安装生产依赖（--production 跳过开发依赖，更轻量）
-npm install --production
+# 严格按 package-lock.json 安装，生产运行不需要开发依赖时省略它们
+npm ci --omit=dev
 
 # 根据示例创建真实的环境变量文件
 cp .env.example .env
@@ -122,35 +134,55 @@ nano .env       # 填入数据库密码、密钥等敏感信息
 
 ### 2.3 用 PM2 运行并守护进程
 
-上一篇我们介绍了用 `systemd` 守护应用。这里演示 Node 生态更便捷的 **PM2**，两者效果相同，你可任选其一。
+上一篇我们介绍了用 `systemd` 守护应用。这里演示 Node 生态更便捷的 **PM2**，两者都能管理进程，但配置与发布语义不同。
+
+先创建 `ecosystem.config.cjs`。要让 `reload` 在单机上做到**近零停机**，至少需要 cluster 多实例、就绪握手和优雅退出共同配合：
+
+```js
+module.exports = {
+  apps: [{
+    name: 'myapp',
+    script: './server.js',
+    exec_mode: 'cluster',
+    instances: 2,
+    wait_ready: true,
+    listen_timeout: 10000,
+    kill_timeout: 10000,
+    env: { NODE_ENV: 'production', PORT: 3000 },
+  }],
+};
+```
+
+前面的 `server.js` 已在真正监听后发送 `ready`，并处理 `SIGINT` / `SIGTERM`，因此 PM2 可以等新实例就绪后再终止旧实例：
 
 ```bash
 # 1. 全局安装 PM2
 npm install -g pm2
 
-# 2. 启动应用（--name 给进程起个名字）
-pm2 start server.js --name myapp
+# 2. 按配置启动 cluster 多实例
+pm2 start ecosystem.config.cjs
 
-# 3. 查看运行状态
-pm2 list
+# 3. 查看状态与日志
 pm2 status
-
-# 4. 查看日志
 pm2 logs myapp
 
-# 5. ⭐ 配置开机自启（关键，否则服务器重启后应用不会启动）
-pm2 startup          # 它会输出一条命令，复制并执行那条命令
-pm2 save             # 保存当前进程列表
+# 4. 配置开机自启（按 pm2 startup 输出继续执行）
+pm2 startup
+pm2 save
 ```
 
-更新代码时，手动部署的流程就是：
+更新时先准备好代码与依赖，再触发滚动 reload：
 
 ```bash
 cd ~/myapp
-git pull                    # 拉取最新代码
-npm install --production    # 更新依赖
-pm2 reload myapp            # 平滑重启（0 秒停机）
+git pull --ff-only
+npm ci --omit=dev
+pm2 reload ecosystem.config.cjs --update-env
 ```
+
+:::warning 单实例不承诺零停机
+`instances: 1` 时，旧进程退出与新进程就绪之间仍可能出现空窗；即使是多实例，进程崩溃、长连接、数据库迁移或宿主机故障也会影响可用性。因此这里称为“近零停机”，上线后仍要用健康检查和真实请求验证。
+:::
 
 ### 2.4 接上 Nginx 反向代理
 
@@ -193,48 +225,71 @@ graph LR
 
 ### 3.2 安装 Docker
 
+Ubuntu 上优先使用 Docker 官方 apt 仓库，这样来源、签名与后续升级路径都更清晰；不要把远程脚本直接通过管道交给 shell 执行。
+
 ```bash
-# 用官方便捷脚本安装 Docker
-curl -fsSL https://get.docker.com | sudo sh
+# 1. 准备仓库签名与目录
+sudo apt update
+sudo apt install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
 
-# 把当前用户加入 docker 组，之后无需每次 sudo（需重新登录生效）
-sudo usermod -aG docker $USER
+# 2. 添加与当前 Ubuntu 版本匹配的官方仓库
+. /etc/os-release
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME:-$VERSION_CODENAME} stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-# 启动并开机自启
+# 3. 安装 Engine、Buildx 与 Compose 插件
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin
 sudo systemctl enable --now docker
-
-# 重新登录后验证
-docker --version
-docker run hello-world
+sudo docker run --rm hello-world
 ```
+
+如果确实需要让部署用户免 `sudo` 操作 Docker，可以加入 `docker` 组并重新登录：
+
+```bash
+sudo usermod -aG docker deploy
+```
+
+:::warning docker 组等价于高权限
+Docker daemon 通常以 root 身份运行，能访问 Docker socket 的用户可挂载宿主机目录、启动特权容器，效果接近获得 root 权限。只把受控部署账号加入 `docker` 组；权限要求更高时，评估 rootless 模式或通过严格限定的自动化入口部署。
+:::
 
 ### 3.3 编写 Dockerfile
 
 `Dockerfile` 是一份"如何构建镜像"的说明书。在项目根目录创建：
 
 ```dockerfile
-# 1. 基础镜像：选官方 Node 镜像，alpine 版极其轻量（还记得第一篇提到 Alpine 吗）
-FROM node:20-alpine
-
-# 2. 设置容器内的工作目录
+# 固定 major/minor 与发行版，避免无意跨大版本升级
+FROM node:20.18-alpine3.20 AS deps
 WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
-# 3. 先只复制 package 文件并安装依赖
-#    —— 利用 Docker 的层缓存：只要依赖没变，这一层就不用重新构建，加速后续构建
-COPY package*.json ./
-RUN npm install --production
+FROM node:20.18-alpine3.20 AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
 
-# 4. 再复制其余源代码
-COPY . .
+# tini 作为 PID 1 转发信号并回收僵尸进程
+RUN apk add --no-cache tini
+COPY --from=deps --chown=node:node /app/node_modules ./node_modules
+COPY --chown=node:node . .
 
-# 5. 声明应用监听的端口（仅作文档说明）
+USER node
 EXPOSE 3000
-
-# 6. 容器启动时执行的命令
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:3000/healthz >/dev/null || exit 1
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "server.js"]
 ```
 
-同时建一个 `.dockerignore`，避免把无用文件打进镜像：
+这里用两阶段构建把依赖安装与运行环境分开，最终镜像只保留运行所需内容。示例固定了 Node major/minor 与 Alpine 版本；关键生产环境还应把验证过的基础镜像固定到 digest（`image@sha256:...`），并通过受控流程更新 digest，避免同名 tag 漂移。
+
+同时建一个 `.dockerignore`，避免把无用文件和本地秘密打进镜像：
 
 ```text
 node_modules
@@ -249,10 +304,10 @@ npm-debug.log
 # 1. 构建镜像，-t 打标签（名字:版本）
 docker build -t myapp:1.0 .
 
-# 2. 运行容器
+# 2. 只把宿主端口绑定到回环地址，由 Nginx 对外提供入口
 docker run -d \
   --name myapp \
-  -p 3000:3000 \
+  -p 127.0.0.1:3000:3000 \
   --env-file .env \
   --restart unless-stopped \
   myapp:1.0
@@ -262,7 +317,7 @@ docker run -d \
 
 - `-d`：后台运行（detached）。
 - `--name myapp`：给容器命名，方便管理。
-- `-p 3000:3000`：端口映射，把**容器内的 3000** 映射到**宿主机的 3000**（左边宿主机，右边容器）。
+- `-p 127.0.0.1:3000:3000`：把容器内 3000 只映射到宿主机回环地址，公网不能绕过 Nginx 直接访问应用端口（左边是宿主机，右边是容器）。
 - `--env-file .env`：从文件注入环境变量。
 - `--restart unless-stopped`：容器崩溃或服务器重启后自动拉起（相当于 Docker 版的"开机自启"）。
 
@@ -280,56 +335,70 @@ Nginx 配置完全不变——它依然把流量转发给本机 3000 端口，�
 
 ### 3.5 用 Docker Compose 编排多个服务
 
-真实项目往往不止一个容器：应用 + 数据库 + 缓存。一个个 `docker run` 太繁琐，**Docker Compose** 让你用一个 `docker-compose.yml` 文件描述并一键启停所有服务。
+真实项目往往不止一个容器。下面把应用与 Redis 放进一个 Compose 项目；生产数据库通常由独立主机或托管服务提供，不把 MySQL root 密码和数据库生命周期塞进这个入门示例。
 
 ```yaml
 services:
   app:
-    build: .
+    image: ${APP_IMAGE:?请设置不可变镜像标签}
+    init: true
     ports:
-      - "3000:3000"
-    env_file: .env
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - .env
     depends_on:
-      - db
-      - redis
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
     restart: unless-stopped
-
-  db:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
-      MYSQL_DATABASE: myapp
-    volumes:
-      # 数据卷：让数据库数据持久化到宿主机，容器删了数据也不丢
-      - db_data:/var/lib/mysql
-    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
 volumes:
-  db_data:
+  redis_data:
 ```
+
+`depends_on.condition: service_healthy` 只保证启动 app 前 Redis 的健康检查通过，不代表依赖在整个运行期永不失败；应用仍需设置连接超时、重试与降级策略。端口绑定 `127.0.0.1`，继续由 Nginx 作为唯一公网入口。
 
 一键操作：
 
 ```bash
-# 后台启动所有服务
-docker compose up -d
+# 使用固定镜像标签启动
+export APP_IMAGE="ghcr.io/yourname/myapp:0123456789abcdef"
+docker compose pull app
+docker compose up -d --no-build
 
-# 查看所有服务状态
+# 查看容器状态与日志
 docker compose ps
-
-# 查看日志
-docker compose logs -f
-
-# 停止并移除所有容器
-docker compose down
+docker compose logs -f app
 ```
 
-:::important 数据卷（Volume）至关重要
-容器是"无状态、用完即弃"的——删掉容器，里面的数据就没了。所以**数据库的数据必须存在数据卷（volume）里**，挂载到宿主机持久化保存。上面的 `db_data:/var/lib/mysql` 就是把 MySQL 的数据目录持久化了，这样即使重建容器，数据依然还在。
+:::warning 资源限制要验证实际生效
+`deploy.resources` 来自 Compose Deploy 规范；普通 `docker compose`、Swarm 以及其他 Compose 实现对它的支持范围并不完全相同。部署前先查当前版本文档，可按运行模式改用受支持的 Compose 字段，或直接使用 `docker run --cpus ... --memory ...`。无论写在哪，都要用 `docker inspect`、运行时指标和压测确认限制确实生效，而不是只看 YAML。
+:::
+
+:::important 数据卷不是备份
+Redis 持久化卷让容器重建后仍能读取本机数据，但卷会随磁盘故障、误删或主机丢失一起受损。关键数据仍要按恢复目标做独立备份与异地副本；生产数据库则需要单独设计权限、备份和高可用方案。
 :::
 
 ---
@@ -355,67 +424,136 @@ graph LR
 
 我们用最流行的 **GitHub Actions** 来演示。
 
-### 4.2 准备工作：让 GitHub 能安全访问服务器
+### 4.2 准备工作：最小化生产机入口
 
-CI/CD 流水线需要 SSH 登录你的服务器去执行部署。但绝不能把私钥明文写进代码！正确做法是用 GitHub 的 **Secrets**（加密的环境变量）。
+流水线仍需要 SSH 触发部署，但生产机不再 `git pull`、安装依赖或构建镜像。准备工作如下：
 
-1. 生成一对**专用于部署**的 SSH 密钥（建议独立于你日常用的）。
-2. 把**公钥**加到服务器 `~/.ssh/authorized_keys`（第三篇讲过）。
-3. 在 GitHub 仓库 → **Settings → Secrets and variables → Actions** 里添加：
-   - `SERVER_HOST`：服务器 IP
-   - `SERVER_USER`：部署用户（如 `deploy`）
-   - `SSH_PRIVATE_KEY`：那把**私钥**的完整内容
+1. 生成一对**专用于部署**的 SSH 密钥，把公钥放进部署用户的 `authorized_keys`，并限制该账号权限。
+2. 在仓库的 **Settings → Secrets and variables → Actions** 中保存 `SERVER_HOST`、`SERVER_USER`、`SSH_PRIVATE_KEY` 与经过核验的 `SSH_KNOWN_HOSTS`；不要在流水线中临时信任未知主机指纹。
+3. 在服务器 `/opt/myapp/compose.yaml` 放好上一节的 Compose 配置及权限受控的 `.env`。若 GHCR 包不是公开的，预先用只有 `read:packages` 权限的凭据登录 GHCR。
+4. 在 GitHub 的 **Settings → Environments → production** 配置 required reviewers 等审批规则。工作流里的 `environment: production` 只有配合这些规则才会形成上线审批门禁。
 
-### 4.3 编写工作流文件
+### 4.3 构建不可变镜像并按 SHA 部署
 
-在项目里创建 `.github/workflows/deploy.yml`：
+下面的工作流先测试，再把镜像以 `github.sha` 作为不可变 tag 推送到 GHCR，最后让生产机只拉取这一固定 tag：
 
 ```yaml
-name: Deploy to Server
+name: Build and deploy
 
-# 触发条件：push 到 main 分支时
 on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
-      # 1. 检出代码
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. （CI 部分）安装依赖并运行测试
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-      - name: Install & Test
+          node-version: '20.18'
+          cache: npm
+
+      - name: Test
         run: |
           npm ci
           npm test
 
-      # 3. （CD 部分）通过 SSH 登录服务器执行部署
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.0
+      - name: Login to GHCR
+        uses: docker/login-action@v3
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd ~/myapp
-            git pull origin main
-            docker compose up -d --build
-            docker image prune -f
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push immutable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Pull SHA image, smoke test, and restore on failure
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          TARGET_IMAGE: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "$SERVER_USER@$SERVER_HOST" \
+            bash -s -- "$TARGET_IMAGE" <<'REMOTE'
+          set -Eeuo pipefail
+          cd /opt/myapp
+
+          TARGET_IMAGE="$1"
+          PREVIOUS_IMAGE="$(cat .deployed-image 2>/dev/null || true)"
+
+          APP_IMAGE="$TARGET_IMAGE" docker compose pull app
+          APP_IMAGE="$TARGET_IMAGE" docker compose up -d --no-build app
+
+          healthy=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:3000/healthz >/dev/null; then
+              healthy=true
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$healthy" != true ]; then
+            echo "Smoke test failed; restoring PREVIOUS_IMAGE" >&2
+            if [ -n "$PREVIOUS_IMAGE" ]; then
+              APP_IMAGE="$PREVIOUS_IMAGE" docker compose pull app
+              APP_IMAGE="$PREVIOUS_IMAGE" docker compose up -d --no-build app
+              curl --fail --silent --show-error \
+                --retry 15 --retry-delay 2 --retry-connrefused \
+                http://127.0.0.1:3000/healthz >/dev/null
+            fi
+            exit 1
+          fi
+
+          tmp="$(mktemp .deployed-image.XXXXXX)"
+          printf '%s\n' "$TARGET_IMAGE" > "$tmp"
+          mv -f "$tmp" .deployed-image
+          REMOTE
 ```
 
-现在，**每次往 `main` 分支推送代码，GitHub Actions 就会自动跑测试、登录服务器、拉取最新代码、重新构建并重启容器**。从写完代码到线上更新，你只需要一个 `git push`。
+示例使用 `actions/checkout@v4`、`docker/login-action@v3` 等稳定主版本，便于教学阅读；真实企业环境应把第三方 Action 固定到审核过的**完整 commit SHA**，并通过依赖更新流程评估升级。生产包还要设置合适的可见性、保留策略和镜像扫描。
 
-### 4.4 更进一步：构建镜像推送到仓库
-
-更专业的做法是：在 CI 阶段**构建好镜像并推送到镜像仓库**（如 Docker Hub、GitHub Container Registry），服务器只负责**拉取镜像并运行**，无需在生产服务器上安装构建工具链，也更快、更干净。这是大型项目的标准做法，原理与上面一致，只是把"在服务器上 build"换成了"在服务器上 pull 现成镜像"。
-
+这条流水线不会在生产服务器拉源码或 build。每次发布都能由 `github.sha` 精确定位；烟雾测试失败时，脚本读取上次成功记录的 `PREVIOUS_IMAGE`，重新 `pull` 并 `up -d` 恢复。若变更包含不向后兼容的数据库迁移，仅切镜像可能无法恢复，必须另行设计可回退迁移。
 ---
 
 ## 5. 上线之后：日志、备份与回滚
@@ -451,47 +589,106 @@ awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -nr | head -1
 grep -E ' 5[0-9]{2} ' /var/log/nginx/access.log
 ```
 
-### 5.2 数据库备份（最重要的事）
+### 5.2 数据库备份：先保证凭据与产物可信
 
-代码可以重新部署，**数据丢了就真没了**。务必定期备份数据库：
+代码可以重新部署，数据通常不能。不要把数据库密码放在命令行、脚本变量或 crontab 中：命令行可能被进程列表、历史记录或任务日志看到。先创建仅用于逻辑备份的账号；以下权限适合示例中的 InnoDB 单库、无存储过程备份，实际权限要按 MySQL 版本、存储引擎和备份参数逐项评估：
 
-```bash
-# 手动备份 MySQL（导出为 SQL 文件）
-mysqldump -u myapp_user -p myapp > backup_$(date +%Y%m%d).sql
-
-# 恢复
-mysql -u myapp_user -p myapp < backup_20260211.sql
+```sql
+CREATE USER 'backup'@'localhost' IDENTIFIED BY 'replace-with-a-strong-secret';
+GRANT SELECT, SHOW VIEW, TRIGGER, EVENT ON myapp.* TO 'backup'@'localhost';
 ```
 
-把它写成脚本，配合 `cron` 定时执行，实现每天自动备份：
+把客户端凭据放进只有部署用户可读的配置文件：
 
-```bash
-# 编辑当前用户的定时任务
-crontab -e
-
-# 加入这一行：每天凌晨 3 点自动备份
-0 3 * * * mysqldump -u myapp_user -pYOUR_PASS myapp > ~/backups/db_$(date +\%Y\%m\%d).sql
+```ini
+# /home/deploy/.my-backup.cnf
+[client]
+user=backup
+password=replace-with-a-strong-secret
+host=localhost
 ```
 
-:::tip cron 表达式速记
-五个字段依次是：`分 时 日 月 周`。`0 3 * * *` 即"每天 3 点 0 分"。这是 Linux 定时任务的标准语法，部署后台清理、日志轮转、备份等都靠它。
-:::
+```bash
+chmod 600 /home/deploy/.my-backup.cnf
+```
 
-### 5.3 回滚：出事了怎么快速退回
-
-新版本上线后发现严重 bug，最快的止血方式是**回滚到上一个正常版本**。
+备份脚本同时检查管道、压缩包与原子落盘；只有成功后才清理旧备份：
 
 ```bash
-# Git 方式：回退到上一个提交再重新部署
-git reset --hard HEAD~1
-docker compose up -d --build
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
 
-# Docker 镜像方式（推荐）：直接切回上一个版本的镜像 tag
-# 这也是为什么镜像要打版本号而非只用 latest
-docker compose down
-# 修改 compose 文件里镜像 tag 为旧版本，再 up
-docker compose up -d
+BACKUP_DIR="/home/deploy/backups/mysql"
+MYSQL_CNF="/home/deploy/.my-backup.cnf"
+DATE="$(date +%Y%m%d_%H%M%S)"
+FINAL="$BACKUP_DIR/myapp_${DATE}.sql.gz"
+
+mkdir -p "$BACKUP_DIR"
+TEMP="$(mktemp "$BACKUP_DIR/.myapp_${DATE}.XXXXXX.tmp")"
+trap 'rm -f "$TEMP"' EXIT
+
+mysqldump --defaults-extra-file="$MYSQL_CNF" \
+  --single-transaction --quick --skip-lock-tables --no-tablespaces myapp \
+  | gzip -c > "$TEMP"
+
+gzip -t "$TEMP"
+# TEMP 与 FINAL 位于同一文件系统，mv 才能作为原子发布步骤
+mv -f "$TEMP" "$FINAL"
+trap - EXIT
+
+# 成功产出并校验后再执行保留策略
+find "$BACKUP_DIR" -type f -name 'myapp_*.sql.gz' -mtime +7 -delete
+printf 'backup completed: %s\n' "$FINAL"
 ```
+
+Cron 只调用脚本，不携带密码：
+
+```cron
+0 3 * * * /home/deploy/scripts/backup-mysql.sh >> /home/deploy/backups/backup.log 2>&1
+```
+
+备份文件存在不等于可恢复。定期在隔离的临时数据库中用单独、受控的恢复凭据执行演练，并做表数量、关键查询或校验和验证：
+
+```bash
+# 不要直接覆盖生产库；先恢复到隔离的 myapp_restore
+set -o pipefail
+gzip -dc /home/deploy/backups/mysql/myapp_20260211_030000.sql.gz \
+  | mysql --defaults-extra-file=/home/deploy/.my-restore.cnf myapp_restore
+```
+
+最后，把备份加密复制到不同主机、区域或对象存储，并监控复制失败；本机磁盘上的唯一副本无法覆盖磁盘损坏、误删和主机失陷。
+
+### 5.3 回滚：按固定旧 SHA 恢复
+
+回滚不是改写 Git 历史，也不需要先停止整套服务。选择一个已经验证过的旧 `github.sha` 镜像 tag，更新 app 并立即做健康检查；若旧版本也未通过检查，再恢复发布前镜像：
+
+```bash
+set -Eeuo pipefail
+cd /opt/myapp
+
+PREVIOUS_IMAGE="$(cat .deployed-image)"
+ROLLBACK_IMAGE="ghcr.io/yourname/myapp:4f2c9d7b1a6e"
+
+APP_IMAGE="$ROLLBACK_IMAGE" docker compose pull app
+APP_IMAGE="$ROLLBACK_IMAGE" docker compose up -d --no-build app
+
+if curl --fail --silent --show-error \
+  --retry 15 --retry-delay 2 --retry-connrefused \
+  http://127.0.0.1:3000/healthz >/dev/null; then
+  tmp="$(mktemp .deployed-image.XXXXXX)"
+  printf '%s\n' "$ROLLBACK_IMAGE" > "$tmp"
+  mv -f "$tmp" .deployed-image
+  echo "rollback succeeded: $ROLLBACK_IMAGE"
+else
+  echo "rollback image is unhealthy; restoring $PREVIOUS_IMAGE" >&2
+  APP_IMAGE="$PREVIOUS_IMAGE" docker compose pull app
+  APP_IMAGE="$PREVIOUS_IMAGE" docker compose up -d --no-build app
+  exit 1
+fi
+```
+
+固定 SHA tag 能让操作指向明确镜像，但仍应记录操作者、原因和验证结果。回滚前还要确认旧程序是否兼容当前数据库 schema、队列消息与配置；不兼容时需要专门的恢复方案，而不是反复重启容器。
 
 :::note 蓝绿部署与灰度发布
 更成熟的团队会用**蓝绿部署**（准备好新版本环境，瞬间切换流量，出问题秒切回）或**灰度发布**（先放一小部分流量到新版本，验证无误再全量）。它们的目标都是**让上线变更对用户无感、且随时可退**。这超出了入门范围，但值得在你成长路上去深入了解。
@@ -499,16 +696,16 @@ docker compose up -d
 
 ---
 
-## 总结：一条完整的闭环
+## 总结：单机部署基础已经打通
 
-这篇文章我们把整个 Linux 系列收束成了一条完整闭环——从一份本地代码，到稳定运行在公网上的服务：
+这篇文章把一份本地代码带到了可重复发布的单机服务：
 
-- **看清本质**：部署无非"拿代码 → 装依赖 → 构建 → 运行守护"四步，工具只是手段。
-- **手动部署**：用 Git + PM2 + Nginx 跑通第一个版本，理解每一步的意义。
-- **Docker 容器化**：用镜像彻底解决环境一致性问题，用 Compose 编排多服务，用数据卷持久化数据。
-- **CI/CD 自动化**：用 GitHub Actions 实现 `git push` 即自动上线，把人从重复劳动里解放出来。
-- **长期运维**：看日志、定时备份、随时能回滚，才能让服务真正稳定地活下去。
+- **看清本质**：部署仍是“准备产物 → 注入配置 → 启动守护 → 验证结果”，工具只是手段。
+- **PM2**：只有 cluster 多实例、就绪握手与优雅退出共同工作时，reload 才能争取近零停机；单实例不作保证。
+- **Docker 与 Compose**：用多阶段、非 root、健康检查和回环端口缩小运行边界，并明确卷、依赖顺序和资源限制的能力边界。
+- **CI/CD**：在 CI 构建并推送 SHA 镜像，生产机只拉不可变产物，通过审批、并发控制、烟雾测试和旧镜像恢复降低发布风险。
+- **数据与回退**：备份需要最小权限、完整性检查、恢复演练和异地副本；回退则始终指向明确的旧 SHA 镜像。
 
-回望整个系列，你已经从"认识 `ls` 和 `cd`"，一路走到了"独立把一个项目安全、自动化地部署上线并稳定运维"。这正是一名后端 / 运维 / 全栈工程师的核心基本功。
+这些内容解决的是**单机部署基础**，不是成熟生产体系的终点。单机仍有宿主机故障、容量、数据库、观测、发布兼容性和人为操作等风险，后续要进入更系统的生产工程。
 
-剩下的，就是找一台真实的服务器，把你自己的项目跑起来——**实践，永远是掌握 Linux 最好的方式。**
+下一篇《[系统运维与安全](/posts/linux/system-ops-and-security)》，我们会继续建立日志、定时任务、监控、备份与安全加固能力，让已经上线的服务更可观察、更容易维护。
