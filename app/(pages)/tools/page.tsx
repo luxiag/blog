@@ -33,6 +33,7 @@ const tools: Tool[] = [
   { id: 'shader-toy', name: 'Shader Preview', description: '在线编写和预览 GLSL Shader', icon: 'cube', category: 'design' },
   { id: 'qrcode', name: 'QR Code Generator', description: '生成自定义二维码', icon: 'qr-code', category: 'other' },
   { id: 'xmind-viewer', name: 'XMind Viewer', description: '在线预览 XMind 思维导图文件', icon: 'mindmap', category: 'productivity' },
+  { id: 'calculator', name: 'Calculator', description: '房贷 / 贷款 / 工资 / 社保 / 科学 / 科研计算', icon: 'calculator', category: 'productivity' },
 ];
 
 const toolIcons: Record<string, React.ReactElement> = {
@@ -49,6 +50,7 @@ const toolIcons: Record<string, React.ReactElement> = {
   eye: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>,
   cube: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><polyline points="3.27 6.96 12 12.01 20.73 6.96" /><line x1="12" y1="22.08" x2="12" y2="12" /></svg>,
   mindmap: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="3" /><path d="M12 2v4m0 12v4M2 12h4m12 0h4" /><path d="M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83m0-17.17l-2.83 2.83m-8.48 8.48l-2.83 2.83" /></svg>,
+  calculator: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="4" y="2" width="16" height="20" rx="2" /><line x1="8" y1="6" x2="16" y2="6" /><line x1="8" y1="12" x2="8" y2="12.01" /><line x1="12" y1="12" x2="12" y2="12.01" /><line x1="16" y1="12" x2="16" y2="12.01" /><line x1="8" y1="16" x2="8" y2="16.01" /><line x1="12" y1="16" x2="12" y2="16.01" /><line x1="16" y1="16" x2="16" y2="16.01" /></svg>,
 };
 
 export default function ToolsPage() {
