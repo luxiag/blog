@@ -3,6 +3,7 @@ title: 'Python 包管理与虚拟环境：从 pip 到 uv 的工程实践'
 date: '2026-07-19'
 excerpt: '系统讲解 Python 包管理与虚拟环境的核心概念与工具链。覆盖 import 机制与模块搜索路径、虚拟环境原理与 venv、pip 与 requirements.txt、pyproject.toml 与现代项目标准、uv 现代包管理器、依赖冲突与锁定、发布自己的包，最后用完整的项目工作流串联所有知识点。'
 tags: ['python', 'pip', 'uv', 'venv', 'packaging', 'pyproject']
+nextPost: 'python/python-type-system'
 ---
 
 # Python 包管理与虚拟环境：从 pip 到 uv 的工程实践
@@ -91,19 +92,19 @@ my_package/
 # module：单个 .py 文件
 # my_utils.py → import my_utils
 
-# package：包含 __init__.py 的目录
+# regular package：包含 __init__.py 的目录
 # my_package/
 #     __init__.py
 #     utils.py
 # → import my_package.utils
 
-# namespace package：没有 __init__.py 的目录（PEP 420）
-# 可跨多个目录拆分同一个包
+# namespace package：一个或多个同名目录中都没有 __init__.py（PEP 420）
+# 可把同一命名空间拆分到 sys.path 的多个位置
 ```
 
 ### `__init__.py` 的作用
 
-`__init__.py` 告诉 Python"这个目录是一个包"。它可以是空文件，也可以包含初始化代码：
+`__init__.py` 标识并初始化 **regular package（常规包）**。它可以是空文件，也可以定义包级 API 或执行必要的初始化代码：
 
 ```python
 # my_package/__init__.py
@@ -124,8 +125,8 @@ from my_package import main_function, __version__
 
 而不用写 `from my_package.core import main_function`。
 
-:::warning
-Python 3.3+ 支持 namespace package（没有 `__init__.py` 也能 import），但显式写 `__init__.py` 仍是推荐做法，能避免隐式行为带来的困惑。
+:::note
+从 Python 3.3 起，PEP 420 允许目录在没有 `__init__.py` 时组成 **namespace package（命名空间包）**，因此“可导入的包目录必须包含 `__init__.py`”并不准确。普通应用和不需要跨发行包拆分命名空间的库通常使用 regular package；只有确实要让多个独立分发包共享同一命名空间时，才选择 namespace package。
 :::
 
 ### 相对导入与绝对导入

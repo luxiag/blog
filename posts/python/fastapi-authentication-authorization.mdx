@@ -1,0 +1,1496 @@
+---
+title: 'FastAPI / Pydantic v2 生产级认证授权：JWT、Refresh Rotation、RBAC 与资源隔离'
+date: '2026-08-18'
+excerpt: '从威胁模型与信任边界出发，使用 FastAPI、Pydantic v2、SQLAlchemy 2.x、Argon2id、短期 JWT 与可撤销的 refresh token family，构建默认拒绝、可轮换、可审计的生产级认证授权体系。'
+tags: ['python', 'fastapi', 'pydantic-v2', 'authentication', 'authorization', 'security', 'jwt', 'sqlalchemy']
+nextPost: 'python/fastapi-redis-background-tasks'
+---
+
+# FastAPI / Pydantic v2 生产级认证授权
+
+“能登录”不等于“认证系统安全”。真正困难的部分不是签发一个 JWT，而是回答这些问题：数据库泄露后攻击者能得到什么？refresh token 被复制并在两个地点使用时怎么办？用户被禁用、改密或退出后，已经签发的 access token 何时失效？`GET /documents/{id}` 如何避免读到别人的文档？代理传来的 IP 是否可信？密钥如何轮换而不中断服务？
+
+本文从**为什么 → 是什么 → 怎么做 → 完整示例 → 边界**逐层构建答案。示例面向 FastAPI + Pydantic v2 + SQLAlchemy 2.x，使用同步 `Session`、PostgreSQL 和 Redis；数据库基础可先阅读[FastAPI、SQLAlchemy 与 Alembic](/posts/python/fastapi-sqlalchemy-alembic)。
+
+:::important 先划清产品边界
+本文实现的是单个产品内的第一方账号、会话与授权，不是 OIDC/OAuth 身份平台的替代品。复杂企业身份、SSO、MFA、SAML/OIDC 联邦、设备风控、账号恢复与合规目录同步，应优先采用经过审计的托管 IdP；应用只验证 IdP 令牌并实施本地资源授权。不要把“自研 JWT 登录”宣传成等价能力。
+:::
+## 一、为什么认证授权必须从威胁模型开始
+
+没有威胁模型时，团队常把安全需求写成“密码加密、接口加 JWT”，却遗漏真正的攻击路径。本文假设：
+
+- 公网客户端、浏览器脚本、请求头、Cookie、URL 参数都不可信；攻击者可以重放窃取的 token、撞库、枚举邮箱、篡改资源 ID。
+- TLS 在可信入口终止；入口到应用若跨不可信网络，必须继续使用 mTLS/TLS。应用不能仅凭 `X-Forwarded-For` 相信来源 IP。
+- PostgreSQL、Redis、密钥管理服务和受控邮件提供商位于服务端信任区；但仍按“单个数据存储可能泄露”设计，数据库中不保存 refresh/reset/verify token 明文。
+- 应用进程可能读取运行时密钥，因此主机失陷不在纯应用代码可完全防御的范围内；要靠最小权限、隔离、轮换与告警降低影响。
+- access token 可能在过期前泄露，因此它必须短期、受众受限，并在高风险系统中结合会话状态检查。
+
+### STRIDE 风格威胁表
+
+| 类别 | 具体威胁 | 本文控制 |
+| --- | --- | --- |
+| Spoofing（身份伪造） | 撞库、伪造 JWT、refresh 重放 | Argon2id、固定算法与完整 claim 校验、rotation 与 reuse detection、限流 |
+| Tampering（篡改） | 修改 `sub`、`role`、资源 ID | 签名验证、服务端权限查询、owner/tenant 条件查询 |
+| Repudiation（抵赖） | 否认登录、撤销或权限变更 | 结构化审计事件、request ID、actor/target/result |
+| Information Disclosure（泄露） | 用户枚举、日志记录 token、IDOR | 统一错误、敏感字段禁记、默认拒绝与资源级授权 |
+| Denial of Service（拒绝服务） | 密码哈希耗尽 CPU、登录/重置轰炸 | Redis 原子限流、网关限流、超时与容量规划 |
+| Elevation of Privilege（权限提升） | 客户端自报角色、跨租户访问 | RBAC 服务端加载、tenant + owner 双重约束、deny by default |
+
+### 信任边界
+
+```mermaid
+graph LR
+  U[不可信浏览器/客户端] -->|HTTPS| E[可信反向代理/WAF]
+  E -->|受控代理协议| A[FastAPI 应用]
+  A --> P[(PostgreSQL)]
+  A --> R[(Redis 限流)]
+  A --> K[Secrets Manager/KMS]
+  A --> M[邮件提供商]
+```
+
+边界的直接含义是：**身份认证只证明“请求代表谁”，授权才决定“这个身份能否对这个具体资源执行这个动作”**。前端隐藏按钮不是授权；JWT 中存在 `role=admin` 也不应成为长期真相，权限变化必须由服务端策略决定。
+
+---
+
+## 二、是什么：把凭证、会话与权限分开
+
+### 1. 密码只用于建立会话
+
+密码是低熵、可复用的人类秘密。服务端保存 Argon2id 哈希，而非可逆“加密密码”。登录成功后使用两类 token：
+
+- **access JWT**：5～15 分钟，携带最少身份声明；每次 API 请求验证。
+- **refresh token**：数周有效的高熵 opaque 随机串，只用于换取新 token；数据库只保存其 HMAC 摘要。
+
+Argon2id 参数不是永久不变的。现代库会把参数写入哈希字符串；登录验证成功后若策略升级，应在同一事务中 rehash。本文使用 `pwdlib.PasswordHash.recommended()` 与 `verify_and_update()`，不手写密码学。
+
+### 2. refresh token family 是一条可追踪的会话链
+
+每次登录创建一个 `family_id`。refresh 成功时，旧 token 被**原子消费**，同一事务内创建新 token：
+
+```text
+T1(consumed) -> T2(consumed) -> T3(active)
+      同一个 family_id = 一次设备会话
+```
+
+若已经消费的 T1 或 T2 再出现，说明可能发生复制或重放：撤销整个 family。并发的两个合法 refresh 也会触发这一严格策略，因此客户端必须对 refresh 做 single-flight；服务端必须使用行锁或带 `consumed_at IS NULL` 的条件更新，不能“先查再改”。
+
+数据库只存 `HMAC-SHA-256(pepper, token)`。单纯 SHA-256 对 384 位随机 token 本来也难以穷举，但 HMAC pepper 能让数据库单独泄露时更难离线比对；pepper 必须放 secrets manager，不与数据库同库保存。
+
+### 3. 认证与两层授权
+
+RBAC 解决“角色拥有哪些权限”，例如 `editor -> article:write`；资源级授权解决“能操作哪一条”，例如只能修改同租户且自己拥有的文章。两者缺一不可：拥有 `document:read` 不代表可以读取任意租户、任意 ID 的文档。
+
+默认拒绝的判定顺序是：
+
+1. token 合法且类型为 `access`；
+2. 用户存在、已启用、邮箱状态满足策略，token version 匹配；
+3. 会话 family 仍有效；
+4. 用户拥有所需 permission；
+5. 资源查询同时约束 `id`、`tenant_id`，必要时再约束 `owner_id`。
+
+未命中时返回 `404` 可以减少资源存在性泄露；明确需要区分的管理接口才返回 `403`。
+
+---
+
+## 三、怎么做：先确定关键安全决策
+
+### Cookie 还是 Bearer
+
+本文采用折中方案：access token 由响应体返回，客户端放在**内存**并通过 `Authorization: Bearer` 发送；refresh token 放 `HttpOnly; Secure; SameSite=Lax` Cookie，并以数据库绑定的双提交 CSRF token 保护 refresh/logout。
+
+- Cookie 自动随请求发送，因此必须防 CSRF。跨站部署可改 `SameSite=None; Secure`，但更要严格校验 Origin 并使用 CSRF token。
+- Bearer 不会被浏览器自动附带，天然降低 CSRF 面，但任何能运行的 XSS 都能读取内存或 Web Storage。不要把长效 refresh token 放 `localStorage`。
+- 若 access 也放 HttpOnly Cookie，所有状态变更接口都必须纳入 CSRF 防护；若原生 App 全部使用 Bearer，应把 refresh 保存在系统安全存储并防止日志泄露。
+
+CORS 不能用 `allow_origins=["*"]` 同时开启 credentials。必须列出精确 HTTPS origin；CORS 不是 CSRF 防护，也不是服务端授权。
+
+### 邮箱规范化与唯一性
+
+Pydantic 的 `EmailStr` 做语法与域名规范化；示例再执行 `strip().casefold()`，把“邮箱大小写不敏感”作为本产品的明确账号策略。真正防重复依赖数据库 `UNIQUE(normalized_email)`，不能只做应用层 `SELECT`。遇到唯一约束冲突，注册接口仍返回统一 `202`，避免泄露账号是否存在。
+
+租户归属同样不能信任请求体。示例的公共注册会生成新的个人租户标识；企业成员加入现有租户时，应由服务端从已验证、单次消费且绑定目标租户/邮箱的邀请记录中解析 `tenant_id`，绝不能允许客户端提交任意租户 ID。
+
+### 错误、限流与代理 IP
+
+登录、refresh、注册、邮箱验证、密码重置都要限流。至少组合“来源 IP + 账号摘要”，否则攻击者可针对单一账号分布式尝试，或借共享 NAT 封禁所有用户。本文用 Redis Lua 保证计数与 TTL 原子化；网关还应设置更粗粒度限流。
+
+应用只读取 ASGI server 提供的 `request.client.host`，不自行解析任意 `X-Forwarded-For`。只有反向代理会**覆盖**外部传入的转发头，且 ASGI server 仅信任已知代理 IP 时，这个地址才可作为近似客户端 IP；它仍不是身份凭证。
+## 四、完整示例：项目与依赖
+
+以下代码以 PostgreSQL 15+、Redis 7+ 为运行前提。版本范围表达“示例依赖的 API 世代”，部署时应由锁文件固定并经过测试；不要盲目复制未来的“最新版”。
+
+<FileTree tree={[
+  { name: "app", type: "folder", children: [
+    { name: "__init__.py", type: "file" },
+    { name: "config.py", type: "file", comment: "密钥环与运行配置" },
+    { name: "database.py", type: "file", comment: "同步 SQLAlchemy Session" },
+    { name: "models.py", type: "file", comment: "typed ORM 与数据库约束" },
+    { name: "schemas.py", type: "file", comment: "Pydantic v2 输入输出边界" },
+    { name: "security.py", type: "file", comment: "Argon2id、JWT、opaque token" },
+    { name: "rate_limit.py", type: "file", comment: "Redis 原子限流" },
+    { name: "services.py", type: "file", comment: "事务与 token rotation" },
+    { name: "dependencies.py", type: "file", comment: "认证、RBAC、默认拒绝" },
+    { name: "router.py", type: "file", comment: "认证与资源路由" },
+    { name: "main.py", type: "file", comment: "应用装配与精确 CORS" },
+  ]},
+  { name: "pyproject.toml", type: "file" },
+  { name: ".env", type: "file", comment: "仅本地；生产由 secrets manager 注入" },
+]} />
+
+```toml
+# pyproject.toml
+[project]
+name = "secure-fastapi-auth"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.34,<1",
+  "pydantic[email]>=2.10,<3",
+  "pydantic-settings>=2.7,<3",
+  "sqlalchemy>=2.0.36,<3",
+  "psycopg[binary]>=3.2,<4",
+  "PyJWT[crypto]>=2.10,<3",
+  "pwdlib[argon2]>=0.2,<1",
+  "redis>=5.2,<7",
+]
+
+[tool.uv]
+dev-dependencies = ["pytest>=8.3,<9", "freezegun>=1.5,<2", "httpx>=0.28,<1"]
+```
+
+本地 `.env` 可以这样写；示例值绝不能进入生产：
+
+```dotenv
+ENVIRONMENT=development
+DATABASE_URL=postgresql+psycopg://auth:auth@127.0.0.1:5432/auth
+REDIS_URL=redis://127.0.0.1:6379/0
+JWT_ISSUER=https://api.example.test
+JWT_AUDIENCE=example-api
+JWT_ACTIVE_KID=2026-08
+# JSON 字典；每个 HS256 key 至少 32 个不可预测字节，生产从 secrets manager 注入
+JWT_KEYS_JSON={"2026-08":"replace-with-at-least-32-random-bytes"}
+REFRESH_PEPPER=replace-with-an-independent-random-secret
+ALLOWED_ORIGINS=["https://app.example.test"]
+COOKIE_SECURE=true
+```
+
+:::warning 密钥选择
+为让示例紧凑，代码使用带 `kid` 的 HS256 key ring。多服务验证、隔离签发权限或第三方验证时，优先采用 EdDSA/ES256 等非对称签名：私钥只在签发方，验证方只拿公钥。无论哪种方案，都应从 secrets manager 读取；新增 key → 切换 active `kid` → 保留旧 key 到其签发 token 全部过期 → 删除旧 key。
+:::
+
+### 1. 配置与数据库
+
+```python
+# app/config.py
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    environment: Literal["development", "test", "production"] = "development"
+    database_url: str
+    redis_url: str
+    jwt_issuer: str
+    jwt_audience: str
+    jwt_active_kid: str
+    jwt_keys_json: dict[str, str]
+    refresh_pepper: str = Field(min_length=32)
+    allowed_origins: list[str]
+    cookie_secure: bool = True
+    access_ttl_seconds: int = 600
+    refresh_ttl_seconds: int = 60 * 60 * 24 * 30
+    jwt_leeway_seconds: int = 30
+
+    @field_validator("jwt_keys_json")
+    @classmethod
+    def strong_keys(cls, value: dict[str, str]) -> dict[str, str]:
+        if not value or any(len(k.encode()) < 32 for k in value.values()):
+            raise ValueError("each JWT key must be at least 32 bytes")
+        return value
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def exact_origins(cls, value: list[str]) -> list[str]:
+        if not value or "*" in value:
+            raise ValueError("credentialed CORS requires exact origins")
+        return value
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()  # type: ignore[call-arg]
+```
+
+```python
+# app/database.py
+from collections.abc import Generator
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+from .config import get_settings
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+engine = create_engine(get_settings().database_url, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+
+
+def get_db() -> Generator[Session, None, None]:
+    # 路由不隐式提交：service 明确 begin/commit/rollback 边界。
+    with SessionLocal() as session:
+        yield session
+```
+
+生产使用 Alembic 迁移，不要在 `main.py` 调用 `create_all()`。下面模型中的唯一约束、索引和外键必须真实落到迁移中。
+### 2. SQLAlchemy 2.x typed 模型
+
+```python
+# app/models.py
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import (
+    Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Table,
+    Text, UniqueConstraint, Uuid, func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .database import Base
+
+
+user_roles = Table(
+    "user_roles", Base.metadata,
+    Column("user_id", Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("role_id", Uuid, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True),
+)
+role_permissions = Table(
+    "role_permissions", Base.metadata,
+    Column("role_id", Uuid, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True),
+    Column("permission_id", Uuid, ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("normalized_email", name="uq_users_normalized_email"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True)
+    normalized_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    roles: Mapped[list[Role]] = relationship(secondary=user_roles, lazy="selectin")
+
+
+class Role(Base):
+    __tablename__ = "roles"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    permissions: Mapped[list[Permission]] = relationship(
+        secondary=role_permissions, lazy="selectin"
+    )
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (
+        UniqueConstraint("token_digest", name="uq_refresh_token_digest"),
+        Index("ix_refresh_family", "family_id"),
+        Index("ix_refresh_user_active", "user_id", "revoked_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    family_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("refresh_tokens.id", ondelete="SET NULL")
+    )
+    replaced_by_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    csrf_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OneTimeToken(Base):
+    __tablename__ = "one_time_tokens"
+    __table_args__ = (
+        UniqueConstraint("token_digest", name="uq_one_time_token_digest"),
+        Index("ix_one_time_user_purpose", "user_id", "purpose"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)  # verify_email/reset_password
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class Document(Base):
+    __tablename__ = "documents"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True, nullable=False)
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    target_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    request_id: Mapped[str | None] = mapped_column(String(100))
+    source_ip: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(300))
+    result: Mapped[str] = mapped_column(String(24), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(80))
+```
+
+审计日志只记录事件类型、主体、目标、租户、request ID、受信边界内得到的来源 IP、截断后的 User-Agent、结果与原因码。**绝不记录密码、完整 Cookie、Authorization 头、JWT、opaque token、reset/verify 链接或 token 摘要**。高保证环境还应把审计流异步复制到追加写、访问隔离、有留存策略的 SIEM；业务数据库表只是示例中的最小持久化接口。
+### 3. Pydantic v2 schema：输入严格、输出最小
+
+```python
+# app/schemas.py
+import uuid
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, field_validator
+
+Password = Annotated[str, StringConstraints(min_length=12, max_length=128)]
+
+
+class StrictSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class RegisterIn(StrictSchema):
+    email: EmailStr
+    password: Password
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().casefold()
+
+
+class LoginIn(StrictSchema):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().casefold()
+
+
+class AccessOut(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int
+
+
+class PasswordResetRequestIn(StrictSchema):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().casefold()
+
+
+class PasswordResetConfirmIn(StrictSchema):
+    token: str = Field(min_length=40, max_length=256)
+    new_password: Password
+
+
+class EmailVerificationIn(StrictSchema):
+    token: str = Field(min_length=40, max_length=256)
+
+
+class DocumentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    title: str
+    body: str
+```
+
+密码最大长度不仅是 UX 决策，也防止攻击者用超大输入放大昂贵哈希成本。不要静默截断；密码管理器生成的长密码应被明确接受或拒绝。密码规则应优先长度与泄露密码检查，不要强迫可预测的字符组合。
+
+### 4. security.py：Argon2id、固定算法 JWT 与高熵 token
+
+```python
+# app/security.py
+from __future__ import annotations
+
+import hashlib
+import hmac
+import secrets
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import jwt
+from pwdlib import PasswordHash
+
+from .config import Settings
+
+ALGORITHM = "HS256"  # 固定常量，绝不从 token 的 alg 动态选择
+PASSWORD_HASH = PasswordHash.recommended()  # 当前 pwdlib 推荐的 Argon2id 配置
+DUMMY_HASH = PASSWORD_HASH.hash("not-a-real-user-password")
+
+
+class TokenError(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class AccessClaims:
+    user_id: uuid.UUID
+    session_id: uuid.UUID
+    token_version: int
+    jti: uuid.UUID
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def hash_password(password: str) -> str:
+    return PASSWORD_HASH.hash(password)
+
+
+def verify_password(password: str, encoded: str) -> tuple[bool, str | None]:
+    # updated_hash 非空表示参数落后，应在登录事务中替换。
+    return PASSWORD_HASH.verify_and_update(password, encoded)
+
+
+def burn_dummy_password_check(password: str) -> None:
+    # 不存在账号也执行昂贵验证，缩小基于耗时的用户枚举信号。
+    PASSWORD_HASH.verify(password, DUMMY_HASH)
+
+
+def new_opaque_token() -> str:
+    # 48 bytes = 384 bits，URL-safe；不要在服务端记录返回值。
+    return secrets.token_urlsafe(48)
+
+
+def token_digest(token: str, pepper: str) -> str:
+    return hmac.new(pepper.encode(), token.encode(), hashlib.sha256).hexdigest()
+
+
+def create_access_token(
+    *, user_id: uuid.UUID, session_id: uuid.UUID, token_version: int, settings: Settings
+) -> tuple[str, int]:
+    now = utcnow()
+    ttl = settings.access_ttl_seconds
+    payload: dict[str, Any] = {
+        "sub": str(user_id),
+        "sid": str(session_id),
+        "ver": token_version,
+        "jti": str(uuid.uuid4()),
+        "type": "access",
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+        "iat": now,
+        "nbf": now,
+        "exp": now + timedelta(seconds=ttl),
+    }
+    key = settings.jwt_keys_json[settings.jwt_active_kid]
+    return jwt.encode(
+        payload, key, algorithm=ALGORITHM,
+        headers={"kid": settings.jwt_active_kid, "typ": "JWT"},
+    ), ttl
+
+
+def decode_access_token(token: str, settings: Settings) -> AccessClaims:
+    try:
+        header = jwt.get_unverified_header(token)  # 只用于选择本地 allowlist 中的 key
+        kid = header.get("kid")
+        if not isinstance(kid, str) or kid not in settings.jwt_keys_json:
+            raise TokenError("unknown key")
+        payload = jwt.decode(
+            token,
+            settings.jwt_keys_json[kid],
+            algorithms=[ALGORITHM],
+            issuer=settings.jwt_issuer,
+            audience=settings.jwt_audience,
+            leeway=settings.jwt_leeway_seconds,
+            options={
+                "require": ["exp", "nbf", "iat", "iss", "aud", "jti", "sub", "type", "sid", "ver"],
+                "verify_exp": True,
+                "verify_nbf": True,
+                "verify_iat": True,
+            },
+        )
+        if payload["type"] != "access" or not isinstance(payload["ver"], int):
+            raise TokenError("wrong token type")
+        return AccessClaims(
+            user_id=uuid.UUID(payload["sub"]),
+            session_id=uuid.UUID(payload["sid"]),
+            token_version=payload["ver"],
+            jti=uuid.UUID(payload["jti"]),
+        )
+    except (jwt.PyJWTError, ValueError, KeyError, TypeError) as exc:
+        raise TokenError("invalid access token") from exc
+```
+
+`exp/nbf/iat` 都是 NumericDate；PyJWT 会验证过期、尚未生效和未来 `iat`。`leeway` 只是容忍小幅时钟偏差，不是延长会话的工具。所有主机必须同步时间。`jti` 提供审计关联与高风险场景 denylist 的键；常规撤销由短 TTL、`sid` 会话检查与 `token_version` 完成。
+### 5. Redis 限流：失败时不能悄悄放行
+
+```python
+# app/rate_limit.py
+import hashlib
+
+from redis import Redis
+from redis.exceptions import RedisError
+
+RATE_LUA = """
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+return current
+"""
+
+
+class RateLimitUnavailable(Exception):
+    pass
+
+
+class RateLimitExceeded(Exception):
+    pass
+
+
+class RedisRateLimiter:
+    def __init__(self, redis: Redis):
+        self.redis = redis
+        self.script = redis.register_script(RATE_LUA)
+
+    def check(self, *, bucket: str, subject: str, limit: int, window: int) -> None:
+        # key 中只放摘要，避免把邮箱等标识写进 Redis key 和运维输出。
+        subject_hash = hashlib.sha256(subject.encode()).hexdigest()
+        key = f"rl:{bucket}:{subject_hash}"
+        try:
+            count = int(self.script(keys=[key], args=[window]))
+        except RedisError as exc:
+            # 认证端点 fail closed；可用性策略可在网关做受控降级，不能静默无限放行。
+            raise RateLimitUnavailable from exc
+        if count > limit:
+            raise RateLimitExceeded
+```
+
+固定窗口足以展示原子性，但边界时刻允许短突发。生产可换成经过验证的滑动窗口或 token bucket；接口契约仍是“给定 bucket/subject/limit/window，要么允许，要么明确拒绝/不可用”。Redis 必须启用认证、TLS/私网、超时与隔离 keyspace。
+
+### 6. services.py：事务、rotation、reuse detection 与 revoke
+
+服务层返回明文 token 只为立刻交给客户端/邮件提供商；不会写日志或数据库。所有状态变更都在明确事务中完成。
+
+```python
+# app/services.py
+from __future__ import annotations
+
+import hmac
+import uuid
+from dataclasses import dataclass
+from datetime import timedelta
+
+from sqlalchemy import exists, select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from .config import Settings
+from .models import AuditEvent, OneTimeToken, RefreshToken, User
+from .security import (
+    burn_dummy_password_check, create_access_token, hash_password,
+    new_opaque_token, token_digest, utcnow, verify_password,
+)
+
+
+class InvalidCredentials(Exception):
+    pass
+
+
+class InvalidRefresh(Exception):
+    pass
+
+
+class RefreshReuseDetected(Exception):
+    pass
+
+
+class InvalidOneTimeToken(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class IssuedSession:
+    access_token: str
+    expires_in: int
+    refresh_token: str
+    csrf_token: str
+
+
+def audit(
+    db: Session, *, event_type: str, result: str, actor: uuid.UUID | None = None,
+    target: uuid.UUID | None = None, tenant: uuid.UUID | None = None,
+    request_id: str | None = None, source_ip: str | None = None,
+    user_agent: str | None = None, reason: str | None = None,
+) -> None:
+    db.add(AuditEvent(
+        event_type=event_type, result=result, actor_user_id=actor,
+        target_user_id=target, tenant_id=tenant, request_id=request_id,
+        source_ip=source_ip, user_agent=(user_agent or "")[:300] or None,
+        reason_code=reason,
+    ))
+
+
+def _new_refresh_row(
+    *, user: User, family_id: uuid.UUID, parent_id: uuid.UUID | None,
+    settings: Settings,
+) -> tuple[RefreshToken, str, str]:
+    refresh = new_opaque_token()
+    csrf = new_opaque_token()
+    row = RefreshToken(
+        user_id=user.id,
+        family_id=family_id,
+        parent_id=parent_id,
+        token_digest=token_digest(refresh, settings.refresh_pepper),
+        csrf_digest=token_digest(csrf, settings.refresh_pepper),
+        expires_at=utcnow() + timedelta(seconds=settings.refresh_ttl_seconds),
+    )
+    return row, refresh, csrf
+
+
+def _issue_session(db: Session, user: User, settings: Settings) -> IssuedSession:
+    family_id = uuid.uuid4()
+    row, refresh, csrf = _new_refresh_row(
+        user=user, family_id=family_id, parent_id=None, settings=settings
+    )
+    db.add(row)
+    access, ttl = create_access_token(
+        user_id=user.id, session_id=family_id,
+        token_version=user.token_version, settings=settings,
+    )
+    return IssuedSession(access, ttl, refresh, csrf)
+
+
+def register_user(
+    db: Session, *, email: str, password: str, tenant_id: uuid.UUID,
+    settings: Settings,
+) -> str | None:
+    """返回 verify token 供调用方发信；重复邮箱返回 None，外部响应保持一致。"""
+    try:
+        with db.begin():
+            user = User(
+                normalized_email=email, password_hash=hash_password(password),
+                tenant_id=tenant_id,
+            )
+            db.add(user)
+            db.flush()  # 唯一约束在这里裁决并发重复注册
+            raw = new_opaque_token()
+            db.add(OneTimeToken(
+                user_id=user.id, purpose="verify_email",
+                token_digest=token_digest(raw, settings.refresh_pepper),
+                expires_at=utcnow() + timedelta(hours=1),
+            ))
+            audit(db, event_type="user.registered", result="accepted", target=user.id,
+                  tenant=tenant_id)
+        return raw
+    except IntegrityError:
+        db.rollback()
+        # 不区分“已存在”与“已受理”，也不要给调用方不同状态码。
+        return None
+
+
+def login(db: Session, *, email: str, password: str, settings: Settings,
+          request_id: str | None, source_ip: str, user_agent: str | None) -> IssuedSession:
+    with db.begin():
+        user = db.scalar(
+            select(User).where(User.normalized_email == email).with_for_update()
+        )
+        if user is None:
+            burn_dummy_password_check(password)
+            raise InvalidCredentials
+
+        ok, upgraded_hash = verify_password(password, user.password_hash)
+        if not ok or not user.is_active:
+            raise InvalidCredentials
+        if upgraded_hash:
+            user.password_hash = upgraded_hash
+        issued = _issue_session(db, user, settings)
+        audit(db, event_type="auth.login", result="success", actor=user.id,
+              tenant=user.tenant_id, request_id=request_id,
+              source_ip=source_ip, user_agent=user_agent)
+    return issued
+```
+```python
+# app/services.py（续）
+def rotate_refresh(
+    db: Session, *, raw_refresh: str, raw_csrf: str, settings: Settings,
+    request_id: str | None, source_ip: str, user_agent: str | None,
+) -> IssuedSession:
+    digest = token_digest(raw_refresh, settings.refresh_pepper)
+    now = utcnow()
+
+    with db.begin():
+        # PostgreSQL 行锁让同一 token 的两个请求串行观察 consumed_at。
+        current = db.scalar(
+            select(RefreshToken)
+            .where(RefreshToken.token_digest == digest)
+            .with_for_update()
+        )
+        if current is None:
+            raise InvalidRefresh
+
+        csrf_ok = hmac.compare_digest(
+            current.csrf_digest, token_digest(raw_csrf, settings.refresh_pepper)
+        )
+        if not csrf_ok or current.revoked_at is not None or current.expires_at <= now:
+            raise InvalidRefresh
+
+        if current.consumed_at is not None:
+            # 已消费 token 再出现：撤销 family，包括并发请求刚创建的新 token。
+            db.execute(
+                update(RefreshToken)
+                .where(
+                    RefreshToken.family_id == current.family_id,
+                    RefreshToken.revoked_at.is_(None),
+                )
+                .values(revoked_at=now)
+            )
+            audit(db, event_type="auth.refresh_reuse", result="family_revoked",
+                  target=current.user_id, request_id=request_id,
+                  source_ip=source_ip, user_agent=user_agent)
+            # 先提交撤销，再在事务外抛错；否则异常会回滚安全响应。
+            reuse = True
+        else:
+            user = db.scalar(
+                select(User).where(User.id == current.user_id).with_for_update()
+            )
+            if user is None or not user.is_active:
+                raise InvalidRefresh
+            current.consumed_at = now
+            successor, refresh, csrf = _new_refresh_row(
+                user=user, family_id=current.family_id,
+                parent_id=current.id, settings=settings,
+            )
+            db.add(successor)
+            db.flush()
+            current.replaced_by_id = successor.id
+            access, ttl = create_access_token(
+                user_id=user.id, session_id=current.family_id,
+                token_version=user.token_version, settings=settings,
+            )
+            audit(db, event_type="auth.refresh", result="success", actor=user.id,
+                  tenant=user.tenant_id, request_id=request_id,
+                  source_ip=source_ip, user_agent=user_agent)
+            issued = IssuedSession(access, ttl, refresh, csrf)
+            reuse = False
+
+    if reuse:
+        raise RefreshReuseDetected
+    return issued
+
+
+def revoke_family(db: Session, *, raw_refresh: str, settings: Settings,
+                  user_id: uuid.UUID) -> None:
+    digest = token_digest(raw_refresh, settings.refresh_pepper)
+    now = utcnow()
+    with db.begin():
+        token = db.scalar(
+            select(RefreshToken)
+            .where(RefreshToken.token_digest == digest)
+            .with_for_update()
+        )
+        # 幂等且不泄露 token 是否存在；只允许撤销当前已认证用户自己的 family。
+        if token is not None and token.user_id == user_id:
+            db.execute(
+                update(RefreshToken)
+                .where(RefreshToken.family_id == token.family_id,
+                       RefreshToken.revoked_at.is_(None))
+                .values(revoked_at=now)
+            )
+            audit(db, event_type="auth.logout", result="success", actor=user_id)
+
+
+def revoke_all_sessions(db: Session, *, user_id: uuid.UUID) -> None:
+    now = utcnow()
+    with db.begin():
+        user = db.scalar(select(User).where(User.id == user_id).with_for_update())
+        if user is None:
+            return
+        user.token_version += 1  # 立即使旧 access JWT 的 ver 失配
+        db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.user_id == user_id,
+                   RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        audit(db, event_type="auth.revoke_all", result="success", actor=user_id)
+
+
+def session_is_active(db: Session, *, user_id: uuid.UUID,
+                      family_id: uuid.UUID) -> bool:
+    now = utcnow()
+    return bool(db.scalar(select(exists().where(
+        RefreshToken.user_id == user_id,
+        RefreshToken.family_id == family_id,
+        RefreshToken.revoked_at.is_(None),
+        RefreshToken.expires_at > now,
+    ))))
+```
+
+这里的严格 reuse detection 有一个明确取舍：网络重试或两个标签页并发 refresh 时，第二个请求会撤销整个 family。客户端应以互斥锁/共享 worker 做 single-flight；如果业务要提供很短的幂等宽限窗口，不能把新 token 明文存库，需设计一次性加密响应缓存及严格的设备绑定，复杂度明显更高。
+
+PostgreSQL 的 `SELECT ... FOR UPDATE` 是本示例的并发前提。若存储不支持可靠行锁，应改用：
+
+```sql
+UPDATE refresh_tokens
+SET consumed_at = now()
+WHERE token_digest = :digest
+  AND consumed_at IS NULL
+  AND revoked_at IS NULL
+  AND expires_at > now();
+```
+
+并检查 `rowcount == 1`；随后创建 successor 必须仍处于同一事务。绝不能把“查询未消费”和“标记已消费”拆成两个事务。
+### 7. 邮箱验证与密码重置：短期、单用途、只存摘要
+
+重置/验证链接不是长效 JWT。JWT 即使签名正确也难以做到单次消费；正确模式与 refresh 类似：高熵 opaque token、短 TTL、数据库摘要、明确 `purpose`、行锁原子消费。
+
+```python
+# app/services.py（续）
+def request_password_reset(
+    db: Session, *, email: str, settings: Settings
+) -> tuple[str, str] | None:
+    """返回 (email, raw_token) 给邮件适配器；外部始终返回相同响应。"""
+    with db.begin():
+        user = db.scalar(
+            select(User).where(User.normalized_email == email).with_for_update()
+        )
+        if user is None or not user.is_active:
+            return None
+        # 使之前未使用的 reset token 失效，缩小攻击窗口。
+        db.execute(
+            update(OneTimeToken)
+            .where(OneTimeToken.user_id == user.id,
+                   OneTimeToken.purpose == "reset_password",
+                   OneTimeToken.consumed_at.is_(None))
+            .values(consumed_at=utcnow())
+        )
+        raw = new_opaque_token()
+        db.add(OneTimeToken(
+            user_id=user.id, purpose="reset_password",
+            token_digest=token_digest(raw, settings.refresh_pepper),
+            expires_at=utcnow() + timedelta(minutes=20),
+        ))
+        audit(db, event_type="auth.reset_requested", result="accepted", target=user.id,
+              tenant=user.tenant_id)
+        return user.normalized_email, raw
+
+
+def consume_one_time_token(
+    db: Session, *, raw_token: str, purpose: str, settings: Settings,
+    new_password: str | None = None,
+) -> uuid.UUID:
+    digest = token_digest(raw_token, settings.refresh_pepper)
+    now = utcnow()
+    with db.begin():
+        item = db.scalar(
+            select(OneTimeToken)
+            .where(OneTimeToken.token_digest == digest,
+                   OneTimeToken.purpose == purpose)
+            .with_for_update()
+        )
+        if item is None or item.consumed_at is not None or item.expires_at <= now:
+            raise InvalidOneTimeToken
+        user = db.scalar(select(User).where(User.id == item.user_id).with_for_update())
+        if user is None or not user.is_active:
+            raise InvalidOneTimeToken
+
+        item.consumed_at = now  # 与后续状态变化同一事务，失败会一起回滚
+        if purpose == "verify_email":
+            user.email_verified = True
+        elif purpose == "reset_password" and new_password is not None:
+            user.password_hash = hash_password(new_password)
+            user.token_version += 1
+            db.execute(
+                update(RefreshToken)
+                .where(RefreshToken.user_id == user.id,
+                       RefreshToken.revoked_at.is_(None))
+                .values(revoked_at=now)
+            )
+        else:
+            raise InvalidOneTimeToken
+        audit(db, event_type=f"auth.{purpose}", result="success",
+              actor=user.id, tenant=user.tenant_id)
+        return user.id
+```
+
+链接应使用 HTTPS，token 放 URL 时可能进入浏览器历史、代理与分析系统，所以落地页应立即用 POST 消费，设置严格 `Referrer-Policy: no-referrer`，并禁止第三方脚本。邮件发送通过明确接口交给受控提供商：
+
+```python
+# app/mailer.py
+from typing import Protocol
+
+
+class Mailer(Protocol):
+    def send_verification(self, *, recipient: str, token: str) -> None: ...
+    def send_password_reset(self, *, recipient: str, token: str) -> None: ...
+```
+
+示例故意不提供“打印到控制台”的假邮件实现，因为那会把 token 写入日志。生产替代边界应是实现该接口的事务邮件提供商或**持久化 outbox worker**：提交用户/token 与 outbox 记录后异步发送、可重试、日志只记 provider message ID，不能记 URL/token。测试使用只保存在测试进程内的 spy，并断言日志没有秘密。
+
+### 8. dependencies.py：认证与 RBAC 默认拒绝
+
+```python
+# app/dependencies.py
+import uuid
+from dataclasses import dataclass
+from typing import Annotated
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from .config import Settings, get_settings
+from .database import get_db
+from .models import User
+from .security import TokenError, decode_access_token
+from .services import session_is_active
+
+bearer = HTTPBearer(auto_error=False)
+Db = Annotated[Session, Depends(get_db)]
+Config = Annotated[Settings, Depends(get_settings)]
+
+
+@dataclass(frozen=True)
+class Principal:
+    user_id: uuid.UUID
+    tenant_id: uuid.UUID
+    session_id: uuid.UUID
+    permissions: frozenset[str]
+
+
+def current_principal(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    db: Db,
+    settings: Config,
+) -> Principal:
+    unauthorized = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="invalid credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise unauthorized
+    try:
+        claims = decode_access_token(credentials.credentials, settings)
+    except TokenError:
+        raise unauthorized
+
+    user = db.scalar(select(User).where(User.id == claims.user_id))
+    if (
+        user is None
+        or not user.is_active
+        or user.token_version != claims.token_version
+        or not session_is_active(db, user_id=user.id, family_id=claims.session_id)
+    ):
+        raise unauthorized
+
+    permissions = frozenset(
+        permission.name
+        for role in user.roles
+        for permission in role.permissions
+    )
+    principal = Principal(user.id, user.tenant_id, claims.session_id, permissions)
+    # 认证查询会触发 SQLAlchemy autobegin；结束只读事务，允许后续 service 明确 begin。
+    db.rollback()
+    return principal
+
+
+CurrentPrincipal = Annotated[Principal, Depends(current_principal)]
+
+
+def require_permission(name: str):
+    def dependency(principal: CurrentPrincipal) -> Principal:
+        # 没有显式 permission 就拒绝；不以角色名、客户端字段或“默认用户”放行。
+        if name not in principal.permissions:
+            raise HTTPException(status_code=403, detail="not permitted")
+        return principal
+    return dependency
+```
+
+该实现每个请求查用户、角色与 family，以换取禁用用户、权限变化、单会话 logout 的即时生效。吞吐量更高的系统可以缓存权限版本，但缓存键必须包含 tenant/user/authorization-version，并为撤销设计明确的一致性上限；不能只因为 JWT 签名有效就一直信任其中的旧权限。
+### 9. router.py：注册、登录、refresh、logout 与资源授权
+
+```python
+# app/router.py
+import hashlib
+import hmac
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from .config import Settings, get_settings
+from .database import get_db
+from .dependencies import CurrentPrincipal, Principal, require_permission
+from .mailer import Mailer
+from .models import Document
+from .rate_limit import RateLimitExceeded, RateLimitUnavailable, RedisRateLimiter
+from .schemas import (
+    AccessOut, DocumentOut, EmailVerificationIn, LoginIn,
+    PasswordResetConfirmIn, PasswordResetRequestIn, RegisterIn,
+)
+from .services import (
+    InvalidCredentials, InvalidOneTimeToken, InvalidRefresh,
+    RefreshReuseDetected, audit, consume_one_time_token, login, register_user,
+    request_password_reset, revoke_all_sessions, revoke_family, rotate_refresh,
+)
+
+router = APIRouter()
+Db = Annotated[Session, Depends(get_db)]
+Config = Annotated[Settings, Depends(get_settings)]
+
+
+def client_ip(request: Request) -> str:
+    # 只接受 ASGI server 在可信代理配置后给出的地址，不解析用户可伪造的 XFF。
+    return request.client.host if request.client else "unknown"
+
+
+def request_id(request: Request) -> str | None:
+    value = request.headers.get("x-request-id")
+    return value[:100] if value else None
+
+
+def limiter(request: Request) -> RedisRateLimiter:
+    return request.app.state.rate_limiter
+
+
+def mailer(request: Request) -> Mailer:
+    return request.app.state.mailer
+
+
+def limit_or_reject(
+    rl: RedisRateLimiter, *, bucket: str, subject: str, limit: int, window: int
+) -> None:
+    try:
+        rl.check(bucket=bucket, subject=subject, limit=limit, window=window)
+    except RateLimitExceeded:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(window)})
+    except RateLimitUnavailable:
+        raise HTTPException(503, "authentication service temporarily unavailable")
+
+
+def set_refresh_cookies(response: Response, *, refresh: str, csrf: str,
+                        settings: Settings) -> None:
+    response.set_cookie(
+        "refresh_token", refresh, max_age=settings.refresh_ttl_seconds,
+        path="/auth", httponly=True, secure=settings.cookie_secure,
+        samesite="lax",
+    )
+    response.set_cookie(
+        "csrf_token", csrf, max_age=settings.refresh_ttl_seconds,
+        path="/auth", httponly=False, secure=settings.cookie_secure,
+        samesite="lax",
+    )
+
+
+def clear_refresh_cookies(response: Response, settings: Settings) -> None:
+    response.delete_cookie("refresh_token", path="/auth", secure=settings.cookie_secure,
+                           httponly=True, samesite="lax")
+    response.delete_cookie("csrf_token", path="/auth", secure=settings.cookie_secure,
+                           httponly=False, samesite="lax")
+
+
+@router.post("/auth/register", status_code=status.HTTP_202_ACCEPTED)
+def register(payload: RegisterIn, request: Request, db: Db, settings: Config,
+             rl: Annotated[RedisRateLimiter, Depends(limiter)],
+             mail: Annotated[Mailer, Depends(mailer)]) -> dict[str, str]:
+    ip = client_ip(request)
+    account_key = hashlib.sha256(str(payload.email).encode()).hexdigest()
+    limit_or_reject(rl, bucket="register-ip", subject=ip, limit=10, window=3600)
+    limit_or_reject(rl, bucket="register-account", subject=account_key, limit=3, window=3600)
+    # 公共注册不能让客户端选择已有 tenant；这里为个人账号创建独立租户标识。
+    # 企业场景应从已验证、单次消费的邀请中解析 tenant_id，而不是读取请求体。
+    raw = register_user(db, email=str(payload.email), password=payload.password,
+                        tenant_id=uuid.uuid4(), settings=settings)
+    if raw is not None:
+        # 真实适配器不得记录 token；可靠系统应改为同事务 outbox。
+        mail.send_verification(recipient=str(payload.email), token=raw)
+    return {"message": "if the address can be used, instructions will be sent"}
+
+
+@router.post("/auth/login", response_model=AccessOut)
+def login_route(payload: LoginIn, request: Request, response: Response,
+                db: Db, settings: Config,
+                rl: Annotated[RedisRateLimiter, Depends(limiter)]) -> AccessOut:
+    ip = client_ip(request)
+    account_key = hashlib.sha256(str(payload.email).encode()).hexdigest()
+    limit_or_reject(rl, bucket="login-ip", subject=ip, limit=30, window=900)
+    limit_or_reject(rl, bucket="login-account", subject=account_key, limit=8, window=900)
+    try:
+        issued = login(
+            db, email=str(payload.email), password=payload.password, settings=settings,
+            request_id=request_id(request), source_ip=ip,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except InvalidCredentials:
+        # 失败审计不写邮箱、密码或 token，也不暴露账号是否存在。
+        with db.begin():
+            audit(db, event_type="auth.login", result="failure",
+                  request_id=request_id(request), source_ip=ip,
+                  user_agent=request.headers.get("user-agent"),
+                  reason="invalid_credentials")
+        raise HTTPException(401, "invalid credentials")
+    set_refresh_cookies(response, refresh=issued.refresh_token,
+                        csrf=issued.csrf_token, settings=settings)
+    return AccessOut(access_token=issued.access_token, expires_in=issued.expires_in)
+
+
+@router.post("/auth/refresh", response_model=AccessOut)
+def refresh_route(
+    request: Request, response: Response, db: Db, settings: Config,
+    rl: Annotated[RedisRateLimiter, Depends(limiter)],
+    x_csrf_token: Annotated[str | None, Header()] = None,
+) -> AccessOut:
+    ip = client_ip(request)
+    limit_or_reject(rl, bucket="refresh-ip", subject=ip, limit=60, window=900)
+    raw_refresh = request.cookies.get("refresh_token")
+    csrf_cookie = request.cookies.get("csrf_token")
+    if not raw_refresh or not csrf_cookie or not x_csrf_token or not hmac.compare_digest(
+        csrf_cookie, x_csrf_token
+    ):
+        raise HTTPException(401, "invalid session")
+    try:
+        issued = rotate_refresh(
+            db, raw_refresh=raw_refresh, raw_csrf=x_csrf_token, settings=settings,
+            request_id=request_id(request), source_ip=ip,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except (InvalidRefresh, RefreshReuseDetected):
+        clear_refresh_cookies(response, settings)
+        raise HTTPException(401, "invalid session")
+    set_refresh_cookies(response, refresh=issued.refresh_token,
+                        csrf=issued.csrf_token, settings=settings)
+    return AccessOut(access_token=issued.access_token, expires_in=issued.expires_in)
+```
+```python
+# app/router.py（续）
+@router.post("/auth/logout", status_code=204)
+def logout(request: Request, response: Response, principal: CurrentPrincipal,
+           db: Db, settings: Config) -> Response:
+    raw_refresh = request.cookies.get("refresh_token")
+    if raw_refresh:
+        revoke_family(db, raw_refresh=raw_refresh, settings=settings,
+                      user_id=principal.user_id)
+    clear_refresh_cookies(response, settings)
+    response.status_code = 204
+    return response
+
+
+@router.post("/auth/revoke-all", status_code=204)
+def revoke_all(principal: CurrentPrincipal, db: Db) -> Response:
+    revoke_all_sessions(db, user_id=principal.user_id)
+    return Response(status_code=204)
+
+
+@router.post("/auth/password-reset/request", status_code=202)
+def reset_request(payload: PasswordResetRequestIn, request: Request, db: Db,
+                  settings: Config,
+                  rl: Annotated[RedisRateLimiter, Depends(limiter)],
+                  mail: Annotated[Mailer, Depends(mailer)]) -> dict[str, str]:
+    ip = client_ip(request)
+    account_key = hashlib.sha256(str(payload.email).encode()).hexdigest()
+    limit_or_reject(rl, bucket="reset-ip", subject=ip, limit=10, window=3600)
+    limit_or_reject(rl, bucket="reset-account", subject=account_key, limit=3, window=3600)
+    result = request_password_reset(db, email=str(payload.email), settings=settings)
+    if result:
+        recipient, raw = result
+        mail.send_password_reset(recipient=recipient, token=raw)
+    return {"message": "if the account exists, instructions will be sent"}
+
+
+@router.post("/auth/password-reset/confirm", status_code=204)
+def reset_confirm(payload: PasswordResetConfirmIn, request: Request, db: Db,
+                  settings: Config,
+                  rl: Annotated[RedisRateLimiter, Depends(limiter)]) -> Response:
+    limit_or_reject(rl, bucket="reset-confirm-ip", subject=client_ip(request),
+                    limit=10, window=3600)
+    try:
+        consume_one_time_token(
+            db, raw_token=payload.token, purpose="reset_password",
+            settings=settings, new_password=payload.new_password,
+        )
+    except InvalidOneTimeToken:
+        raise HTTPException(400, "invalid or expired token")
+    return Response(status_code=204)
+
+
+@router.post("/auth/email/verify", status_code=204)
+def verify_email(payload: EmailVerificationIn, request: Request, db: Db,
+                 settings: Config,
+                 rl: Annotated[RedisRateLimiter, Depends(limiter)]) -> Response:
+    limit_or_reject(rl, bucket="verify-ip", subject=client_ip(request),
+                    limit=20, window=3600)
+    try:
+        consume_one_time_token(db, raw_token=payload.token, purpose="verify_email",
+                               settings=settings)
+    except InvalidOneTimeToken:
+        raise HTTPException(400, "invalid or expired token")
+    return Response(status_code=204)
+
+
+@router.get("/documents/{document_id}", response_model=DocumentOut)
+def get_document(
+    document_id: uuid.UUID,
+    db: Db,
+    principal: Annotated[Principal, Depends(require_permission("document:read"))],
+) -> Document:
+    # tenant 条件必须进入 SQL，不能查出对象后才比较。
+    conditions = [
+        Document.id == document_id,
+        Document.tenant_id == principal.tenant_id,
+    ]
+    if "document:read:any" not in principal.permissions:
+        conditions.append(Document.owner_id == principal.user_id)
+    document = db.scalar(select(Document).where(*conditions))
+    if document is None:
+        # 对越权与不存在统一 404，降低 IDOR 枚举信息。
+        raise HTTPException(404, "document not found")
+    return document
+```
+
+这条资源查询同时防止两类 IDOR：修改 URL 中 `document_id` 不能跨 owner；即使猜中另一个租户的 ID，也被 `tenant_id` 条件隔离。更新/删除必须复用同样的条件，并检查受影响行数，不能先按 ID 加载再忘记 tenant 条件。
+
+logout 使用 access Bearer 认证，同时只撤销属于该用户的 refresh family。因为 `current_principal` 每次检查 `sid` 是否仍有有效 family，事务提交后该会话的 access token 也立即失效。若系统选择纯无状态 access token，则必须接受 logout 后最多存活一个 access TTL，或额外维护 `sid/jti` denylist。
+
+### 10. main.py：精确 CORS 与强制注入生产边界
+
+```python
+# app/main.py
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from redis import Redis
+
+from .config import get_settings
+from .mailer import Mailer
+from .rate_limit import RedisRateLimiter
+from .router import router
+
+
+def create_app(*, mailer: Mailer) -> FastAPI:
+    settings = get_settings()
+    redis = Redis.from_url(
+        settings.redis_url, decode_responses=True,
+        socket_connect_timeout=2, socket_timeout=2,
+    )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # 启动即验证关键依赖；认证限流不可用时不悄悄进入无限放行模式。
+        redis.ping()
+        yield
+        redis.close()
+
+    app = FastAPI(title="Secure Auth API", lifespan=lifespan)
+    app.state.rate_limiter = RedisRateLimiter(redis)
+    app.state.mailer = mailer  # 必须是真实 provider/outbox adapter，不提供日志型 fallback
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID"],
+    )
+    app.include_router(router)
+    return app
+```
+
+部署入口应在 composition root 创建实现 `Mailer` 的邮件 provider/outbox adapter，再调用 `create_app(mailer=...)`。这是刻意保留的**外部系统接口**，不是缺省放行：没有真实适配器，应用就不应启动。开发环境可接 Mailpit 等本地 SMTP 捕获器，但必须确认其只在本机隔离网络中，且日志采集排除邮件正文。
+
+运行方式取决于 composition root，例如 `uvicorn deployment:app --proxy-headers --forwarded-allow-ips=<可信代理IP>`。不要使用 `*` 信任任意代理；公网客户端可以伪造转发头。数据库迁移、RBAC seed、mailer adapter 与 secrets 注入属于部署步骤，不应塞进 Web 进程启动时隐式执行。
+---
+
+## 五、验证：不要只测“登录成功”
+
+认证代码的测试重点是**不变量**，而不是 happy path 的状态码。建议矩阵如下。
+
+### 单元测试
+
+- 邮箱规范化后大小写变体相同，超长/非法输入由 Pydantic v2 拒绝。
+- `verify_and_update()` 对旧 Argon2id 参数返回新哈希；错误密码不 rehash。
+- JWT 缺少任一 required claim、`alg=none`、错误算法、未知 `kid`、错误 `iss/aud/type`、非法 UUID 均拒绝。
+- `exp` 刚过期、`nbf/iat` 略在未来：在 leeway 内外分别测试，冻结时间而非 `sleep()`。
+- HMAC 摘要稳定但不同 pepper 不同；任何日志捕获中都没有 token/password/Authorization/Cookie。
+- permission 缺失默认 403；普通用户不能因自报角色获得权限。
+
+### PostgreSQL 集成测试
+
+- 两个并发事务注册同一规范化邮箱，最终只能有一行，两个 HTTP 响应保持同形。
+- refresh 成功后旧 token 的 `consumed_at` 与 successor 在同一提交中出现；数据库从未保存明文。
+- 过期、撤销、错误 CSRF、错误 purpose、已经消费的 token 均失败。
+- 密码重置成功同时消费 token、更新哈希、递增 `token_version`、撤销所有 family；任何一步异常都整体回滚。
+- 单会话 logout 只撤销对应 family；revoke-all 撤销全部 family，并让旧 access `ver` 失配。
+- owner、同租户其他用户、其他租户、`read:any` 四组身份访问同一资源，验证 200/404 边界。
+
+### 必须使用真实并发的 rotation 测试
+
+```python
+# tests/test_refresh_race.py（示意：两个独立 Session/连接，不可共用 Session）
+from concurrent.futures import ThreadPoolExecutor
+
+
+def test_same_refresh_used_twice_revokes_family(app_client_factory, login_tokens):
+    token, csrf = login_tokens.refresh, login_tokens.csrf
+
+    def refresh_once():
+        client = app_client_factory()  # 每个 client 对应独立请求与 DB Session
+        return client.post(
+            "/auth/refresh",
+            cookies={"refresh_token": token, "csrf_token": csrf},
+            headers={"X-CSRF-Token": csrf},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: refresh_once(), range(2)))
+
+    assert sorted(r.status_code for r in responses) == [200, 401]
+    # 严格 reuse 策略：即使一个请求拿到 200，其新 family token 随后也必须不可用。
+    assert_family_fully_revoked(login_tokens.family_id)
+```
+
+不要用 SQLite 验证此并发性质：其锁与 `FOR UPDATE` 语义不等价于 PostgreSQL。测试应在容器化 PostgreSQL 上运行，并用 barrier 尽量扩大竞争窗口；重复执行以捕获偶发竞态。
+
+### API 与浏览器安全测试
+
+- `Set-Cookie` 包含 `HttpOnly`（refresh）、`Secure`、预期 `SameSite` 与窄 `Path`；CSRF cookie 可读但 token 与数据库 session 绑定。
+- 缺 header、header/cookie 不同、不同 family 的 CSRF 值、恶意 Origin 均不能 refresh。
+- CORS 只为 allowlist origin 返回 credentials 头；预检不允许任意 header/method。
+- 错误响应不区分未知邮箱、错误密码、禁用账号；reset/register 始终使用相同公开文案。
+- Redis 不可用时认证敏感端点返回受控 503，而不是绕过限制。
+- 受信代理配置测试覆盖直连、单层代理、伪造 XFF；确认应用不会把用户头当真实 IP。
+
+:::note 关于“已验证”
+本文给出的是设计与参考实现，并未声称这些代码已在你的基础设施、代理拓扑、邮件提供商或数据库版本上运行验证。上线前必须生成 Alembic 迁移、锁定依赖，在真实 PostgreSQL/Redis 环境执行上述单元、集成、并发和时间边界测试，并进行安全评审。
+:::
+
+---
+
+## 六、边界与生产决策
+
+### 1. access JWT 不是“签名正确就永远可信”
+
+本例额外查询用户和 family，因此能立即响应用户禁用、token version 与单会话撤销。代价是每次请求访问数据库。可根据风险选择：
+
+- 普通 API：5～10 分钟 access，验证签名与用户版本；允许小的撤销延迟。
+- 高风险操作：每次查会话、要求近期重新认证，必要时 MFA step-up。
+- 大规模微服务：网关/sidecar 验签，权限仍由资源服务基于本地数据判定；用版本化缓存和事件失效，而非无限期信任 JWT 角色。
+
+不要在 access JWT 放邮箱、完整权限列表或敏感画像，JWT 默认只是编码和签名，不是加密。不要把 refresh token 做成长效 JWT 并宣称“可撤销”；可撤销性来自服务端状态。
+
+### 2. 密钥轮换必须设计验证窗口
+
+HS256 key ring 的部署顺序：
+
+1. 从 secrets manager 发布新 key，所有验证节点先能按新 `kid` 验证；
+2. 签发节点切换 `jwt_active_kid`；
+3. 保留旧 key 至“旧 key 最后签发时间 + 最大 access TTL + leeway”；
+4. 确认无旧 token 后移除，记录变更审计。
+
+refresh token 不受 JWT key 轮换影响，但 HMAC pepper 的轮换更困难，因为摘要不可逆。可给摘要增加 `pepper_version`，验证期间尝试有限 key ring，并在 rotation 时用新 pepper 写 successor。发生 key 泄露时，不要等待平滑迁移：撤销会话、轮换 key，并按事件响应流程通知。
+
+### 3. 密码与账号生命周期
+
+- Argon2id 内存/时间参数要在生产同规格机器压测，目标是在安全与登录容量之间取得可测平衡；不要盲目复制参数。
+- 参数升级通过成功登录 rehash；长期不登录账号可在下次登录升级。修改/重置密码后全局 revoke。
+- 密码重置与邮箱验证 token 单用途、20～60 分钟、摘要存储、原子消费；链接不可用长效 JWT 替代。
+- 注册、重置都返回通用响应。完全消除时间侧信道很难，生产 outbox、固定最小响应预算和网关抖动策略需结合压测，不能仅靠文案。
+- 是否要求 `email_verified` 才能执行特定操作，应作为显式 dependency，而不是到处散落条件判断。
+
+### 4. 租户不是普通字段
+
+多租户系统最危险的错误是“先按 ID 查，再在 Python 判断 tenant”。应把 tenant 条件固化到 repository/policy，数据库层再考虑 Row-Level Security 作为纵深防御。RLS 也不是魔法：连接池必须在每个事务正确设置租户上下文并在归还连接前清理。
+
+管理员权限要明确作用域：`document:read:any` 通常应解释为“当前 tenant 内任意文档”，跨租户支持人员应使用独立、短期、强审计的 break-glass 权限。
+
+### 5. Cookie、XSS 与 CSRF 的真实边界
+
+`HttpOnly` 防止 JavaScript 读取 Cookie，但不能阻止 XSS 以用户身份发请求；CSP、输出编码、依赖治理仍然必要。`SameSite` 是纵深防御，不替代 CSRF token。双提交方案必须比较 header 与 cookie，并像本文一样把 CSRF 摘要绑定到服务端 refresh 记录；服务端 session token 方案也可以。
+
+Bearer access 放内存可降低持久化窃取，但页面刷新后需要 refresh。不要把 token 放 URL；不要在错误上报、APM breadcrumbs、反向代理 access log 中记录 Authorization、Cookie 或请求体敏感字段。
+
+### 6. 审计、告警与隐私
+
+应该审计：登录成功/失败（失败目标可用不可逆账号指纹）、限流、refresh 成功、reuse、logout、全局撤销、重置请求/完成、邮箱验证、角色与权限变更、管理员跨资源操作、密钥轮换。字段至少包括：时间、event type、actor、target、tenant、request ID、来源 IP、User-Agent、结果、reason code、服务版本。
+
+审计数据本身是敏感数据：限制读取权限、定义留存周期、做完整性保护与时钟同步。`reason_code` 用枚举，不写异常堆栈中的秘密；HTTP 响应保持模糊，内部告警可以具体。
+
+### 7. 什么时候不要继续自研
+
+出现下列需求时，优先托管 IdP，而不是继续给这套代码堆功能：企业 SSO、SAML/OIDC 联邦、多因素与 WebAuthn 恢复、风险登录、设备信任、SCIM、复杂账号合并、跨组织同意与 OAuth 第三方授权。应用仍需负责 owner/tenant/RBAC 等资源授权；IdP 解决身份生命周期，不会自动消除 IDOR。
+
+---
+
+## 七、上线前检查清单
+
+- [ ] TLS 全链路与可信代理 allowlist 已配置，外部转发头被覆盖。
+- [ ] PostgreSQL 唯一约束、外键、索引和 rotation 行锁经迁移与并发测试验证。
+- [ ] Argon2id 参数在生产硬件压测，登录失败执行 dummy verify，输入长度有限制。
+- [ ] access JWT 固定算法并校验 `exp/nbf/iat/iss/aud/jti/sub/type/sid/ver`，时钟同步。
+- [ ] refresh 仅存 HMAC 摘要，rotation 原子，reuse 撤销 family，单会话/全局 revoke 可测。
+- [ ] Cookie 属性、精确 CORS、CSRF、CSP 与 token 存储策略已通过浏览器测试。
+- [ ] RBAC 默认拒绝；每个资源查询都带 tenant/owner 条件并有 IDOR 反例测试。
+- [ ] login/refresh/register/reset/verify 在网关与 Redis 两层限流，Redis 故障策略明确。
+- [ ] reset/verify token 单用途、短期、只存摘要、原子消费；邮件使用 provider/outbox，不记链接。
+- [ ] JWT key ring、旧 key 验证窗口、pepper 版本、secrets manager 与应急轮换演练完成。
+- [ ] 审计流可检索、完整性受保护；密码、token、Cookie、Authorization 被日志系统脱敏/丢弃。
+- [ ] 单元、PostgreSQL 集成、真实并发、冻结时间边界和代理拓扑测试全部通过。
+
+生产级认证授权不是一个装饰器，而是一组跨越密码学、事务、浏览器、代理、数据库、运维和产品恢复流程的不变量。先明确威胁与信任边界，再让短期 access、可追踪 refresh family、默认拒绝授权和可审计撤销共同工作，系统才有能力在凭证泄露和权限变化时做出可预测的安全响应。

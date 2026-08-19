@@ -1,15 +1,16 @@
 ---
-title: 'FastAPI 系统教程：从入门到生产级 REST API'
+title: 'FastAPI 系统教程：REST API 工程化基础'
 date: '2026-04-21'
-excerpt: '系统讲解 FastAPI 的核心特性与工程实践。覆盖路由与参数、Pydantic 数据校验、依赖注入、异步 IO、数据库集成（SQLAlchemy）、JWT 鉴权、中间件、测试，最后用一个完整的博客 API 串联所有知识点。'
-tags: ['python', 'fastapi', 'backend', 'rest-api', 'async']
+excerpt: '面向 FastAPI 工程化入门，系统讲解路由与参数、Pydantic v2 数据校验、依赖注入、同步 SQLAlchemy 2.x、JWT 最小示例、中间件与测试，并用博客 API 串联基础实践。'
+tags: ['python', 'fastapi', 'backend', 'rest-api']
+nextPost: 'python/fastapi-sqlalchemy-alembic'
 ---
 
-# FastAPI 系统教程：从入门到生产级 REST API
+# FastAPI 系统教程：REST API 工程化基础
 
-FastAPI 是 Python 生态中增长最快的 Web 框架。它把 Python 的类型注解系统用到极致：路由参数自动校验、请求体自动解析、响应自动序列化、API 文档自动生成——这些在其他框架里需要大量样板代码才能做到的事，FastAPI 让你几乎不需要额外写任何配置。
+FastAPI 是 Python 生态中成熟的现代 Web 框架。它把 Python 的类型注解系统用到极致：路由参数自动校验、请求体自动解析、响应自动序列化、API 文档自动生成——这些在其他框架里需要大量样板代码才能做到的事，FastAPI 让你几乎不需要额外写任何配置。
 
-这篇文章会带你从零搭建，一路走到生产可用的 REST API，包含鉴权、数据库、测试。
+本文定位是 **REST API 工程化基础**，示例适用于 **Python 3.12+、FastAPI（Pydantic v2）与 SQLAlchemy 2.x**。你会完成一个包含基础鉴权、同步数据库访问和测试的教学项目；生产环境仍需继续补齐数据库迁移、完整认证授权、可观测性、容量规划与发布治理。
 
 ---
 
@@ -397,11 +398,14 @@ def get_post(post_id: int, db: DB):
 
 ---
 
-## 六、数据库集成（SQLAlchemy）
+## 六、数据库集成（同步 SQLAlchemy 2.x）
+
+本文统一使用**同步 SQLAlchemy 2.x + 同步 `Session`**，避免在同一条教学主线里混用异步驱动和同步会话。本地开发使用 SQLite，并保持单 worker：
 
 ```bash
-uv add sqlalchemy aiosqlite   # aiosqlite 用于异步 SQLite
-# 生产环境用 PostgreSQL：uv add asyncpg
+uv add "sqlalchemy>=2,<3"
+# 部署到 PostgreSQL 时再安装同步驱动
+uv add "psycopg[binary]>=3,<4"
 ```
 
 ### 定义 ORM 模型
@@ -412,6 +416,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, F
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 from datetime import datetime, timezone
 
+# 仅用于本地教学；SQLite 示例请使用单 worker
 DATABASE_URL = "sqlite:///./blog.db"
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -446,10 +451,15 @@ class PostORM(Base):
 
     author = relationship("UserORM", back_populates="posts")
 
-# 建表（启动时执行）
+# 仅限本地教学快速建表；生产环境不要在应用启动时执行 create_all
+
 def create_tables():
     Base.metadata.create_all(bind=engine)
 ```
+
+:::warning
+`Base.metadata.create_all()` 不管理列变更、约束演进和回滚，只适合本地教学快速初始化。生产环境请使用 Alembic 管理版本化迁移，完整做法见 [FastAPI + SQLAlchemy 2.x + Alembic](/posts/python/fastapi-sqlalchemy-alembic)。
+:::
 
 ### CRUD 操作封装
 
@@ -542,10 +552,12 @@ def delete_post(post_id: int, db: DB, user: CurrentUser):
 
 ---
 
-## 七、JWT 鉴权
+## 七、JWT 鉴权（最小教学示例）
+
+下面的代码只用于说明“注册/登录 → 签发访问令牌 → 依赖中解析令牌”的最小闭环，并不是完整的生产认证方案。刷新令牌、撤销机制、密钥轮换、Cookie/CSRF 策略、权限模型、限流与审计等内容，请继续阅读 [FastAPI 认证与授权](/posts/python/fastapi-authentication-authorization)。
 
 ```bash
-uv add python-jose[cryptography] passlib[bcrypt]
+uv add python-jose[cryptography] passlib[bcrypt] "pydantic[email]"
 ```
 
 ### JWT 工具函数
@@ -615,9 +627,11 @@ def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
 ) -> UserORM:
     payload = decode_token(credentials.credentials)
-    user_id: int | None = payload.get("sub")
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Token 缺少用户信息")
+    subject = payload.get("sub")
+    try:
+        user_id = int(subject)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Token 缺少有效用户信息")
 
     user = db.query(UserORM).filter(UserORM.id == user_id).first()
     if not user:
@@ -644,7 +658,7 @@ Pagination = Annotated[dict, Depends(get_pagination)]
 ```python
 # app/auth/router.py
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from app.database import UserORM
 from app.auth.jwt import hash_password, verify_password, create_access_token
 from app.dependencies import DB
@@ -653,7 +667,7 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 
 class RegisterBody(BaseModel):
     username: str = Field(min_length=3, max_length=50)
-    email:    str
+    email:    EmailStr
     password: str = Field(min_length=8)
 
 class LoginBody(BaseModel):
@@ -678,7 +692,7 @@ def register(body: RegisterBody, db: DB):
     db.commit()
     db.refresh(user)
 
-    token = create_access_token({"sub": user.id})
+    token = create_access_token({"sub": str(user.id)})
     return {"access_token": token}
 
 @router.post("/login", response_model=TokenResponse)
@@ -688,7 +702,7 @@ def login(body: LoginBody, db: DB):
         # 故意不区分"用户不存在"和"密码错误"，防止用户枚举攻击
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-    token = create_access_token({"sub": user.id})
+    token = create_access_token({"sub": str(user.id)})
     return {"access_token": token}
 ```
 
@@ -706,13 +720,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(...)
 
-# CORS 中间件
+# CORS 中间件：来源、方法和请求头都按实际前端需求精确列出
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "https://yourdomain.com"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # 自定义中间件：请求耗时日志
@@ -772,15 +786,17 @@ from app.database import create_tables
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动时
+    # 仅限本地教学：快速初始化 SQLite；生产环境由 Alembic 迁移
     create_tables()
-    print("✅ 数据库表初始化完成")
+    print("✅ 本地数据库表初始化完成")
     yield
     # 关闭时（清理连接池等）
     print("👋 应用关闭")
 
 app = FastAPI(title="博客 API", lifespan=lifespan)
 ```
+
+本地运行该 SQLite 示例时保持 Uvicorn 默认的**单 worker**。生产部署不应让多个进程并发执行 `create_all()`，而应在发布阶段先执行 Alembic 迁移。
 
 ---
 
@@ -793,18 +809,27 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import posts, users
 from app.auth.router import router as auth_router
+from app.config import settings
 from app.database import create_tables
 import time
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_tables()
+    # 本地教学环境可快速建表；生产发布由 Alembic 在应用启动前迁移
+    if settings.debug:
+        create_tables()
     yield
 
 app = FastAPI(title="博客 API", version="1.0.0", lifespan=lifespan)
 
-# 中间件
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# CORS 使用配置中的精确来源；不要用通配符来源配合凭证
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 @app.middleware("http")
 async def add_process_time(request, call_next):
@@ -954,24 +979,29 @@ RUN uv sync --frozen --no-dev
 
 COPY app/ ./app/
 
-# 生产环境用多 worker
+# 生产镜像以单 worker 作为可观测、可压测的起点
 CMD ["uv", "run", "uvicorn", "app.main:app",
      "--host", "0.0.0.0",
-     "--port", "8000",
-     "--workers", "4"]
+     "--port", "8000"]
 ```
 
 ### 生产环境配置
+
+生产环境安装同步 PostgreSQL 驱动与配置组件：
+
+```bash
+uv add "psycopg[binary]>=3,<4" pydantic-settings
+```
 
 ```python
 # app/config.py（用 pydantic-settings 管理环境变量）
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    database_url:  str  = "sqlite:///./blog.db"
-    secret_key:    str  = "change-me-in-production"
-    debug:         bool = False
-    allowed_origins: list[str] = ["*"]
+    database_url: str
+    secret_key: str
+    debug: bool = False
+    allowed_origins: list[str]
 
     model_config = {"env_file": ".env"}
 
@@ -980,16 +1010,22 @@ settings = Settings()
 
 ```bash
 # .env（不提交到 git）
-DATABASE_URL=postgresql+asyncpg://user:password@localhost/blogdb
+DATABASE_URL=postgresql+psycopg://user:password@db:5432/blogdb
 SECRET_KEY=super-secret-random-string-at-least-32-chars
 DEBUG=false
 ALLOWED_ORIGINS=["https://yourdomain.com"]
 ```
 
-:::tip
-**性能调优**：`uvicorn --workers N` 中，N 推荐设为 `2 * CPU 核心数 + 1`。如果用 Gunicorn 管理多进程则是 `gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app`。
-:::
+生产部署使用 PostgreSQL，并让数据库引擎读取 `settings.database_url`。worker 数量不存在适用于所有项目的固定公式：先从少量 worker 开始，用接近真实流量的压测观察延迟、吞吐、CPU、内存和数据库连接池，再决定扩容；容器编排环境通常优先增加实例数。每增加一个 worker 都会创建独立进程和连接池，必须同时核算 PostgreSQL 的连接上限。
 
 :::warning
-SQLite 不支持真正的并发写入，生产环境请换用 PostgreSQL 或 MySQL。
+SQLite 只用于本文本地教学，并应保持单 worker；不要把 SQLite 文件挂到多 worker 的生产部署中。生产发布先执行 Alembic 迁移，再启动应用进程。
 :::
+
+---
+
+## 后续专题
+
+- [FastAPI + SQLAlchemy 2.x + Alembic](/posts/python/fastapi-sqlalchemy-alembic)：把本地 `create_all()` 升级为可审查、可回滚的数据库迁移流程
+- [FastAPI 认证与授权](/posts/python/fastapi-authentication-authorization)：补齐刷新与撤销、Cookie/CSRF、权限模型、密钥轮换和安全审计
+- [Python 测试系统教程](/posts/python/python-testing)：继续完善 fixture、mock、异步测试、集成测试与覆盖率策略

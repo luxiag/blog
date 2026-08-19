@@ -1,0 +1,1392 @@
+---
+title: 'Python 后端集成测试：用真实 PostgreSQL、Redis 与 Testcontainers 构建可信测试'
+date: '2026-08-18'
+excerpt: '面向已有 pytest 基础的读者，系统讲解 FastAPI 后端的集成测试：测试金字塔、Testcontainers、真实 PostgreSQL/Redis、Alembic 迁移、依赖覆盖、事务隔离、鉴权、缓存、任务、契约、并发幂等、故障注入与 CI 质量门禁。'
+tags: ['python', 'pytest', 'integration-testing', 'fastapi', 'testcontainers', 'postgresql', 'redis']
+nextPost: 'python/python-backend-capstone'
+---
+
+# Python 后端集成测试：用真实 PostgreSQL、Redis 与 Testcontainers 构建可信测试
+
+单元测试可以证明一个函数在隔离环境中按预期工作，却不能回答这些更接近生产的问题：SQLAlchemy 生成的 SQL 能否被 PostgreSQL 接受？Alembic 能否把一张空数据库迁移到当前版本？Redis 的 TTL、原子命令与数据编码是否符合预期？FastAPI 的依赖注入、鉴权和响应序列化串起来后是否仍然正确？
+
+这正是集成测试要解决的问题。本文假设你已经掌握 fixture、参数化和 `monkeypatch`；如果还不熟悉，先阅读 [pytest 从入门到工程实践](/posts/python/python-testing)。数据库建模与迁移基础可参考 [FastAPI、SQLAlchemy 与 Alembic](/posts/python/fastapi-sqlalchemy-alembic)。
+
+本文示例面向以下版本族：
+
+- Python 3.12+
+- pytest 8.x
+- FastAPI 0.110+、Pydantic v2、SQLAlchemy 2.x
+- Psycopg 3.2+、redis-py 5.x
+- Testcontainers for Python 4.x
+- PostgreSQL 16、Redis 7
+
+全文只有一条执行主线：同步 SQLAlchemy 2.x + Psycopg 3、同步 `redis.Redis`、普通 `def` 路由与 FastAPI `TestClient`。同步 `Session` 不能跨线程共享，因此请求依赖为每次请求创建自己的会话；并发测试中的每个线程也必须创建独立会话。普通 `def` 路由由 FastAPI 在线程池中执行，不要把阻塞的同步数据库或 Redis 调用放进 `async def`。
+
+:::important 本文对“真实集成测试”的定义
+只有代码确实通过真实驱动、真实协议连接真实 PostgreSQL 或 Redis 进程，才把它称为这些资源的集成测试。用 `Mock` 替换 repository、用 `fakeredis` 替换 Redis、或通过 FastAPI dependency override 把外部资源换成内存实现，依然有价值，但它们属于单元测试或组件测试，不证明真实外部系统的行为。
+:::
+
+---
+
+## 一、先划清边界：测试金字塔不是速度排行榜
+
+一个可维护的后端测试集通常分为四层：
+
+| 层次 | 主要对象 | 外部资源 | 典型反馈速度 |
+| --- | --- | --- | --- |
+| 单元测试 | 纯函数、领域规则 | 全部替身 | 毫秒级 |
+| 组件测试 | FastAPI 路由到 service | 数据库或缓存可被替换 | 毫秒到秒级 |
+| 集成测试 | 应用与 PostgreSQL、Redis、迁移工具 | 至少一个真实依赖 | 秒到分钟级 |
+| 端到端测试 | 已部署系统与完整基础设施 | 全部真实 | 分钟级 |
+
+
+```mermaid
+graph TB
+  E2E[少量端到端测试：部署与关键旅程]
+  Integration[适量集成测试：真实 PostgreSQL / Redis / Alembic]
+  Component[较多组件测试：HTTP 边界与依赖替身]
+  Unit[大量单元测试：领域规则]
+  E2E --> Integration --> Component --> Unit
+```
+
+测试金字塔的重点不是“越靠上越差”，而是把不同风险放到成本最低、仍能发现该风险的层次：
+
+- 金额计算、权限矩阵等纯规则放在单元测试；
+- 请求校验和异常到 HTTP 状态码的映射可放在组件测试；
+- 唯一约束、事务、锁、迁移、Redis TTL 必须交给真实依赖；
+- 反向代理、TLS、部署清单等只在端到端测试才能覆盖。
+
+:::warning
+SQLite 不是 PostgreSQL 的轻量替身。二者在类型系统、JSON、数组、大小写、约束、事务隔离、锁和 SQL 方言上都有差异。用 SQLite 测 repository，最多证明代码兼容 SQLite，不能证明它兼容生产 PostgreSQL。
+:::
+
+### 什么应该 mock，什么不应该
+
+下面的选择不是绝对规则，而是风险分配：
+
+```python
+# 适合单元测试：第三方邮件 API 不属于当前进程，验证“发什么”即可
+mailer.send = Mock()
+service.register(email="reader@example.com")
+mailer.send.assert_called_once()
+
+# 不适合作为 PostgreSQL 集成测试：这里根本没有执行 SQL
+repository.save = Mock(return_value=Post(id=1, title="hello"))
+
+# 适合缓存算法的快速组件测试，但不验证真实 Redis 协议与 TTL 精度
+fake_redis = FakeRedis(decode_responses=True)
+```
+
+本文会在 FastAPI 中使用 dependency override，但 override 的目标是把应用指向**测试容器里的真实连接**，而不是把 PostgreSQL 或 Redis 换成假对象。这样既保留应用入口，又可精确控制隔离。
+
+---
+
+## 二、完整示例：一个可测试的文章 API
+
+示例应用提供文章创建、查询、JWT 角色授权、Redis 缓存与任务入队，并用唯一 `idempotency_key` 保证重复提交只产生一条记录。
+
+```text
+backend-integration-demo/
+├── app/
+│   ├── __init__.py
+│   ├── auth.py                 # JWT 解析与角色依赖
+│   ├── cache.py                # Redis 依赖、缓存键与任务队列
+│   ├── config.py               # Pydantic Settings
+│   ├── db.py                   # SQLAlchemy engine/session
+│   ├── main.py                 # 应用工厂与路由
+│   ├── models.py               # ORM 模型
+│   ├── repository.py           # 幂等写入
+│   └── schemas.py              # Pydantic v2 请求/响应模型
+├── alembic/
+│   ├── versions/
+│   │   └── 20260818_01_create_posts.py
+│   └── env.py
+├── tests/
+│   ├── conftest.py             # 容器、迁移、事务、HTTP client
+│   ├── test_auth.py
+│   ├── test_cache_and_tasks.py
+│   ├── test_contract.py
+│   ├── test_faults.py
+│   ├── test_idempotency.py
+│   ├── test_migrations.py
+│   └── test_posts_api.py
+├── .github/workflows/ci.yml
+├── alembic.ini
+└── pyproject.toml
+```
+
+如果 Testcontainers 的 Docker 工作流还不熟悉，可先看 [Docker 完整指南](/posts/docker/docker-complete-guide)；Redis 的缓存语义可配合 [Redis 缓存深入解析](/posts/redis/redis-cache-in-depth) 阅读。
+
+### pyproject.toml
+
+版本使用兼容区间，数据库驱动明确选择 Psycopg 3 的二进制分发：
+
+```toml
+[project]
+name = "backend-integration-demo"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.13,<2",
+  "fastapi>=0.110,<1",
+  "pydantic>=2.6,<3",
+  "pydantic-settings>=2.2,<3",
+  "psycopg[binary]>=3.2,<4",
+  "pyjwt>=2.8,<3",
+  "redis>=5,<6",
+  "sqlalchemy>=2.0,<3",
+  "uvicorn>=0.29,<1",
+]
+
+[project.optional-dependencies]
+test = [
+  "httpx>=0.27,<1", # TestClient 的底层依赖
+  "mypy>=1.10,<2",
+  "pytest>=8,<9",
+  "pytest-cov>=5,<7",
+  "ruff>=0.5,<1",
+  "testcontainers[postgres,redis]>=4,<5",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "integration: requires Docker-backed infrastructure",
+  "fault: temporarily disrupts a test container",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+omit = ["app/models.py"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 85
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+```
+
+安装后先确认 Docker 可用：
+
+```bash
+python -m pip install -e ".[test]"
+docker info
+pytest --collect-only
+```
+
+---
+
+## 三、应用代码：让生产依赖可替换，但不隐藏真实行为
+
+### 配置与数据库
+
+```python
+# app/config.py
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    database_url: str = "postgresql+psycopg://app:app@localhost:5432/app"
+    redis_url: str = "redis://localhost:6379/0"
+    jwt_secret: str = "development-only-change-me"
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+```
+
+```python
+# app/db.py
+from collections.abc import Generator
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.config import get_settings
+
+settings = get_settings()
+engine = create_engine(settings.database_url, pool_pre_ping=True)
+SessionFactory = sessionmaker(
+    bind=engine,
+    class_=Session,
+    expire_on_commit=False,
+)
+
+
+def get_session() -> Generator[Session, None, None]:
+    # 普通 def 依赖为每个请求创建会话；不要把该 Session 交给其他线程。
+    with SessionFactory() as session:
+        yield session
+```
+
+测试不会修改全局 `engine`，而是覆盖 `get_session`，把应用绑定到当前测试的连接。生产代码保持正常生命周期，测试代码则获得事务边界的控制权。
+
+### ORM 与 Pydantic v2 模型
+
+```python
+# app/models.py
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, String, Text, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Post(Base):
+    __tablename__ = "posts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    owner_id: Mapped[str] = mapped_column(String(64), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(64), unique=True)
+    published: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+```
+
+```python
+# app/schemas.py
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class PostCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1)
+    idempotency_key: str = Field(min_length=8, max_length=64)
+
+
+class PostOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    body: str
+    owner_id: str
+    published: bool
+    created_at: datetime
+```
+
+### 鉴权、缓存与幂等 repository
+
+```python
+# app/auth.py
+from dataclasses import dataclass
+from typing import Annotated
+
+import jwt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from app.config import get_settings
+
+bearer = HTTPBearer(auto_error=False)
+
+
+@dataclass(frozen=True)
+class Principal:
+    subject: str
+    role: str
+
+
+def get_principal(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> Principal:
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing token")
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            get_settings().jwt_secret,
+            algorithms=["HS256"],
+            options={"require": ["sub", "role", "exp"]},
+        )
+        return Principal(subject=str(payload["sub"]), role=str(payload["role"]))
+    except jwt.PyJWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+        ) from exc
+
+
+def require_editor(
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> Principal:
+    if principal.role not in {"editor", "admin"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+    return principal
+```
+
+```python
+# app/cache.py
+from collections.abc import Generator
+
+from redis import Redis
+
+from app.config import get_settings
+
+
+def get_redis() -> Generator[Redis, None, None]:
+    client = Redis.from_url(get_settings().redis_url, decode_responses=True)
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+def post_cache_key(post_id: int) -> str:
+    return f"post:{post_id}"
+```
+
+```python
+# app/repository.py
+from threading import Barrier
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.models import Post
+from app.schemas import PostCreate
+
+
+def find_post(session: Session, post_id: int) -> Post | None:
+    return session.get(Post, post_id)
+
+
+def create_post(
+    session: Session,
+    data: PostCreate,
+    owner_id: str,
+) -> tuple[Post, bool]:
+    existing = session.scalar(
+        select(Post).where(Post.idempotency_key == data.idempotency_key)
+    )
+    if existing is not None:
+        return existing, False
+
+    post = Post(**data.model_dump(), owner_id=owner_id)
+    session.add(post)
+    session.flush()
+    return post, True
+
+
+def create_post_concurrently(
+    factory: sessionmaker[Session],
+    data: PostCreate,
+    owner_id: str,
+    barrier: Barrier,
+) -> int:
+    """供并发测试调用：每个竞争者使用独立 session 和事务。"""
+    with factory() as session:
+        post = Post(**data.model_dump(), owner_id=owner_id)
+        session.add(post)
+        barrier.wait(timeout=5)
+        try:
+            session.commit()
+            return post.id
+        except IntegrityError:
+            session.rollback()
+            winner = session.scalar(
+                select(Post).where(Post.idempotency_key == data.idempotency_key)
+            )
+            if winner is None:
+                raise RuntimeError("idempotency winner disappeared")
+            return winner.id
+```
+
+这里故意把“先查后写”的普通路径与数据库唯一约束同时保留。前者优化重复请求，后者才是并发正确性的最终防线；只写 `SELECT` 再 `INSERT` 会留下竞态窗口。
+
+### FastAPI 应用工厂
+
+```python
+# app/main.py
+import json
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, Response, status
+from redis import Redis
+from sqlalchemy.orm import Session
+
+from app.auth import Principal, require_editor
+from app.cache import get_redis, post_cache_key
+from app.db import get_session
+from app.repository import create_post, find_post
+from app.schemas import PostCreate, PostOut
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="Integration Demo", version="1.0.0")
+
+    @app.post(
+        "/posts",
+        response_model=PostOut,
+        status_code=status.HTTP_201_CREATED,
+        responses={200: {"model": PostOut, "description": "幂等请求已存在"}},
+    )
+    def add_post(
+        data: PostCreate,
+        response: Response,
+        principal: Annotated[Principal, Depends(require_editor)],
+        session: Annotated[Session, Depends(get_session)],
+        redis: Annotated[Redis, Depends(get_redis)],
+    ) -> PostOut:
+        post, created = create_post(session, data, principal.subject)
+        session.commit()
+        session.refresh(post)
+        if created:
+            redis.rpush(
+                "tasks:index-post",
+                json.dumps({"post_id": post.id}, separators=(",", ":")),
+            )
+            response.status_code = status.HTTP_201_CREATED
+        else:
+            response.status_code = status.HTTP_200_OK
+        return PostOut.model_validate(post)
+
+    @app.get("/posts/{post_id}", response_model=PostOut)
+    def get_post(
+        post_id: int,
+        session: Annotated[Session, Depends(get_session)],
+        redis: Annotated[Redis, Depends(get_redis)],
+    ) -> PostOut:
+        key = post_cache_key(post_id)
+        if cached := redis.get(key):
+            return PostOut.model_validate_json(cached)
+
+        post = find_post(session, post_id)
+        if post is None:
+            raise HTTPException(status_code=404, detail="post not found")
+        result = PostOut.model_validate(post)
+        redis.set(key, result.model_dump_json(), ex=60)
+        return result
+
+    return app
+
+
+app = create_app()
+```
+
+:::note
+示例在提交数据库后再入 Redis 队列，若 Redis 写入失败，会出现“数据库已成功但 HTTP 返回失败”的双写问题。生产系统应采用 transactional outbox：把待发布事件与业务数据写入同一 PostgreSQL 事务，再由 worker 可靠投递。集成测试应该明确暴露这个边界，而不是用 mock 把它掩盖。
+:::
+
+---
+
+## 四、Alembic：先证明空数据库能迁移
+
+`alembic.ini` 至少包含脚本位置；连接 URL 由 `env.py` 从环境变量读取，避免在仓库中写密码。
+
+```ini
+# alembic.ini
+[alembic]
+script_location = alembic
+prepend_sys_path = .
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+```
+
+```python
+# alembic/env.py
+import os
+from logging.config import fileConfig
+
+from alembic import context
+from sqlalchemy import engine_from_config, pool
+from sqlalchemy.engine import make_url
+
+from app.models import Base
+
+config = context.config
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+# 应用和迁移统一强制使用 Psycopg 3；ConfigParser 中的 % 需要写成 %%。
+database_url = make_url(os.environ["DATABASE_URL"]).set(
+    drivername="postgresql+psycopg"
+)
+config.set_main_option(
+    "sqlalchemy.url",
+    database_url.render_as_string(hide_password=False).replace("%", "%%"),
+)
+target_metadata = Base.metadata
+
+
+def run_migrations_offline() -> None:
+    context.configure(
+        url=config.get_main_option("sqlalchemy.url"),
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+    with connectable.connect() as connection:
+        context.configure(connection=connection, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+```
+
+```python
+# alembic/versions/20260818_01_create_posts.py
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+
+revision: str = "20260818_01"
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "posts",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("title", sa.String(length=200), nullable=False),
+        sa.Column("body", sa.Text(), nullable=False),
+        sa.Column("owner_id", sa.String(length=64), nullable=False),
+        sa.Column("idempotency_key", sa.String(length=64), nullable=False),
+        sa.Column("published", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.UniqueConstraint("idempotency_key", name="uq_posts_idempotency_key"),
+    )
+    op.create_index("ix_posts_owner_id", "posts", ["owner_id"])
+
+
+def downgrade() -> None:
+    op.drop_index("ix_posts_owner_id", table_name="posts")
+    op.drop_table("posts")
+```
+
+不能用 `Base.metadata.create_all()` 代替迁移测试。`create_all()` 只根据当前 ORM 建最终表，不会执行历史迁移，也不会发现错误的 revision 链、数据回填或生产升级路径。
+
+
+---
+
+## 五、核心 fixtures：容器长寿命，测试事务短寿命
+
+这是整个方案最重要的一段。PostgreSQL 与 Redis 容器启动较慢，适合 session scope；数据库 `Connection`、测试外层事务、ORM `Session` 与 HTTP `TestClient` 保持 function scope，避免状态跨测试泄漏。
+
+Testcontainers 4.x 常用 API 是 `PostgresContainer(...).start()`、`get_connection_url()`、`RedisContainer(...).start()`，并在 teardown 调用 `stop()`。容器返回的 PostgreSQL URL 先通过 `make_url(...).set(drivername="postgresql+psycopg")` 转为本文统一使用的 Psycopg 3 URL，不做脆弱的字符串替换。
+
+```python
+# tests/conftest.py
+import os
+from collections.abc import Callable, Generator, Iterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import jwt
+import pytest
+from alembic import command
+from alembic.config import Config
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from redis import Redis
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Connection, Engine, make_url
+from sqlalchemy.orm import Session
+from testcontainers.postgres import PostgresContainer
+from testcontainers.redis import RedisContainer
+
+from app.cache import get_redis
+from app.config import get_settings
+from app.db import get_session
+from app.main import create_app
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def as_psycopg_url(container_url: str) -> str:
+    url = make_url(container_url).set(drivername="postgresql+psycopg")
+    # str(URL) 会隐藏密码；连接字符串必须显式保留真实密码。
+    return url.render_as_string(hide_password=False)
+
+
+@pytest.fixture(scope="session")
+def postgres_container() -> Iterator[PostgresContainer]:
+    container = PostgresContainer("postgres:16.4-alpine")
+    container.start()
+    try:
+        yield container
+    finally:
+        container.stop()
+
+
+@pytest.fixture(scope="session")
+def redis_container() -> Iterator[RedisContainer]:
+    container = RedisContainer("redis:7.2-alpine")
+    container.start()
+    try:
+        yield container
+    finally:
+        container.stop()
+
+
+@pytest.fixture(scope="session")
+def database_url(postgres_container: PostgresContainer) -> str:
+    return as_psycopg_url(postgres_container.get_connection_url())
+
+
+@pytest.fixture(scope="session", autouse=True)
+def migrated_database(database_url: str) -> Iterator[None]:
+    config = Config(ROOT / "alembic.ini")
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+
+    old = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = database_url
+    try:
+        command.upgrade(config, "head")
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = old
+
+
+@pytest.fixture(scope="session")
+def db_engine(database_url: str, migrated_database: None) -> Iterator[Engine]:
+    engine = create_engine(database_url, pool_pre_ping=True)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def db_connection(db_engine: Engine) -> Iterator[Connection]:
+    with db_engine.connect() as connection:
+        outer_transaction = connection.begin()
+        try:
+            yield connection
+        finally:
+            outer_transaction.rollback()
+
+
+@pytest.fixture
+def db_session(db_connection: Connection) -> Iterator[Session]:
+    session = Session(
+        bind=db_connection,
+        expire_on_commit=False,
+        # 应用中的 commit 只结束 savepoint，不提交测试外层事务。
+        join_transaction_mode="create_savepoint",
+    )
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def redis_client(redis_container: RedisContainer) -> Iterator[Redis]:
+    client = Redis.from_url(
+        redis_container.get_connection_url(),
+        decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=1,
+    )
+    client.flushdb()
+    try:
+        yield client
+    finally:
+        client.flushdb()
+        client.close()
+
+
+@pytest.fixture
+def app(db_connection: Connection, redis_client: Redis) -> Iterator[FastAPI]:
+    application = create_app()
+
+    def session_override() -> Generator[Session, None, None]:
+        # 依赖在处理请求时创建 Session，避免把 pytest 线程中的 db_session
+        # 直接交给 TestClient 背后的应用执行线程。
+        with Session(
+            bind=db_connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        ) as request_session:
+            yield request_session
+
+    def redis_override() -> Generator[Redis, None, None]:
+        # redis-py 的连接池可由同步调用共享；本测试仍保持串行访问。
+        yield redis_client
+
+    application.dependency_overrides[get_session] = session_override
+    application.dependency_overrides[get_redis] = redis_override
+    try:
+        yield application
+    finally:
+        application.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client(app: FastAPI) -> Iterator[TestClient]:
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def token() -> Callable[..., str]:
+    def build(role: str = "editor", subject: str = "user-1") -> str:
+        now = datetime.now(UTC)
+        return jwt.encode(
+            {"sub": subject, "role": role, "iat": now, "exp": now + timedelta(minutes=5)},
+            get_settings().jwt_secret,
+            algorithm="HS256",
+        )
+
+    return build
+
+
+@pytest.fixture
+def auth_headers(token: Callable[..., str]) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token()}"}
+```
+
+`db_connection` 先开启外层事务。直接测试 repository 时，`db_session` 用 `join_transaction_mode="create_savepoint"` 绑定该连接；HTTP 测试则由 `session_override` 在请求处理期间创建独立的 `request_session`，不把 pytest 测试线程中创建的 `db_session` 传给 TestClient 背后的应用线程。两种 Session 都只在自己的顺序执行流中使用。应用代码即使调用 `commit()`，也只会完成当前 savepoint；测试结束后回滚外层事务，数据库恢复到测试开始前。这个模式既保留真实提交语义，又免去逐表删除。
+
+同一个测试若同时请求 `client` 与 `db_session`，二者虽然绑定同一条测试连接，也必须顺序使用，不能并发发 SQL。真正需要制造竞争时应绕过这条共享连接，像并发幂等测试那样从 `db_engine` 为每个线程创建独立 Session 和事务，并在结束时显式清理已提交数据。
+
+Redis 不参与 PostgreSQL 事务，所以 fixture 在每个测试前后都执行 `flushdb()`。同步 redis-py 客户端内部使用线程安全连接池，但测试仍应避免在容器暂停期间并行执行其他 Redis 用例。若测试进程并行运行，不应让多个 worker 共用同一个 Redis DB；后文会给出隔离策略。
+
+---
+
+## 六、迁移与基础 API：先验证最短闭环
+
+### 验证 revision 与数据库结构
+
+```python
+# tests/test_migrations.py
+import pytest
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from sqlalchemy import inspect
+from sqlalchemy.engine import Engine
+
+
+@pytest.mark.integration
+def test_database_is_at_alembic_head(db_engine: Engine) -> None:
+    config = Config("alembic.ini")
+    scripts = ScriptDirectory.from_config(config)
+
+    with db_engine.connect() as connection:
+        current = MigrationContext.configure(connection).get_current_revision()
+        inspector = inspect(connection)
+        tables = inspector.get_table_names()
+        constraints = inspector.get_unique_constraints("posts")
+
+    assert current == scripts.get_current_head()
+    assert "posts" in tables
+    assert {item["name"] for item in constraints} == {"uq_posts_idempotency_key"}
+```
+
+这条测试从空容器执行 `upgrade head` 后再检查，不只是读取迁移文件。对于包含数据迁移的项目，还应准备“上一生产版本”的匿名化种子数据，升级后断言数据不丢失。`downgrade` 只有在团队承诺支持回滚时才应成为强制门禁；不可逆数据迁移应明确记录，而不是写一个虚假的 downgrade。
+
+### 创建与查询
+
+```python
+# tests/test_posts_api.py
+from fastapi.testclient import TestClient
+
+
+def test_create_then_get_post(
+    client: TestClient,
+    auth_headers: dict[str, str],
+) -> None:
+    created = client.post(
+        "/posts",
+        headers=auth_headers,
+        json={
+            "title": "真实集成测试",
+            "body": "PostgreSQL 与 Redis 都来自容器",
+            "idempotency_key": "request-0001",
+        },
+    )
+    assert created.status_code == 201
+    post = created.json()
+    assert post["owner_id"] == "user-1"
+
+    fetched = client.get(f"/posts/{post['id']}")
+    assert fetched.status_code == 200
+    assert fetched.json() == post
+
+
+def test_validation_stops_before_database(
+    client: TestClient,
+    auth_headers: dict[str, str],
+) -> None:
+    response = client.post(
+        "/posts",
+        headers=auth_headers,
+        json={"title": "", "body": "", "idempotency_key": "short"},
+    )
+    assert response.status_code == 422
+```
+
+事务 fixture 使两条测试都可以自由调用应用中的 `commit()`，测试结束仍由外层事务统一回滚。相比“每次删所有表”，它更快，也不容易漏表；相比 `TRUNCATE`，它无需处理外键顺序。
+
+:::warning 事务隔离的边界
+外层事务只隔离使用同一测试连接的代码。后台线程、独立 worker 或另一个 connection 看不到未提交数据，也不会被该回滚自动清理。并发测试必须使用独立事务，因此要显式删除自己提交的数据，或为每个测试创建独立 database/schema。
+:::
+
+---
+
+## 七、认证与授权：分别断言 401、403 和资源归属
+
+401 表示“没有可信身份”，403 表示“身份可信但权限不足”。把二者混成一个测试会掩盖安全边界。
+
+```python
+# tests/test_auth.py
+from collections.abc import Callable
+
+from fastapi.testclient import TestClient
+
+
+PAYLOAD = {
+    "title": "受保护文章",
+    "body": "只有 editor 或 admin 可以创建",
+    "idempotency_key": "auth-case-01",
+}
+
+
+def test_missing_token_is_401(client: TestClient) -> None:
+    response = client.post("/posts", json=PAYLOAD)
+    assert response.status_code == 401
+    assert response.json() == {"detail": "missing token"}
+
+
+def test_reader_is_authenticated_but_forbidden(
+    client: TestClient,
+    token: Callable[[str, str], str],
+) -> None:
+    headers = {"Authorization": f"Bearer {token('reader', 'reader-1')}"}
+    response = client.post("/posts", headers=headers, json=PAYLOAD)
+    assert response.status_code == 403
+
+
+def test_owner_comes_from_token_not_request_body(
+    client: TestClient,
+    token: Callable[[str, str], str],
+) -> None:
+    headers = {"Authorization": f"Bearer {token('editor', 'editor-7')}"}
+    response = client.post("/posts", headers=headers, json=PAYLOAD)
+    assert response.status_code == 201
+    assert response.json()["owner_id"] == "editor-7"
+```
+
+还应按业务补充：过期 token、签名错误、算法白名单、跨租户资源访问、admin 与普通用户差异。不要在集成测试里绕过 `get_principal` 直接返回管理员，否则只能测授权后的路由，不能证明 JWT 到权限的链路。
+
+---
+
+## 八、真实 Redis：缓存命中、TTL、失效与任务入队
+
+`fakeredis` 很适合快速测试缓存分支，但它不保证与目标 Redis 版本在 Lua、过期时机、连接错误、集群和模块命令上完全一致。下面测试通过真实 Redis 7 容器执行命令。
+
+```python
+# tests/test_cache_and_tasks.py
+import json
+
+from fastapi.testclient import TestClient
+from redis import Redis
+from sqlalchemy.orm import Session
+
+from app.models import Post
+
+
+def test_get_populates_real_redis_with_ttl(
+    client: TestClient,
+    db_session: Session,
+    redis_client: Redis,
+) -> None:
+    post = Post(
+        title="缓存文章",
+        body="version-1",
+        owner_id="user-1",
+        idempotency_key="cache-case-01",
+    )
+    db_session.add(post)
+    db_session.commit()
+    db_session.refresh(post)
+
+    first = client.get(f"/posts/{post.id}")
+    assert first.status_code == 200
+
+    key = f"post:{post.id}"
+    cached = redis_client.get(key)
+    ttl = redis_client.ttl(key)
+    assert cached is not None
+    assert 0 < ttl <= 60
+
+    # 直接改数据库，证明第二次响应来自缓存中的旧值。
+    post.body = "version-2"
+    db_session.commit()
+    second = client.get(f"/posts/{post.id}")
+    assert second.json()["body"] == "version-1"
+
+    redis_client.delete(key)
+    third = client.get(f"/posts/{post.id}")
+    assert third.json()["body"] == "version-2"
+
+
+def test_create_enqueues_index_task(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    redis_client: Redis,
+) -> None:
+    response = client.post(
+        "/posts",
+        headers=auth_headers,
+        json={
+            "title": "需要索引",
+            "body": "任务通过真实 Redis list 传递",
+            "idempotency_key": "task-case-001",
+        },
+    )
+    assert response.status_code == 201
+
+    raw = redis_client.lpop("tasks:index-post")
+    assert raw is not None
+    assert json.loads(raw) == {"post_id": response.json()["id"]}
+```
+
+任务测试不应只断言 `rpush` 被调用，还应由真实 Redis 读回消息，检查编码和队列名。若使用 Celery、Dramatiq 或 RQ，可以在一部分测试中直接执行任务函数，另设少量 worker 集成测试验证 broker 投递、重试和 ack；不要让整套测试都依赖 sleep 等待 worker。
+
+---
+
+## 九、契约测试：验证消费者看到的边界
+
+集成测试通过不等于契约稳定。数据库行正确，但响应字段改名、日期格式改变或 OpenAPI 丢失鉴权声明，都可能让客户端失败。
+
+```python
+# tests/test_contract.py
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.schemas import PostOut
+
+
+def test_post_response_matches_pydantic_contract(
+    client: TestClient,
+    auth_headers: dict[str, str],
+) -> None:
+    response = client.post(
+        "/posts",
+        headers=auth_headers,
+        json={
+            "title": "契约测试",
+            "body": "消费者依赖这些字段",
+            "idempotency_key": "contract-0001",
+        },
+    )
+    assert response.headers["content-type"].startswith("application/json")
+    parsed = PostOut.model_validate(response.json())
+    assert parsed.title == "契约测试"
+
+
+def test_openapi_declares_auth_and_response(app: FastAPI) -> None:
+    schema = app.openapi()
+    operation = schema["paths"]["/posts"]["post"]
+
+    assert operation["security"] == [{"HTTPBearer": []}]
+    assert {"200", "201"} <= set(operation["responses"])
+    response_schema = operation["responses"]["201"]["content"][
+        "application/json"
+    ]["schema"]
+    assert response_schema["$ref"].endswith("/PostOut")
+```
+
+这里同时验证了“首次创建 201”和“幂等命中 200”都进入 OpenAPI；这两个结果已经在路由装饰器的 `status_code` 与 `responses` 中显式声明。若运行时动态修改状态码，却没有声明额外响应，代码虽然能返回，生成的契约却会遗漏该分支。
+
+如果有独立消费者，再增加 consumer-driven contract：由消费者发布它实际读取的字段与状态码，提供者在 CI 中验证。Pydantic schema 测试保护“提供者自认为的契约”，不能替代消费者需求。
+
+
+---
+
+## 十、并发与幂等：用独立 Session 制造真实竞争
+
+同一个 `Session` 不能由多个线程同时使用，也无法模拟两个独立事务竞争。下面用 `ThreadPoolExecutor` 启动两个竞争者，每个线程都从同一个 factory 创建自己的 `Session`；`Barrier` 让二者在提交前会合，再由数据库唯一约束决定赢家。
+
+```python
+# tests/test_idempotency.py
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+import pytest
+from sqlalchemy import delete, func, select
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.models import Post
+from app.repository import create_post_concurrently
+from app.schemas import PostCreate
+
+
+@pytest.mark.integration
+def test_concurrent_requests_create_one_row(db_engine: Engine) -> None:
+    factory = sessionmaker(bind=db_engine, expire_on_commit=False)
+    barrier = Barrier(2)
+    data = PostCreate(
+        title="只创建一次",
+        body="两个事务同时竞争",
+        idempotency_key="concurrent-case-001",
+    )
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(
+                    create_post_concurrently,
+                    factory,
+                    data,
+                    "user-1",
+                    barrier,
+                )
+                for _ in range(2)
+            ]
+            ids = [future.result(timeout=10) for future in futures]
+
+        with factory() as session:
+            count = session.scalar(
+                select(func.count()).select_from(Post).where(
+                    Post.idempotency_key == data.idempotency_key
+                )
+            )
+        assert len(set(ids)) == 1
+        assert count == 1
+    finally:
+        # 两个线程使用独立事务并真实提交，不受普通外层回滚管理。
+        with factory.begin() as cleanup_session:
+            cleanup_session.execute(
+                delete(Post).where(Post.idempotency_key == data.idempotency_key)
+            )
+```
+
+这个测试验证的是数据库层幂等，不应只断言两个 HTTP 响应相同。更复杂的场景还要测试：相同 key 不同 body 是否返回 409、锁等待是否有上限、事务重试是否只针对可重试错误，以及任务是否也只发布一次。
+
+:::tip
+并发测试偶尔通过不代表没有竞态。`Barrier` 把竞争窗口固定在提交前；还可循环运行目标测试，例如 `pytest tests/test_idempotency.py --count=20`（需 pytest-repeat）。不要在断言前用固定 `sleep` 猜测线程调度时机。
+:::
+
+---
+
+## 十一、故障注入：测试失败路径，而不是只测快乐路径
+
+真实系统会遇到超时、连接中断、容器重启和半成功。故障注入的目标是验证应用的**超时上限、错误分类、重试边界和恢复能力**，不是让测试随机失败。
+
+下面直接暂停真实 Redis 容器，因此属于真实依赖集成测试。它不通过 mock 伪造异常，并用 `finally` 保证恢复容器：
+
+```python
+# tests/test_faults.py
+import pytest
+from redis import Redis
+from redis.exceptions import TimeoutError
+from testcontainers.redis import RedisContainer
+
+
+@pytest.mark.integration
+@pytest.mark.fault
+def test_redis_timeout_and_recovery(
+    redis_container: RedisContainer,
+) -> None:
+    client = Redis.from_url(
+        redis_container.get_connection_url(),
+        decode_responses=True,
+        socket_connect_timeout=0.2,
+        socket_timeout=0.2,
+    )
+    docker_container = redis_container.get_wrapped_container()
+
+    try:
+        assert client.ping() is True
+        docker_container.pause()
+        with pytest.raises(TimeoutError):
+            client.ping()
+    finally:
+        docker_container.reload()
+        if docker_container.status == "paused":
+            docker_container.unpause()
+        client.close()
+
+    recovered = Redis.from_url(
+        redis_container.get_connection_url(),
+        decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=1,
+    )
+    try:
+        assert recovered.ping() is True
+    finally:
+        recovered.close()
+```
+
+故障测试应单独标记，因为暂停容器会影响同一容器上的其他测试，不能与 Redis 测试并行执行。可进一步覆盖：
+
+- PostgreSQL `statement_timeout`，验证慢查询被取消；
+- 持有行锁，在第二个事务设置 `lock_timeout`，验证应用不会无限等待；
+- 在任务处理到一半时终止 worker，验证消息重新投递；
+- Redis 重启后验证客户端连接池恢复；
+- 第三方 HTTP 用本地 stub server 返回 429、500、截断响应，而不是访问真实第三方沙箱。
+
+:::warning
+不要用 `time.sleep()` 制造“看起来像超时”的测试，也不要在 CI 中随机 kill 共享容器。故障必须可控、可恢复、有限时，并有独立 marker。涉及生产故障演练时，应使用专门环境和审批流程。
+:::
+
+### dependency override 在故障测试中的正确位置
+
+如果 override 返回一个手写 `BrokenRedis`，可以快速验证“Redis 抛错时路由映射成 503”，但这是组件测试。若 override 返回一个连接到被暂停 Testcontainers Redis 的真实 client，则仍是集成测试，因为协议、连接池和超时都是真实发生的。分类取决于**被替换后的实现**，不是是否调用了 `dependency_overrides`。
+
+---
+
+## 十二、CI：Ruff、mypy、pytest 分层执行
+
+GitHub 托管的 Linux runner 已提供 Docker。Testcontainers 会通过 Docker socket 动态创建容器，不需要在 workflow 中再声明固定 PostgreSQL/Redis service；这也避免本地和 CI 使用两套启动方式。
+
+```yaml
+# .github/workflows/ci.yml
+name: backend-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[test]"
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Type check
+        run: mypy app tests
+
+      - name: Tests with coverage
+        run: >-
+          pytest -m "not fault"
+          --cov=app
+          --cov-branch
+          --cov-report=term-missing
+          --cov-report=xml
+
+      - name: Controlled fault tests
+        run: pytest -m fault
+```
+
+本地可按反馈速度分层：
+
+```bash
+# 提交前：不运行故障注入
+pytest -m "not fault" -q
+
+# 只看真实依赖测试
+pytest -m integration -v
+
+# 串行运行会暂停容器的故障测试
+pytest -m fault -v
+
+# 完整质量门禁（这不是本站文章仓库的构建命令，而是示例项目命令）
+ruff check . && ruff format --check .
+mypy app tests
+pytest -m "not fault" --cov=app --cov-branch --cov-report=term-missing
+```
+
+### 并行执行的数据库隔离
+
+启用 pytest-xdist 后，所有 worker 若共用一个数据库，`flushdb`、迁移和清理会互相干扰。可靠方案按隔离强度排序：
+
+1. 每个 worker 启动独立 PostgreSQL/Redis 容器，最简单但启动成本高；
+2. 共用 PostgreSQL 容器，每个 worker 创建独立 database 或 schema；
+3. 共用 Redis 容器，每个 worker 使用独立 DB 编号或 key prefix，且禁止全局 `FLUSHALL`；
+4. 只有完全无共享状态的测试才直接并行。
+
+不要为了 CI 快几秒而牺牲确定性。先通过 session-scoped 容器减少启动成本，再根据耗时报告决定是否并行。
+
+---
+
+## 十三、覆盖率边界：数字不是可信度
+
+行覆盖率回答“哪些行执行过”，不回答：
+
+- SQL 是否在目标 PostgreSQL 版本上使用正确索引；
+- 两个事务同时提交时是否只产生一条记录；
+- Alembic 是否能从生产上一版本升级；
+- Redis 超时后是否被错误地无限重试；
+- 权限测试是否覆盖跨租户资源；
+- 任务是否可能重复消费。
+
+因此 `fail_under = 85` 只是防止明显倒退，不应成为追求 100% 的目标。更有意义的组合是：
+
+- 单元测试对领域规则做高分支覆盖；
+- 集成测试覆盖每一种持久化模式、约束、事务边界和缓存协议；
+- 迁移测试覆盖空库升级，并对高风险迁移覆盖“上一版本数据 → 当前版本”；
+- 契约测试覆盖状态码、响应 schema、错误结构和鉴权声明；
+- 故障测试覆盖超时、恢复和至少一次投递产生的重复。
+
+可排除纯声明式 ORM 模型，但不能为了提高数字排除 repository、迁移辅助代码或异常分支。覆盖率报告要与 mutation testing、SQL 查询计划审查和生产可观测性结合使用。
+
+---
+
+## 十四、常见失败模式与排查顺序
+
+### 1. 本地通过，CI 找不到 Docker
+
+先运行 `docker info`。在容器化 CI runner 中，需要正确挂载 Docker socket 或使用支持的远程 daemon。Testcontainers 的 Ryuk 负责清理容器；不要在不了解后果时关闭它，否则中断的任务可能留下资源。
+
+### 2. 测试单独通过，整套失败
+
+优先检查共享状态：Redis 是否在前后都清理、测试是否提交了独立连接、dependency override 是否在 teardown 清空、全局 settings cache 是否受环境变量修改影响。
+
+### 3. 应用调用 `commit()` 后数据无法回滚
+
+确保 `Session` 绑定测试 `Connection`，并设置 `join_transaction_mode="create_savepoint"`。如果代码自己创建 engine/session，dependency override 就无法接管；应把 session factory 注入边界设计清楚。
+
+### 4. 并发测试污染后续测试
+
+普通事务 fixture 只回滚同一连接上的更改。`ThreadPoolExecutor` 中每个线程都创建独立 `Session` 并真实提交，所以必须在 `finally` 中按幂等键删除数据；若清理也失败，应直接让测试失败，而不是掩盖污染。
+
+### 5. 容器已就绪，但应用第一次连接失败
+
+`start()` 会执行模块定义的等待策略，但“端口开放”不一定代表复杂初始化已经结束。自定义镜像包含建库脚本时，应增加明确的日志或 SQL readiness check，不要用固定 sleep。
+
+### 6. 用了真实容器，测试仍不可信
+
+真实依赖只是必要条件，不是充分条件。若测试没有断言约束、事务结果、TTL、序列化或并发行为，它仍可能只是在昂贵地执行一条快乐路径。
+
+### 7. TestClient 下能否复用测试函数里的 Session
+
+不要这样做。`TestClient` 在自己的应用执行上下文中运行请求，普通 `def` 路由还会在线程池执行；把 pytest fixture 预先创建的同一个 `Session` 直接 override 给路由，会模糊会话的线程与生命周期边界。本文让 override 在请求依赖中创建 `request_session`，repository 直测才使用 `db_session`。若要并发，每个线程都从 `sessionmaker` 获取独立 Session；同步数据库和 Redis 调用只放在普通 `def` 调用链中。
+
+---
+
+## 十五、落地清单
+
+在把集成测试加入项目之前，逐项确认：
+
+- [ ] 生产 PostgreSQL/Redis 大版本与测试镜像一致，并固定镜像 tag；
+- [ ] 容器与 `Engine` 使用 session scope，`Connection`、`Session`、Redis client 与 `TestClient` 使用 function scope；
+- [ ] `DATABASE_URL` 使用 `postgresql+psycopg`，依赖安装 `psycopg[binary]`；
+- [ ] 空数据库通过 Alembic `upgrade head` 初始化，不调用 `create_all()`；
+- [ ] FastAPI override 指向真实测试连接，而不是 mock/fakeredis；
+- [ ] 普通测试用外层事务 + `join_transaction_mode="create_savepoint"` 回滚；
+- [ ] 独立连接和并发测试有显式清理策略；
+- [ ] 并发竞争者在线程中各自创建 `Session`，不共享 ORM 会话；
+- [ ] Redis 测试前后清理，且并行 worker 不共享 key 空间；
+- [ ] 认证同时覆盖 401、403、资源归属与跨租户边界；
+- [ ] 缓存覆盖 miss、hit、TTL、失效与恢复；
+- [ ] 任务覆盖消息编码、重复投递与幂等消费；
+- [ ] 契约覆盖 Pydantic v2 schema、状态码与 OpenAPI；
+- [ ] CI 依次运行 Ruff、mypy、pytest，并给容器任务设置超时；
+- [ ] 覆盖率是回归门禁，不是质量的唯一代理指标；
+- [ ] 故障注入独立标记、串行运行，并保证 `finally` 恢复资源。
+
+---
+
+## 总结
+
+高质量后端集成测试的核心，不是“把更多东西启动起来”，而是为生产风险建立可重复的实验：用 Alembic 从空库构造真实 schema，用 Testcontainers 提供版本明确的 PostgreSQL 与 Redis，用 FastAPI dependency override 把应用接到真实测试连接，用外层事务与 savepoint 获得速度和隔离，再对鉴权、缓存、任务、契约、线程并发幂等和故障恢复做可观察断言。
+
+Mock、fakeredis 和内存 override 仍然重要，它们负责快速、精确的低层测试；只是不要把它们提供的信心误写成“真实集成”。把单元、组件、集成和端到端测试放回各自擅长的位置，测试套件才能既快，又真正拦住生产事故。
+
+类型边界与 mypy 实践可参考 [Python 类型系统](/posts/python/python-type-system)。
+
+### 参考资料
+
+- [SQLAlchemy 2.x ORM 文档](https://docs.sqlalchemy.org/en/20/orm/)
+- [Psycopg 3 文档](https://www.psycopg.org/psycopg3/docs/)
+- [FastAPI 测试文档](https://fastapi.tiangolo.com/tutorial/testing/)
+- [redis-py 文档](https://redis.readthedocs.io/en/stable/)
+- [Alembic 文档](https://alembic.sqlalchemy.org/en/latest/)
+- [Testcontainers for Python 文档](https://testcontainers-python.readthedocs.io/en/latest/)
+
+以上外部资料中的版本行为已按本文示例重新组织和表述。

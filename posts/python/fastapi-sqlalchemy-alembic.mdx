@@ -1,0 +1,1577 @@
+---
+title: 'FastAPI + SQLAlchemy 2.x + PostgreSQL + Alembic：生产级数据层实战'
+date: '2026-08-18'
+excerpt: '面向已有 SQL 基础的前端开发者，从同步执行边界、SQLAlchemy 2.x 类型化模型与事务分层，到 PostgreSQL 约束、并发控制、连接池和 Alembic 零停机迁移，搭建一套可运行的 FastAPI 数据层。'
+tags: ['python', 'fastapi', 'sqlalchemy', 'postgresql', 'alembic', 'backend']
+nextPost: 'python/fastapi-authentication-authorization'
+---
+
+# FastAPI + SQLAlchemy 2.x + PostgreSQL + Alembic：生产级数据层实战
+
+前端开发者开始写 API 时，最容易低估的通常不是 SQL，而是 SQL 外面的边界：一个请求何时取得连接、谁提交事务、唯一性冲突如何变成稳定的 HTTP 响应、应用发布与表结构变更怎样错峰，以及一次看似普通的列表查询为什么会突然发出上百条 SQL。
+
+本文不重复 `JOIN`、索引、事务隔离级别等 SQL 原理。需要补齐这部分，可先阅读 [SQL 高级与性能优化](/posts/sql/sql-advanced-performance) 和 [PostgreSQL 实战指南](/posts/postgresql/postgresql-guide)。我们专注于把这些数据库能力正确接入 FastAPI。
+
+本文面向**已经会 SQL、熟悉 TypeScript/前端工程，但刚进入 Python 服务端开发**的读者。最终会得到一个可运行的博客文章 API，并建立如下边界：
+
+- **Python 3.12+**；
+- **SQLAlchemy 2.x**，只使用 2.x 风格的 `select()`、`Mapped`、`mapped_column()`；
+- **Alembic 1.x**；
+- **Pydantic 2 + FastAPI**；
+- PostgreSQL 驱动使用 Psycopg 3；
+- 全文明确选择**同步 SQLAlchemy 主线**，不混入 `AsyncSession`、`asyncpg` 或异步 engine。
+
+:::important 本文的同步选择
+同步不是“在事件循环里直接跑阻塞 SQL”。路由和数据库依赖使用普通 `def`，FastAPI 会把它们放进线程池执行；每个请求持有自己的同步 `Session`。不要把同步 SQLAlchemy 调用塞进 `async def` 路由，否则会阻塞事件循环。也不要在同一套调用链中混用同步与异步 engine/session；需要异步数据库访问时，应整条链路一起切换。
+:::
+
+下面按“为什么 → 是什么 → 怎么做 → 完整示例 → 生产边界”的顺序展开。
+
+
+## 一、先建立正确心智模型：请求、Session、事务与连接不是一回事
+
+浏览器里的 `fetch()` 对应一次 HTTP 请求；在数据层里，这次请求会经过四层对象：
+
+```text
+HTTP 请求
+  └─ FastAPI 依赖：创建一个 Session
+       └─ Service：定义一次业务事务
+            └─ Repository：发出 select/insert/update/delete
+                 └─ Engine/Pool：按需借出 PostgreSQL 连接
+```
+
+`Engine` 是进程级对象，内部持有连接池；`Session` 是一次工作单元（Unit of Work），维护 ORM 对象状态和事务上下文；连接通常到首次执行 SQL 时才从池中借出；`session.close()` 释放 ORM 状态并把连接归还池中，它不是“关闭整个 Engine”。
+
+这里采用四条硬规则：
+
+1. `Engine`、`sessionmaker` 在进程内复用，不能每次请求重建。
+2. 一个请求一个 `Session`，不得跨请求、跨并发任务共享；`Session` 不是线程安全对象。
+3. Repository 只查询、`add()`、`flush()`，**永远不 `commit()`**。
+4. Service 用 `with session.begin():` 声明业务事务；成功自动提交，异常自动回滚。
+
+这与前端常见的 API client / state store 分工类似：Repository 封装持久化细节，Service 编排业务用例，而事务属于“完整用例”，不能被某个底层 CRUD 函数提前提交。
+
+### 为什么选择同步 SQLAlchemy
+
+SQLAlchemy 的同步 API 成熟、直观，Psycopg 3 支持完善，适合普通 CRUD 服务。FastAPI 对普通 `def` 路由和普通 `def` 依赖使用外部线程池，阻塞数据库调用不会直接占住事件循环：
+
+```python
+@router.get("/posts/{post_id}")
+def get_post(post_id: int, session: Session = Depends(get_session)):
+    # 整个普通 def 路由在线程池中运行，可以调用同步 Session。
+    return PostService(session).get(post_id)
+```
+
+错误写法是：
+
+```python
+@router.get("/wrong")
+async def wrong(session: Session = Depends(get_session)):
+    # 同步 execute 会阻塞承载 async def 的事件循环线程。
+    return session.execute(select(Post)).scalars().all()
+```
+
+如果路由还要等待异步 HTTP 请求，合理做法不是随手混用，而是二选一：让整个数据库栈切到 `create_async_engine` + `AsyncSession`，或把同步数据库工作明确隔离到线程池。本文选择前者以外的简单路径：数据库路由统一写成 `def`。同时，不要把请求 Session 传给 `BackgroundTasks`、线程或 `asyncio.gather()`；后台任务应自行创建新 Session。
+
+## 二、创建完整项目
+
+项目名为 `fastapi-data-layer`，目录如下：
+
+```text
+fastapi-data-layer/
+├── .env.example
+├── alembic.ini
+├── pyproject.toml
+├── app/
+│   ├── __init__.py
+│   ├── config.py
+│   ├── database.py
+│   ├── exceptions.py
+│   ├── main.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   ├── author.py
+│   │   └── post.py
+│   ├── repositories/
+│   │   ├── __init__.py
+│   │   └── posts.py
+│   ├── routers/
+│   │   ├── __init__.py
+│   │   └── posts.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── posts.py
+│   └── services/
+│       ├── __init__.py
+│       └── posts.py
+├── migrations/
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/
+└── tests/
+    ├── conftest.py
+    └── test_posts.py
+```
+
+所有 `__init__.py` 都可以先创建为空文件；后文会特别给出 `app/models/__init__.py`。
+
+### 2.1 依赖与 Python 版本
+
+`pyproject.toml`：
+
+```toml
+[project]
+name = "fastapi-data-layer"
+version = "0.1.0"
+description = "FastAPI + SQLAlchemy 2.x + PostgreSQL + Alembic example"
+requires-python = ">=3.12,<4.0"
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.30,<1.0",
+  "sqlalchemy>=2.0,<2.1",
+  "alembic>=1.13,<2.0",
+  "psycopg[binary]>=3.2,<4.0",
+  "pydantic>=2.8,<3.0",
+  "pydantic-settings>=2.4,<3.0",
+  "email-validator>=2.2,<3.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.3,<9.0",
+  "httpx>=0.27,<1.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.25,<2.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+```
+
+版本使用兼容范围而非假装锁定未来某个精确补丁版本。实际部署还应由 `uv.lock`、Poetry lock 或其他锁文件固定解析结果。
+
+安装与启动 PostgreSQL 的方式可按你的环境选择。项目安装命令：
+
+```bash
+python -m venv .venv
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+python -m pip install -e ".[test]"
+```
+
+### 2.2 环境变量与 pydantic-settings
+
+`.env.example` 只能放示例值，不能提交真实密码：
+
+```dotenv
+APP_ENV=development
+DATABASE_URL=postgresql+psycopg://app_user:change-me@127.0.0.1:5432/blog_app
+DB_POOL_SIZE=5
+DB_MAX_OVERFLOW=5
+DB_POOL_TIMEOUT=30
+DB_POOL_RECYCLE=1800
+SQL_ECHO=false
+```
+
+本地复制为 `.env`，并确保 `.env` 已被 Git 忽略。`app/config.py`：
+
+```python
+from functools import lru_cache
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    app_env: str = "development"
+    database_url: str = Field(
+        default="postgresql+psycopg://app_user:change-me@127.0.0.1:5432/blog_app"
+    )
+    db_pool_size: int = Field(default=5, ge=1)
+    db_max_overflow: int = Field(default=5, ge=0)
+    db_pool_timeout: int = Field(default=30, ge=1)
+    db_pool_recycle: int = Field(default=1800, ge=1)
+    sql_echo: bool = False
+
+
+@lru_cache
+def get_settings() -> Settings:
+    # 缓存的是不可频繁重建的配置对象；测试可 clear cache 后替换环境变量。
+    return Settings()
+
+
+settings = get_settings()
+```
+
+在真实项目中，生产环境应由部署平台注入 `DATABASE_URL`；示例默认值只是让配置形状清晰，不是生产凭据。若密码含 `@`、`%` 等字符，应进行 URL 编码，或用 `sqlalchemy.URL.create()` 组装 URL，避免手工拼接。
+
+
+## 三、类型化模型：DeclarativeBase、Mapped 与数据库约束
+
+SQLAlchemy 2.x 的声明式模型把 Python 类型注解和映射配置放在一起。`Mapped[str]` 表示该属性由 ORM 管理；`Mapped[str | None]` 会推导为 nullable，但生产代码仍建议显式写出关键约束。
+
+### 3.1 统一 Base 与命名约定
+
+`app/models/base.py`：
+
+```python
+from sqlalchemy import MetaData
+from sqlalchemy.orm import DeclarativeBase
+
+
+# 稳定的约束名让 Alembic diff 和 IntegrityError 映射都更可靠。
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+
+class Base(DeclarativeBase):
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
+```
+
+### 3.2 Author 与 Post
+
+`app/models/author.py`：
+
+```python
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy import String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.post import Post
+
+
+class Author(Base):
+    __tablename__ = "authors"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    posts: Mapped[list[Post]] = relationship(
+        back_populates="author",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+```
+
+`app/models/post.py`：
+
+```python
+from __future__ import annotations
+
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.author import Author
+
+
+class Post(Base):
+    __tablename__ = "posts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    author_id: Mapped[int] = mapped_column(
+        ForeignKey("authors.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    slug: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary: Mapped[str] = mapped_column(String(240), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    version_id: Mapped[int] = mapped_column(nullable=False, default=1)
+
+    author: Mapped[Author] = relationship(back_populates="posts")
+
+    __table_args__ = (Index("ix_posts_created_at_id", "created_at", "id"),)
+    # UPDATE/DELETE 会在 WHERE 中带上旧 version_id，成功后整数版本自动 +1。
+    __mapper_args__ = {"version_id_col": version_id}
+```
+
+`app/models/__init__.py` 必须导入所有模型，使 Alembic 加载 `Base.metadata` 时表已注册：
+
+```python
+from app.models.author import Author
+from app.models.base import Base
+from app.models.post import Post
+
+__all__ = ["Author", "Base", "Post"]
+```
+
+:::note Python 默认值与 server_default
+`default=1` 是 SQLAlchemy 在发出 INSERT 时提供的客户端默认值；`server_default=func.now()` 是数据库端默认值，也能覆盖其他客户端直接写表的场景。时间列使用带时区的 PostgreSQL `timestamptz` 语义，并在 API 边界使用带时区 `datetime`。
+:::
+
+数据库约束是最终裁决者。应用层先查 `slug` 是否存在只能改善错误提示，无法消除“两个请求同时通过检查”的竞态；真正保证唯一性的仍是 PostgreSQL UNIQUE 约束。
+
+## 四、Engine、连接池与请求级 Session
+
+`app/database.py`：
+
+```python
+from collections.abc import Generator
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.config import settings
+
+
+engine = create_engine(
+    settings.database_url,
+    echo=settings.sql_echo,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_timeout=settings.db_pool_timeout,
+    pool_recycle=settings.db_pool_recycle,
+    pool_pre_ping=True,
+)
+
+SessionFactory = sessionmaker(
+    bind=engine,
+    class_=Session,
+    autoflush=True,
+    expire_on_commit=False,
+)
+
+
+def get_session() -> Generator[Session, None, None]:
+    # 普通 def 依赖与普通 def 路由共同构成同步边界。
+    with SessionFactory() as session:
+        yield session
+```
+
+`expire_on_commit=False` 让 Service 提交后，路由序列化已加载字段时不会因为属性过期再隐式查询；它并不意味着对象会永久自动刷新。需要最新数据库状态时显式 `session.refresh(obj)`。
+
+不要在依赖的 `finally` 中无条件 `commit()`：路由已经开始生成响应后才提交会让数据库错误太晚出现，也会把多个 Service 的边界变得模糊。提交应该发生在 Service 的 `session.begin()` 退出处。
+
+### 4.1 连接池容量怎么算
+
+每个 Uvicorn/Gunicorn **进程**都有独立 Engine 和独立池。单个进程最多占用：
+
+```text
+pool_size + max_overflow
+```
+
+若运行 4 个 worker，`pool_size=5`、`max_overflow=5`，理论峰值就是：
+
+```text
+4 × (5 + 5) = 40 条应用连接
+```
+
+还要给 Alembic、运维、后台任务、监控和 PostgreSQL 保留连接。因此应满足：
+
+```text
+worker 数 × (pool_size + max_overflow)
++ 后台进程连接
++ 迁移与运维余量
+< PostgreSQL 可供应用使用的连接上限
+```
+
+不要简单把池开到几百；连接越多不等于吞吐越高。`pool_pre_ping=True` 在借出时检测失效连接；`pool_recycle` 可回收长期连接；`pool_timeout` 控制池耗尽时等待多久。容量必须结合 SQL 延迟、线程并发、数据库 CPU 与代理层（如 PgBouncer）压测。
+
+:::warning Session 的并发边界
+一个 Session 只能由一条顺序执行流使用。即使 FastAPI 使用线程池，也不要把同一个 Session 传给多个线程或后台任务。请求结束后 ORM 实例也不应被当作跨请求缓存对象。
+:::
+
+
+## 五、Pydantic 2 输入输出模型
+
+ORM 模型描述数据库状态，Pydantic 模型描述 HTTP 契约，两者不要混为一类。`app/schemas/posts.py`：
+
+```python
+from datetime import datetime
+from typing import Annotated, Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+NonEmptyTitle = Annotated[str, Field(min_length=1, max_length=200)]
+NonEmptySlug = Annotated[
+    str,
+    Field(min_length=1, max_length=200, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$"),
+]
+
+
+class AuthorRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    display_name: str
+
+
+class PostCreate(BaseModel):
+    author_id: int
+    slug: NonEmptySlug
+    title: NonEmptyTitle
+    summary: Annotated[str, Field(min_length=1, max_length=240)]
+    body: Annotated[str, Field(min_length=1)]
+    published_at: datetime | None = None
+
+
+class PostUpdate(BaseModel):
+    # expected_version 相当于前端携带的并发控制 token。
+    expected_version: Annotated[int, Field(ge=1)]
+    title: NonEmptyTitle | None = None
+    summary: Annotated[str, Field(min_length=1, max_length=240)] | None = None
+    body: Annotated[str, Field(min_length=1)] | None = None
+    published_at: datetime | None = None
+
+    @field_validator("title", "summary", "body")
+    @classmethod
+    def reject_null_for_required_columns(cls, value: Any) -> Any:
+        # 字段省略时不会进入 PATCH 更新；显式 null 则拒绝。
+        if value is None:
+            raise ValueError("field cannot be null")
+        return value
+
+
+class PostRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    slug: str
+    title: str
+    summary: str
+    body: str
+    published_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    version_id: int
+    author: AuthorRead
+
+
+class PostPage(BaseModel):
+    items: list[PostRead]
+    offset: int
+    limit: int
+    total: int
+```
+
+`published_at=None` 有合法业务语义（撤回发布），所以不能用上面的非空校验。Service 必须使用 `model_dump(exclude_unset=True)` 区分“没传”与“传了 null”。
+
+## 六、Repository：只负责持久化，不决定事务
+
+`app/repositories/posts.py`：
+
+```python
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, joinedload, selectinload
+
+from app.models import Author, Post
+from app.schemas.posts import PostCreate
+
+
+class PostRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get(self, post_id: int) -> Post | None:
+        stmt = (
+            select(Post)
+            .options(joinedload(Post.author))
+            .where(Post.id == post_id)
+        )
+        return self.session.scalar(stmt)
+
+    def get_by_slug(self, slug: str) -> Post | None:
+        stmt = (
+            select(Post)
+            .options(joinedload(Post.author))
+            .where(Post.slug == slug)
+        )
+        return self.session.scalar(stmt)
+
+    def get_author(self, author_id: int) -> Author | None:
+        return self.session.get(Author, author_id)
+
+    def list(self, *, offset: int, limit: int) -> tuple[list[Post], int]:
+        stmt = (
+            select(Post)
+            .options(joinedload(Post.author))
+            # created_at 可能相同，必须再用唯一 id 打破平局，保证稳定排序。
+            .order_by(Post.created_at.desc(), Post.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        items = list(self.session.scalars(stmt).all())
+        total = self.session.scalar(select(func.count()).select_from(Post)) or 0
+        return items, total
+
+    def create(self, data: PostCreate, author: Author) -> Post:
+        post = Post(
+            author=author,
+            slug=data.slug,
+            title=data.title,
+            summary=data.summary,
+            body=data.body,
+            published_at=data.published_at,
+        )
+        self.session.add(post)
+        self.session.flush()  # 取得 id，并让约束错误在 Service 事务内暴露。
+        return post
+
+    def delete(self, post: Post) -> None:
+        self.session.delete(post)
+        self.session.flush()
+
+    def author_with_posts(self, author_id: int) -> Author | None:
+        # 集合关系用 selectinload：先查 author，再用 IN 批量查 posts。
+        stmt = (
+            select(Author)
+            .options(selectinload(Author.posts))
+            .where(Author.id == author_id)
+        )
+        return self.session.scalar(stmt)
+```
+
+这里的 `flush()` 只把待处理变更发送到数据库，事务仍未提交；后续失败时整个 Service 事务仍可回滚。Repository 不调用 `commit()`，否则“创建文章 + 写审计记录”这类用例会被切成无法原子回滚的两段。
+
+### 6.1 `joinedload`、`selectinload` 与 N+1
+
+默认惰性关系在序列化列表时可能变成：先查 1 次 posts，再为每篇文章查 1 次 author，即 N+1。
+
+- 多对一、且关联行较小：`joinedload(Post.author)` 通常用一条 JOIN 完成。
+- 一对多集合：`selectinload(Author.posts)` 通常比 JOIN 后产生大量重复父行更合适。
+- 如果对集合使用 `joinedload()`，查询结果通常需要 `result.unique().scalars()` 去重。
+
+加载策略应写在用例查询上，而不是寄希望于序列化阶段隐式访问。开启 SQL 日志或 SQLAlchemy 事件计数，才能看见 N+1。
+
+### 6.2 Offset 分页的稳定排序与边界
+
+本文为了 API 简洁使用 offset。只按 `created_at DESC` 不稳定，因为多行可能同一时间创建；加入唯一的 `id DESC` 后顺序确定。offset 在深页会扫描并跳过许多行，而且数据插入可能导致跨页重复或遗漏。高写入、大数据列表应改成游标分页，游标包含 `(created_at, id)`，查询条件与排序方向保持一致，例如：
+
+```python
+from sqlalchemy import select, tuple_
+
+stmt = (
+    select(Post)
+    .where(tuple_(Post.created_at, Post.id) < tuple_(cursor_created_at, cursor_id))
+    .order_by(Post.created_at.desc(), Post.id.desc())
+    .limit(limit)
+)
+```
+
+PostgreSQL 支持行值比较；实际游标应编码并校验，而不是让客户端随意拼 SQL。
+
+## 七、Service：事务、约束冲突与乐观锁的真正边界
+
+先定义业务异常。`app/exceptions.py`：
+
+```python
+class NotFoundError(Exception):
+    pass
+
+
+class ConflictError(Exception):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+```
+
+`app/services/posts.py`：
+
+```python
+from typing import Any
+
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
+
+from app.exceptions import ConflictError, NotFoundError
+from app.models import Post
+from app.repositories.posts import PostRepository
+from app.schemas.posts import PostCreate, PostUpdate
+
+
+CONSTRAINT_ERRORS = {
+    "uq_posts_slug": ("slug_exists", "文章 slug 已存在"),
+    "fk_posts_author_id_authors": ("author_missing", "作者不存在"),
+}
+
+
+def constraint_name(exc: IntegrityError) -> str | None:
+    # Psycopg 3 的诊断对象暴露 PostgreSQL constraint_name。
+    diag = getattr(exc.orig, "diag", None)
+    return getattr(diag, "constraint_name", None)
+
+
+class PostService:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.repo = PostRepository(session)
+
+    def get(self, post_id: int) -> Post:
+        with self.session.begin():
+            post = self.repo.get(post_id)
+            if post is None:
+                raise NotFoundError("文章不存在")
+            return post
+
+    def list(self, *, offset: int, limit: int) -> tuple[list[Post], int]:
+        with self.session.begin():
+            return self.repo.list(offset=offset, limit=limit)
+
+    def create(self, data: PostCreate) -> Post:
+        try:
+            with self.session.begin():
+                author = self.repo.get_author(data.author_id)
+                if author is None:
+                    raise NotFoundError("作者不存在")
+
+                # 预检查只优化提示，不能替代数据库 UNIQUE 约束。
+                if self.repo.get_by_slug(data.slug) is not None:
+                    raise ConflictError("slug_exists", "文章 slug 已存在")
+                return self.repo.create(data, author)
+        except IntegrityError as exc:
+            # 必须在 begin 块之外捕获：上下文已完成 rollback。
+            mapped = CONSTRAINT_ERRORS.get(constraint_name(exc) or "")
+            if mapped:
+                raise ConflictError(*mapped) from exc
+            raise
+
+    def update(self, post_id: int, data: PostUpdate) -> Post:
+        try:
+            with self.session.begin():
+                post = self.repo.get(post_id)
+                if post is None:
+                    raise NotFoundError("文章不存在")
+                if post.version_id != data.expected_version:
+                    raise ConflictError("stale_version", "文章已被其他请求修改")
+
+                changes: dict[str, Any] = data.model_dump(
+                    exclude={"expected_version"},
+                    exclude_unset=True,
+                )
+                for field, value in changes.items():
+                    setattr(post, field, value)
+
+                self.session.flush()
+                return post
+        except StaleDataError as exc:
+            # 预检查之后仍可能并发更新；version_id_col 是最终防线。
+            raise ConflictError("stale_version", "文章已被其他请求修改") from exc
+
+    def delete(self, post_id: int, *, expected_version: int) -> None:
+        try:
+            with self.session.begin():
+                post = self.repo.get(post_id)
+                if post is None:
+                    raise NotFoundError("文章不存在")
+                if post.version_id != expected_version:
+                    raise ConflictError("stale_version", "文章已被其他请求修改")
+                self.repo.delete(post)
+        except StaleDataError as exc:
+            raise ConflictError("stale_version", "文章已被其他请求修改") from exc
+```
+
+### 7.1 为什么捕获位置很重要
+
+`IntegrityError` 发生后，当前事务处于失败状态。在 `with session.begin()` 外捕获时，上下文管理器已经执行回滚，Session 可以继续用于后续顺序操作。如果在块内吞掉异常并继续查询，就会遇到 `PendingRollbackError`。
+
+不用上下文管理器时，最低限度应这样写：
+
+```python
+try:
+    session.flush()
+    session.commit()
+except Exception:
+    session.rollback()
+    raise
+```
+
+但一个请求复用 Session 不等于跨请求复用：异常回滚后它可以在同一请求里继续顺序工作；请求结束必须 `close()`，不能放入全局变量。
+
+### 7.2 唯一约束为什么要按 constraint_name 映射
+
+不要匹配数据库错误字符串。错误文案可能随驱动、语言和 PostgreSQL 版本变化；命名约束后读取 `exc.orig.diag.constraint_name` 更稳定。未识别的 `IntegrityError` 不应一律伪装成“已存在”，应继续抛出并由统一 500 处理与日志记录。
+
+### 7.3 `version_id_col` 如何阻止丢失更新
+
+两个请求都读取 `version_id=3`。第一个 UPDATE 的条件包含 `WHERE id=? AND version_id=3`，成功后版本变为 4；第二个再更新时影响 0 行，SQLAlchemy 抛出 `StaleDataError`。应用把它转成 HTTP 409，让前端重新读取、合并或提示用户。
+
+它解决的是应用 ORM 写入中的丢失更新，不替代数据库隔离、行锁或复杂业务校验；批量 `update(Post)` 不经过普通 ORM 单对象 flush 时，也不能依赖这个版本检查。
+
+
+## 八、路由与应用入口：只做 HTTP 适配
+
+`app/routers/posts.py`：
+
+```python
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query, Response, status
+from sqlalchemy.orm import Session
+
+from app.database import get_session
+from app.schemas.posts import PostCreate, PostPage, PostRead, PostUpdate
+from app.services.posts import PostService
+
+router = APIRouter(prefix="/posts", tags=["posts"])
+SessionDep = Annotated[Session, Depends(get_session)]
+
+
+@router.post("", response_model=PostRead, status_code=status.HTTP_201_CREATED)
+def create_post(payload: PostCreate, session: SessionDep):
+    return PostService(session).create(payload)
+
+
+@router.get("", response_model=PostPage)
+def list_posts(
+    session: SessionDep,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+):
+    items, total = PostService(session).list(offset=offset, limit=limit)
+    return {"items": items, "offset": offset, "limit": limit, "total": total}
+
+
+@router.get("/{post_id}", response_model=PostRead)
+def get_post(post_id: int, session: SessionDep):
+    return PostService(session).get(post_id)
+
+
+@router.patch("/{post_id}", response_model=PostRead)
+def update_post(post_id: int, payload: PostUpdate, session: SessionDep):
+    return PostService(session).update(post_id, payload)
+
+
+@router.delete("/{post_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_post(
+    post_id: int,
+    session: SessionDep,
+    expected_version: Annotated[int, Query(ge=1)],
+):
+    PostService(session).delete(post_id, expected_version=expected_version)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+```
+
+`app/main.py`：
+
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from app.exceptions import ConflictError, NotFoundError
+from app.routers.posts import router as posts_router
+
+app = FastAPI(title="Blog Data API", version="1.0.0")
+app.include_router(posts_router)
+
+
+@app.exception_handler(NotFoundError)
+async def not_found_handler(_request: Request, exc: NotFoundError) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(ConflictError)
+async def conflict_handler(_request: Request, exc: ConflictError) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={"detail": exc.message, "code": exc.code},
+    )
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    # 存活检查不要无条件占数据库连接；就绪检查可另设并执行 SELECT 1。
+    return {"status": "ok"}
+```
+
+启动：
+
+```bash
+uvicorn app.main:app --reload
+```
+
+迁移完成后，可先用 PostgreSQL 客户端准备作者（生产项目应为 Author 建独立用例和权限控制，不要把 seed 写进应用启动逻辑）：
+
+```sql
+INSERT INTO authors (email, display_name)
+VALUES ('demo@example.com', 'Demo Author')
+RETURNING id;
+```
+
+然后调用 API：
+
+```bash
+curl -X POST http://127.0.0.1:8000/posts \
+  -H "Content-Type: application/json" \
+  -d '{"author_id":1,"slug":"first-post","title":"第一篇","summary":"第一篇文章摘要","body":"正文"}'
+
+curl "http://127.0.0.1:8000/posts?offset=0&limit=20"
+
+curl -X PATCH http://127.0.0.1:8000/posts/1 \
+  -H "Content-Type: application/json" \
+  -d '{"expected_version":1,"title":"更新后的标题"}'
+
+curl -X DELETE "http://127.0.0.1:8000/posts/1?expected_version=2"
+```
+
+前端应保存响应中的 `version_id`，更新或删除时原样带回。409 后不要盲目无限重试，因为用户输入可能需要与服务器新版本合并。
+
+## 九、Alembic：让模型变化成为可审查、可发布的数据库变更
+
+ORM 模型不是数据库迁移。`Base.metadata.create_all()` 适合非常有限的临时场景，不能表达生产升级历史、数据回填、并发索引或可靠 downgrade。应用启动时也不应让每个 worker 抢着改表。
+
+### 9.1 初始化
+
+在项目根目录执行一次：
+
+```bash
+alembic init migrations
+```
+
+它创建 `alembic.ini`、`migrations/env.py`、模板和 versions 目录。`alembic.ini` 保留脚本路径与日志配置；连接 URL 从 settings 读取，不在 ini 中提交密码：
+
+```ini
+[alembic]
+script_location = %(here)s/migrations
+prepend_sys_path = .
+sqlalchemy.url =
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %H:%M:%S
+```
+
+### 9.2 env.py：导入 metadata，从 settings 取 URL
+
+`migrations/env.py`：
+
+```python
+from logging.config import fileConfig
+
+from alembic import context
+from sqlalchemy import engine_from_config, pool
+
+from app.config import settings
+from app.models import Base  # __init__ 会导入全部模型并注册表。
+
+config = context.config
+
+# ConfigParser 会解释百分号，URL 中编码后的 % 必须转义。
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
+
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+target_metadata = Base.metadata
+
+
+def run_migrations_offline() -> None:
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+        compare_type=True,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+```
+
+迁移进程使用 `NullPool`，执行结束即释放连接，不需要常驻应用池。
+
+### 9.3 生成、审查、执行与检查
+
+```bash
+# 根据 metadata 和当前数据库生成候选迁移
+alembic revision --autogenerate -m "create authors and posts"
+
+# 人工审查 versions 中生成的 Python 文件后再执行
+alembic upgrade head
+
+# 查看数据库当前 revision
+alembic current
+
+# 查看迁移历史
+alembic history --verbose
+
+# 回退一个 revision；生产回退前先确认数据兼容性
+alembic downgrade -1
+
+# CI 中检查模型是否还有未生成的 schema 差异
+alembic check
+```
+
+:::warning autogenerate 不是自动正确
+Alembic 能检测很多表、列、索引和约束变化，但无法理解业务语义。重命名常被识别为“删旧列 + 新增列”，这会丢数据；数据回填、并发索引、复杂 CHECK、扩展和部分 PostgreSQL 特性也需要人工编写。每个自动迁移都必须像业务代码一样审查，并在与生产版本相近的数据库上演练。
+:::
+
+
+### 9.4 可执行初始迁移
+
+下面是一份可执行的基线迁移 `migrations/versions/0001_create_authors_and_posts.py`。若你使用 autogenerate，生成内容可能在格式上不同，但约束和列语义应一致：
+
+```python
+"""create authors and posts
+
+Revision ID: 0001
+Revises:
+"""
+from collections.abc import Sequence
+
+from alembic import op
+import sqlalchemy as sa
+
+revision: str = "0001"
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "authors",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("email", sa.String(length=320), nullable=False),
+        sa.Column("display_name", sa.String(length=100), nullable=False),
+        sa.PrimaryKeyConstraint("id", name="pk_authors"),
+        sa.UniqueConstraint("email", name="uq_authors_email"),
+    )
+    op.create_table(
+        "posts",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("author_id", sa.Integer(), nullable=False),
+        sa.Column("slug", sa.String(length=200), nullable=False),
+        sa.Column("title", sa.String(length=200), nullable=False),
+        sa.Column("body", sa.Text(), nullable=False),
+        sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column("version_id", sa.Integer(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["author_id"],
+            ["authors.id"],
+            name="fk_posts_author_id_authors",
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name="pk_posts"),
+        sa.UniqueConstraint("slug", name="uq_posts_slug"),
+    )
+    op.create_index("ix_posts_author_id", "posts", ["author_id"], unique=False)
+
+
+def downgrade() -> None:
+    op.drop_index("ix_posts_author_id", table_name="posts")
+    op.drop_table("posts")
+    op.drop_table("authors")
+```
+
+先执行 `alembic upgrade 0001`。这组 `0001`～`0005` 文件表示项目从基线演进到前文“完整最终模型”的历史：若按本文手写迁移，就依次保留它们；若你直接针对最终 metadata 在空库上 autogenerate 一个全量基线，它会一次包含 `summary` 和最终索引，此时不要再叠加同名的 `0002`～`0005` 示例。
+
+基线部署稳定后，假设产品要求为 Post 增加必填 `summary`，不要直接执行 `ADD COLUMN summary ... NOT NULL`：旧行没有值，旧应用也不会写它。正确做法是 expand → backfill → contract。
+
+### 9.5 Expand：先加 nullable 列
+
+`migrations/versions/0002_expand_post_summary.py`：
+
+```python
+"""expand post summary
+
+Revision ID: 0002
+Revises: 0001
+"""
+from collections.abc import Sequence
+
+from alembic import op
+import sqlalchemy as sa
+
+revision: str = "0002"
+down_revision: str | None = "0001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.add_column(
+        "posts",
+        sa.Column("summary", sa.String(length=240), nullable=True),
+    )
+
+
+def downgrade() -> None:
+    op.drop_column("posts", "summary")
+```
+
+发布顺序的第一步只运行：
+
+```bash
+alembic upgrade 0002
+```
+
+然后部署“既能面对旧行 null，又会为新写入提供 summary”的过渡应用版本。此阶段 ORM/Pydantic 读取类型暂时允许 `None`，但创建逻辑始终写值：
+
+```python
+# expand 阶段的临时形态；contract 后改回非空类型。
+summary: Mapped[str | None] = mapped_column(String(240), nullable=True)
+```
+
+不能先部署只认 NOT NULL 新列的代码，因为滚动发布期间新旧实例会共存。等回填和 contract 完成后，再使用前文完整模型中的 `Mapped[str]` 与 `PostRead.summary: str`。
+
+### 9.6 Backfill：批量回填已有行
+
+中小表可以在迁移中回填。`migrations/versions/0003_backfill_post_summary.py`：
+
+```python
+"""backfill post summary
+
+Revision ID: 0003
+Revises: 0002
+"""
+from collections.abc import Sequence
+
+from alembic import op
+import sqlalchemy as sa
+
+revision: str = "0003"
+down_revision: str | None = "0002"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+BATCH_SIZE = 1000
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+    statement = sa.text(
+        """
+        WITH batch AS (
+            SELECT id
+            FROM posts
+            WHERE summary IS NULL
+            ORDER BY id
+            LIMIT :batch_size
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE posts AS p
+        SET summary = left(p.body, 240)
+        FROM batch
+        WHERE p.id = batch.id
+        """
+    )
+
+    while True:
+        result = bind.execute(statement, {"batch_size": BATCH_SIZE})
+        if result.rowcount == 0:
+            break
+
+
+def downgrade() -> None:
+    # 数据回填通常不应在 downgrade 中抹除，否则会破坏新数据。
+    pass
+```
+
+执行并验证：
+
+```bash
+alembic upgrade 0003
+```
+
+```sql
+SELECT count(*) FROM posts WHERE summary IS NULL;
+```
+
+对于数百万行、严格延迟预算或需要每批提交的生产库，不要让 Alembic 持有一个超长事务。应把 backfill 做成可重入、可限速、有检查点的独立任务；expand 和 contract 仍由 Alembic 管理。回填任务每批提交，并持续观察锁、复制延迟、WAL 和连接池。
+
+### 9.7 Contract：验证后收紧 NOT NULL
+
+`migrations/versions/0004_contract_post_summary.py`：
+
+```python
+"""contract post summary
+
+Revision ID: 0004
+Revises: 0003
+"""
+from collections.abc import Sequence
+
+from alembic import op
+import sqlalchemy as sa
+
+revision: str = "0004"
+down_revision: str | None = "0003"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+    remaining = bind.scalar(
+        sa.text("SELECT count(*) FROM posts WHERE summary IS NULL")
+    )
+    if remaining:
+        raise RuntimeError(f"cannot set NOT NULL: {remaining} rows remain")
+
+    op.alter_column(
+        "posts",
+        "summary",
+        existing_type=sa.String(length=240),
+        nullable=False,
+    )
+
+
+def downgrade() -> None:
+    op.alter_column(
+        "posts",
+        "summary",
+        existing_type=sa.String(length=240),
+        nullable=True,
+    )
+```
+
+只有当所有应用实例都写 summary、回填完成、监控无异常后，才运行：
+
+```bash
+alembic upgrade 0004
+```
+
+此时最终 ORM 模型也必须声明：
+
+```python
+summary: Mapped[str] = mapped_column(String(240), nullable=False)
+```
+
+这三步不是形式主义，而是为了让旧代码、旧数据和新约束在滚动发布期间能够共存。
+
+### 9.8 PostgreSQL 并发建索引与 autocommit_block
+
+普通 `CREATE INDEX` 可能长时间阻塞写入；PostgreSQL 的 `CREATE INDEX CONCURRENTLY` 不能在事务块内运行。将它放在独立 revision，并明确进入 autocommit 边界：
+
+`migrations/versions/0005_add_post_created_cursor_index.py`：
+
+```python
+"""add post created cursor index concurrently
+
+Revision ID: 0005
+Revises: 0004
+"""
+from collections.abc import Sequence
+
+from alembic import op
+
+revision: str = "0005"
+down_revision: str | None = "0004"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+INDEX_NAME = "ix_posts_created_at_id"
+
+
+def upgrade() -> None:
+    # 进入此块时，Alembic 会结束此前事务；不要和其他 DDL/数据变更混在一起。
+    with op.get_context().autocommit_block():
+        op.execute(
+            f"CREATE INDEX CONCURRENTLY {INDEX_NAME} "
+            "ON posts (created_at, id)"
+        )
+
+
+def downgrade() -> None:
+    with op.get_context().autocommit_block():
+        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {INDEX_NAME}")
+```
+
+B-tree 可以反向扫描，因此 `(created_at, id)` 同样支持列表中的两列 `DESC` 排序。最终模型中也应声明该索引，避免 `alembic check` 把数据库和 metadata 视为不一致：
+
+```python
+from sqlalchemy import Index
+
+class Post(Base):
+    __tablename__ = "posts"
+    __table_args__ = (
+        Index("ix_posts_created_at_id", "created_at", "id"),
+    )
+```
+
+`autocommit_block()` 会真实提交边界，因此并发索引 revision 应保持单一职责。若并发创建失败，PostgreSQL 可能留下 invalid index，应查询 `pg_index.indisvalid`，清理后重试，不能只看索引名是否存在。
+
+
+## 十、测试：依赖覆盖 + PostgreSQL 外层事务隔离
+
+数据库行为测试应尽量使用 PostgreSQL 测试库，而不是 SQLite。JSON、时区、约束、锁、并发索引和 SQL 方言语义并不等价。测试库必须是可丢弃的独立数据库，绝不能指向开发或生产库。
+
+先创建测试库并升级到 head。PowerShell 示例：
+
+```powershell
+$env:DATABASE_URL = $env:TEST_DATABASE_URL
+alembic upgrade head
+pytest
+```
+
+`tests/conftest.py` 使用外层事务包住每个测试，并让 Service 内的 `commit` 落在 savepoint 中；测试结束回滚外层事务：
+
+```python
+import os
+from collections.abc import Generator
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from app.database import get_session
+from app.main import app
+
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+if not TEST_DATABASE_URL:
+    raise RuntimeError("TEST_DATABASE_URL must point to a disposable PostgreSQL database")
+
+test_engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
+
+
+@pytest.fixture
+def db_session() -> Generator[Session, None, None]:
+    with test_engine.connect() as connection:
+        outer_transaction = connection.begin()
+        session = Session(
+            bind=connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
+        try:
+            yield session
+        finally:
+            session.close()
+            outer_transaction.rollback()
+
+
+@pytest.fixture
+def client(db_session: Session) -> Generator[TestClient, None, None]:
+    def override_get_session() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
+```
+
+`tests/test_posts.py`：
+
+```python
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from app.models import Author
+
+
+def seed_author(session: Session) -> Author:
+    with session.begin():
+        author = Author(email="author@example.com", display_name="Author")
+        session.add(author)
+        session.flush()
+        return author
+
+
+def test_post_crud_and_optimistic_lock(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    author = seed_author(db_session)
+
+    created = client.post(
+        "/posts",
+        json={
+            "author_id": author.id,
+            "slug": "sqlalchemy-2",
+            "title": "SQLAlchemy 2",
+            "summary": "类型化 ORM 与事务边界",
+            "body": "content",
+        },
+    )
+    assert created.status_code == 201
+    post = created.json()
+    assert post["version_id"] == 1
+    post_id = post["id"]
+
+    listed = client.get("/posts", params={"offset": 0, "limit": 10})
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 1
+
+    updated = client.patch(
+        f"/posts/{post_id}",
+        json={"expected_version": 1, "title": "SQLAlchemy 2.x"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["version_id"] == 2
+
+    stale = client.patch(
+        f"/posts/{post_id}",
+        json={"expected_version": 1, "title": "过期更新"},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "stale_version"
+
+    duplicate = client.post(
+        "/posts",
+        json={
+            "author_id": author.id,
+            "slug": "sqlalchemy-2",
+            "title": "重复 slug",
+            "summary": "应被唯一约束拒绝",
+            "body": "content",
+        },
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["code"] == "slug_exists"
+
+    deleted = client.delete(
+        f"/posts/{post_id}",
+        params={"expected_version": 2},
+    )
+    assert deleted.status_code == 204
+    assert client.get(f"/posts/{post_id}").status_code == 404
+```
+
+这种模式允许 Service 正常使用 `session.begin()`。不过 DDL、显式连接级提交以及某些数据库操作不能被普通事务测试完全隔离；这类测试应使用临时数据库或每次重建 schema。迁移本身也要单独测试“空库升级到 head”和“上一发布版本升级到 head”。
+
+## 十一、常见故障：从症状回到边界
+
+### 11.1 `PendingRollbackError`
+
+**症状**：一次 `IntegrityError` 后，后续查询都报当前事务需要 rollback。
+
+**原因**：数据库已拒绝当前事务中的语句，但代码捕获异常后继续使用 Session。
+
+**处理**：让异常逃出 `with session.begin()`，或在手动事务中立即 `session.rollback()`，然后再执行任何 SQL。不要只清理 Python 异常而忽略数据库事务状态。
+
+```python
+try:
+    with session.begin():
+        session.add(post)
+        session.flush()
+except IntegrityError:
+    # 到这里上下文已回滚，才可以映射并继续。
+    raise ConflictError("constraint_conflict", "数据约束冲突")
+```
+
+### 11.2 `DetachedInstanceError`
+
+**症状**：请求结束或 Session 关闭后访问 `post.author`，ORM 尝试惰性加载却已没有 Session。
+
+**处理**：在 Repository 中按响应需要使用 `joinedload` / `selectinload`；在 Session 有效期内完成 DTO 转换；不要把 ORM 实例跨请求缓存。`expire_on_commit=False` 能减少提交后的隐式刷新，但不能让未加载关系脱离 Session 后自动可用。
+
+```python
+post = session.scalar(
+    select(Post).options(joinedload(Post.author)).where(Post.id == post_id)
+)
+```
+
+### 11.3 N+1 查询
+
+**症状**：列表只有 100 行，却发出 101 条 SQL；延迟随列表长度线性上升。
+
+**处理**：观察 SQL 数量，按关系基数选择 eager loading；不要在 Pydantic 序列化时才发现惰性加载。
+
+```python
+stmt = select(Author).options(selectinload(Author.posts))
+authors = session.scalars(stmt).all()  # 通常是 2 条 SQL，而不是 1 + N。
+```
+
+### 11.4 连接池耗尽
+
+**症状**：请求等待后出现 QueuePool timeout，数据库连接数接近上限。
+
+优先检查：
+
+1. `get_session()` 是否总能退出并关闭 Session；
+2. 是否有慢 SQL、锁等待或事务中执行远程 HTTP；
+3. worker 数乘池上限是否超过 PostgreSQL 容量；
+4. 是否把长任务与 Web 请求共用过小的池；
+5. 是否错误地每请求创建新 Engine。
+
+```python
+# 错误：每次调用都创建新池。
+def bad_repository():
+    engine = create_engine(settings.database_url)
+    return Session(engine)
+```
+
+事务内不要调用不可控的外部 API，因为连接会一直被占用。可先完成外部调用再开事务，或使用 outbox 等模式解耦。
+
+### 11.5 Alembic 迁移分叉（multiple heads）
+
+**症状**：两个分支都从同一 revision 新建迁移，`alembic upgrade head` 报 multiple heads。
+
+检查并合并：
+
+```bash
+alembic heads
+alembic branches
+alembic merge -m "merge migration heads" <head_a> <head_b>
+alembic history --verbose
+alembic upgrade head
+```
+
+不要通过随意修改已经在共享环境执行过的 `down_revision` 来“假装没有分叉”。生成 merge revision，让历史显式汇合；团队还应规定迁移文件合并与发布顺序。
+
+### 11.6 自动迁移想删除再新建列
+
+这通常意味着 Alembic 无法判断“重命名”。不要直接执行。手写 `op.alter_column("posts", "old_name", new_column_name="new_name")`，并检查应用滚动发布期间是否同时兼容新旧名字。跨版本不兼容的重命名也应采用 expand/contract，而非一次完成。
+
+## 十二、这套方案的适用边界
+
+这条同步主线适合 CRUD API、内部服务和大多数数据库等待占主要部分的业务。它不是所有系统的唯一答案：
+
+- 大量长连接、WebSocket、单请求高并发 fan-out，且整条依赖链都有异步驱动时，可评估全异步 SQLAlchemy；不要只把路由改成 `async def`。
+- 极高吞吐或复杂批处理需要专门的批量 SQL、COPY、队列与独立 worker，而不是循环 ORM `add()`。
+- 资金扣减、库存竞争等强并发用例可能需要 `SELECT ... FOR UPDATE`、原子条件 UPDATE 或更严格隔离，`version_id_col` 不是万能锁。
+- 深分页与持续写入列表应使用游标，而不是无限增大的 offset。
+- 跨数据库与消息系统的原子性不能由单个 Session 事务解决，可采用 transactional outbox、幂等消费等模式。
+- SQLite 测试不能证明 PostgreSQL 锁、约束、索引和迁移行为正确。
+
+## 十三、上线清单
+
+### 应用与事务
+
+- [ ] Python、FastAPI、Pydantic、SQLAlchemy、Alembic 版本范围明确，并有锁文件。
+- [ ] 同步数据库路由使用普通 `def`，没有在 `async def` 中直接调用同步 Session。
+- [ ] Engine 和 sessionmaker 进程级复用；一个请求一个 Session。
+- [ ] Repository 不 commit；Service 的事务覆盖完整业务用例。
+- [ ] 所有异常路径会 rollback；未知数据库错误不会被误报成业务冲突。
+- [ ] 不把 Session/ORM 实例传入后台线程、并发任务或跨请求缓存。
+
+### 数据正确性与查询
+
+- [ ] UNIQUE、FOREIGN KEY、NOT NULL 等关键不变量由数据库最终保证。
+- [ ] 约束有稳定名称，IntegrityError 按 constraint name 映射。
+- [ ] 更新冲突通过版本列、行锁或原子 SQL 明确处理。
+- [ ] 列表排序有唯一字段打破平局；深分页评估游标。
+- [ ] 响应需要的关系已 eager load，并有 SQL 数量或性能测试防 N+1。
+- [ ] 慢查询有 EXPLAIN、索引和观测数据支撑，不凭感觉加索引。
+
+### 连接与容量
+
+- [ ] `worker × (pool_size + max_overflow)` 加后台任务与运维余量，小于数据库可用连接数。
+- [ ] pool timeout、连接等待、事务时长、数据库锁和慢 SQL 有监控。
+- [ ] 事务内没有无界远程调用或长时间 CPU 工作。
+- [ ] 健康检查区分 liveness 与 readiness，避免探针制造连接风暴。
+
+### 迁移与发布
+
+- [ ] autogenerate 文件经过人工审查，重命名和数据变更没有被误判。
+- [ ] 在生产相近数据量上演练 upgrade，必要时也演练 downgrade 或前滚修复。
+- [ ] 大表变更采用 expand/backfill/contract，滚动发布期间新旧代码兼容。
+- [ ] 大规模 backfill 可重入、可限速、可观测，不持有超长事务。
+- [ ] PostgreSQL 并发索引位于独立 autocommit revision，并检查 invalid index。
+- [ ] 发布前运行 `alembic current`、`alembic heads`、`alembic check`，确认只有预期 head。
+- [ ] 备份、恢复演练和回滚决策已准备；不把“有 downgrade”误当成数据一定可逆。
+
+## 结语
+
+真正生产可用的数据层，不是把 ORM CRUD 拼出来，而是把边界做清楚：FastAPI 的线程池承接同步调用，Session 隔离请求，Service 拥有事务，Repository 保持可组合，PostgreSQL 约束裁决并发，版本列暴露写冲突，连接池受容量预算约束，Alembic 则把结构变化拆成可审查、可演进的发布步骤。
+
+当这些边界稳定后，业务代码反而会变简单：路由只处理 HTTP，Service 表达用例，Repository 表达查询。下一步可在这套数据层上继续加入认证、授权、审计与多租户隔离，而不必重新争论“到底谁应该 commit”。

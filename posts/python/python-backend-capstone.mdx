@@ -1,0 +1,1154 @@
+---
+title: 'Python 后端综合实战：团队知识库 API'
+date: '2026-08-18'
+excerpt: '以团队知识库 API 为毕业项目，贯通 FastAPI、SQLAlchemy、Alembic、认证授权、Redis、后台任务、对象存储、集成测试、Docker Compose、CI/CD、可观测性、迁移发布与故障恢复。'
+tags: ['python', 'fastapi', 'backend', 'capstone', 'api', 'production']
+nextPost: 'linux/linux-production-roadmap'
+---
+
+# Python 后端综合实战：团队知识库 API
+
+前面的专题分别解决语言、持久化、认证、缓存、任务和测试问题；本篇不再复制它们的完整实现，而是给出一个可以启动、可以测试、可以逐步演进的**团队知识库 API**。你会把它接到自己已有的前端项目，不在这里学习前端框架。
+
+项目基线采用 **Python 3.12、FastAPI、Pydantic v2、同步 SQLAlchemy 2.x、Psycopg 3、Alembic、PostgreSQL 16 与同步 Redis 客户端**。本项目明确沿用前文的**同步数据库主线**：即使其他专题或未来扩展使用异步 Redis 客户端，异步 Redis 也只代表缓存客户端的执行模型，**不代表数据库必须异步化**，更不能据此把异步数据库会话混入当前工作单元。示例中的依赖范围限定在对应主版本；真实项目应生成并提交 `uv.lock`，让 CI 与生产安装同一组解析结果。
+
+:::important 统一同步执行模型
+本项目从 API 路由、数据库会话、认证授权查询、开发 seed 到 Alembic 全部采用同步 SQLAlchemy 2.x + Psycopg 3；当前纵切同时选择同步 `redis.Redis`，因此需要访问数据库或 Redis 的 FastAPI 路由统一写成普通 `def`，由 FastAPI 在线程池中执行，避免在事件循环中阻塞。不要在同一调用链混入另一套数据库执行模型。
+:::
+
+:::warning 先明确“骨架完整”的含义
+下文骨架提供一条可执行纵切：进程启动、数据库会话、JWT 校验、文章创建/读取、权限检查、缓存失效、健康检查与测试。搜索索引、对象存储直传、可靠任务队列等以清晰端口和阶段任务接入，避免为了“代码很多”把专题实现再抄一遍。
+:::
+
+## 1. 需求：先写可验收的系统行为
+
+团队需要在工作区内沉淀文章，成员按角色协作，并让搜索、附件和通知在失败时可恢复。第一版范围如下：
+
+- 用户登录后进入一个或多个工作区，角色为 `owner`、`editor` 或 `viewer`。
+- editor 可创建草稿、编辑正文并提交发布；owner 还可管理成员和归档文章。
+- viewer 只能读取已发布文章；草稿不能因列表、缓存或搜索索引泄漏。
+- 每篇文章有稳定 ID、标题、Markdown 正文、状态、作者、版本号和时间戳。
+- 发布文章后异步更新搜索索引并发送通知；重复投递不能产生重复副作用。
+- 附件走对象存储，不穿过 API 进程传输大文件；数据库只保存元数据和对象键。
+- 所有写操作可审计；服务提供健康、指标和结构化日志。
+
+**明确不做**：富文本编辑器、前端路由、实时协同编辑、跨区域多活和自研搜索引擎。把非目标写下来，才能守住毕业项目边界。
+## 2. 架构：数据库是真相，其他组件可重建
+
+```mermaid
+flowchart TB
+  FE[读者已有前端] -->|HTTPS / JSON| N[Nginx]
+  N --> API[FastAPI API]
+  API --> PG[(PostgreSQL)]
+  API --> R[(Redis Cache)]
+  API --> OS[(S3 兼容对象存储)]
+  API --> OB[(Outbox 表)]
+  W[Worker] --> OB
+  W --> IDX[搜索索引 / 通知服务]
+  W --> OS
+  API --> O[日志 / 指标 / Trace]
+  W --> O
+```
+
+核心决定：
+
+1. **PostgreSQL 是业务事实源**。文章状态、成员关系、附件元数据和 outbox 都受事务保护。
+2. **Redis 只保存可丢失、可重建的数据**。缓存不可用时牺牲性能，不牺牲正确性。
+3. **副作用在提交后发生**。事务内写 outbox，worker 至少投递一次；消费者靠事件 ID 幂等。
+4. **对象存储承载文件字节**。API 只签发短期上传/下载 URL 并校验元数据与权限。
+5. **同步路径保持短**。发布接口承诺“文章状态已提交”，不承诺搜索索引和通知已瞬间完成。
+
+对应专题见 [SQLAlchemy 与 Alembic](/posts/python/fastapi-sqlalchemy-alembic)、[认证与授权](/posts/python/fastapi-authentication-authorization)、[Redis 与后台任务](/posts/python/fastapi-redis-background-tasks) 和 [后端集成测试](/posts/python/python-backend-integration-testing)。
+
+## 3. 仓库结构：按边界组织，不按框架文件堆放
+
+```text
+knowledge-api/
+├── app/
+│   ├── api/                 # HTTP 路由、请求/响应转换
+│   ├── core/                # 配置、安全、日志、指标
+│   ├── domain/              # 实体、值对象、领域错误
+│   ├── services/            # 应用用例与事务编排
+│   ├── repositories/        # 仓储协议与 SQLAlchemy 实现
+│   ├── integrations/        # Redis、对象存储、通知适配器
+│   ├── models.py            # 最小骨架先集中；增长后拆分
+│   ├── schemas.py
+│   ├── db.py
+│   └── main.py
+├── worker/
+│   └── main.py              # outbox 消费与任务入口
+├── alembic/
+│   ├── versions/
+│   └── env.py
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── contract/
+├── ops/
+│   ├── nginx/
+│   ├── dashboards/
+│   └── runbooks/
+├── compose.yaml
+├── Dockerfile
+├── pyproject.toml
+├── .env.example
+└── README.md
+```
+
+最小骨架允许 `models.py` 暂时集中；当模型增多时再按领域拆分。不要在第一天创建几十个空目录，也不要让路由直接承担 SQL、权限、缓存和通知。
+
+## 4. API 契约：先稳定外部行为
+
+所有业务路由放在 `/api/v1`。时间使用带时区的 RFC 3339 字符串；ID 使用 UUID；列表采用不透明 cursor，避免大偏移分页。下面是第一版契约：
+
+| 方法与路径 | 作用 | 成功响应 | 关键错误 |
+| --- | --- | --- | --- |
+| `POST /auth/token` | 换取短期 access token | `200` | `INVALID_CREDENTIALS` |
+| `GET /workspaces/{wid}/articles` | 列出可见文章 | `200` | `WORKSPACE_NOT_FOUND` |
+| `POST /workspaces/{wid}/articles` | 创建草稿 | `201` | `FORBIDDEN`、`VALIDATION_ERROR` |
+| `GET /workspaces/{wid}/articles/{aid}` | 读取文章 | `200` | `ARTICLE_NOT_FOUND` |
+| `PATCH /workspaces/{wid}/articles/{aid}` | 更新草稿 | `200` | `VERSION_CONFLICT` |
+| `POST /workspaces/{wid}/articles/{aid}/publish` | 发布文章 | `200` | `INVALID_STATE` |
+| `DELETE /workspaces/{wid}/articles/{aid}` | 归档文章 | `204` | `FORBIDDEN` |
+| `POST /workspaces/{wid}/attachments/presign` | 申请上传 URL | `200` | `UNSUPPORTED_MEDIA_TYPE` |
+| `POST /workspaces/{wid}/members` | 邀请/添加成员 | `201` | `FORBIDDEN` |
+| `GET /health/live` | 进程存活 | `200` | — |
+| `GET /health/ready` | 接流量条件 | `200/503` | `DEPENDENCY_UNAVAILABLE` |
+
+创建请求使用 `Idempotency-Key`；更新请求携带当前 `version`。发生版本冲突返回 `409`，客户端先重新获取资源，不做盲目覆盖。
+
+```json
+{
+  "id": "d8f2c23d-f2f5-4bd1-a0c7-0ea59d870e76",
+  "workspace_id": "7dfcbfd3-e048-4388-9553-78636cb98c7a",
+  "title": "发布手册",
+  "body": "# Runbook",
+  "status": "draft",
+  "version": 3,
+  "author_id": "237fdca4-bdf2-447f-b669-bbf13d22661d",
+  "created_at": "2026-08-18T08:30:00Z",
+  "updated_at": "2026-08-18T09:10:00Z"
+}
+```
+
+统一错误响应只暴露可行动信息，详细堆栈留在带同一 `request_id` 的服务端日志：
+
+```json
+{
+  "error": {
+    "code": "VERSION_CONFLICT",
+    "message": "文章已被其他成员更新，请刷新后重试",
+    "request_id": "01K2Y4QYJ3EZ0CZA87B6Y3K9FT"
+  }
+}
+```
+
+## 5. 数据模型：约束必须落在事实源
+
+```mermaid
+erDiagram
+  USERS ||--o{ WORKSPACE_MEMBERS : joins
+  WORKSPACES ||--o{ WORKSPACE_MEMBERS : has
+  WORKSPACES ||--o{ ARTICLES : owns
+  USERS ||--o{ ARTICLES : authors
+  ARTICLES ||--o{ ARTICLE_VERSIONS : records
+  ARTICLES ||--o{ ATTACHMENTS : contains
+  WORKSPACES ||--o{ AUDIT_LOGS : records
+  WORKSPACES ||--o{ OUTBOX_EVENTS : emits
+```
+
+建议表与关键约束：
+
+- `users(id, email, password_hash, is_active, created_at)`：`lower(email)` 唯一；密码只存自适应哈希。
+- `workspaces(id, name, created_at)`：租户边界。
+- `workspace_members(workspace_id, user_id, role)`：复合主键；角色限定为三种值。
+- `articles(id, workspace_id, author_id, title, body, status, version, published_at, created_at, updated_at)`：`version >= 1`；发布时 `published_at` 非空。
+- `article_versions(article_id, version, title, body, editor_id, created_at)`：`(article_id, version)` 唯一。
+- `attachments(id, workspace_id, article_id, object_key, content_type, byte_size, checksum, status)`：对象键唯一；只有扫描通过才能绑定为可下载。
+- `idempotency_keys(workspace_id, key, request_hash, response_status, response_body, expires_at)`：同 key 不同请求体必须拒绝。
+- `outbox_events(id, aggregate_type, aggregate_id, event_type, payload, occurred_at, processed_at, attempts)`：事务内写入。
+- `audit_logs(id, workspace_id, actor_id, action, resource_type, resource_id, metadata, occurred_at)`：追加写，不用它还原业务状态。
+
+常用索引至少包含：
+
+```sql
+CREATE INDEX ix_articles_workspace_status_published
+ON articles (workspace_id, status, published_at DESC, id DESC);
+
+CREATE INDEX ix_outbox_unprocessed
+ON outbox_events (occurred_at)
+WHERE processed_at IS NULL;
+```
+
+索引不是清单任务。用真实查询、基数和执行计划验证；写放大、磁盘占用和锁等待也属于成本。通用方法见 [SQL 执行计划与查询优化](/posts/sql/sql-advanced-performance)，产品细节见 [PostgreSQL 深度实战](/posts/postgresql/postgresql-guide)。若选择 MySQL，应把部分索引、JSON、锁和迁移语法调整为 InnoDB 行为，不宣称一份迁移同时兼容两种数据库。
+
+## 6. 权限矩阵：默认拒绝，查询也必须带租户边界
+
+| 操作 | owner | editor | viewer |
+| --- | :---: | :---: | :---: |
+| 读取已发布文章 | ✓ | ✓ | ✓ |
+| 读取工作区内草稿 | ✓ | ✓ | — |
+| 创建/编辑草稿 | ✓ | ✓ | — |
+| 发布文章 | ✓ | ✓ | — |
+| 归档任意文章 | ✓ | — | — |
+| 管理成员与角色 | ✓ | — | — |
+| 申请附件上传 | ✓ | ✓ | — |
+| 查看审计记录 | ✓ | — | — |
+
+RBAC 只回答“角色通常能做什么”，资源规则还要回答“能对哪个工作区、哪篇文章做”。每条 SQL 都应显式约束 `workspace_id`；先按全局 ID 查询、再在 Python 中判断租户，容易形成越权和枚举漏洞。
+
+安全响应策略：对工作区外资源统一返回 `404`，不向攻击者区分“存在但无权”和“不存在”。审计日志则记录真实拒绝原因，但不得保存 access token、密码、完整正文或预签名 URL。
+## 7. 缓存：优化读取，不参与权限判定
+
+只缓存**已发布文章的公开业务表示**，键中包含工作区、文章和表示版本：
+
+```text
+kb:v1:workspace:{workspace_id}:article:{article_id}:published
+```
+
+采用 cache-aside：先查 Redis，未命中查数据库并回填；更新事务提交后删除缓存。TTL（例如 5 分钟加随机抖动）用于限制陈旧上界，不替代主动失效。缓存值包含 `version`，方便诊断旧数据。
+
+边界必须写进设计：
+
+- 权限先从可信身份与成员关系得出，再读取业务缓存；绝不缓存“某用户允许访问”的永久结论。
+- 草稿默认不缓存，避免状态切换或键设计错误造成泄漏。
+- Redis 超时应短于数据库路径预算；读取降级到数据库，写入失效失败要记录指标。
+- 防击穿只在确认热点后引入请求合并或短锁；锁不是数据库事务替代品。
+- 发布与缓存删除之间仍有短暂竞态。严格一致场景可使用版本化键或事务提交后的事件失效，不能假装“先删缓存”已解决所有并发。
+
+## 8. 后台任务：outbox 保证不丢，幂等抵抗重复
+
+直接在请求事务提交后调用队列存在崩溃窗口：数据库已发布，但进程在 enqueue 前退出。解决方式是同一数据库事务内同时更新文章并插入 outbox。worker 使用 `FOR UPDATE SKIP LOCKED` 批量领取事件，成功后标记 `processed_at`。
+
+```python
+# 伪代码强调事务边界；完整 SQLAlchemy 写法见专题文章。
+with transaction():
+    article.publish()
+    article_repo.save(article)
+    outbox.add(
+        event_id=uuid4(),
+        event_type="article.published",
+        aggregate_id=article.id,
+    )
+# 事务提交后，独立 worker 最终会看到事件。
+```
+
+worker 至少投递一次，因此处理器必须以 `event_id` 去重。重试使用指数退避和最大次数；超过阈值进入可查询的失败状态并告警，不能无限热循环。业务任务包括：
+
+- `article.published`：更新搜索索引、通知订阅者、预热热点缓存。
+- `attachment.uploaded`：校验对象大小/checksum、病毒扫描、生成预览。
+- `workspace.export_requested`：生成压缩包并写对象存储，返回短期下载链接。
+
+不要用 FastAPI 进程内 `BackgroundTasks` 承担必须完成的工作；它适合短小、可丢失且不需要跨进程重试的附带任务。
+
+## 9. 文件与对象存储边界
+
+API 不接收大文件字节，而是：
+
+1. 客户端提交文件名、MIME、大小和 checksum。
+2. API 校验角色、配额和允许类型，创建 `pending` 附件记录。
+3. API 生成 5–10 分钟有效、绑定对象键/大小/类型的预签名上传 URL。
+4. 客户端直接上传对象存储，再通知 API 完成。
+5. worker 校验对象元数据并扫描；通过后改为 `ready`，失败则隔离/删除。
+6. 下载时再次鉴权，再签发短期下载 URL。
+
+对象键使用服务端生成的 UUID，不拼接用户文件名；原始文件名仅作显示元数据。桶保持私有，禁止把永久公网 URL 存进正文。删除文章时先软删除元数据，再由可重试清理任务处理对象，避免数据库回滚而文件已不可恢复。
+
+本地可使用 MinIO 模拟 S3 兼容边界，但生产凭证、生命周期、加密和审计由基础设施管理。MinIO 行为不等于所有云对象存储细节，契约测试应针对实际供应商再跑一次。
+
+## 10. 测试策略：按风险分层，而不是追逐单一覆盖率
+
+| 层级 | 真实依赖 | 重点 | 典型失败 |
+| --- | --- | --- | --- |
+| 单元测试 | 无 | 发布规则、权限函数、状态机 | 边界条件、非法状态 |
+| 仓储集成 | PostgreSQL | 约束、事务、锁、迁移 | 重复键、回滚、并发冲突 |
+| 缓存/任务集成 | PostgreSQL + Redis | 失效、幂等、重试 | 旧缓存、重复事件 |
+| API 契约 | 应用 + DB | 状态码、schema、错误码 | 字段漂移、越权 |
+| 端到端冒烟 | 完整 Compose | 登录到发布关键旅程 | 配置、网络、启动顺序 |
+
+最低风险清单：
+
+- owner/editor/viewer 每个矩阵单元都有允许或拒绝测试。
+- 用户 A 无法读取用户 B 工作区的资源，即使猜到 UUID。
+- 两个 editor 用同一 `version` 更新时只有一个成功，另一个得到 `409`。
+- 重复 `Idempotency-Key` 与同请求体返回原结果，不同请求体返回冲突。
+- 事务回滚后没有 outbox；同一 outbox 重放两次只产生一次外部结果。
+- Redis 断开时读路径降级，草稿仍不泄漏。
+- 从空库升级到 head，并用生产快照的脱敏副本演练迁移。
+
+测试容器应等待健康条件而不是固定 `sleep`。每个测试用例可在事务中回滚，涉及并发/提交语义的测试则使用独立数据库或显式清理，避免“测试隔离技巧”掩盖真实行为。
+
+## 11. 最小可执行骨架
+
+下面骨架实现健康检查、JWT 当前用户、工作区角色校验、创建文章、读取已发布文章和 Redis cache-aside。它刻意不包含登录发 token、成员管理、outbox worker 与预签名 URL：这些在后续里程碑通过既定端口加入。开发时用环境中的固定测试身份签发 token；生产必须接入完整认证专题的登录、刷新、撤销和密钥轮换方案。
+
+### 11.1 项目元数据
+
+```toml title="pyproject.toml"
+[project]
+name = "knowledge-api"
+version = "0.1.0"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "sqlalchemy>=2.0,<3",
+  "psycopg[binary]>=3.2,<4",
+  "alembic>=1.13,<2",
+  "pydantic-settings>=2.4,<3",
+  "redis>=5,<7",
+  "PyJWT>=2.9,<3",
+]
+
+[project.optional-dependencies]
+test = [
+  "httpx>=0.27,<1",
+  "pytest>=8,<9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+```
+
+依赖范围便于展示主版本兼容边界，不是生产锁定策略。首次解析后运行 `uv lock` 并提交 `uv.lock`，CI 使用 `uv sync --frozen --extra test`。`sqlalchemy` 使用默认同步 API，`psycopg[binary]` 提供 Psycopg 3 驱动；测试由 FastAPI 的同步 `TestClient` 驱动，因此不需要额外的异步测试插件。
+
+### 11.2 配置与数据库会话
+
+```python title="app/config.py"
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    database_url: str = "postgresql+psycopg://knowledge:knowledge@db:5432/knowledge"
+    redis_url: str = "redis://redis:6379/0"
+    jwt_secret: str
+    jwt_algorithm: str = "HS256"
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+```
+
+```python title="app/db.py"
+from collections.abc import Generator
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from .config import get_settings
+
+settings = get_settings()
+engine = create_engine(settings.database_url, pool_pre_ping=True)
+SessionFactory = sessionmaker(
+    bind=engine,
+    class_=Session,
+    expire_on_commit=False,
+)
+
+
+def get_session() -> Generator[Session, None, None]:
+    # 一个请求一个同步 Session；异常时回滚，结束时始终归还连接。
+    with SessionFactory() as session:
+        try:
+            yield session
+        except Exception:
+            session.rollback()
+            raise
+```
+
+`expire_on_commit=False` 便于序列化刚提交对象，但不会让对象自动保持最新；新的业务操作应重新查询，不把 ORM 实例跨请求缓存。同步 `Session` 不能跨线程或请求共享，数据库路由必须保持普通 `def`。
+### 11.3 ORM 模型与输入输出模型
+
+```python title="app/models.py"
+import uuid
+from datetime import datetime
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+class Base(DeclarativeBase):
+    pass
+
+class WorkspaceMember(Base):
+    __tablename__ = "workspace_members"
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    __table_args__ = (
+        CheckConstraint("role IN ('owner', 'editor', 'viewer')", name="ck_member_role"),
+    )
+
+class Article(Base):
+    __tablename__ = "articles"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    author_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+    version: Mapped[int] = mapped_column(nullable=False, default=1)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'published', 'archived')", name="ck_article_status"),
+        CheckConstraint("version >= 1", name="ck_article_version"),
+        Index("ix_articles_workspace_status_created", "workspace_id", "status", "created_at"),
+    )
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    aggregate_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    aggregate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+```
+
+完整项目还应为 workspace/user 建表和外键。骨架保留 UUID 边界，是为了让你能先用固定开发身份跑通纵切；阶段任务中必须补齐主实体、外键、删除策略和审计表。
+
+```python title="app/schemas.py"
+import uuid
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field
+
+class ArticleCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=200_000)
+
+class ArticleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    author_id: uuid.UUID
+    title: str
+    body: str
+    status: str
+    version: int
+    created_at: datetime
+    updated_at: datetime
+```
+
+### 11.4 JWT 身份与数据库授权
+
+```python title="app/auth.py"
+import uuid
+from dataclasses import dataclass
+
+import jwt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import InvalidTokenError
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from .config import get_settings
+from .models import WorkspaceMember
+
+bearer = HTTPBearer(auto_error=False)
+settings = get_settings()
+
+@dataclass(frozen=True)
+class CurrentUser:
+    id: uuid.UUID
+
+
+def current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> CurrentUser:
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing token")
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            options={"require": ["sub", "exp"]},
+        )
+        return CurrentUser(id=uuid.UUID(payload["sub"]))
+    except (InvalidTokenError, KeyError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="invalid token") from exc
+
+
+def role_for(
+    workspace_id: uuid.UUID,
+    user: CurrentUser,
+    session: Session,
+) -> str:
+    role = session.scalar(
+        select(WorkspaceMember.role).where(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.user_id == user.id,
+        )
+    )
+    if role is None:
+        # 对工作区外请求隐藏资源是否存在。
+        raise HTTPException(status_code=404, detail="workspace not found")
+    return role
+```
+
+JWT 只证明身份；角色每次通过同步 `Session` 从服务端事实源读取。规模扩大后可短缓存成员关系，但必须有撤权失效和极短 TTL。生产环境优先使用非对称签名或外部身份提供方，并固定允许算法；绝不能从 token header 动态信任算法。
+
+### 11.5 FastAPI 应用纵切
+
+```python title="app/main.py"
+import uuid
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, HTTPException, status
+from redis import Redis
+from redis.exceptions import RedisError
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
+
+from .auth import CurrentUser, current_user, role_for
+from .config import get_settings
+from .db import get_session
+from .models import Article
+from .schemas import ArticleCreate, ArticleRead
+
+settings = get_settings()
+redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # FastAPI 的 lifespan 协议本身是异步上下文；业务 I/O 仍全部使用同步客户端。
+    try:
+        yield
+    finally:
+        redis_client.close()
+
+
+app = FastAPI(title="Team Knowledge API", version="0.1.0", lifespan=lifespan)
+
+
+@app.get("/health/live")
+def live() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/health/ready")
+def ready(session: Session = Depends(get_session)) -> dict[str, str]:
+    # Redis 是可降级依赖，不阻止 API 接流量；数据库是当前硬依赖。
+    try:
+        session.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"status": "ready"}
+
+
+@app.post(
+    "/api/v1/workspaces/{workspace_id}/articles",
+    response_model=ArticleRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_article(
+    workspace_id: uuid.UUID,
+    data: ArticleCreate,
+    user: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> Article:
+    role = role_for(workspace_id, user, session)
+    if role not in {"owner", "editor"}:
+        raise HTTPException(status_code=403, detail="forbidden")
+    article = Article(
+        workspace_id=workspace_id,
+        author_id=user.id,
+        title=data.title,
+        body=data.body,
+    )
+    session.add(article)
+    session.commit()
+    session.refresh(article)
+    return article
+
+
+@app.get(
+    "/api/v1/workspaces/{workspace_id}/articles/{article_id}",
+    response_model=ArticleRead,
+)
+def get_article(
+    workspace_id: uuid.UUID,
+    article_id: uuid.UUID,
+    user: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> ArticleRead:
+    role = role_for(workspace_id, user, session)
+    cache_key = f"kb:v1:workspace:{workspace_id}:article:{article_id}:published"
+
+    # 仅已发布表示进入同步 Redis 缓存；先完成成员校验。
+    try:
+        cached = redis_client.get(cache_key)
+        if cached is not None:
+            return ArticleRead.model_validate_json(cached)
+    except RedisError:
+        pass  # 实际项目同时递增 cache_error_total 并记录结构化日志。
+
+    statement = select(Article).where(
+        Article.id == article_id,
+        Article.workspace_id == workspace_id,
+    )
+    if role == "viewer":
+        statement = statement.where(Article.status == "published")
+    article = session.scalar(statement)
+    if article is None:
+        raise HTTPException(status_code=404, detail="article not found")
+
+    result = ArticleRead.model_validate(article)
+    if article.status == "published":
+        try:
+            redis_client.set(cache_key, result.model_dump_json(), ex=300)
+        except RedisError:
+            pass
+    return result
+```
+
+这里故意让 Redis 失败时降级，但数据库 readiness 失败时拒绝流量。所有访问同步数据库或同步 Redis 的路由都是普通 `def`，FastAPI 会在线程池执行它们；lifespan 只负责进程级 Redis 客户端的确定性关闭。生产代码还应加入统一错误体、request ID、超时、缓存指标与日志；不要照搬裸 `pass` 后失去故障信号。
+### 11.6 Alembic：从第一天就用迁移启动
+
+`alembic.ini` 至少保留 `script_location = alembic`；URL 由环境配置注入，不把密码写进文件。
+
+```python title="alembic/env.py"
+from alembic import context
+from sqlalchemy import engine_from_config, pool
+
+from app.config import get_settings
+from app.models import Base
+
+config = context.config
+# ConfigParser 会解释百分号，URL 中经过编码的 % 需要转义。
+config.set_main_option(
+    "sqlalchemy.url",
+    get_settings().database_url.replace("%", "%%"),
+)
+target_metadata = Base.metadata
+
+
+def run_migrations_offline() -> None:
+    context.configure(
+        url=config.get_main_option("sqlalchemy.url"),
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+        compare_type=True,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section) or {},
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+    connectable.dispose()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+```
+
+迁移进程使用同步 Psycopg 3 连接与 `NullPool`，执行完即释放连接，不创建常驻应用连接池。初始化后执行：
+
+```bash
+uv run alembic revision --autogenerate -m "create core tables"
+uv run alembic upgrade head
+uv run alembic check
+```
+
+自动生成只是草稿。逐行审查类型、约束、索引、默认值、锁和 downgrade；重命名经常会被误判成“删列 + 新增列”。提交后不再改写已在共享环境执行过的 migration，而是追加新 revision。
+
+为了让本页骨架可直接启动，先创建空的 `app/__init__.py`，并保存下面两个文件：
+
+```ini title="alembic.ini"
+[alembic]
+script_location = alembic
+prepend_sys_path = .
+sqlalchemy.url = postgresql+psycopg://placeholder
+```
+
+```python title="alembic/versions/0001_core.py"
+from collections.abc import Sequence
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+revision: str = "0001_core"
+down_revision: str | None = None
+branch_labels: Sequence[str] | None = None
+depends_on: Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "workspace_members",
+        sa.Column("workspace_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("role", sa.String(16), nullable=False),
+        sa.CheckConstraint(
+            "role IN ('owner', 'editor', 'viewer')", name="ck_member_role"
+        ),
+        sa.PrimaryKeyConstraint("workspace_id", "user_id"),
+    )
+    op.create_table(
+        "articles",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("workspace_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("author_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("title", sa.String(200), nullable=False),
+        sa.Column("body", sa.Text(), nullable=False),
+        sa.Column("status", sa.String(16), nullable=False),
+        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("published_at", sa.DateTime(timezone=True)),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+        ),
+        sa.CheckConstraint(
+            "status IN ('draft', 'published', 'archived')", name="ck_article_status"
+        ),
+        sa.CheckConstraint("version >= 1", name="ck_article_version"),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_articles_workspace_status_created",
+        "articles",
+        ["workspace_id", "status", "created_at"],
+    )
+    op.create_table(
+        "outbox_events",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("aggregate_type", sa.String(50), nullable=False),
+        sa.Column("aggregate_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("event_type", sa.String(100), nullable=False),
+        sa.Column("payload", sa.Text(), nullable=False),
+        sa.Column(
+            "occurred_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+        ),
+        sa.Column("processed_at", sa.DateTime(timezone=True)),
+        sa.Column("attempts", sa.Integer(), server_default="0", nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+    )
+
+
+def downgrade() -> None:
+    op.drop_table("outbox_events")
+    op.drop_index("ix_articles_workspace_status_created", table_name="articles")
+    op.drop_table("articles")
+    op.drop_table("workspace_members")
+```
+
+模型中的 Python 默认值不会自动成为数据库默认值，因此 API 创建路径负责写入 UUID、`status`、`version` 和 `attempts`；若还有其他写入方，应在 migration 中增加数据库默认值并明确默认值的演进策略。
+
+### 11.7 固定开发身份：只用于本地启动
+
+```python title="app/dev_seed.py"
+import uuid
+from datetime import datetime, timedelta, timezone
+
+import jwt
+from sqlalchemy.dialects.postgresql import insert
+
+from .config import get_settings
+from .db import SessionFactory
+from .models import WorkspaceMember
+
+USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000101")
+
+
+def main() -> None:
+    with SessionFactory() as session:
+        with session.begin():
+            statement = insert(WorkspaceMember).values(
+                workspace_id=WORKSPACE_ID,
+                user_id=USER_ID,
+                role="owner",
+            ).on_conflict_do_nothing()
+            session.execute(statement)
+
+    settings = get_settings()
+    token = jwt.encode(
+        {
+            "sub": str(USER_ID),
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
+    print(f"workspace={WORKSPACE_ID}\ntoken={token}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+该模块使用独立同步 `Session` 和明确事务，并且必须被生产镜像启动流程忽略；生产环境也不能使用固定 ID 或对称开发密钥。
+
+## 12. Docker Compose 本地环境
+
+```dockerfile title="Dockerfile"
+FROM python:3.12-slim
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN pip install --no-cache-dir "uv>=0.5,<1"
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./
+USER 10001
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+真实发布应把基础镜像固定到 digest、扫描镜像并生成 SBOM；这里的版本标签便于阅读，不代表供应链已锁定。
+
+```yaml title="compose.yaml"
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: knowledge
+      POSTGRES_USER: knowledge
+      POSTGRES_PASSWORD: knowledge
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowledge -d knowledge"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: knowledge-dev
+      MINIO_ROOT_PASSWORD: knowledge-dev-secret
+    ports:
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  migrate:
+    build: .
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  minio_data:
+```
+
+`latest` 仅适合这里尚未接线的本地 MinIO 占位服务；真正使用前固定经过验证的版本或 digest。数据库与 Redis 同样应由依赖更新流程定期升级，而不是永久停在示例标签。
+
+```dotenv title=".env.example"
+DATABASE_URL=postgresql+psycopg://knowledge:knowledge@db:5432/knowledge
+REDIS_URL=redis://redis:6379/0
+JWT_SECRET=replace-with-at-least-32-random-bytes
+JWT_ALGORITHM=HS256
+```
+
+启动与冒烟：
+
+```bash
+cp .env.example .env
+uv lock
+docker compose up --build -d
+docker compose exec api uv run python -m app.dev_seed
+curl http://localhost:8000/health/ready
+# 把上一条命令打印的 token 放入 Authorization: Bearer <token>。
+```
+
+Compose 的 `depends_on` 只负责本地编排，不是生产发布策略。生产迁移应作为受控的一次性任务运行，多个 API 副本不能竞相执行危险 DDL。
+
+## 13. 最小测试：验证行为，不锁死实现
+
+```python title="tests/test_health_and_authorization.py"
+import uuid
+from datetime import datetime, timedelta, timezone
+
+import jwt
+from fastapi.testclient import TestClient
+
+from app.config import get_settings
+from app.main import app
+
+USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000101")
+
+
+def token_for(user_id: uuid.UUID) -> str:
+    settings = get_settings()
+    return jwt.encode(
+        {
+            "sub": str(user_id),
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+        },
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
+
+
+def test_live_does_not_require_dependencies() -> None:
+    # 上下文管理器会执行应用 lifespan，并在退出时关闭同步 Redis 客户端。
+    with TestClient(app) as client:
+        response = client.get("/health/live")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_outsider_cannot_create_article() -> None:
+    outsider = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/v1/workspaces/{WORKSPACE_ID}/articles",
+            headers={"Authorization": f"Bearer {token_for(outsider)}"},
+            json={"title": "secret", "body": "must not be created"},
+        )
+    assert response.status_code == 404
+```
+
+第二个测试需要 Compose 中的真实 PostgreSQL、migration 与开发 seed；成熟测试套件还应让 Redis 保持真实服务，并创建独立测试数据库和 fixture，不依赖开发固定数据。同步 `TestClient` 已覆盖当前同步 HTTP 边界，无需异步测试标记。不要把 `os.environ` 或全局 settings cache 在不同测试间随意修改；配置覆盖应在应用工厂中显式注入。
+## 14. CI/CD：制品只构建一次
+
+CI 至少执行：依赖冻结校验 → 静态检查 → 单元/集成测试 → migration 检查 → 镜像构建与扫描。下面片段只展示与项目有关的主干；仓库权限、镜像签名和部署审批按组织平台配置。
+
+```yaml title=".github/workflows/api.yml"
+name: knowledge-api
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: knowledge_test
+          POSTGRES_USER: knowledge
+          POSTGRES_PASSWORD: knowledge
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U knowledge -d knowledge_test"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://knowledge:knowledge@localhost:5432/knowledge_test
+      REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET: ci-only-secret-at-least-32-bytes-long
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen --extra test
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
+      - run: uv run pytest -q
+      - run: docker build -t knowledge-api:${{ github.sha }} .
+```
+
+第三方 action 也属于供应链依赖；生产仓库应固定到审核过的 commit SHA，并由自动化工具提出更新。流水线通过后推送带 commit SHA/镜像 digest 的不可变制品，同一 digest 依次晋级预发布和生产，不在生产机 `git pull` 后现场构建。
+
+接入 [Linux 生产工程路线图](/posts/linux/linux-production-roadmap) 时，沿用其中的可靠 CI/CD、可观测性、安全基线与事件响应阶段；由 [Nginx 指南](/posts/nginx/nginx-complete-guide) 提供 TLS、反向代理、请求体限制和超时配置。应用对 Nginx 至少要明确：
+
+- `/health/live` 与 `/health/ready` 的用途不同，readiness 不对公网暴露详细依赖信息。
+- 上传采用对象存储直传；API 的请求体上限可以保持较小。
+- 代理、应用、数据库的超时逐层收紧，保留清理时间。
+- 非幂等请求不由代理盲目重试；创建接口用幂等键处理客户端安全重试。
+
+## 15. 可观测性：从用户结果倒推信号
+
+结构化日志至少包含 `timestamp`、`level`、`service`、`environment`、`request_id`、`route`、`method`、`status_code`、`duration_ms`，认证后可记录不可逆/受控的 `user_id` 与 `workspace_id`。不得记录 token、密码、正文、预签名 URL 和数据库连接串。
+
+核心指标：
+
+- HTTP：按规范化 route 统计请求量、错误率和延迟直方图，禁止把 article ID 放进 label。
+- 数据库：连接池使用率、等待时间、查询延迟、事务回滚、死锁。
+- Redis：命中率、操作延迟、错误率；命中率变化要结合数据库负载解释。
+- worker：outbox 最老未处理事件年龄、队列深度、成功/失败/重试数、死信数。
+- 业务：文章发布成功率、版本冲突率、附件扫描失败率。
+
+建议首个 SLI 是“有效认证用户的文章读取请求中，在 500 ms 内返回非 5xx 的比例”。SLO 和告警窗口应由业务目标设定，不复制任意百分比。告警必须附仪表盘与 runbook：先看依赖健康、最近发布和饱和度，再决定降级或回滚。
+
+trace 跨 API、数据库和 worker 传播 `trace_id`；outbox payload 保存追踪上下文而不是依赖进程内变量。采样能控制成本，但错误与高延迟请求应提高保留概率。
+
+## 16. 迁移与发布：expand → migrate → contract
+
+以 `articles.body` 拆成 `body_markdown` 为例：
+
+1. **Expand**：新增可空列，新旧应用都能运行。
+2. **双写**：新版本同时写旧列和新列，读取仍以旧列为准。
+3. **Migrate**：可暂停、可重跑地分批回填，记录进度并限制负载。
+4. **切读**：验证行数、checksum 和业务指标后改读新列；保留快速开关。
+5. **Contract**：确认所有旧版本退出、回滚窗口关闭后，再删除旧列和双写代码。
+
+DDL 在类生产数据量上测量锁时间。发布顺序通常是“向后兼容 migration → 新 worker/API → 验证 → 清理 migration”；回滚应用不等于回滚数据库。破坏性 migration 不应和第一次使用新列的代码在同一不可逆步骤完成。
+
+发布前后自动检查：migration head、错误率、p95/p99 延迟、数据库连接、outbox 年龄和关键业务冒烟。超过阈值自动停止推进；回滚使用上一镜像 digest，而不是现场改代码。
+
+## 17. 备份与恢复：备份文件不是恢复能力
+
+定义并经业务确认 RPO/RTO。例如毕业项目可先以 **RPO 24 小时、RTO 2 小时**作为练习目标，这不是通用生产建议。备份范围包含：
+
+- PostgreSQL 全量备份与可选 WAL/PITR；备份加密、异地保存、限制访问。
+- 对象存储版本控制/生命周期与清单；数据库附件元数据和对象必须能对账。
+- Alembic revision、镜像 digest、运行配置模板和恢复 runbook。
+- Redis 不作为事实源，可冷启动重建，不把它加入关键 RPO 承诺。
+
+本地逻辑备份练习：
+
+```bash
+# 在宿主机执行；文件名包含时间，真实环境还要加密并上传异地存储。
+docker compose exec -T db pg_dump -U knowledge -d knowledge -Fc > knowledge.dump
+
+# 恢复必须进入隔离的新数据库，不能覆盖正在服务的库。
+docker compose exec -T db createdb -U knowledge knowledge_restore
+docker compose exec -T db pg_restore -U knowledge -d knowledge_restore --clean --if-exists < knowledge.dump
+```
+
+恢复后不是看到 exit code 0 就结束：执行 migration 兼容性检查，核对关键表行数与约束，抽样文章和附件 checksum，用临时 API 实例跑只读冒烟，记录实际 RPO/RTO。生产托管数据库的快照/PITR 流程不同，应沿 [Linux 生产路线](/posts/linux/linux-production-roadmap) 中数据库运维与灾备章节落实。
+
+## 18. 故障演练：在可控环境证明退化方式
+
+每次演练写清假设、影响半径、停止条件、观测信号、恢复步骤和证据。先从本地/预发布开始：
+
+| 故障 | 注入方式 | 期望行为 | 关键证据 |
+| --- | --- | --- | --- |
+| Redis 中断 | `docker compose stop redis` | 已授权读取回源 DB；延迟上升但不泄漏 | cache error 与 DB 负载指标 |
+| 数据库中断 | `docker compose stop db` | readiness 失败；接口快速 503，不堆积连接 | 连接池、5xx、恢复时间 |
+| worker 停止 | 停 worker 进程 | 发布仍成功；outbox 年龄告警；恢复后追平 | 最老事件年龄、幂等结果 |
+| 重复事件 | 重放同一 event ID | 外部副作用只出现一次 | 去重记录与审计日志 |
+| 坏 migration | 在快照副本执行高锁 DDL | 超阈值中止，不影响生产 | 锁等待与中止记录 |
+| 对象存储超时 | 阻断 MinIO | 文章 API 可用；附件申请明确失败 | 依赖错误率与降级说明 |
+| 坏版本 | 注入持续 5xx | 发布门禁停止并回滚旧 digest | 回滚耗时与指标恢复 |
+
+`docker compose down -v` 会删除本地卷，只能在确认无需保留开发数据时执行；不要把破坏性命令写进默认演练脚本。
+
+## 19. 分阶段任务：每一步都可演示
+
+### 里程碑 0：项目基线
+
+- 建仓、`pyproject.toml`、锁文件、配置、健康检查和 Compose。
+- CI 能从空库 migration 到 head 并运行测试。
+- **验收**：新成员只按 README 在 15 分钟内启动，不需要口头补充。
+
+### 里程碑 1：文章纵切
+
+- 工作区、成员、文章模型；创建、读取、更新、发布、归档。
+- Pydantic 契约、统一错误、乐观版本号。
+- **验收**：OpenAPI 契约测试通过，并发更新稳定产生一个成功和一个 `409`。
+
+### 里程碑 2：认证、授权与审计
+
+- 登录/刷新/撤销、密码哈希、密钥轮换设计。
+- 完成权限矩阵与跨租户测试；敏感操作追加审计。
+- **验收**：矩阵每格有测试，日志扫描不含敏感值。
+
+### 里程碑 3：缓存与可靠任务
+
+- 已发布文章 cache-aside、提交后失效、Redis 降级。
+- outbox worker、幂等处理、重试、失败事件查询与重放。
+- **验收**：Redis/worker 故障演练达到预期，恢复后无丢失和重复副作用。
+
+### 里程碑 4：附件与搜索
+
+- 私有桶、预签名上传、元数据确认、扫描状态机、过期对象清理。
+- 发布事件驱动搜索索引；搜索结果再次受工作区/发布状态约束。
+- **验收**：越权 URL 无法生成，超限/伪造类型被拒，数据库与对象清单可对账。
+
+### 里程碑 5：生产交付
+
+- 不可变镜像、Nginx、渐进发布、仪表盘、SLO/告警与 runbook。
+- 兼容 migration、备份恢复和坏版本回滚演练。
+- **验收**：另一位成员按 runbook 完成恢复和回滚，证据进入复盘。
+
+## 20. 最终验收清单
+
+### 功能与契约
+
+- [ ] 前端仅依赖版本化 API/OpenAPI，不依赖数据库字段或内部异常文本。
+- [ ] 创建支持幂等键，更新支持版本冲突，分页游标稳定。
+- [ ] 文章状态机、附件状态机和统一错误码有文档与测试。
+
+### 数据与安全
+
+- [ ] 数据库约束保护关键不变量，所有查询显式包含工作区边界。
+- [ ] 权限矩阵全覆盖；跨租户、失效 token、撤权和草稿泄漏测试通过。
+- [ ] 密钥、token、密码、正文和预签名 URL 不进入代码库与日志。
+- [ ] migration 可从空库执行，破坏性变更遵循 expand/migrate/contract。
+
+### 缓存、任务与文件
+
+- [ ] Redis 可失效、可重建、可降级，不成为授权或业务事实源。
+- [ ] outbox 无丢失窗口；worker 幂等、有限重试、失败可观察和重放。
+- [ ] 对象桶私有，上传/下载短期签名，大小/type/checksum 在服务端验证。
+
+### 测试与交付
+
+- [ ] 单元、真实数据库/Redis 集成、契约和关键 E2E 分层合理。
+- [ ] CI 使用冻结依赖，构建并晋级同一镜像 digest，失败自动停止。
+- [ ] readiness/liveness、结构化日志、指标、trace、仪表盘和可执行告警齐全。
+
+### 运行与恢复
+
+- [ ] Nginx/TLS/超时/请求体限制经过验证，非幂等写入不会被盲重试。
+- [ ] 备份覆盖数据库、对象与配置；隔离恢复演练达到约定 RPO/RTO。
+- [ ] Redis、数据库、worker、对象存储、migration 和坏版本演练均有记录。
+- [ ] 值班人员能根据 runbook 诊断、降级、回滚并形成复盘改进项。
+
+完成这些清单，才意味着你交付的不是一个“能返回 JSON 的 Demo”，而是一套能够被前端稳定消费、被团队持续变更、并在依赖失败后恢复的后端服务。下一步进入 [Linux 生产工程路线图](/posts/linux/linux-production-roadmap)，把本项目的部署、观测、安全和恢复证据提升到真实生产标准。

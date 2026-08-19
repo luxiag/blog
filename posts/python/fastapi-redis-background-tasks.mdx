@@ -1,0 +1,1200 @@
+---
+title: 'FastAPI + Redis 后台任务实战：缓存、限流与 Dramatiq 可靠队列'
+date: '2026-08-18'
+excerpt: '面向 Python 3.12+ 的生产实践：用 redis-py 5.x 管理 FastAPI 异步连接池，以 Cache Aside、限流和锁构建 Redis 基础设施，并以 Dramatiq + Redis 实现可重试、幂等、可观测的持久化后台任务。'
+tags: ['python', 'fastapi', 'redis', 'dramatiq', 'background-tasks', 'backend']
+nextPost: 'python/python-backend-integration-testing'
+---
+
+# FastAPI + Redis 后台任务实战：缓存、限流与 Dramatiq 可靠队列
+
+FastAPI 的请求处理很快，但真实系统很少只做一次数据库查询：商品详情需要缓存，接口需要限流，发邮件、生成报表、调用第三方 API 又不该阻塞响应。Redis 可以同时承担缓存、计数器、短租约协调和任务 Broker，但这些角色的可靠性要求并不相同。
+
+本文以 **Python 3.12+、FastAPI（Pydantic v2）、redis-py 5.x、Dramatiq + Redis** 为基线，搭建一套边界清晰的方案。数据库是业务事实来源；Redis 缓存可以降级；任务采用持久化队列并按“至少一次”语义设计。你将看到连接池生命周期、依赖注入、Cache Aside、限流、锁、幂等任务、Outbox、监控与本地 Docker Compose 如何连成一条完整链路。
+
+数据库层沿用 **同步 SQLAlchemy 2.x + Psycopg 3**，不会因为 FastAPI 使用 `async def`、缓存与限流使用 `redis.asyncio` 就改成异步数据库：**异步 Redis 不等于异步数据库**。需要从异步路由访问 PostgreSQL 时，本文会把自行创建并关闭 `Session` 的完整同步工作单元交给线程池执行；同步 Dramatiq Worker 也继续使用同一套同步数据库栈。
+
+:::note 前置阅读
+如果还不熟悉 Redis 的 key、数据结构与过期机制，先看[《Redis 核心概念与数据结构》](/posts/redis/redis-core-concepts)；缓存一致性、穿透、击穿和雪崩的原理可配合[《Redis 缓存实战》](/posts/redis/redis-cache-in-depth)阅读。本文聚焦 FastAPI 集成与可靠后台任务，不重复展开底层原理。
+:::
+
+:::important 先确定可靠性语义
+Redis Broker 与 Dramatiq **不提供 exactly-once（恰好一次）保证**。消息可能因 Worker 崩溃、确认丢失或重试而执行多次，也可能因为错误配置、数据丢失或超过保留边界而不可恢复。生产代码应按 **at-least-once（至少一次）+ 业务幂等 + 可追踪失败** 设计，而不是假设任务只运行一次。
+:::
+
+---
+
+## 一、先选对执行模型：响应后执行不等于可靠队列
+
+FastAPI 自带的 `BackgroundTasks`、进程内 `asyncio.Queue` 与 Dramatiq 解决的是三类问题。它们不能因为都叫“后台任务”就互换。
+### 1. `BackgroundTasks`：请求进程里的“稍后执行”
+
+```python
+from fastapi import BackgroundTasks, FastAPI
+
+app = FastAPI()
+
+def write_access_log(line: str) -> None:
+    # 适合短小、失败后可忽略或可由别处补偿的本地操作
+    with open("access.log", "a", encoding="utf-8") as file:
+        file.write(line + "\n")
+
+@app.post("/demo-background")
+async def demo(background_tasks: BackgroundTasks) -> dict[str, str]:
+    background_tasks.add_task(write_access_log, "request accepted")
+    return {"status": "accepted"}
+```
+
+任务在响应发送后由同一个应用进程执行。进程重启、容器被杀或任务抛错时，没有持久化消息、跨进程认领、自动重试和独立扩缩容。它适合低价值、快速、可丢的收尾工作，不适合扣款、发券、订单履约等关键流程。
+
+### 2. `asyncio.Queue`：单进程内的并发协调
+
+```python
+import asyncio
+
+queue: asyncio.Queue[str] = asyncio.Queue(maxsize=100)
+
+async def consumer() -> None:
+    while True:
+        item = await queue.get()
+        try:
+            await asyncio.sleep(0.1)  # 模拟异步 I/O
+            print(f"processed: {item}")
+        finally:
+            queue.task_done()
+```
+
+它提供背压和生产者—消费者协作，却只存在于当前进程内存。多 Uvicorn Worker 各有一份队列；进程退出后未处理项目消失。它适合 WebSocket 推送、进程内批处理等局部并发，不是持久化任务系统。
+
+### 3. Dramatiq + Redis：独立 Worker 消费的持久化队列
+
+```mermaid
+graph LR
+  C[客户端] --> A[FastAPI API]
+  A --> DB[(PostgreSQL)]
+  A --> R[(Redis)]
+  R --> W1[Dramatiq Worker 1]
+  R --> W2[Dramatiq Worker 2]
+  W1 --> DB
+  W2 --> DB
+```
+
+API 只负责校验请求、提交数据库事务和发布消息；Worker 独立部署、消费、重试。Redis 可持久化 Broker 状态，但可靠性仍取决于 Redis 的 AOF/复制、部署拓扑、Dramatiq 配置和业务幂等。关键任务还需要数据库任务记录、Outbox 或专用消息系统来补齐事务边界。
+
+| 方案 | 跨进程 | 重启后保留 | 自动重试 | 适用场景 |
+| --- | --- | --- | --- | --- |
+| `BackgroundTasks` | 否 | 否 | 否 | 可丢的短小收尾 |
+| `asyncio.Queue` | 否 | 否 | 自己实现 | 单进程异步流水线 |
+| Dramatiq + Redis | 是 | 取决于 Broker 持久化 | 是 | 可重试、可扩缩的后台任务 |
+
+:::tip Celery、RQ 还是 Dramatiq？
+Celery 生态最完整，路由、Canvas 工作流和调度能力丰富，但配置与运维面更大；RQ API 简单、直接围绕 Redis，适合较轻的任务系统；Dramatiq API 克制，内建重试与中间件模型清晰。本文选择 Dramatiq，不代表它自动比其他方案可靠——三者都要求你处理幂等、超时、事务发布与监控。
+:::
+
+---
+
+## 二、项目骨架与依赖
+
+本文明确采用两套不会混淆的 I/O 边界：FastAPI 继续用 `redis.asyncio` 处理异步缓存与限流；所有 PostgreSQL 访问统一使用 **同步 SQLAlchemy 2.x + Psycopg 3**，Dramatiq Actor 也保持同步。`async def` 路由需要访问数据库或调用同步 `.send()` 时，只把一个完整的同步工作单元交给 `run_in_threadpool()`；工作单元必须自行创建、提交/回滚并关闭 `Session`，绝不能把请求级 `Session` 跨线程传递。
+
+<FileTree tree={[
+  { name: "app", type: "folder", children: [
+    { name: "__init__.py", type: "file" },
+    { name: "config.py", type: "file", comment: "Pydantic Settings" },
+    { name: "database.py", type: "file", comment: "同步 Engine 与 SessionFactory" },
+    { name: "redis_client.py", type: "file", comment: "异步连接池与 DI" },
+    { name: "cache.py", type: "file", comment: "Cache Aside 与防击穿" },
+    { name: "rate_limit.py", type: "file", comment: "原子限流" },
+    { name: "broker.py", type: "file", comment: "Dramatiq Broker 配置" },
+    { name: "tasks.py", type: "file", comment: "同步幂等 Actor" },
+    { name: "main.py", type: "file", comment: "FastAPI 异步外壳" },
+    { name: "outbox_publisher.py", type: "file", comment: "同步事务 Outbox 发布器" },
+  ]},
+  { name: "pyproject.toml", type: "file" },
+  { name: "Dockerfile", type: "file" },
+  { name: "compose.yaml", type: "file" },
+]} />
+
+```toml
+# pyproject.toml
+[project]
+name = "fastapi-redis-tasks"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.111,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "redis>=5,<6",
+  "dramatiq[redis]>=1.17,<2",
+  "pydantic>=2.7,<3",
+  "pydantic-settings>=2.2,<3",
+  "email-validator>=2,<3",
+  "sqlalchemy>=2.0,<3",
+  "psycopg[binary]>=3.1,<4",
+  "httpx>=0.27,<1",
+]
+```
+
+版本范围用于说明兼容基线；真实项目应提交锁文件，部署时安装经过测试的精确版本。
+
+```python
+# app/config.py
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    redis_url: str = "redis://localhost:6379/0"
+    database_url: str = "postgresql+psycopg://app:app@localhost:5432/app"
+    cache_ttl_seconds: int = 300
+    cache_jitter_seconds: int = 60
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+```
+
+同步数据库对象集中在 `app/database.py`。`Engine` 与 `sessionmaker` 可在进程内复用，但每次工作必须创建独立 `Session`；`Session` 不是线程安全对象：
+
+```python
+# app/database.py
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.config import get_settings
+
+engine = create_engine(
+    get_settings().database_url,  # postgresql+psycopg:// 使用 Psycopg 3
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=5,
+    pool_timeout=10,
+)
+SessionFactory = sessionmaker(
+    bind=engine,
+    class_=Session,
+    expire_on_commit=False,
+)
+```
+
+:::important 线程池边界
+本文不定义供这些 `async def` 路由注入的数据库 `Session`。同步 loader、更新用例、Job 用例各自在执行线程中调用 `SessionFactory()` 或 `SessionFactory.begin()`，并在线程返回前转换为 Pydantic DTO。这样 ORM 实例和 `Session` 都不会越过线程、请求或任务边界。
+:::
+
+---
+
+## 三、`redis.asyncio`：让连接池跟随 FastAPI lifespan
+
+不要在每个请求里新建 Redis 客户端，也不要在模块导入时创建依赖事件循环的连接。应用启动时创建一个有上限的连接池，保存在 `app.state`；关闭时显式释放客户端与池。
+
+```python
+# app/redis_client.py
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from redis.asyncio import ConnectionPool, Redis
+from redis.exceptions import RedisError
+
+from app.config import get_settings
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    pool = ConnectionPool.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        max_connections=100,
+        socket_connect_timeout=0.2,
+        socket_timeout=0.5,
+        health_check_interval=30,
+    )
+    client = Redis(connection_pool=pool)
+    app.state.redis = client
+
+    try:
+        await client.ping()
+        app.state.redis_ready = True
+    except RedisError:
+        # 缓存型 Redis 可允许 API 降级启动；关键限流需按风险另定策略。
+        app.state.redis_ready = False
+
+    try:
+        yield
+    finally:
+        # 外部传入 pool 时由应用明确管理其所有权。
+        await client.aclose()
+        await pool.aclose()
+
+def get_redis(request: Request) -> Redis:
+    """FastAPI DI：返回当前应用生命周期内的共享客户端。"""
+    return request.app.state.redis
+```
+
+`max_connections` 是每个 API 进程的上限，而不是全服务上限。若部署 8 个进程、每池 100 条连接，理论上可产生 800 条连接，必须与 Redis `maxclients`、并发量和超时一起预算。短超时能让缓存故障快速降级，避免请求堆积。
+
+```python
+# app/main.py
+from fastapi import Depends, FastAPI
+from redis.asyncio import Redis
+
+from app.redis_client import get_redis, lifespan
+
+app = FastAPI(title="FastAPI Redis Tasks", lifespan=lifespan)
+
+@app.get("/health/live")
+async def liveness() -> dict[str, str]:
+    # 存活探针不依赖 Redis，避免 Redis 故障触发整个 API 重启风暴。
+    return {"status": "alive"}
+
+@app.get("/health/ready")
+async def readiness(redis: Redis = Depends(get_redis)) -> dict[str, str]:
+    await redis.ping()
+    return {"status": "ready"}
+```
+
+:::warning 健康检查策略不是固定答案
+如果 Redis 只做可选缓存，readiness 不应因 Redis 故障而摘除所有 API 实例；如果 Redis 承担不可绕过的安全限流或会话，readiness 可以失败。最好分别暴露组件状态，由部署平台按业务角色决定是否摘流。
+:::
+---
+
+## 四、Cache Aside：key、TTL、空值与故障降级
+
+先定约束，再写代码：
+
+- **key 可演进**：`blog:product:v1:{id}`，结构变化时升版本，不在生产上全量扫描旧 key。
+- **TTL 有随机抖动**：基础 TTL 加随机值，避免大量 key 同时到期形成雪崩。
+- **缓存空值**：不存在的数据写短 TTL 哨兵，阻断重复穿透；写入新数据时要删掉对应 key。
+- **数据库是事实来源**：Redis 读取、写入或删除失败时，读接口可回源数据库；不能把缓存异常误报成“数据不存在”。
+- **只缓存可接受短暂陈旧的数据**：余额、权限判定等强一致结果不要照搬本节方案。
+
+```python
+# app/cache.py
+import asyncio
+import random
+from collections.abc import Callable
+from typing import TypeVar
+from uuid import uuid4
+
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
+
+T = TypeVar("T", bound=BaseModel)
+NULL_SENTINEL = "__NULL__"
+UNLOCK_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+def product_key(product_id: int) -> str:
+    return f"blog:product:v1:{product_id}"
+
+async def cache_get(redis: Redis, key: str, model: type[T]) -> tuple[bool, T | None]:
+    """返回 (是否命中缓存, 值)；空值哨兵也是一次命中。"""
+    try:
+        raw = await redis.get(key)
+    except RedisError:
+        return False, None
+
+    if raw is None:
+        return False, None
+    if raw == NULL_SENTINEL:
+        return True, None
+
+    try:
+        return True, model.model_validate_json(raw)
+    except ValueError:
+        # 旧结构或坏数据按未命中处理，并尽力清理。
+        try:
+            await redis.delete(key)
+        except RedisError:
+            pass
+        return False, None
+
+async def cache_set(
+    redis: Redis,
+    key: str,
+    value: BaseModel | None,
+    *,
+    ttl: int = 300,
+    jitter: int = 60,
+) -> None:
+    actual_ttl = ttl + random.randint(0, max(jitter, 0))
+    payload = NULL_SENTINEL if value is None else value.model_dump_json()
+    # 空值应更快过期，降低“数据刚创建却仍显示不存在”的窗口。
+    expire = min(actual_ttl, 30) if value is None else actual_ttl
+    try:
+        await redis.set(key, payload, ex=expire)
+    except RedisError:
+        pass  # 缓存写失败不应覆盖数据库查询的正确结果
+
+async def get_or_load(
+    redis: Redis,
+    key: str,
+    model: type[T],
+    loader: Callable[[], T | None],
+) -> T | None:
+    """Redis 保持异步；同步 loader 作为完整工作单元在线程池执行。"""
+    hit, cached = await cache_get(redis, key, model)
+    if hit:
+        return cached
+
+    # 短租约只用于减少同一热点 key 的并发回源，不承担业务正确性。
+    lock_key = f"{key}:rebuild-lock"
+    token = uuid4().hex
+    try:
+        owns_lock = bool(await redis.set(lock_key, token, nx=True, px=3_000))
+    except RedisError:
+        owns_lock = False
+
+    if not owns_lock:
+        # 有界等待后再查一次；仍未命中就自行回源，避免无限等待。
+        await asyncio.sleep(random.uniform(0.03, 0.08))
+        hit, cached = await cache_get(redis, key, model)
+        if hit:
+            return cached
+        value = await run_in_threadpool(loader)
+        await cache_set(redis, key, value)
+        return value
+
+    try:
+        # 获锁后双检，避免等待期间已有其他请求完成回填。
+        hit, cached = await cache_get(redis, key, model)
+        if hit:
+            return cached
+        value = await run_in_threadpool(loader)
+        await cache_set(redis, key, value)
+        return value
+    finally:
+        try:
+            # 只能释放自己的锁，不能无条件 DEL 别人的新租约。
+            await redis.eval(UNLOCK_SCRIPT, 1, lock_key, token)
+        except RedisError:
+            pass
+```
+
+完整路由使用 Pydantic v2 响应模型。数据库 loader 是普通同步函数，并在函数内部创建、使用和关闭自己的 `Session`；缓存层只负责在线程池调用它：
+
+```python
+# app/main.py（续）
+from functools import partial
+from typing import Annotated
+
+from fastapi import Depends, HTTPException
+from pydantic import BaseModel, ConfigDict
+from redis.asyncio import Redis
+
+from app.cache import get_or_load, product_key
+from app.database import SessionFactory
+from app.models import Product
+from app.redis_client import get_redis
+
+class ProductOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    price_cents: int
+
+def load_product_from_db(product_id: int) -> ProductOut | None:
+    # Session 的创建、ORM 读取和 DTO 转换都发生在同一个工作线程。
+    with SessionFactory() as session:
+        product = session.get(Product, product_id)
+        return None if product is None else ProductOut.model_validate(product)
+
+@app.get("/products/{product_id}", response_model=ProductOut)
+async def get_product(
+    product_id: int,
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> ProductOut:
+    product = await get_or_load(
+        redis,
+        product_key(product_id),
+        ProductOut,
+        partial(load_product_from_db, product_id),
+    )
+    if product is None:
+        raise HTTPException(status_code=404, detail="product not found")
+    return product
+```
+
+这里没有向路由注入同步 `Session`，也没有把 ORM 对象返回到事件循环线程。每次缓存未命中才在线程池中执行 loader；loader 返回的是已完成校验、可安全跨线程传递的 DTO。
+
+### 更新路径：在线程池提交完整事务，再异步删缓存
+
+数据库事务未提交前删除缓存，可能让并发读回填旧值。更稳妥的顺序是：**在线程池完成整个同步事务并返回 DTO，确认提交成功后，再由异步外壳删除 Redis key**。
+
+```python
+from fastapi.concurrency import run_in_threadpool
+from redis.exceptions import RedisError
+
+class ProductNotFoundError(Exception):
+    pass
+
+def update_product_in_db(product_id: int, new_name: str) -> ProductOut:
+    # SessionFactory.begin() 负责成功提交、异常回滚，退出时关闭 Session。
+    with SessionFactory.begin() as session:
+        product = session.get(Product, product_id)
+        if product is None:
+            raise ProductNotFoundError
+
+        product.name = new_name
+        session.flush()
+        result = ProductOut.model_validate(product)
+
+    # 到达这里说明事务已经提交；只把 DTO 带回事件循环线程。
+    return result
+
+@app.patch("/products/{product_id}", response_model=ProductOut)
+async def update_product(
+    product_id: int,
+    new_name: str,
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> ProductOut:
+    try:
+        result = await run_in_threadpool(
+            update_product_in_db, product_id, new_name
+        )
+    except ProductNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="product not found") from exc
+
+    try:
+        # 只有数据库 commit 成功后才执行异步缓存失效。
+        await redis.delete(product_key(product_id))
+    except RedisError:
+        # 删除失败时旧值最多存活到 TTL；同时必须记录指标/日志。
+        cache_invalidation_failures.inc()
+
+    return result
+```
+
+不要从依赖中取得请求 `Session` 再把它传给 `run_in_threadpool()`：Session 及其 ORM 状态只能留在创建它的同步工作单元里。
+
+这仍不是原子操作：数据库已提交后进程可能在删除缓存前崩溃。普通详情缓存可依赖短 TTL 限制影响；更严格时，把“缓存失效事件”与业务更新写入同一数据库事务的 Outbox，再由发布器重试删除或广播失效。不要把 Redis 与数据库强行包装成一个不存在的分布式事务。
+
+### Redis 故障时如何降级
+
+缓存层的 `RedisError` 被转成未命中，读请求回源数据库。但降级必须有护栏：
+
+1. 对数据库设置连接池与查询超时，不能让无限回源拖垮数据库。
+2. 用进程内并发限制或网关限流削峰；热点接口可返回短暂 `503`，而不是压垮核心库。
+3. 监控缓存错误率、命中率和数据库 QPS；Redis 恢复后让 TTL 抖动自然回填，不要瞬间全量预热。
+4. 区分数据语义：商品详情可 fail-open 回源；防暴力破解等安全控制通常应 fail-closed 或由网关提供第二道限制。
+
+:::warning 缓存降级不是吞掉所有异常
+只捕获 Redis 连接、超时等可预期异常。Pydantic 结构错误可以清理后回源；数据库异常、业务代码错误仍应正常暴露和告警，否则“降级”会变成静默数据错误。
+:::
+---
+
+## 五、限流：用 Lua 保证计数与过期原子执行
+
+最简单的固定窗口算法在一个窗口内最多允许 N 次请求。`INCR` 与首次 `EXPIRE` 必须放进同一段 Lua 脚本，否则进程可能在两条命令之间崩溃，留下永不过期的计数 key。
+
+```python
+# app/rate_limit.py
+import time
+from dataclasses import dataclass
+
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
+
+FIXED_WINDOW_SCRIPT = """
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+return {current, ttl}
+"""
+
+@dataclass(frozen=True)
+class RateLimitResult:
+    allowed: bool
+    remaining: int
+    retry_after: int
+
+async def check_rate_limit(
+    redis: Redis,
+    identity: str,
+    *,
+    limit: int = 60,
+    window_seconds: int = 60,
+    fail_open: bool = True,
+) -> RateLimitResult:
+    window = int(time.time()) // window_seconds
+    key = f"blog:rate:v1:{identity}:{window}"
+    try:
+        current, ttl = await redis.eval(
+            FIXED_WINDOW_SCRIPT, 1, key, window_seconds
+        )
+    except RedisError:
+        if fail_open:
+            return RateLimitResult(True, limit, 0)
+        return RateLimitResult(False, 0, 1)
+
+    current = int(current)
+    ttl = max(int(ttl), 1)
+    return RateLimitResult(
+        allowed=current <= limit,
+        remaining=max(limit - current, 0),
+        retry_after=0 if current <= limit else ttl,
+    )
+```
+
+把它包装成 FastAPI 依赖：
+
+```python
+from typing import Annotated
+
+from fastapi import Depends, HTTPException, Request, status
+
+async def rate_limited(
+    request: Request,
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> None:
+    # 已登录用户优先使用稳定 user_id；直接信任 X-Forwarded-For 会被伪造。
+    identity = str(request.state.user_id)
+    result = await check_rate_limit(redis, identity, limit=30, window_seconds=60)
+    if not result.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many requests",
+            headers={"Retry-After": str(result.retry_after)},
+        )
+
+@app.post("/reports", dependencies=[Depends(rate_limited)])
+async def create_report() -> dict[str, str]:
+    return {"status": "accepted"}
+```
+
+固定窗口在边界处可能短时间放过接近两倍请求。需要更平滑时可用滑动日志（ZSet）、滑动窗口计数或令牌桶，并把“取时间、删旧记录、计数、写入、过期”放入 Lua 脚本。高风险接口还应在 API 网关做第一层限流，避免 Redis 故障让应用只剩单点防线。
+
+---
+
+## 六、分布式锁：它是有过期时间的租约，不是数据库事务
+
+缓存重建锁使用 `SET key token NX PX ttl` 获取租约，并用“比较 token 后删除”的 Lua 脚本释放。这能避免客户端 A 的锁过期后，A 又误删客户端 B 新获得的锁，但不能解决全部正确性问题：
+
+```python
+from uuid import uuid4
+
+async def try_lock(redis: Redis, resource: str, ttl_ms: int = 5_000) -> str | None:
+    token = uuid4().hex
+    acquired = await redis.set(
+        f"blog:lock:v1:{resource}", token, nx=True, px=ttl_ms
+    )
+    return token if acquired else None
+```
+
+必须明确以下边界：
+
+- Actor 暂停、网络抖动或操作超过 TTL 后，租约会过期，另一个执行者可以进入；此时旧执行者可能仍在运行。
+- 自动续租只能缩小概率，不能证明旧执行者已经停止。
+- Redis 主从切换涉及复制时序；不能把单个 Redis 锁当作资金、库存等关键不变量的唯一保护。
+- 对外部存储写入，可使用单调递增的 **fencing token**，由存储拒绝旧 token；若存储不校验 token，锁无法隔离过期持有者。
+- 数据库唯一约束、条件更新、行锁或乐观版本号通常才是业务正确性的最终防线。
+
+因此，本文只用 Redis 短租约降低缓存击穿或减少重复调度，不用它承诺“任务只执行一次”。
+
+---
+
+## 七、配置 Dramatiq Redis Broker
+
+API 发布消息和 Worker 消费消息必须导入同一份 Broker 配置。为避免把 FastAPI 的异步客户端带进同步 Worker，Broker 自己管理 Redis 连接。
+
+```python
+# app/broker.py
+import dramatiq
+from dramatiq.brokers.redis import RedisBroker
+
+from app.config import get_settings
+
+settings = get_settings()
+broker = RedisBroker(url=settings.redis_url, namespace="blog-tasks")
+dramatiq.set_broker(broker)
+```
+
+Dramatiq Broker 会安装默认中间件来提供重试、时间限制等能力；Actor 再通过 `max_retries`、`min_backoff`、`max_backoff`、`time_limit` 与 `max_age` 设置具体策略。自定义 `middleware=` 列表时要保留所需中间件，追加前也要检查 `broker.middleware`，避免重复安装同类中间件。`time_limit` 是最后一道防线，不应替代 HTTP 客户端的读/连接超时；阻塞的系统调用也不一定会被立即中断。
+
+### 一个可追踪、可幂等的邮件任务
+
+可靠 Actor 至少需要四样东西：稳定的业务幂等键、数据库状态记录、有限次数的指数退避、每个外部调用自己的超时。下面假设 `jobs.idempotency_key` 有唯一约束。
+
+```sql
+CREATE TABLE jobs (
+  id UUID PRIMARY KEY,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ
+);
+```
+
+```python
+# app/tasks.py
+from datetime import UTC, datetime
+from uuid import UUID
+
+import dramatiq
+import httpx
+from sqlalchemy import select
+
+from app.broker import broker  # noqa: F401；导入时完成 set_broker
+from app.database import SessionFactory
+from app.models import Job
+
+class PermanentTaskError(Exception):
+    """参数或业务状态永久无效，不应继续重试。"""
+
+def send_email_via_provider(recipient: str, template: str, request_id: str) -> None:
+    # 把幂等键传给支持幂等的供应商；同时设置连接/读取/写入超时。
+    timeout = httpx.Timeout(10.0, connect=2.0, read=5.0, write=5.0)
+    with httpx.Client(timeout=timeout) as client:
+        response = client.post(
+            "https://email-provider.invalid/v1/send",
+            json={"to": recipient, "template": template},
+            headers={"Idempotency-Key": request_id},
+        )
+        if response.status_code in {400, 404, 422}:
+            raise PermanentTaskError(response.text[:500])
+        response.raise_for_status()
+
+@dramatiq.actor(
+    queue_name="emails",
+    max_retries=5,
+    min_backoff=1_000,
+    max_backoff=60_000,
+    time_limit=30_000,
+    max_age=24 * 60 * 60 * 1000,
+)
+def send_welcome_email(job_id: str) -> None:
+    # Actor 是同步函数，每段数据库状态迁移都是独立同步事务。
+    with SessionFactory.begin() as session:
+        job = session.execute(
+            select(Job).where(Job.id == UUID(job_id)).with_for_update()
+        ).scalar_one()
+
+        # 重复投递或重试成功后再次到达：直接返回。
+        if job.status in {"succeeded", "failed"}:
+            return
+        job.status = "running"
+        job.attempts += 1
+        job.started_at = datetime.now(UTC)
+        recipient = job.recipient
+
+    try:
+        send_email_via_provider(recipient, "welcome", request_id=job_id)
+    except PermanentTaskError as exc:
+        # 永久错误由业务显式终止，并保留可检索的失败原因。
+        with SessionFactory.begin() as session:
+            job = session.get(Job, UUID(job_id), with_for_update=True)
+            job.status = "failed"
+            job.last_error = str(exc)[:1000]
+            job.finished_at = datetime.now(UTC)
+        return
+    except Exception as exc:
+        # 暂时错误记录后继续抛出，让 Dramatiq 按退避策略重试。
+        with SessionFactory.begin() as session:
+            job = session.get(Job, UUID(job_id), with_for_update=True)
+            job.last_error = repr(exc)[:1000]
+        raise
+
+    with SessionFactory.begin() as session:
+        job = session.get(Job, UUID(job_id), with_for_update=True)
+        job.status = "succeeded"
+        job.last_error = None
+        job.finished_at = datetime.now(UTC)
+```
+
+这里故意没有用 Redis `SETNX` 作为永久幂等记录：Redis key 可能过期、淘汰或随故障丢失。数据库唯一约束和状态行更适合作为长期事实。对于“扣库存”这类任务，应把幂等记录与库存条件更新放在**同一数据库事务**里；调用外部邮件服务仍有“供应商成功、Worker 在落库前崩溃”的窗口，所以还要向供应商传稳定幂等键。若对方不支持幂等，系统只能检测与补偿，不能凭空获得 exactly-once。
+### 从 API 发布任务：先提交，再发送
+
+最小实现把“创建或查询幂等 Job”封装为独立同步工作单元。它在线程池内自行管理 `Session`，返回 DTO 后，异步路由再在线程池调用同步 `.send()`：
+
+```python
+from dataclasses import dataclass
+from uuid import UUID, uuid4
+
+from fastapi import status
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, EmailStr
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+
+from app.database import SessionFactory
+from app.models import Job
+from app.tasks import send_welcome_email
+
+class WelcomeEmailIn(BaseModel):
+    email: EmailStr
+    idempotency_key: str
+
+@dataclass(frozen=True)
+class JobResult:
+    id: UUID
+    status: str
+
+def create_or_get_welcome_job(
+    idempotency_key: str,
+    recipient: str,
+) -> JobResult:
+    """完整同步工作单元：自行创建/提交/回滚/关闭 Session。"""
+    try:
+        with SessionFactory.begin() as session:
+            job = session.scalar(
+                select(Job).where(Job.idempotency_key == idempotency_key)
+            )
+            if job is None:
+                job = Job(
+                    id=uuid4(),
+                    idempotency_key=idempotency_key,
+                    kind="welcome_email",
+                    recipient=recipient,
+                    status="pending",
+                )
+                session.add(job)
+                session.flush()
+            result = JobResult(id=job.id, status=job.status)
+        return result  # 此时事务已经提交，Session 已关闭。
+    except IntegrityError:
+        # 两个并发请求可能同时未查到；唯一约束裁决后，用新 Session 查询赢家。
+        with SessionFactory() as session:
+            job = session.execute(
+                select(Job).where(Job.idempotency_key == idempotency_key)
+            ).scalar_one()
+            return JobResult(id=job.id, status=job.status)
+
+@app.post("/welcome-emails", status_code=status.HTTP_202_ACCEPTED)
+async def enqueue_welcome_email(body: WelcomeEmailIn) -> dict[str, str]:
+    job = await run_in_threadpool(
+        create_or_get_welcome_job,
+        body.idempotency_key,
+        str(body.email),
+    )
+
+    # Dramatiq send 也是同步 I/O；与数据库工作单元分开在线程池执行。
+    # Actor 从 Job 读取持久化 recipient，重复请求不能篡改原始负载。
+    await run_in_threadpool(send_welcome_email.send, str(job.id))
+    return {"job_id": str(job.id), "status": job.status}
+```
+
+这个 API 没有请求级数据库依赖，更不会把请求 `Session` 交给另一个线程。唯一约束处理的是并发创建竞态；稳定的 Job ID 同时作为 Actor 和邮件供应商的幂等键。
+
+但它仍有一个明确漏洞：数据库提交后、消息发送前 API 崩溃，`jobs` 中会永远留下 `pending`。反过来若先发消息再提交，Worker 可能找不到尚未提交的 Job。要跨过这个“双写缺口”，使用事务 Outbox。
+
+---
+
+## 八、Outbox：让业务提交与“待发布事实”同生共死
+
+Outbox 不会让数据库和 Redis 获得原子提交；它把“必须发布这件事”先可靠地留在数据库。业务数据、Job 和 Outbox 行在一个数据库事务中提交，独立发布器持续扫描未发布行并发送到 Dramatiq。
+
+```sql
+CREATE TABLE outbox_events (
+  id UUID PRIMARY KEY,
+  topic TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ
+);
+CREATE INDEX outbox_unpublished_idx
+  ON outbox_events (created_at) WHERE published_at IS NULL;
+```
+
+```python
+# Outbox 版本替换上一节的 create_or_get_welcome_job 与直接 send。
+def create_welcome_job_with_outbox(
+    idempotency_key: str,
+    recipient: str,
+) -> JobResult:
+    try:
+        # 同一个同步事务：要么 Job 与 Outbox 同时存在，要么都不存在。
+        with SessionFactory.begin() as session:
+            job = session.scalar(
+                select(Job).where(Job.idempotency_key == idempotency_key)
+            )
+            if job is None:
+                job = Job(
+                    id=uuid4(),
+                    idempotency_key=idempotency_key,
+                    kind="welcome_email",
+                    recipient=recipient,
+                    status="pending",
+                )
+                session.add(job)
+                session.add(OutboxEvent(
+                    id=uuid4(),
+                    topic="welcome_email",
+                    payload={"job_id": str(job.id)},
+                ))
+                session.flush()
+            result = JobResult(id=job.id, status=job.status)
+        return result
+    except IntegrityError:
+        with SessionFactory() as session:
+            job = session.execute(
+                select(Job).where(Job.idempotency_key == idempotency_key)
+            ).scalar_one()
+            return JobResult(id=job.id, status=job.status)
+
+@app.post("/welcome-emails", status_code=status.HTTP_202_ACCEPTED)
+async def enqueue_welcome_email(body: WelcomeEmailIn) -> dict[str, str]:
+    job = await run_in_threadpool(
+        create_welcome_job_with_outbox,
+        body.idempotency_key,
+        str(body.email),
+    )
+    # API 不直接 send；独立发布器最终发布 Outbox。
+    return {"job_id": str(job.id), "status": job.status}
+```
+
+发布器用 `FOR UPDATE SKIP LOCKED` 允许多个实例并行领取不同批次：
+
+```python
+# app/outbox_publisher.py
+import time
+from datetime import UTC, datetime
+
+from sqlalchemy import select
+
+from app.database import SessionFactory
+from app.models import OutboxEvent
+from app.tasks import send_welcome_email
+
+def publish_batch(batch_size: int = 100) -> int:
+    # 同步发布器用一个明确事务领取、发送并标记本批事件。
+    with SessionFactory.begin() as session:
+        events = session.execute(
+            select(OutboxEvent)
+            .where(OutboxEvent.published_at.is_(None))
+            .order_by(OutboxEvent.created_at)
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+        ).scalars().all()
+
+        for event in events:
+            if event.topic == "welcome_email":
+                send_welcome_email.send(event.payload["job_id"])
+            else:
+                raise ValueError(f"unknown outbox topic: {event.topic}")
+            event.published_at = datetime.now(UTC)
+
+        # 离开 begin 块后统一 commit；异常会回滚 published_at。
+        return len(events)
+
+def main() -> None:
+    while True:
+        try:
+            count = publish_batch()
+        except Exception:
+            # 实际项目输出结构化日志并增加失败指标。
+            count = 0
+        time.sleep(0.1 if count else 1.0)
+
+if __name__ == "__main__":
+    main()
+```
+
+如果发布器在 `send()` 成功后、`published_at` 提交前崩溃，同一事件会再次发送。因此 Outbox 解决的是“最终能发布”，不是“只发布一次”；Actor 的 Job ID 幂等仍不可省略。生产上还应清理已发布旧行、对长期未发布事件告警，并考虑用数据库通知或 CDC 降低轮询延迟。
+
+### Worker 命令与队列隔离
+
+```bash
+# app.tasks 必须可导入，模块导入后会注册 Actor
+# 邮件属于 I/O 密集任务，可使用多个线程；参数需压测后确定。
+dramatiq app.tasks --queues emails --processes 2 --threads 8
+```
+
+CPU 密集任务应减少每进程线程数、增加进程数，或交给专门的计算平台。不同延迟/SLA 的任务放入不同队列和 Worker 池，避免一个大报表堵住验证码邮件。
+
+### 重试、退避与最终失败
+
+`max_retries=5` 限制重试次数，`min_backoff`/`max_backoff` 控制指数退避范围。只有**暂时性错误**（超时、连接重置、上游 5xx）才应抛出触发重试；参数错误、资源永久不存在等应记录为失败后结束。重试总时长必须小于业务时效，消息 `AgeLimit` 则防止陈旧任务恢复后继续产生副作用。
+
+超过重试上限的消息会进入 Broker 的死信处理路径，但死信不能替代业务审计表。应增加一个对账任务：查找长时间处于 `pending`/`running` 且没有进展的 Job，标为 `failed` 或由人工确认后重新入队。不要无限自动重放永久失败任务。
+
+```sql
+-- 示例：找出 30 分钟没有进展的任务，供对账器处理
+SELECT id, kind, status, attempts, last_error
+FROM jobs
+WHERE status IN ('pending', 'running')
+  AND created_at < now() - interval '30 minutes';
+```
+
+---
+
+## 九、定时任务：调度器只负责“到点入队”
+
+Dramatiq 核心 Worker 不负责 cron 式周期调度。简单部署可由系统 cron 或 Kubernetes `CronJob` 调用一个短命令，复杂日历可使用独立 APScheduler 服务或第三方调度组件。无论哪种方式，调度器都只发布消息，不在调度进程里执行重任务。
+
+```python
+# app/enqueue_maintenance.py
+from datetime import UTC, datetime
+
+from app.tasks import cleanup_expired_exports
+
+def main() -> None:
+    day = datetime.now(UTC).date().isoformat()
+    # 同一天重复调度仍使用相同幂等键。
+    cleanup_expired_exports.send(f"cleanup-expired-exports:{day}")
+
+if __name__ == "__main__":
+    main()
+```
+
+```python
+# app/tasks.py（续）
+@dramatiq.actor(queue_name="maintenance", max_retries=3)
+def cleanup_expired_exports(idempotency_key: str) -> None:
+    with SessionFactory.begin() as session:
+        if processed_events.exists(session, idempotency_key):
+            return
+        exports.delete_expired(session, before=datetime.now(UTC))
+        # 业务变更与幂等记录在同一同步事务提交。
+        processed_events.add(session, idempotency_key)
+```
+
+```cron
+# 每天 UTC 02:00 入队；命令本身可重复执行
+0 2 * * * cd /srv/app && .venv/bin/python -m app.enqueue_maintenance
+```
+
+调度器自身可能重复触发，时区/DST 也会造成“少一次或多一次”的错觉。使用 UTC、稳定幂等键并监控“上次成功时间”，比假设调度器绝不重复更可靠。
+
+---
+
+## 十、优雅关闭：停止接单、完成在途、释放连接
+
+关闭不只是捕获一个信号：
+
+1. 负载均衡先停止把新请求发给 API。
+2. FastAPI lifespan 等待在途请求结束，再关闭 Redis 连接池。
+3. Outbox 发布器收到 `SIGTERM` 后停止领取新批次，提交或回滚当前批次。
+4. Dramatiq Worker 收到终止信号后停止拉取并等待当前消息；编排平台的 grace period 必须大于常规任务耗时。
+5. 超出宽限期仍可能被强杀，因此 Actor 必须幂等，外部调用必须有超时。
+
+不要在 Actor 中启动无人管理的 `asyncio.create_task()` 后立即返回：Dramatiq 会认为 Actor 已完成，但真正工作仍悬空。同步 Actor 应在返回前完成副作用；若使用 Dramatiq 的异步中间件，也要 `await` 完整工作。
+
+Outbox 循环可用线程事件实现可控退出：
+
+```python
+# app/outbox_publisher.py（生产版循环骨架）
+import signal
+import threading
+
+stop_event = threading.Event()
+
+def request_stop(_signum: int, _frame: object) -> None:
+    stop_event.set()
+
+signal.signal(signal.SIGTERM, request_stop)
+signal.signal(signal.SIGINT, request_stop)
+
+while not stop_event.is_set():
+    publish_batch()
+    stop_event.wait(timeout=1.0)
+```
+---
+
+## 十一、Docker Compose 本地环境
+
+下面的环境把 API、Worker、Outbox 发布器、Redis 和 PostgreSQL 分成独立进程。Redis 开启 AOF 便于本地观察重启恢复，但本地配置不等于生产高可用；生产还需备份、复制/故障转移、容量和恢复演练。
+
+```dockerfile
+# Dockerfile
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /srv/app
+COPY pyproject.toml ./
+COPY app ./app
+RUN pip install --no-cache-dir .
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+```yaml
+# compose.yaml
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  api:
+    build: .
+    environment: &app-env
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+psycopg://app:app@postgres:5432/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 20s
+
+  worker:
+    build: .
+    command: ["dramatiq", "app.tasks", "--queues", "emails", "maintenance", "--processes", "2", "--threads", "4"]
+    environment: *app-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 45s
+
+  outbox:
+    build: .
+    command: ["python", "-m", "app.outbox_publisher"]
+    environment: *app-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 20s
+
+volumes:
+  redis-data:
+  postgres-data:
+```
+
+启动前通过 Alembic 或初始化脚本创建 `jobs`、`outbox_events` 与业务表，然后运行：
+
+```bash
+docker compose up --build
+
+# 手动模拟一次定时入队
+docker compose run --rm api python -m app.enqueue_maintenance
+```
+
+本地可以共用一个 Redis，生产上应按故障域和资源竞争评估拆分缓存与 Broker。Redis 逻辑 DB 或 key namespace 只能隔离名字，不能隔离 CPU、内存、淘汰策略和故障；缓存的淘汰压力不应把关键任务消息挤掉。Broker Redis 尤其要审慎设置 `maxmemory` 与淘汰策略，并验证持久化和故障恢复。
+
+---
+
+## 十二、指标、日志与告警：可靠性必须可见
+
+只看“Worker 进程还活着”远远不够。至少采集以下指标：
+
+### API 与缓存
+
+- Redis 操作延迟、连接错误率、连接池耗尽次数；
+- 缓存命中、空值命中、回源数据库、回填失败；
+- 热点 key 的重建锁竞争与有界等待次数；
+- 限流放行/拒绝，以及 Redis 故障时 fail-open/fail-closed 次数；
+- Redis 故障期间数据库 QPS、连接池等待和接口 P95/P99。
+
+### 队列与任务
+
+- 各队列深度与**最老消息年龄**，后者比单纯长度更能反映积压；
+- 发布成功/失败、消费成功/失败、重试次数和死信数量；
+- Actor 执行时长直方图、超时次数、当前在途数；
+- Job 长时间停留在 `pending`/`running` 的数量；
+- Outbox 未发布数量、最老未发布事件年龄和单批发布耗时；
+- 定时任务上次成功时间，而不只是“调度命令执行过”。
+
+结构化日志至少带上 `job_id`、`idempotency_key`、`actor_name`、`message_id`、`attempt` 和请求 trace ID。不要记录邮件正文、令牌等敏感数据。
+
+一组可操作的告警示例：
+
+```yaml
+alerts:
+  - name: outbox_stuck
+    condition: oldest_unpublished_outbox_seconds > 120
+    for: 5m
+  - name: queue_lag_high
+    condition: oldest_queue_message_seconds > 300
+    for: 10m
+  - name: cache_degraded
+    condition: redis_error_rate > 0.05
+    for: 2m
+  - name: jobs_stuck
+    condition: stuck_jobs_total > 0
+    for: 15m
+```
+
+阈值必须依据业务 SLA、正常流量和重试上限校准。告警说明中要包含排查入口与处理动作，例如扩容 Worker、暂停生产者、检查上游供应商或执行受控重放。
+
+---
+
+## 十三、生产检查清单
+
+::: details API 与 Redis
+- 用 lifespan 创建并关闭 `redis.asyncio` 连接池，不在请求内重复建连。
+- PostgreSQL 统一使用同步 SQLAlchemy + Psycopg 3；异步路由只在线程池调用自行管理 Session 的完整同步工作单元。
+- Cache Aside loader 自建并关闭 Session，只返回 DTO；禁止把请求 Session 或 ORM 实例跨线程传递。
+- 按“每进程连接数 × 进程数”预算总连接，设置连接与命令超时。
+- key 带业务前缀和 schema 版本；TTL 有 jitter，空值使用短 TTL。
+- 更新事务在线程池内提交并返回 DTO，之后才异步删缓存；删除失败有指标和 TTL 兜底。
+- 缓存故障可回源时，数据库有并发、连接池和超时保护。
+- 限流原子执行，并明确 Redis 故障时 fail-open 还是 fail-closed。
+:::
+
+::: details 任务可靠性
+- 关键任务使用持久化队列，不用 `BackgroundTasks` 或 `asyncio.Queue` 冒充。
+- Actor 接收稳定 Job ID/幂等键，数据库唯一约束是最终防线。
+- API 先在线程池执行“创建或查询 Job”的同步工作单元，再在线程池调用 Dramatiq `send()`。
+- 暂时错误有限重试并指数退避；永久错误直接失败；所有外部 I/O 有超时。
+- 接受至少一次投递，不宣称 Redis/Dramatiq 提供 exactly-once。
+- Job 与 Outbox 使用 `SessionFactory.begin()` 在同一同步事务提交；发布器允许重复，消费者必须幂等。
+- 有死信/卡住 Job 的对账、告警和受控重放流程。
+:::
+
+::: details 运维与安全
+- 缓存与 Broker 是否拆分按故障域评估，不能把 namespace 当资源隔离。
+- Worker 队列按 SLA 隔离，进程/线程数经过压测。
+- 优雅关闭宽限期覆盖正常任务耗时，但 Actor 仍能承受强杀后重跑。
+- 监控队列年龄、Outbox 年龄、失败率、重试率、缓存降级与数据库压力。
+- Redis 使用认证、网络隔离和 TLS（跨不可信网络时），日志不输出敏感负载。
+:::
+
+---
+
+## 总结
+
+FastAPI 与 Redis 的生产集成，难点不在 `await redis.get()` 或 `actor.send()`，而在每个组件的可靠性边界：
+
+1. API 通过 lifespan 与 DI 管理有界、可关闭的异步 Redis 连接池；PostgreSQL 则统一使用同步 SQLAlchemy + Psycopg 3，并把完整工作单元放入线程池。
+2. Cache Aside 以数据库为事实来源，loader 自建 Session 并只返回 DTO；版本化 key、TTL 抖动、空值和短租约降低穿透、雪崩与击穿，Redis 故障时受控回源。
+3. 更新路径在线程池中提交同步事务，提交成功后才异步删除 Redis key；请求 Session 绝不跨线程。
+4. 限流依赖原子脚本并明确故障策略；分布式锁只作为租约优化，数据库约束才守住业务不变量。
+5. 关键后台工作进入 Dramatiq 持久化队列，按至少一次投递设计幂等、超时、有限重试与失败对账。
+6. Outbox 用同一同步数据库事务保存 Job 与待发布事实，关闭消息丢失窗口但允许重复，因此不能替代消费者幂等。
+7. 定时任务只负责入队；优雅关闭、指标和告警让系统在故障时可恢复、可解释。
+
+当缓存可以降级、消息可以重复、进程可以随时退出都被当作正常条件来设计时，这套系统才真正接近生产可用。
