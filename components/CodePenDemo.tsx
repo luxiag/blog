@@ -93,17 +93,17 @@ interface CodePenDemoProps {
 // Custom theme using CSS variables from code-highlight.css
 const codeHighlightTheme = {
   plain: {
-    color: 'var(--hljs-fg)',
+    color: 'var(--color-gray-1000)',
     backgroundColor: 'transparent',
   },
   styles: [
     {
       types: ['comment', 'prolog', 'doctype', 'cdata'],
-      style: { color: 'var(--hljs-comment)' },
+      style: { color: 'var(--shiki-token-comment)' },
     },
     {
       types: ['punctuation'],
-      style: { color: 'var(--hljs-operator)' },
+      style: { color: 'var(--shiki-token-punctuation)' },
     },
     {
       types: ['namespace'],
@@ -111,31 +111,31 @@ const codeHighlightTheme = {
     },
     {
       types: ['tag', 'operator', 'number'],
-      style: { color: 'var(--hljs-number)' },
+      style: { color: 'var(--shiki-token-constant)' },
     },
     {
       types: ['property', 'function'],
-      style: { color: 'var(--hljs-function)' },
+      style: { color: 'var(--shiki-token-function)' },
     },
     {
       types: ['tag-id', 'selector', 'atrule-id'],
-      style: { color: 'var(--hljs-symbol)' },
+      style: { color: 'var(--shiki-token-constant)' },
     },
     {
       types: ['attr-name'],
-      style: { color: 'var(--hljs-attribute)' },
+      style: { color: 'var(--shiki-token-punctuation)' },
     },
     {
       types: ['boolean', 'string', 'entity', 'url', 'attr-value', 'keyword', 'control', 'directive', 'unit', 'statement', 'regex', 'at-rule', 'placeholder', 'variable'],
-      style: { color: 'var(--hljs-keyword)' },
+      style: { color: 'var(--shiki-token-keyword)' },
     },
     {
       types: ['tag'],
-      style: { color: 'var(--hljs-tag)' }
+      style: { color: 'var(--shiki-token-punctuation)' },
     },
     {
       types: ['attr-value'],
-      style: { color: 'var(--hljs-string)' }
+      style: { color: 'var(--shiki-token-string-expression)' },
     }
   ],
 };
@@ -252,7 +252,7 @@ export default function CodePenDemo({ children, code, title = "Live Demo", heigh
           <div
             className={`absolute inset-0 flex flex-col bg-white dark:bg-neutral-900 transition-opacity duration-200 ${activeTab === 'code' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
               }`}
-            style={{ backgroundColor: 'var(--hljs-bg)', color: 'var(--hljs-fg)' }}
+            style={{ backgroundColor: 'var(--color-background)', color: 'var(--color-gray-1000)' }}
           >
             <div className="flex-1 overflow-auto relative font-mono text-sm code-pen-editor">
               <LiveEditor

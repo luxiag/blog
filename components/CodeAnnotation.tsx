@@ -79,13 +79,13 @@ export default function CodeAnnotation({ language, lines }: CodeAnnotationProps)
                   key={i}
                   className={`group/line relative px-3 py-0.5 leading-relaxed transition-colors ${
                     line.note ? 'cursor-default' : ''
-                  } ${hoveredIndex === i && line.note ? 'bg-[#ea580c]/8 dark:bg-[#ea580c]/12' : ''}`}
+                  } ${hoveredIndex === i && line.note ? 'bg-blue-700/8 dark:bg-blue-700/12' : ''}`}
                   onMouseEnter={() => line.note && setHoveredIndex(i)}
                   onMouseLeave={() => setHoveredIndex(null)}
                 >
                   <span className="font-mono text-[0.875rem]" dangerouslySetInnerHTML={{ __html: line.__html || '&nbsp;' }} />
                   {line.note && hoveredIndex === i && (
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-[#ea580c]/60" />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-blue-700/60" />
                   )}
                 </div>
               ))}
@@ -95,8 +95,8 @@ export default function CodeAnnotation({ language, lines }: CodeAnnotationProps)
         {hoveredIndex !== null && lines[hoveredIndex]?.note && (
           <div className="absolute right-0 top-0 h-full w-[260px] border-l border-neutral-200/60 dark:border-neutral-700/40 bg-neutral-50/90 dark:bg-neutral-800/60 backdrop-blur-sm p-4 overflow-y-auto">
             <div className="flex items-start gap-2">
-              <span className="shrink-0 mt-0.5 w-5 h-5 rounded-full bg-[#ea580c]/10 dark:bg-[#ea580c]/20 flex items-center justify-center">
-                <span className="text-[#ea580c] text-[0.625rem] font-mono font-bold">{hoveredIndex + 1}</span>
+              <span className="shrink-0 mt-0.5 w-5 h-5 rounded-full bg-blue-700/10 dark:bg-blue-700/20 flex items-center justify-center">
+                <span className="text-blue-700 text-[0.625rem] font-mono font-bold">{hoveredIndex + 1}</span>
               </span>
               <p className="text-[0.8125rem] leading-relaxed text-neutral-600 dark:text-neutral-400 font-sans">
                 {lines[hoveredIndex].note}

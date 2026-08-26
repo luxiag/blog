@@ -269,7 +269,7 @@ export default function SqlSimulator({
           {answerSql && (
             <button
               onClick={() => setShowAnswer(!showAnswer)}
-              className="text-xs text-orange-600 hover:text-orange-700 dark:text-orange-400 font-medium"
+              className="text-xs text-blue-700 hover:text-blue-900 dark:text-blue-600 font-medium"
             >
               {showAnswer ? '隐藏答案' : '查看答案'}
             </button>
@@ -315,7 +315,7 @@ export default function SqlSimulator({
           <button
             onClick={runQuery}
             disabled={!isInitialized}
-            className="absolute bottom-3 right-3 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-medium rounded shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="absolute bottom-3 right-3 px-3 py-1.5 bg-blue-700 hover:bg-blue-900 text-white text-xs font-medium rounded shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             运行查询
           </button>
@@ -432,7 +432,7 @@ export default function SqlSimulator({
       .sql-editor-textarea {
         outline: none !important;
         resize: none !important;
-        caret-color: #ea580c;
+        caret-color: #1d4ed8;
       }
       .sql-editor-textarea:focus {
         outline: none !important;

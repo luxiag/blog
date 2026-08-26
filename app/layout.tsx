@@ -1,9 +1,8 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, IBM_Plex_Mono, Noto_Serif_SC } from "next/font/google";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 import Header from "@/components/Header";
-import BambooRuler from "@/components/BambooRuler";
-import RulerLayout from "@/components/RulerLayout";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -11,31 +10,10 @@ export const viewport: Viewport = {
   maximumScale: 5,
   userScalable: true,
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f5f5f5" },
-    { media: "(prefers-color-scheme: dark)", color: "#171717" },
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#000000" },
   ],
 };
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-  display: 'swap',
-});
-
-const ibmPlexMono = IBM_Plex_Mono({
-  weight: ["300", "400", "500", "600", "700"],
-  subsets: ["latin"],
-  variable: "--font-ibm-plex-mono",
-  display: 'swap',
-});
-
-const notoSerifSC = Noto_Serif_SC({
-  weight: ["400", "500", "600", "700"],
-  subsets: ["latin"],
-  variable: "--font-noto-serif-sc",
-  display: 'swap',
-});
-
 
 export const metadata: Metadata = {
   title: {
@@ -66,13 +44,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" suppressHydrationWarning className={`${inter.variable} ${ibmPlexMono.variable} ${notoSerifSC.variable}`}>
-      <body className="antialiased overflow-x-hidden" style={{ backgroundColor: 'var(--background)' }}>
-        <RulerLayout>
-          <Header>
-            <main className="overflow-x-hidden">{children}</main>
-          </Header>
-        </RulerLayout>
+    <html lang="zh-CN" suppressHydrationWarning className={`${GeistSans.variable} ${GeistMono.variable}`}>
+      <body className="antialiased bg-[#fafafa] dark:bg-black text-gray-1000 dark:text-gray-1000">
+        <Header>
+          <main>{children}</main>
+        </Header>
       </body>
     </html>
   );

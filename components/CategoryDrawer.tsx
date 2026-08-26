@@ -38,44 +38,42 @@ export default function CategoryDrawer({
   return (
     <MobileDrawer isOpen={isOpen} onClose={onClose}>
       <nav className="py-2">
-        {/* All button */}
         <button
           onClick={() => handleCategoryClick('')}
           className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${
             !selectedCategory
-              ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400'
-              : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+              ? 'bg-blue-100 dark:bg-blue-100 text-blue-900 dark:text-blue-900'
+              : 'text-gray-700 dark:text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-100'
           }`}
         >
-          <span className="text-sm font-medium">all</span>
+          <span className="text-sm font-medium">All</span>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-neutral-500 dark:text-neutral-400">
+            <span className="text-xs text-gray-500 dark:text-gray-500">
               ({posts.length})
             </span>
             {!selectedCategory && (
-              <Check size={16} className="text-orange-500" />
+              <Check size={16} className="text-blue-700 dark:text-blue-900" />
             )}
           </div>
         </button>
 
-        {/* Category items */}
         {categoriesWithCounts.map(([category, count]) => (
           <button
             key={category}
             onClick={() => handleCategoryClick(category)}
             className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${
               selectedCategory === category
-                ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400'
-                : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                ? 'bg-blue-100 dark:bg-blue-100 text-blue-900 dark:text-blue-900'
+                : 'text-gray-700 dark:text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-100'
             }`}
           >
             <span className="text-sm font-medium">{category}</span>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-neutral-500 dark:text-neutral-400">
+              <span className="text-xs text-gray-500 dark:text-gray-500">
                 ({count})
               </span>
               {selectedCategory === category && (
-                <Check size={16} className="text-orange-500" />
+                <Check size={16} className="text-blue-700 dark:text-blue-900" />
               )}
             </div>
           </button>

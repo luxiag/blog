@@ -15,7 +15,7 @@ const FONT_FAMILY =
   "'ChineseHandwrittenLocal', 'ZCOOL KuaiLe', 'LXGW WenKai', 'Segoe Print', cursive";
 
 // 主题色
-const BRAND = "#ea580c";
+const BRAND = "#1d4ed8";
 
 // 缓存 mermaid 实例，避免重复导入
 let mermaidPromise: Promise<any> | null = null;
@@ -73,21 +73,21 @@ function buildThemeVariables(isDark: boolean) {
       fontFamily: FONT_FAMILY,
       fontSize: "20px",
       background: "#0a0a0a",
-      primaryColor: "#431407", // 节点填充：深橙棕
+      primaryColor: "#1e3a5f",
       primaryBorderColor: BRAND,
       primaryTextColor: "#fafaf9",
       secondaryColor: "#1c1917",
-      secondaryBorderColor: "#f97316",
+      secondaryBorderColor: "#3b82f6",
       secondaryTextColor: "#fafaf9",
       tertiaryColor: "#171717",
-      tertiaryBorderColor: "#f97316",
+      tertiaryBorderColor: "#3b82f6",
       tertiaryTextColor: "#fafaf9",
-      lineColor: "#fdba74",
+      lineColor: "#93c5fd",
       textColor: "#fafaf9",
       // 子图 / 分组
       clusterBkg: "#171717",
       clusterBorder: BRAND,
-      titleColor: "#fdba74",
+      titleColor: "#93c5fd",
       edgeLabelBackground: "#0a0a0a",
       nodeTextColor: "#fafaf9",
     };
@@ -97,20 +97,20 @@ function buildThemeVariables(isDark: boolean) {
     fontFamily: FONT_FAMILY,
     fontSize: "16px",
     background: "#ffffff",
-    primaryColor: "#ffedd5", // 节点填充：orange-100
+    primaryColor: "#dbeafe",
     primaryBorderColor: BRAND,
-    primaryTextColor: "#7c2d12",
+    primaryTextColor: "#1e3a8f",
     secondaryColor: "#fef3c7",
-    secondaryBorderColor: "#f97316",
-    secondaryTextColor: "#7c2d12",
+    secondaryBorderColor: "#3b82f6",
+    secondaryTextColor: "#1e3a8f",
     tertiaryColor: "#fafaf9",
-    tertiaryBorderColor: "#fdba74",
+    tertiaryBorderColor: "#93c5fd",
     tertiaryTextColor: "#1c1917",
-    lineColor: "#9a3412",
+    lineColor: "#1d4ed8",
     textColor: "#1c1917",
     clusterBkg: "#fafaf9",
     clusterBorder: BRAND,
-    titleColor: "#9a3412",
+    titleColor: "#1d4ed8",
     edgeLabelBackground: "#ffffff",
     nodeTextColor: "#1c1917",
   };
@@ -317,19 +317,19 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code }) => {
 
           {/* 缩放百分比提示（左上角，仅缩放时显示） */}
           {showScale && (
-            <div className="absolute top-3 left-3 z-10 rounded-md bg-neutral-900/90 dark:bg-neutral-100/90 px-2.5 py-1 text-xs font-medium text-white dark:text-neutral-900 shadow-sm backdrop-blur transition-opacity">
+            <div className="absolute top-3 left-3 z-10 rounded-md bg-gray-1000/90 dark:bg-gray-100/90 px-2.5 py-1 text-xs font-medium text-white dark:text-gray-1000 shadow-sm backdrop-blur transition-opacity">
               {Math.round(scale * 100)}%
             </div>
           )}
 
           {/* 缩放工具栏（垂直布局，左下角） */}
-          <div className="absolute bottom-3 left-3 z-10 flex flex-col items-center gap-0.5 rounded-md bg-neutral-900/90 dark:bg-neutral-100/90 p-0.5 shadow-sm backdrop-blur">
+          <div className="absolute bottom-3 left-3 z-10 flex flex-col items-center gap-0.5 rounded-md bg-gray-1000/90 dark:bg-gray-100/90 p-0.5 shadow-sm backdrop-blur">
             <button
               type="button"
               onClick={zoomIn}
               disabled={scale >= MAX_SCALE}
               aria-label="放大"
-              className="flex h-7 w-7 items-center justify-center rounded text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+              className="flex h-7 w-7 items-center justify-center rounded text-white dark:text-gray-1000 hover:bg-gray-700 dark:hover:bg-gray-300 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                 <line x1="12" y1="5" x2="12" y2="19" />
@@ -341,7 +341,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code }) => {
               onClick={zoomOut}
               disabled={scale <= MIN_SCALE}
               aria-label="缩小"
-              className="flex h-7 w-7 items-center justify-center rounded text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+              className="flex h-7 w-7 items-center justify-center rounded text-white dark:text-gray-1000 hover:bg-gray-700 dark:hover:bg-gray-300 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                 <line x1="5" y1="12" x2="19" y2="12" />
@@ -351,7 +351,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code }) => {
               type="button"
               onClick={resetView}
               aria-label="重置视图"
-              className="flex h-7 w-7 items-center justify-center rounded text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 transition-colors"
+              className="flex h-7 w-7 items-center justify-center rounded text-white dark:text-gray-1000 hover:bg-gray-700 dark:hover:bg-gray-300 transition-colors"
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />

@@ -871,7 +871,7 @@ export default function PdfViewerPage() {
     return (
       <div className="min-h-screen bg-[#f5f5f5] flex items-center justify-center">
         <div className="flex items-center gap-3">
-          <Loader2 className="w-6 h-6 animate-spin text-[#ea580c]" />
+          <Loader2 className="w-6 h-6 animate-spin text-blue-700" />
           <span className="font-mono text-sm">Initializing database...</span>
         </div>
       </div>
@@ -879,16 +879,16 @@ export default function PdfViewerPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f5f5f5] font-sans text-[oklch(0.145_0_0)]">
+    <div className="min-h-screen bg-[#f5f5f5] font-sans text-[oklch(0.205_0_0)]">
       <PageTitle title="PDF 预览" />
 
       {/* Memory Prompt Modal */}
       {showMemoryPrompt && savedPage && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-          <div className="bg-white border border-[oklch(0.145_0_0)] rounded-xl p-6 max-w-md mx-4 shadow-[8px_8px_0px_oklch(0.145_0_0)]">
+          <div className="bg-white border border-gray-1000 rounded-xl p-6 max-w-md mx-4 shadow-[8px_8px_0px_gray-1000]">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ea580c" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"                   stroke="#1d4ed8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12"/>
                   <path d="M3 3v9h9"/>
                 </svg>
@@ -904,13 +904,13 @@ export default function PdfViewerPage() {
             <div className="flex gap-3">
               <button
                 onClick={handleStayOnFirstPage}
-                className="flex-1 px-4 py-2 border border-[oklch(0.145_0_0)] rounded-lg font-mono text-xs font-bold uppercase hover:bg-gray-50 transition-colors"
+                className="flex-1 px-4 py-2 border border-gray-1000 rounded-lg font-mono text-xs font-bold uppercase hover:bg-gray-50 transition-colors"
               >
                 Stay on page 1
               </button>
               <button
                 onClick={handleJumpToSavedPage}
-                className="flex-1 px-4 py-2 bg-[#ea580c] text-white rounded-lg font-mono text-xs font-bold uppercase hover:bg-orange-700 transition-colors"
+                className="flex-1 px-4 py-2 bg-blue-700 text-white rounded-lg font-mono text-xs font-bold uppercase hover:bg-blue-900 transition-colors"
               >
                 Go to page {savedPage}
               </button>
@@ -922,7 +922,7 @@ export default function PdfViewerPage() {
       {/* Delete Confirmation Modal */}
       {pdfToDelete && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-          <div className="bg-white border border-[oklch(0.145_0_0)] rounded-xl p-6 max-w-md mx-4 shadow-[8px_8px_0px_oklch(0.145_0_0)]">
+          <div className="bg-white border border-gray-1000 rounded-xl p-6 max-w-md mx-4 shadow-[8px_8px_0px_gray-1000]">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
                 <Trash2 className="w-5 h-5 text-red-600" />
@@ -935,7 +935,7 @@ export default function PdfViewerPage() {
             <div className="flex gap-3">
               <button
                 onClick={() => setPdfToDelete(null)}
-                className="flex-1 px-4 py-2 border border-[oklch(0.145_0_0)] rounded-lg font-mono text-xs font-bold uppercase hover:bg-gray-50 transition-colors"
+                className="flex-1 px-4 py-2 border border-gray-1000 rounded-lg font-mono text-xs font-bold uppercase hover:bg-gray-50 transition-colors"
               >
                 Cancel
               </button>
@@ -963,14 +963,14 @@ export default function PdfViewerPage() {
         <div className={`
           ${isMobile ? 'fixed inset-y-0 left-0 z-50 transform transition-transform duration-300' : 'relative w-72'}
           ${isMobile && !isSidebarOpen ? '-translate-x-full' : 'translate-x-0'}
-          w-72 bg-white border-r border-[oklch(0.145_0_0)] flex flex-col
+          w-72 bg-white border-r border-gray-1000 flex flex-col
         `}>
           {/* Header */}
-          <div className="px-4 py-4 border-b border-[oklch(0.145_0_0)] flex items-center justify-between">
+          <div className="px-4 py-4 border-b border-gray-1000 flex items-center justify-between">
             <div>
               <Link
                 href="/tools"
-                className="inline-flex items-center text-[10px] font-mono font-bold uppercase tracking-[0.15em] text-[#ea580c] mb-1 hover:underline"
+                className="inline-flex items-center text-[10px] font-mono font-bold uppercase tracking-[0.15em] text-blue-700 mb-1 hover:underline"
               >
                 <ChevronLeft className="w-3 h-3 mr-1" />
                 Back
@@ -989,12 +989,12 @@ export default function PdfViewerPage() {
           </div>
 
           {/* Tabs */}
-          <div className="flex border-b border-[oklch(0.145_0_0)]">
+          <div className="flex border-b border-gray-1000">
             <button
               onClick={() => setActiveTab('outline')}
               className={`flex-1 px-3 py-3 text-xs font-mono font-bold uppercase flex items-center justify-center gap-2 transition-colors ${
                 activeTab === 'outline' 
-                  ? 'bg-[oklch(0.145_0_0)] text-white' 
+                  ? 'bg-gray-1000 text-white' 
                   : 'hover:bg-gray-50'
               }`}
             >
@@ -1006,7 +1006,7 @@ export default function PdfViewerPage() {
               disabled={!currentPdf}
               className={`flex-1 px-3 py-3 text-xs font-mono font-bold uppercase flex items-center justify-center gap-2 transition-colors ${
                 activeTab === 'thumbnails' 
-                  ? 'bg-[oklch(0.145_0_0)] text-white' 
+                  ? 'bg-gray-1000 text-white' 
                   : 'hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed'
               }`}
             >
@@ -1017,7 +1017,7 @@ export default function PdfViewerPage() {
               onClick={() => setActiveTab('library')}
               className={`flex-1 px-3 py-3 text-xs font-mono font-bold uppercase flex items-center justify-center gap-2 transition-colors ${
                 activeTab === 'library' 
-                  ? 'bg-[oklch(0.145_0_0)] text-white' 
+                  ? 'bg-gray-1000 text-white' 
                   : 'hover:bg-gray-50'
               }`}
             >
@@ -1060,7 +1060,7 @@ export default function PdfViewerPage() {
                         }}
                         className={`border-2 rounded-lg overflow-hidden transition-all ${
                           currentPage === thumb.page
-                            ? 'border-[#ea580c] shadow-md'
+                            ? 'border-blue-700 shadow-md'
                             : 'border-gray-200 hover:border-gray-400'
                         }`}
                       >
@@ -1092,13 +1092,13 @@ export default function PdfViewerPage() {
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={loading}
-                  className="w-full px-4 py-3 border-2 border-dashed border-[oklch(0.145_0_0)] rounded-lg flex items-center justify-center gap-2 hover:bg-orange-50 hover:border-[#ea580c] transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full px-4 py-3 border-2 border-dashed border-gray-1000 rounded-lg flex items-center justify-center gap-2 hover:bg-blue-100 hover:border-blue-700 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {loading ? (
                     <Loader2 className="w-5 h-5 animate-spin" />
                   ) : (
                     <>
-                      <div className="w-8 h-8 rounded-full border border-[oklch(0.145_0_0)] flex items-center justify-center group-hover:border-[#ea580c] group-hover:bg-orange-100 transition-colors">
+                      <div className="w-8 h-8 rounded-full border border-gray-1000 flex items-center justify-center group-hover:border-blue-700 group-hover:bg-blue-100 transition-colors">
                         <Plus className="w-4 h-4" />
                       </div>
                       <span className="text-xs font-mono font-bold">Add PDF</span>
@@ -1125,7 +1125,7 @@ export default function PdfViewerPage() {
                           key={pdf.id}
                           className={`w-full px-3 py-2 flex items-center gap-2 rounded-lg text-left text-xs transition-all group ${
                             currentPdf?.id === pdf.id && currentPdf?.isPublic
-                              ? 'bg-[#ea580c] text-white'
+                              ? 'bg-blue-700 text-white'
                               : 'hover:bg-gray-100'
                           }`}
                         >
@@ -1154,7 +1154,7 @@ export default function PdfViewerPage() {
                           key={pdf.id}
                           className={`w-full px-3 py-2 flex items-center gap-2 rounded-lg text-left text-xs transition-all group ${
                             currentPdf?.id === pdf.id && !currentPdf?.isPublic
-                              ? 'bg-[oklch(0.145_0_0)] text-white'
+                              ? 'bg-gray-1000 text-white'
                               : 'hover:bg-gray-100'
                           }`}
                         >
@@ -1198,12 +1198,12 @@ export default function PdfViewerPage() {
         <div className={`flex-1 flex flex-col min-w-0 ${previewMode === 'eink' ? 'bg-white' : 'bg-[#f5f5f5]'}`}>
           {/* Toolbar */}
           {currentPdf ? (
-            <div className="h-auto min-h-[3.5rem] py-2 bg-white border-b border-[oklch(0.145_0_0)] flex flex-wrap items-center justify-between px-4 z-10 gap-2">
+            <div className="h-auto min-h-[3.5rem] py-2 bg-white border-b border-gray-1000 flex flex-wrap items-center justify-between px-4 z-10 gap-2">
               <div className="flex items-center gap-3 min-w-0">
                 {isMobile && (
                   <button
                     onClick={() => setIsSidebarOpen(true)}
-                    className="p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 transition-colors"
+                    className="p-2 border border-gray-1000 rounded hover:bg-gray-50 transition-colors"
                     aria-label="Open sidebar"
                   >
                     <List className="w-4 h-4" />
@@ -1216,12 +1216,12 @@ export default function PdfViewerPage() {
               
               <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
                 {/* Preview Mode Toggle - Icon only on mobile */}
-                <div className="flex items-center border border-[oklch(0.145_0_0)] rounded overflow-hidden">
+                <div className="flex items-center border border-gray-1000 rounded overflow-hidden">
                   <button
                     onClick={() => setPreviewMode('normal')}
                     className={`px-2 sm:px-3 py-1.5 text-[10px] sm:text-xs font-mono font-bold uppercase flex items-center gap-1.5 transition-colors ${
                       previewMode === 'normal'
-                        ? 'bg-[oklch(0.145_0_0)] text-white'
+                        ? 'bg-gray-1000 text-white'
                         : 'bg-white hover:bg-gray-50'
                     }`}
                     title="Normal Preview"
@@ -1233,7 +1233,7 @@ export default function PdfViewerPage() {
                     onClick={() => setPreviewMode('eink')}
                     className={`px-2 sm:px-3 py-1.5 text-[10px] sm:text-xs font-mono font-bold uppercase flex items-center gap-1.5 transition-colors ${
                       previewMode === 'eink'
-                        ? 'bg-[oklch(0.145_0_0)] text-white'
+                        ? 'bg-gray-1000 text-white'
                         : 'bg-white hover:bg-gray-50'
                     }`}
                     title="E-ink Preview"
@@ -1249,7 +1249,7 @@ export default function PdfViewerPage() {
                   <button
                     onClick={prevPage}
                     disabled={currentPage <= 1}
-                    className="p-1.5 sm:p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    className="p-1.5 sm:p-2 border border-gray-1000 rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                     aria-label="Previous page"
                   >
                     <ChevronLeftIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -1266,7 +1266,7 @@ export default function PdfViewerPage() {
                       onBlur={() => setPageInput('')}
                       placeholder={currentPage.toString()}
                       aria-label="Page number"
-                      className="w-10 sm:w-12 px-1 sm:px-2 py-1 border border-[oklch(0.145_0_0)] rounded text-[10px] sm:text-xs font-mono text-center focus:outline-none focus:border-[#ea580c]"
+                      className="w-10 sm:w-12 px-1 sm:px-2 py-1 border border-gray-1000 rounded text-[10px] sm:text-xs font-mono text-center focus:outline-none focus:border-[#ea580c]"
                     />
                     <span className="text-[10px] sm:text-xs font-mono text-gray-500">/ {totalPages}</span>
                   </div>
@@ -1274,7 +1274,7 @@ export default function PdfViewerPage() {
                   <button
                     onClick={nextPage}
                     disabled={currentPage >= totalPages}
-                    className="p-1.5 sm:p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    className="p-1.5 sm:p-2 border border-gray-1000 rounded hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                     aria-label="Next page"
                   >
                     <ChevronRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -1287,7 +1287,7 @@ export default function PdfViewerPage() {
                   value={scale}
                   onChange={(e) => setScale(Number(e.target.value))}
                   aria-label="Zoom level"
-                  className="px-1 sm:px-2 py-1 border border-[oklch(0.145_0_0)] rounded text-[10px] sm:text-xs font-mono bg-white"
+                  className="px-1 sm:px-2 py-1 border border-gray-1000 rounded text-[10px] sm:text-xs font-mono bg-white"
                 >
                   <option value={0.5}>50%</option>
                   <option value={0.75}>75%</option>
@@ -1300,10 +1300,10 @@ export default function PdfViewerPage() {
               </div>
             </div>
           ) : isMobile ? (
-            <div className="h-14 bg-white border-b border-[oklch(0.145_0_0)] flex items-center px-4 z-10">
+            <div className="h-14 bg-white border-b border-gray-1000 flex items-center px-4 z-10">
               <button
                 onClick={() => setIsSidebarOpen(true)}
-                className="p-2 border border-[oklch(0.145_0_0)] rounded hover:bg-gray-50 transition-colors"
+                className="p-2 border border-gray-1000 rounded hover:bg-gray-50 transition-colors"
                 aria-label="Open sidebar"
               >
                 <List className="w-4 h-4" />
@@ -1377,7 +1377,7 @@ export default function PdfViewerPage() {
                 {loading && (
                   <div className="fixed inset-0 flex items-center justify-center bg-[#f5f5f5]/80 z-50">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 border-2 border-[oklch(0.145_0_0)] border-t-[#ea580c] rounded-full animate-spin" />
+                      <div className="w-8 h-8 border-2 border-gray-1000 border-t-[#ea580c] rounded-full animate-spin" />
                       <span className="font-mono text-xs">Loading PDF...</span>
                     </div>
                   </div>
@@ -1385,8 +1385,8 @@ export default function PdfViewerPage() {
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-center opacity-40">
-                <div className="w-24 h-24 rounded-full border border-dashed border-[oklch(0.145_0_0)] flex items-center justify-center mb-6">
-                  <div className="w-[75%] h-[75%] rounded-full border border-[oklch(0.145_0_0)] flex items-center justify-center">
+                <div className="w-24 h-24 rounded-full border border-dashed border-gray-1000 flex items-center justify-center mb-6">
+                  <div className="w-[75%] h-[75%] rounded-full border border-gray-1000 flex items-center justify-center">
                     <FileText className="w-8 h-8" />
                   </div>
                 </div>

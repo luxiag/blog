@@ -15,21 +15,21 @@ interface AdmonitionConfig {
 const defaultKeywords: AdmonitionType[] = ['note', 'tip', 'warning', 'important', 'info', 'details'];
 
 const admonitionStyles: Record<AdmonitionType, string> = {
-  note:      'border-l-4 border-blue-500 bg-blue-50 dark:bg-blue-900/20',
-  tip:       'border-l-4 border-green-500 bg-green-50 dark:bg-green-900/20',
-  warning:   'border-l-4 border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20',
-  important: 'border-l-4 border-red-500 bg-red-50 dark:bg-red-900/20',
-  info:      'border-l-4 border-cyan-500 bg-cyan-50 dark:bg-cyan-900/20',
-  details:   'border-l-4 border-gray-500 bg-gray-50 dark:bg-gray-900/20',
+  note:      'border border-gray-300',
+  tip:       'border border-gray-300',
+  warning:   'border border-gray-300',
+  important: 'border border-gray-300',
+  info:      'border border-gray-300',
+  details:   'border border-gray-300',
 };
 
 const admonitionTitleColors: Record<AdmonitionType, string> = {
-  note:      'text-blue-700 dark:text-blue-400',
-  tip:       'text-green-700 dark:text-green-400',
-  warning:   'text-yellow-700 dark:text-yellow-400',
-  important: 'text-red-700 dark:text-red-400',
-  info:      'text-cyan-700 dark:text-cyan-400',
-  details:   'text-gray-700 dark:text-gray-400',
+  note:      'text-blue-600 dark:text-blue-400',
+  tip:       'text-green-600 dark:text-green-400',
+  warning:   'text-yellow-600 dark:text-yellow-400',
+  important: 'text-red-600 dark:text-red-400',
+  info:      'text-cyan-600 dark:text-cyan-400',
+  details:   'text-gray-600 dark:text-gray-400',
 };
 
 const admonitionTitles: Record<AdmonitionType, string> = {
@@ -306,7 +306,7 @@ function plugin(config: AdmonitionConfig = {}) {
         }
       } else if (format === 'html') {
         // ── react-markdown path ────────────────────────────────────────────────
-        const outerClass = `${styleClass} rounded-r p-4`;
+        const outerClass = `${styleClass} rounded p-4`;
         const titleClass = `${titleColor}`;
         replacementNodes = [
           {
@@ -325,7 +325,7 @@ function plugin(config: AdmonitionConfig = {}) {
             {
               type: 'mdxJsxAttribute',
               name: 'className',
-              value: `${styleClass} rounded-r p-4`,
+              value: `${styleClass} rounded p-4`,
             },
           ],
           children: [

@@ -219,7 +219,7 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
                       <Bot size={20} className="text-neutral-500" />
                     </div>
                     <p className="text-neutral-500 mb-1">你好！我是文章AI助手</p>
-                    <p className="text-sm text-orange-600">有什么关于这篇文章的问题吗？</p>
+                    <p className="text-sm text-blue-700">有什么关于这篇文章的问题吗？</p>
                   </div>
                 ) : (
                   messages.map((message) => (
@@ -244,12 +244,12 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
                                 {message.content}
                                 {isLoading && message.id === messages[messages.length - 1]?.id && (
                                   <span
-                                    className="inline-block w-2 h-4 bg-orange-600 ml-0.5 animate-bounce align-text-bottom"
+                                    className="inline-block w-2 h-4 bg-blue-700 ml-0.5 animate-bounce align-text-bottom"
                                   />
                                 )}
                               </div>
                             )}
-                            <p className="text-xs mt-2 text-orange-600">
+                            <p className="text-xs mt-2 text-blue-700">
                               {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </p>
                           </div>
@@ -286,7 +286,7 @@ export default function AIChatBox({ articleTitle, articleContent }: AIChatBoxPro
                     className={`px-4 py-2.5 rounded-lg border transition-all cursor-pointer ${
                       isLoading || !input.trim()
                         ? 'bg-white border-neutral-200 text-neutral-400 cursor-not-allowed opacity-50'
-                        : 'bg-orange-600 border-orange-600 text-white cursor-pointer hover:opacity-90'
+                        : 'bg-blue-700 border-blue-700 text-white cursor-pointer hover:opacity-90'
                     }`}
                   >
                     <Send size={16} />

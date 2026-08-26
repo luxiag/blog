@@ -38,6 +38,7 @@
     "cesium": "^1.137.0",
     "diff": "^8.0.3",
     "fabric": "^7.1.0",
+    "geist": "^1.7.2",
     "gray-matter": "^4.0.3",
     "hastscript": "^9.0.1",
     "highlight.js": "^11.11.1",

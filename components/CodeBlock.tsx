@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { createLowlight } from 'lowlight';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -33,7 +33,6 @@ const MermaidExcalidraw = dynamic(
     loading: () => <p>Loading Diagram Engine...</p>
   }
 );
-const MAX_CODE_LINES = 15;
 
 const lowlight = createLowlight({
   javascript, typescript, python, css, scss, xml, json, yaml,
@@ -92,89 +91,58 @@ export default function CodeBlock({ className, codeContent }: {
   className?: string;
   codeContent?: string;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
   const [showMermaidPreview, setShowMermaidPreview] = useState(true);
 
   const codeString = codeContent || '';
-  const lines = codeString.split('\n');
-  const showGradient = lines.length > MAX_CODE_LINES && !isExpanded;
-
-  const displayLines = isExpanded ? lines : lines.slice(0, MAX_CODE_LINES);
-  const displayContent = displayLines.join('\n');
-
   const language = resolveLanguage(className);
   const isMermaid = language === 'mermaid';
 
-  const highlightedCode = useMemo(() => highlightCode(language, displayContent), [language, displayContent]);
-
-  const toggleExpand = useCallback(() => {
-    setIsExpanded(prev => !prev);
-  }, []);
+  const highlightedCode = useMemo(() => highlightCode(language, codeString), [language, codeString]);
 
   const toggleMermaidView = useCallback(() => {
     setShowMermaidPreview(prev => !prev);
   }, []);
 
   return (
-    <div className="relative my-4">
+    <div className="my-4 rounded-md not-prose" data-geist-code-block="">
       {isMermaid ? (
         <>
           {showMermaidPreview ? (
-            <div className="relative overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+            <div className="relative overflow-hidden rounded-md border border-gray-200 dark:border-gray-200 bg-background">
               <button
                 onClick={toggleMermaidView}
-                className="absolute top-3 right-3 px-3 py-1.5 text-xs font-medium bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 rounded-md shadow-sm hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors z-10"
+                className="absolute top-3 right-3 px-3 py-1.5 text-xs font-medium bg-gray-1000 dark:bg-gray-1000 text-background rounded-md hover:opacity-90 transition-colors z-10"
               >
                 查看代码
               </button>
               <MermaidExcalidraw code={codeString} />
             </div>
           ) : (
-            <div className={`relative overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 ${!isExpanded ? 'max-h-[400px]' : ''}`}>
+            <div className="relative rounded-md border border-gray-200 dark:border-gray-200 bg-background overflow-y-auto max-h-[400px]">
               <button
                 onClick={toggleMermaidView}
-                className="absolute top-3 right-3 px-3 py-1.5 text-xs font-medium bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 rounded-md shadow-sm hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors z-10"
+                className="sticky top-3 float-right mr-3 mb-2 px-3 py-1.5 text-xs font-medium bg-gray-1000 dark:bg-gray-1000 text-background rounded-md hover:opacity-90 transition-colors z-10"
               >
                 查看预览
               </button>
-              <pre
-                className="p-4 overflow-x-auto font-mono text-sm leading-6 text-neutral-800 dark:text-neutral-200 m-0"
-              >
+              <pre className="p-5 overflow-x-auto m-0">
                 <code
                   className={className}
-                  dangerouslySetInnerHTML={{ __html: highlightedCode || displayContent }}
+                  dangerouslySetInnerHTML={{ __html: highlightedCode || codeString }}
                 />
               </pre>
-              {showGradient && (
-                <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-white dark:from-neutral-900 to-transparent pointer-events-none" />
-              )}
             </div>
           )}
         </>
       ) : (
-        <>
-          <div className={`overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 ${!isExpanded ? 'max-h-[400px]' : ''}`}>
-            <pre
-              className="p-4 overflow-x-auto font-mono text-sm leading-6 text-neutral-800 dark:text-neutral-200 m-0"
-            >
+          <div className="border border-gray-200 dark:border-gray-200 bg-background rounded-md overflow-y-auto max-h-[400px]">
+            <pre className="p-5 overflow-x-auto m-0">
               <code
                 className={className}
-                dangerouslySetInnerHTML={{ __html: highlightedCode || displayContent }}
+                dangerouslySetInnerHTML={{ __html: highlightedCode || codeString }}
               />
             </pre>
-            {showGradient && (
-              <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-white dark:from-neutral-900 to-transparent pointer-events-none" />
-            )}
           </div>
-          {lines.length > MAX_CODE_LINES && (
-            <button
-              onClick={toggleExpand}
-              className="absolute bottom-3 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 text-xs font-mono rounded-full shadow-lg hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors cursor-pointer z-10"
-            >
-              {isExpanded ? '收起代码' : `展开全部 (${lines.length} 行)`}
-            </button>
-          )}
-        </>
       )}
     </div>
   );

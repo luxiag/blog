@@ -63,7 +63,7 @@ export default function Steps({ children }: StepsProps) {
           className="relative rounded-xl border border-neutral-200/80 dark:border-neutral-700/60 overflow-hidden bg-white dark:bg-neutral-900/50"
         >
           <div className="flex items-center gap-3 px-4 py-3 bg-neutral-50/80 dark:bg-neutral-800/40 border-b border-neutral-200/60 dark:border-neutral-700/40">
-            <span className="shrink-0 w-7 h-7 rounded-full bg-[#ea580c] text-white flex items-center justify-center text-[0.6875rem] font-mono font-bold">
+            <span className="shrink-0 w-7 h-7 rounded-full bg-blue-700 text-white flex items-center justify-center text-[0.6875rem] font-mono font-bold">
               {step.index}
             </span>
             <span className="text-[0.9375rem] font-semibold text-neutral-800 dark:text-neutral-200 font-sans">

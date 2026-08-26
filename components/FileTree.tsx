@@ -28,7 +28,7 @@ function FolderItem({ item, depth = 0 }: { item: FileTreeItem; depth?: number })
           className={`w-3 h-3 text-neutral-400 dark:text-neutral-500 transition-transform duration-150 shrink-0 ${isOpen ? 'rotate-90' : ''}`}
         />
         {isOpen ? (
-          <FolderOpen className="w-3.5 h-3.5 text-[#ea580c]/70 shrink-0" />
+          <FolderOpen className="w-3.5 h-3.5 text-blue-700/70 shrink-0" />
         ) : (
           <Folder className="w-3.5 h-3.5 text-neutral-400 dark:text-neutral-500 shrink-0" />
         )}

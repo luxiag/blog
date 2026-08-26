@@ -1,9 +1,8 @@
 
 import { notFound } from 'next/navigation';
-import { getPostData, getAllPostSlugs, extractToc, getSeriesPosts } from '@/lib/markdown';
+import { getPostData, getAllPostSlugs, extractToc, getSeriesPosts, getAllCategoriesWithPosts } from '@/lib/markdown';
 import MDXComponents from '@/components/MDXComponents';
-import TableOfContents from '@/components/TableOfContents';
-import PostContentWrapper from '@/components/PostContentWrapper';
+import DocLayout from '@/components/DocLayout';
 import Link from 'next/link';
 import Image from 'next/image';
 import { logger } from '@/lib/logger';
@@ -54,42 +53,38 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
 
   const toc = extractToc(post.rawContent || post.content);
   const seriesPosts = post.category ? getSeriesPosts(post.category) : undefined;
+  const allCategoriesWithPosts = getAllCategoriesWithPosts();
   const currentSlug = slugParts.join('/');
 
   return (
-    <PostContentWrapper toc={toc} seriesPosts={seriesPosts} currentSlug={currentSlug}>
-      <div className="min-h-screen bg-[#f5f5f5] font-sans text-[oklch(0.145_0_0)] selection:bg-orange-500/20">
+    <DocLayout toc={toc} seriesPosts={seriesPosts} currentSlug={currentSlug} category={post.category} allCategoriesWithPosts={allCategoriesWithPosts}>
+      <div className="font-sans text-gray-900 dark:text-gray-900 selection:bg-blue-600/20">
         <PageTitle title={post.title} />
-        <TableOfContents toc={toc} seriesPosts={seriesPosts} currentSlug={currentSlug} />
 
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-12">
-        {/* Nav */}
-        <nav className="mb-8">
-          <Link
-            href="/posts"
-            className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-[#ea580c] hover:opacity-70"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back
+        {/* Breadcrumb */}
+        <nav className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-500 mb-8">
+          <Link href="/posts" className="hover:text-gray-1000 dark:hover:text-gray-1000 transition-colors">
+            Posts
           </Link>
+          <span className="text-gray-300 dark:text-gray-300">›</span>
+          <span className="text-gray-1000 dark:text-gray-1000">{post.category}</span>
         </nav>
 
         {/* Article */}
         <article>
           {/* Header */}
-          <div className="py-8 border-b border-[oklch(0.145_0_0)]">
-
-            <h1 className="text-3xl md:text-4xl font-bold tracking-tight leading-tight mb-6">
+          <div className="mb-10">
+            <h1 className="text-[2.25rem] font-bold tracking-tight leading-[1.2] mb-4 text-gray-1000 dark:text-gray-1000">
               {post.title}
             </h1>
-            <div className="text-xs font-mono opacity-50">
+            <div className="text-sm text-gray-900 dark:text-gray-900 mt-2 mb-6 font-sans">
               {post.date} · {post.readingTime || '---'} · {post.category}
             </div>
           </div>
 
           {/* Cover */}
           {post.coverImage && (
-            <div className="border-b border-[oklch(0.145_0_0)]">
+            <div className="mb-8 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-200">
               <div className="relative aspect-video w-full">
                 <Image
                   src={post.coverImage}
@@ -102,37 +97,35 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
           )}
 
           {/* Content */}
-          <div className="py-8">
-            <div className="prose prose-neutral max-w-none prose-headings:font-bold prose-blockquote:border-l-[#ea580c] prose-a:text-[#ea580c] no-prose-pre-border">
-              <MDXComponents content={post.content} isMdxCompiled={post.isMdxCompiled} category={post.category} />
-            </div>
-
-            {/* Tags */}
-            {post.tags && post.tags.length > 0 && (
-              <div className="mt-12 pt-8 border-t border-[oklch(0.145_0_0)]">
-                <div className="text-[10px] font-mono uppercase tracking-widest opacity-40 mb-4">
-                  Tags
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {post.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="px-3 py-1 text-xs font-mono border border-[oklch(0.145_0_0)] rounded hover:bg-[oklch(0.145_0_0)] hover:text-white transition-colors"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
+          <div className="no-prose-pre-border">
+            <MDXComponents content={post.content} isMdxCompiled={post.isMdxCompiled} category={post.category} />
           </div>
+
+          {/* Tags */}
+          {post.tags && post.tags.length > 0 && (
+            <div className="mt-12 pt-8 border-t border-gray-200 dark:border-gray-200">
+              <div className="text-xs font-medium text-gray-500 dark:text-gray-500 uppercase tracking-wider mb-4">
+                Tags
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {post.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-700 bg-gray-100 dark:bg-gray-100 border border-gray-200 dark:border-gray-200 rounded-md"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </article>
 
         {/* Footer Nav */}
-        <nav className="mt-8 flex items-center justify-between">
+        <nav className="mt-12 pt-6 border-t border-gray-200 dark:border-gray-200 flex items-center justify-between">
           <Link
             href="/posts"
-            className="inline-flex items-center gap-2 px-4 py-2 border border-[oklch(0.145_0_0)] rounded text-xs font-mono uppercase tracking-widest hover:bg-[#f5f5f5] transition-colors"
+            className="inline-flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-700 hover:text-gray-1000 dark:hover:text-gray-1000 transition-colors"
           >
             <ChevronLeft className="w-4 h-4" />
             Back to Archive
@@ -141,7 +134,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
           {post.nextPost && (
             <Link
               href={`/posts/${post.nextPost.slug}`}
-              className="inline-flex items-center gap-2 px-4 py-2 border border-[oklch(0.145_0_0)] rounded text-xs font-mono uppercase tracking-widest hover:bg-[#f5f5f5] transition-colors"
+              className="inline-flex items-center gap-1.5 text-sm text-blue-700 dark:text-blue-900 hover:text-blue-900 dark:hover:text-blue-700 transition-colors"
             >
               {post.nextPost.title}
               <ChevronRight className="w-4 h-4" />
@@ -149,7 +142,6 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
           )}
         </nav>
       </div>
-    </div>
-    </PostContentWrapper>
+    </DocLayout>
   );
 }

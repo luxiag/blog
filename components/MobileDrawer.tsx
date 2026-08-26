@@ -28,7 +28,6 @@ export default function MobileDrawer({ isOpen, onClose, title, children }: Mobil
 
   return (
     <>
-      {/* Backdrop */}
       <div
         className={`fixed inset-0 bg-black/50 z-40 transition-opacity duration-300 md:hidden ${
           isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
@@ -37,21 +36,19 @@ export default function MobileDrawer({ isOpen, onClose, title, children }: Mobil
         aria-hidden="true"
       />
 
-      {/* Drawer */}
       <div
-        className={`fixed top-0 left-0 h-full w-72 max-w-[85vw] bg-white dark:bg-neutral-900 z-50 transform transition-transform duration-300 ease-in-out md:hidden shadow-xl ${
+        className={`fixed top-0 left-0 h-full w-72 max-w-[85vw] bg-background z-50 transform transition-transform duration-300 ease-in-out md:hidden shadow-xl ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        {/* Header - only show if title is provided */}
         {title && (
-          <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
-            <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-200">
+            <h2 className="text-sm font-semibold text-gray-1000 dark:text-gray-1000">
               {title}
             </h2>
             <button
               onClick={onClose}
-              className="p-1 text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors"
+              className="p-1 text-gray-500 dark:text-gray-500 hover:text-gray-1000 dark:hover:text-gray-1000 transition-colors"
               aria-label="关闭菜单"
             >
               <X size={20} />
@@ -59,13 +56,11 @@ export default function MobileDrawer({ isOpen, onClose, title, children }: Mobil
           </div>
         )}
 
-        {/* Content */}
         <div className={`overflow-y-auto ${title ? 'h-[calc(100vh-53px)]' : 'h-full relative'}`}>
-          {/* Close button when no title */}
           {!title && (
             <button
               onClick={onClose}
-              className="sticky top-2 float-right mr-2 p-2 text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 bg-white dark:bg-neutral-800 rounded-full shadow-md transition-colors z-10"
+              className="sticky top-2 float-right mr-2 p-2 text-gray-500 dark:text-gray-500 hover:text-gray-1000 dark:hover:text-gray-1000 bg-background rounded-full shadow-md transition-colors z-10"
               aria-label="关闭菜单"
             >
               <X size={16} />

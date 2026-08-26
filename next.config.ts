@@ -1,7 +1,5 @@
 import type { NextConfig } from "next";
 
-// Force rebuild for CSS cache clearing
-
 const nextConfig: NextConfig = {
   output: 'export',
   basePath: '/blog',
@@ -16,6 +14,14 @@ const nextConfig: NextConfig = {
         pathname: '/api/posts/**',
       },
     ],
+  },
+  turbopack: {
+    resolveAlias: {
+      '@mermaid-js/parser': { browser: './empty-module.js' },
+      cytoscape: { browser: './empty-module.js' },
+      'cytoscape-fcose': { browser: './empty-module.js' },
+      'cytoscape-cose-bilkent': { browser: './empty-module.js' },
+    },
   },
   async headers() {
     return [

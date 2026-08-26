@@ -80,7 +80,7 @@ export default function CodeRunner({ code, language = 'javascript' }: { code: st
           className={`px-3 py-1 text-xs font-mono font-medium rounded-md transition-colors cursor-pointer ${
             isRunning
               ? 'bg-neutral-200 dark:bg-neutral-700 text-neutral-400 dark:text-neutral-500 cursor-not-allowed'
-              : 'bg-[#ea580c] text-white hover:bg-[#c2410c]'
+              : 'bg-blue-700 text-white hover:bg-blue-900'
           }`}
         >
           {isRunning ? '运行中...' : '运行'}

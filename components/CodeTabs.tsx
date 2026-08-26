@@ -20,13 +20,13 @@ export default function CodeTabs({ items, children }: CodeTabsProps) {
             onClick={() => setActiveIndex(i)}
             className={`px-4 py-2 text-xs font-mono uppercase tracking-wider transition-colors relative ${
               i === activeIndex
-                ? 'text-[#ea580c] dark:text-[#ea580c]'
+                ? 'text-blue-700 dark:text-blue-700'
                 : 'text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-400'
             }`}
           >
             {item}
             {i === activeIndex && (
-              <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#ea580c]" />
+              <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-700" />
             )}
           </button>
         ))}

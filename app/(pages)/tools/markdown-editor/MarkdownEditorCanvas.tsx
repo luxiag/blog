@@ -230,7 +230,7 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:0.
 
                 {/* Preview */}
                 {(viewMode === 'both' || viewMode === 'preview') && (
-                    <div ref={previewRef} className="flex-1 overflow-auto min-w-0 bg-white mdx-content" style={{ padding: '24px 32px' }}>
+                    <div ref={previewRef} className="flex-1 overflow-auto min-w-0 bg-white prose" style={{ padding: '24px 32px' }}>
                         <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
                             h1: ({ children, ...props }: any) => <h1 data-heading={String(children).toLowerCase().replace(/[^\w\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '')} {...props}>{children}</h1>,
                             h2: ({ children, ...props }: any) => <h2 data-heading={String(children).toLowerCase().replace(/[^\w\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '')} {...props}>{children}</h2>,

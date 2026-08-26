@@ -59,19 +59,19 @@ function ShaderPlane({ fragmentShader, vertexShader = DEFAULT_VERTEX_SHADER }: {
 
 const cssVariableTheme = {
   plain: {
-    color: 'var(--hljs-fg)',
-    backgroundColor: 'var(--hljs-bg)',
+    color: 'var(--color-gray-1000)',
+    backgroundColor: 'transparent',
   },
   styles: [
-    { types: ['comment', 'prolog', 'doctype', 'cdata'], style: { color: 'var(--hljs-comment)' } },
-    { types: ['punctuation'], style: { color: 'var(--hljs-fg)', opacity: 0.7 } },
+    { types: ['comment', 'prolog', 'doctype', 'cdata'], style: { color: 'var(--shiki-token-comment)' } },
+    { types: ['punctuation'], style: { color: 'var(--shiki-token-punctuation)', opacity: 0.7 } },
     { types: ['namespace'], style: { opacity: 0.7 } },
-    { types: ['property', 'tag', 'boolean', 'number', 'constant', 'symbol', 'deleted'], style: { color: 'var(--hljs-number)' } },
-    { types: ['selector', 'attr-name', 'string', 'char', 'builtin', 'inserted'], style: { color: 'var(--hljs-string)' } },
-    { types: ['operator', 'entity', 'url', 'variable'], style: { color: 'var(--hljs-variable)' } },
-    { types: ['atrule', 'attr-value', 'keyword'], style: { color: 'var(--hljs-keyword)' } },
-    { types: ['function', 'class-name'], style: { color: 'var(--hljs-function)' } },
-    { types: ['regex', 'important'], style: { color: 'var(--hljs-regexp)' } },
+    { types: ['property', 'tag', 'boolean', 'number', 'constant', 'symbol', 'deleted'], style: { color: 'var(--shiki-token-constant)' } },
+    { types: ['selector', 'attr-name', 'string', 'char', 'builtin', 'inserted'], style: { color: 'var(--shiki-token-string-expression)' } },
+    { types: ['operator', 'entity', 'url', 'variable'], style: { color: 'var(--shiki-token-punctuation)' } },
+    { types: ['atrule', 'attr-value', 'keyword'], style: { color: 'var(--shiki-token-keyword)' } },
+    { types: ['function', 'class-name'], style: { color: 'var(--shiki-token-function)' } },
+    { types: ['regex', 'important'], style: { color: 'var(--shiki-token-keyword)' } },
   ],
 };
 export function ShaderEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -156,7 +156,7 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
       <div className="flex justify-between items-center px-4 py-2 bg-neutral-100 dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
         <span className="font-mono text-sm font-semibold text-neutral-700 dark:text-neutral-300 flex items-center gap-2">
           {title}
-          {editable && <span className="text-xs px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">Editable</span>}
+          {editable && <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-900 dark:bg-blue-900/30 dark:text-blue-300">Editable</span>}
         </span>
 
         <div className="flex gap-2">
@@ -170,7 +170,7 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
           {editable && (
             <button
               onClick={handleRun}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-orange-600 text-white hover:bg-orange-700 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-blue-700 text-white hover:bg-blue-900 transition-colors"
             >
               <Play size={12} fill="currentColor" /> Run Code
             </button>
@@ -178,9 +178,9 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
         </div>
       </div>
 
-      <div className="grid md:grid-cols-2 grid-cols-1 ">
+      <div className="grid md:grid-cols-2 grid-cols-1 h-[300px]">
         {/* Code Editor Area */}
-        <div className="relative group min-h-[300px] border-b md:border-b-0 md:border-r border-neutral-200 dark:border-neutral-700">
+        <div className="relative group h-full border-b md:border-b-0 md:border-r border-neutral-200 dark:border-neutral-700">
           {editable ? (
             <ShaderEditor
               value={code}
@@ -188,7 +188,7 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
 
             />
           ) : (
-            <pre className="w-full h-full min-h-[300px] p-4 m-0 overflow-x-auto font-mono text-sm hljs" style={{ background: 'var(--hljs-bg)', color: 'var(--hljs-fg)' }}>
+            <pre className="w-full h-full min-h-[300px] p-4 m-0 overflow-x-auto font-mono text-sm hljs" style={{ background: 'transparent', color: 'var(--color-gray-1000)' }}>
               <code dangerouslySetInnerHTML={{ __html: highlightGlsl(code) }} />
             </pre>
           )}
@@ -202,7 +202,7 @@ export default function ShaderPreview({ code: initialCode, vertexCode, title = "
         </div>
 
         {/* Preview Area */}
-        <div className="relative h-[300px] bg-black w-full overflow-hidden">
+        <div className="relative min-h-[300px] bg-black w-full overflow-hidden">
           {/* Error Overlay */}
           {error && (
             <div className="absolute inset-0 z-10 bg-black/80 text-red-400 p-4 font-mono text-xs overflow-auto">

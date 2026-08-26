@@ -301,6 +301,7 @@ export interface SeriesPost {
   slug: string;
   title: string;
   date: string;
+  description?: string;
   nextPostSlug?: string;
 }
 
@@ -338,6 +339,56 @@ export function extractToc(content: string): TocItem[] {
   return toc;
 }
 
+export interface CategoryWithPosts {
+  category: string;
+  posts: SeriesPost[];
+}
+
+export function getAllCategoriesWithPosts(): CategoryWithPosts[] {
+  const postFiles = getPostFiles(postsDirectory);
+
+  const categoryMap = new Map<string, SeriesPost[]>();
+
+  postFiles.forEach((postFile) => {
+    if (!postFile.category) return;
+
+    try {
+      const fileContents = fs.readFileSync(postFile.filePath, 'utf8');
+      const { data } = matter(fileContents);
+      const frontMatter = data as PostFrontMatter;
+
+      if (!frontMatter.title || !frontMatter.date || frontMatter.hidden === true) return;
+
+      const post: SeriesPost = {
+        slug: postFile.slug,
+        title: frontMatter.title,
+        date: typeof frontMatter.date === 'object' && frontMatter.date !== null
+          ? new Date(frontMatter.date as unknown as string).toISOString().split('T')[0]
+          : (frontMatter.date || new Date().toISOString().split('T')[0]),
+        description: frontMatter.description || '',
+        nextPostSlug: frontMatter.nextPost,
+      };
+
+      if (!categoryMap.has(postFile.category)) {
+        categoryMap.set(postFile.category, []);
+      }
+      categoryMap.get(postFile.category)!.push(post);
+    } catch {
+      // skip
+    }
+  });
+
+  const categories: CategoryWithPosts[] = [];
+  categoryMap.forEach((posts, category) => {
+    const ordered = orderSeriesPosts(posts);
+    categories.push({ category, posts: ordered });
+  });
+
+  categories.sort((a, b) => a.category.localeCompare(b.category));
+
+  return categories;
+}
+
 export function getSeriesPosts(category: string): SeriesPost[] {
   const postFiles = getPostFiles(postsDirectory);
 
@@ -359,6 +410,7 @@ export function getSeriesPosts(category: string): SeriesPost[] {
           date: typeof frontMatter.date === 'object' && frontMatter.date !== null
             ? new Date(frontMatter.date as unknown as string).toISOString().split('T')[0]
             : (frontMatter.date || new Date().toISOString().split('T')[0]),
+          description: frontMatter.description || '',
           nextPostSlug: frontMatter.nextPost,
         } as SeriesPost;
       } catch {

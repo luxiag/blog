@@ -121,7 +121,7 @@ export default function ProgressIndicator({ current, items, basePath = '/posts' 
                   relative w-32 h-20 rounded-xl overflow-hidden cursor-pointer
                   transition-all duration-300 group
                   ${isCurrent 
-                    ? 'bg-[#ea580c]' 
+                    ? 'bg-blue-700' 
                     : 'bg-white dark:bg-neutral-700 hover:scale-105'
                   }
                 `}
@@ -141,7 +141,7 @@ export default function ProgressIndicator({ current, items, basePath = '/posts' 
                     text-[10px] font-semibold mb-1
                     ${isCurrent 
                       ? 'text-white/80' 
-                      : 'text-neutral-400 dark:text-neutral-500 group-hover:text-[#ea580c]'
+                      : 'text-neutral-400 dark:text-neutral-500 group-hover:text-blue-700'
                     }
                   `}>
                     {card.index + 1}
@@ -151,7 +151,7 @@ export default function ProgressIndicator({ current, items, basePath = '/posts' 
                     text-[9px] font-medium line-clamp-3 leading-tight
                     ${isCurrent 
                       ? 'text-white' 
-                      : 'text-neutral-600 dark:text-neutral-300 group-hover:text-[#ea580c]'
+                      : 'text-neutral-600 dark:text-neutral-300 group-hover:text-blue-700'
                     }
                   `}>
                     {card.item.title}
@@ -180,13 +180,13 @@ export default function ProgressIndicator({ current, items, basePath = '/posts' 
 
       <div className="flex items-center justify-center gap-3 mt-2">
         {clampedIndex > 0 && (
-          <Link href={`${basePath}/${items[clampedIndex - 1].slug}`} className="no-underline text-[9px] text-neutral-400 dark:text-neutral-500 hover:text-[#ea580c] transition-colors">
+          <Link href={`${basePath}/${items[clampedIndex - 1].slug}`} className="no-underline text-[9px] text-neutral-400 dark:text-neutral-500 hover:text-blue-700 transition-colors">
             ← {items[clampedIndex - 1].title}
           </Link>
         )}
         <span className="text-[9px] text-neutral-300 dark:text-neutral-600">|</span>
         {clampedIndex < total - 1 && (
-          <Link href={`${basePath}/${items[clampedIndex + 1].slug}`} className="no-underline text-[9px] text-neutral-400 dark:text-neutral-500 hover:text-[#ea580c] transition-colors">
+          <Link href={`${basePath}/${items[clampedIndex + 1].slug}`} className="no-underline text-[9px] text-neutral-400 dark:text-neutral-500 hover:text-blue-700 transition-colors">
             {items[clampedIndex + 1].title} →
           </Link>
         )}

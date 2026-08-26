@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { TocItem, SeriesPost } from '@/lib/markdown';
 import MobileDrawer from './MobileDrawer';
-import { ChevronRight, List, BookOpen } from 'lucide-react';
+import { List, BookOpen } from 'lucide-react';
 import Link from 'next/link';
 
 interface TocDrawerProps {
@@ -37,15 +37,14 @@ export default function TocDrawer({ isOpen, onClose, toc, seriesPosts, currentSl
 
   return (
     <MobileDrawer isOpen={isOpen} onClose={onClose}>
-      {/* Tabs */}
       {showSeries && (
-        <div className="flex border-b border-neutral-200 dark:border-neutral-800">
+        <div className="flex border-b border-gray-200 dark:border-gray-200">
           <button
             onClick={() => setActiveTab('toc')}
             className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-3 text-xs font-medium transition-colors ${
               activeTab === 'toc'
-                ? 'text-orange-600 dark:text-orange-400 border-b-2 border-orange-500'
-                : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+                ? 'text-blue-700 dark:text-blue-900 border-b-2 border-blue-700 dark:border-blue-900'
+                : 'text-gray-500 dark:text-gray-500 hover:text-gray-1000 dark:hover:text-gray-1000'
             }`}
           >
             <List size={14} />
@@ -55,8 +54,8 @@ export default function TocDrawer({ isOpen, onClose, toc, seriesPosts, currentSl
             onClick={() => setActiveTab('series')}
             className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-3 text-xs font-medium transition-colors ${
               activeTab === 'series'
-                ? 'text-orange-600 dark:text-orange-400 border-b-2 border-orange-500'
-                : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+                ? 'text-blue-700 dark:text-blue-900 border-b-2 border-blue-700 dark:border-blue-900'
+                : 'text-gray-500 dark:text-gray-500 hover:text-gray-1000 dark:hover:text-gray-1000'
             }`}
           >
             <BookOpen size={14} />
@@ -65,7 +64,6 @@ export default function TocDrawer({ isOpen, onClose, toc, seriesPosts, currentSl
         </div>
       )}
 
-      {/* TOC Content */}
       {activeTab === 'toc' && (
         <nav className="py-2">
           {toc.map((item) => (
@@ -74,16 +72,14 @@ export default function TocDrawer({ isOpen, onClose, toc, seriesPosts, currentSl
               onClick={() => scrollToHeading(item.id)}
               className={`w-full flex items-center text-left px-4 py-2.5 transition-colors ${
                 item.level === 3 ? 'pl-8' : ''
-              } text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800`}
+              } text-gray-700 dark:text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-100`}
             >
-              <ChevronRight size={12} className="mr-2 flex-shrink-0 text-neutral-400" />
               <span className="text-sm truncate">{item.text}</span>
             </button>
           ))}
         </nav>
       )}
 
-      {/* Series Content */}
       {activeTab === 'series' && showSeries && (
         <nav className="py-2">
           {seriesPosts.map((post, index) => {
@@ -95,12 +91,12 @@ export default function TocDrawer({ isOpen, onClose, toc, seriesPosts, currentSl
                 onClick={onClose}
                 className={`flex items-center w-full text-left px-4 py-2.5 transition-colors ${
                   isCurrent
-                    ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400'
-                    : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                    ? 'bg-blue-100 dark:bg-blue-100 text-blue-900 dark:text-blue-900'
+                    : 'text-gray-700 dark:text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-100'
                 }`}
               >
                 <span className={`mr-3 flex-shrink-0 text-xs font-mono w-5 text-right ${
-                  isCurrent ? 'text-orange-500' : 'text-neutral-400'
+                  isCurrent ? 'text-blue-700 dark:text-blue-900' : 'text-gray-500 dark:text-gray-500'
                 }`}>
                   {index + 1}
                 </span>
