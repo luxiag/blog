@@ -77,21 +77,15 @@ export default function Header({ children }: { children?: React.ReactNode }) {
         isOnPostPage,
       }}
     >
-      <header className="sticky top-0 z-50 bg-background dark:bg-black border-b border-gray-200 dark:border-gray-200">
-        <div className="max-w-[1400px] mx-auto px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
+      <header className="sticky top-0 z-50 bg-background/80 dark:bg-black/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800">
+        <div className="max-w-[var(--ds-page-width)] mx-auto px-6 lg:px-8">
+          <div className="flex justify-between items-center h-14">
             <div className="flex items-center gap-6">
-              <Link href="/" className="text-[15px] font-bold text-gray-1000 dark:text-gray-1000 tracking-[-0.02em]" aria-label="Home">
-                Blog
-              </Link>
-              <nav className="hidden md:flex items-center gap-[24px]">
-                <Link href="/posts" className="text-[14px] text-gray-600 dark:text-gray-600 hover:text-gray-1000 dark:hover:text-gray-1000 transition-colors">
+              <nav className="flex items-center gap-1">
+                <Link href="/" className={`px-3 py-1.5 text-sm transition-colors rounded-md ${pathname === '/' ? 'text-gray-1000 dark:text-gray-1000 font-medium' : 'text-gray-600 dark:text-gray-400 hover:text-gray-1000 dark:hover:text-gray-1000 hover:bg-gray-100 dark:hover:bg-gray-800'}`} aria-label="Home">
                   Post
                 </Link>
-                <Link href="/todos" className="text-[14px] text-gray-600 dark:text-gray-600 hover:text-gray-1000 dark:hover:text-gray-1000 transition-colors">
-                  Todo
-                </Link>
-                <Link href="/tools" className="text-[14px] text-gray-600 dark:text-gray-600 hover:text-gray-1000 dark:hover:text-gray-1000 transition-colors">
+                <Link href="/tools" className={`px-3 py-1.5 text-sm transition-colors rounded-md ${pathname.startsWith('/tools') ? 'text-gray-1000 dark:text-gray-1000 font-medium' : 'text-gray-600 dark:text-gray-400 hover:text-gray-1000 dark:hover:text-gray-1000 hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
                   Tools
                 </Link>
               </nav>
@@ -105,7 +99,7 @@ export default function Header({ children }: { children?: React.ReactNode }) {
               <AlgoliaSearch />
               <button
                 type="button"
-                className="p-1.5 text-gray-600 dark:text-gray-600 hover:text-gray-1000 dark:hover:text-gray-1000 transition-colors"
+                className="p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-1000 dark:hover:text-gray-1000 transition-colors"
                 onClick={toggleMenu}
                 aria-label="Toggle menu"
               >
@@ -119,22 +113,16 @@ export default function Header({ children }: { children?: React.ReactNode }) {
               isMenuOpen ? 'max-h-64 opacity-100 pb-4' : 'max-h-0 opacity-0'
             }`}
           >
-            <nav className="flex flex-col gap-0 pt-2 border-t border-gray-200 dark:border-gray-200">
+            <nav className="flex flex-col gap-0 pt-2 border-t border-gray-200 dark:border-gray-800">
               <Link
-                href="/posts"
-                className="px-3 py-2 text-[14px] text-gray-600 dark:text-gray-600 hover:text-gray-1000 dark:hover:text-gray-1000 hover:bg-gray-100 dark:hover:bg-gray-100 rounded-md transition-colors"
+                href="/"
+                className="px-3 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-1000 dark:hover:text-gray-1000 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors"
               >
                 Post
               </Link>
               <Link
-                href="/todos"
-                className="px-3 py-2 text-[14px] text-gray-600 dark:text-gray-600 hover:text-gray-1000 dark:hover:text-gray-1000 hover:bg-gray-100 dark:hover:bg-gray-100 rounded-md transition-colors"
-              >
-                Todo
-              </Link>
-              <Link
                 href="/tools"
-                className="px-3 py-2 text-[14px] text-gray-600 dark:text-gray-600 hover:text-gray-1000 dark:hover:text-gray-1000 hover:bg-gray-100 dark:hover:bg-gray-100 rounded-md transition-colors"
+                className="px-3 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-1000 dark:hover:text-gray-1000 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors"
               >
                 Tools
               </Link>

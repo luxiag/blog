@@ -105,7 +105,7 @@ export default function DocLayout({
       <div className="px-6">
         <div className="relative mx-auto max-w-[var(--ds-page-width)] lg:flex lg:flex-row">
           <aside
-            className={`sticky top-[64px] hidden h-[calc(100vh-64px)] w-[284px] lg:flex lg:shrink-0 lg:flex-col lg:justify-between bg-background overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+            className={`sticky top-[56px] hidden h-[calc(100vh-56px)] w-[284px] lg:flex lg:shrink-0 lg:flex-col lg:justify-between bg-background overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
               isMobileMenuOpen ? '!flex' : ''
             }`}
             data-docs-sidebar
@@ -213,7 +213,7 @@ export default function DocLayout({
 
           {toc.length > 0 && (
             <nav className="order-last hidden w-56 shrink-0 2xl:block">
-              <div className="sticky top-[64px] h-[calc(100vh-64px)] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pt-10">
+              <div className="sticky top-[56px] h-[calc(100vh-56px)] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pt-10">
                 <div className="text-gray-1000 dark:text-gray-1000 mb-1 text-sm font-medium">On this page</div>
                 <ul className="space-y-2.5 py-2 text-sm">
                   {toc.map((item) => {
