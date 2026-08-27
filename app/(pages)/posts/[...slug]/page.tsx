@@ -122,7 +122,7 @@ export default async function BlogPost({ params }: { params: Promise<{ slug: str
         </article>
 
         {/* Footer Nav */}
-        <nav className="mt-12 pt-6 border-t border-gray-200 dark:border-gray-200 flex items-center justify-between">
+        <nav className="mt-8 pt-4 border-t border-gray-200 dark:border-gray-200 flex items-center justify-between">
           <Link
             href="/posts"
             className="inline-flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-700 hover:text-gray-1000 dark:hover:text-gray-1000 transition-colors"

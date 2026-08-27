@@ -1,8 +1,15 @@
 import type { Metadata, Viewport } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
+import localFont from "next/font/local";
 import "./globals.css";
 import Header from "@/components/Header";
+
+const ClearHanSerif = localFont({
+  src: "../public/fonts/Clear-Han-Serif.woff2",
+  variable: "--font-clear-han-serif",
+  display: "swap",
+});
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -44,7 +51,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" suppressHydrationWarning className={`${GeistSans.variable} ${GeistMono.variable}`}>
+    <html lang="zh-CN" suppressHydrationWarning className={`${GeistSans.variable} ${GeistMono.variable} ${ClearHanSerif.variable}`}>
       <body className="antialiased bg-[#fafafa] dark:bg-black text-gray-1000 dark:text-gray-1000">
         <Header>
           <main>{children}</main>

@@ -205,7 +205,7 @@ export default function DocLayout({
             </nav>
           </aside>
 
-          <article className="mt-4 pt-10 w-full min-w-0 px-1 md:px-6 lg:px-12 lg:pr-6">
+          <article className="mt-4 pt-10 pb-16 w-full min-w-0 px-1 md:px-6 lg:px-12 lg:pr-6">
             <div className="prose">
               {children}
             </div>

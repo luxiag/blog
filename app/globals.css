@@ -43,7 +43,7 @@
   --color-pink-900: hsl(330, 80%, 40%);
   --color-purple-900: hsl(270, 60%, 50%);
 
-  --font-sans: var(--font-geist-sans), "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  --font-sans: var(--font-geist-sans), var(--font-clear-han-serif), "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 
   --link-color: #0070f3;
@@ -113,9 +113,9 @@
   --color-green-900: var(--color-green-900);
   --color-amber-600: var(--color-amber-600);
   --color-amber-700: var(--color-amber-700);
-  --font-sans: var(--font-geist-sans), "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  --font-sans: var(--font-geist-sans), var(--font-clear-han-serif), "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  --font-serif: "Noto Serif SC", "Source Han Serif SC", "STSong", Georgia, serif;
+  --font-serif: var(--font-clear-han-serif), "Noto Serif SC", "Source Han Serif SC", "STSong", Georgia, serif;
 }
 
 * {
