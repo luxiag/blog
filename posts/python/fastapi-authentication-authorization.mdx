@@ -1356,6 +1356,7 @@ def create_app(*, mailer: Mailer) -> FastAPI:
 部署入口应在 composition root 创建实现 `Mailer` 的邮件 provider/outbox adapter，再调用 `create_app(mailer=...)`。这是刻意保留的**外部系统接口**，不是缺省放行：没有真实适配器，应用就不应启动。开发环境可接 Mailpit 等本地 SMTP 捕获器，但必须确认其只在本机隔离网络中，且日志采集排除邮件正文。
 
 运行方式取决于 composition root，例如 `uvicorn deployment:app --proxy-headers --forwarded-allow-ips=<可信代理IP>`。不要使用 `*` 信任任意代理；公网客户端可以伪造转发头。数据库迁移、RBAC seed、mailer adapter 与 secrets 注入属于部署步骤，不应塞进 Web 进程启动时隐式执行。
+
 ---
 
 ## 五、验证：不要只测“登录成功”

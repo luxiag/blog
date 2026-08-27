@@ -10,7 +10,7 @@ export default function AlgoliaSearch() {
       <DocSearch
         appId="E61AH5LVMY"
         indexName="luxiagio"
-        apiKey="7ee7c421ead583565a0f595847080f06"
+        apiKey="fd8ce21dfc9c469f1267e0e94ee5fe1e"
         placeholder="搜索文章..."
         translations={{
           button: {

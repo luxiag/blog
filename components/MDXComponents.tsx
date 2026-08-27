@@ -315,7 +315,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       );
     }, { displayName: 'h4' }),
     p: ({ children, ...props }: React.ComponentPropsWithoutRef<'p'>) => (
-      <p className="font-sans text-[1.0625rem] text-neutral-800 dark:text-neutral-300 leading-[1.75] mb-5 tracking-[0.01em]" {...props}>
+      <p           className="font-sans text-[1.0625rem] text-neutral-800 dark:text-neutral-300 leading-[1.75] mb-5 tracking-[0.01em]" {...props}>
         {children}
       </p>
     ),
