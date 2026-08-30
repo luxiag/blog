@@ -24,7 +24,7 @@ const lowlight = createLowlight({
 
 const ALIASES: Record<string, string> = {
   shell: 'bash', cs: 'csharp', yml: 'json', plain: 'plaintext', text: 'plaintext',
-  mdx: 'javascript', jsx: 'javascript', tsx: 'typescript',
+  mdx: 'javascript', jsx: 'javascript', tsx: 'typescript', html: 'xml', svg: 'xml',
 };
 
 function resolveLang(lang?: string): string {

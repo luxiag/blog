@@ -3,11 +3,13 @@ title: Vuex 3.x 框架原理分析
 date: 2021-09-11
 category:
   - Vue
-type:
-  - vuex
+tags: ['vuex', 'vue2']
+excerpt: 'Vuex 3.x 框架原理分析，包括 Store 类、dispatch/commit、模块安装、辅助函数及 min-vuex 实现'
 ---
 
 ![](./images/1680123401008144724.png)
+
+Vuex 是 Vue.js 的状态管理模式，它采用集中式存储管理应用的所有组件的状态，并以相应的规则保证状态只能以可预测的方式变更。本篇从 `Vue.use(Vuex)` 开始，分析 Store 的初始化、dispatch/commit 的实现、模块系统的安装以及响应式原理。
 
 ::: details vuex 使用
 
@@ -43,6 +45,8 @@ new Vue({
 
 ## Vue.use 安装
 
+Vuex 通过 `Vue.use()` 安装时调用内部的 `install` 方法，核心是通过全局 `mixin` 在每个组件的 `beforeCreate` 钩子中注入 `$store`。
+
 ::: details install
 
 ```js
@@ -63,6 +67,7 @@ export function install(_Vue) {
 :::
 
 `applyMixin`通过全局 mixin 将$store 混入到所有 vue 组件中
+
 ::: details applyMixin
 
 ```js
@@ -94,6 +99,8 @@ export default function (Vue) {
 :::
 
 ## Store 类
+
+`Store` 是 Vuex 的核心类。构造函数接收 options 参数，完成模块树构建、模块安装、响应式状态初始化等一系列操作。
 
 ::: details class Store
 
@@ -168,6 +175,8 @@ export class Store {
 
 ## dispatch
 
+`dispatch` 用于触发 action。action 可以包含异步操作，内部通过 `commit` 提交 mutation 来修改状态。dispatch 的返回值是 Promise，支持异步链式调用。
+
 ```js
 this.dispatch = function boundDispatch(type, payload) {
   return dispatch.call(store, type, payload);
@@ -218,6 +227,8 @@ store.dispatch("increment", 10);
 
 ## commit
 
+`commit` 用于触发 mutation。mutation 是修改 Vuex 状态的唯一合法途径，它通过 `_withCommit` 方法将 `_committing` 标记为 true 后执行，在严格模式下可检测是否在 mutation 之外修改了状态。
+
 ```js
 this.commit = function boundCommit(type, payload, options) {
   return commit.call(store, type, payload, options);
@@ -266,6 +277,8 @@ _withCommit (fn) {
 :::
 
 ## module 安装
+
+Vuex 支持模块化拆分，通过 `modules` 选项将 store 分割成多个模块，每个模块拥有独立的 state、mutation、action、getter。`ModuleCollection` 负责将模块配置递归构建为模块树。
 
 ```js
 this._modules = new ModuleCollection(options);
@@ -372,6 +385,7 @@ export default class Module {
 :::
 
 module 安装，注册对应的 state,mutations,actions,getters
+
 ::: details installModule
 
 ```js
@@ -478,7 +492,9 @@ function installModule(store, rootState, path, module, hot) {
 ```
 
 :::
+
 store 组件初始化
+
 ::: details resetStoreVM
 
 ```js
@@ -552,6 +568,8 @@ function resetStoreVM(store, state, hot) {
 :::
 
 ## 辅助函数
+
+Vuex 提供了 `mapState`、`mapGetters`、`mapMutations`、`mapActions` 四个辅助函数，用于将 store 中的状态和操作映射为组件的计算属性或方法，避免重复编写 `$store.state.xxx` 之类的冗长代码。
 
 ```js
 computed: mapState({
@@ -637,6 +655,8 @@ export const mapGetters = normalizeNamespace((namespace, getters) => {
 :::
 
 ## min-vux
+
+以下是 Vuex 的极简实现，只保留了核心的 state、getters、commit、dispatch 功能，帮助理解 Vuex 的本质：一个基于 Vue 响应式系统的状态管理容器。
 
 ```js
 let Vue;

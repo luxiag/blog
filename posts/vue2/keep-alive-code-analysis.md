@@ -3,12 +3,14 @@ title: Vue2.x keep-alive原理分析
 date: 2021-09-12
 category:
   - Vue
-type:
-  - vue2
+tags: ['vue2']
+excerpt: 'Vue2.x keep-alive 组件原理分析，包括缓存机制、LRU 策略、组件激活与失活过程'
 ---
 
 `<keep-alive>`是 Vue 中内置的一个抽象组件，自身不会渲染，也不会出现在父组件链中。当它包裹动态组件时，会缓存不活动的组件实例，而不是销毁它们。
 组件一旦被 `<keep-alive>` 缓存，再次渲染的时候不会执行 created、mounted 等钩子函数
+
+keep-alive 的核心原理是：在组件切换时，将即将失活的组件实例缓存起来而非销毁，当再次激活时直接复用缓存的组件实例。这使得组件可以保留之前的状态（如滚动位置、表单输入等），避免重复渲染的性能开销。
 
 ## 使用
 
@@ -33,7 +35,6 @@ type:
   <component :is="view"></component>
 </keep-alive>
 ```
-
 
 - 保证keep-alive直接包裹组件
   - 因为keep-alive会判断第一层dom是不是组件，如果包裹了一层div，则会缓存失败
@@ -67,6 +68,13 @@ export default new Router({
 ```
 
 ## keep-alive
+
+keep-alive 组件的实现有以下关键设计：
+
+- **abstract: true**：声明为抽象组件，不会出现在组件树中
+- **缓存策略**：使用 `cache` 对象存储 VNode，`keys` 数组记录缓存顺序
+- **LRU 缓存淘汰**：当缓存数量超过 `max` 时，销毁最久未访问的缓存（keys 数组的首个元素）
+- **include/exclude**：通过 `matches` 函数匹配组件 name，决定是否缓存
 
 ::: details keep-alive
 
@@ -234,6 +242,8 @@ export default {
 :::
 
 ## 使用渲染
+
+keep-alive 包裹的组件渲染分为两种情况：首次渲染和缓存渲染。
 
 首次渲染只会在keep-alive建立缓存，其他和普通缓存没有区别
 

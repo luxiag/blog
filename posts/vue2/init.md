@@ -1,14 +1,16 @@
 ---
 title: Vue2.x框架原理分析-初始化、响应式原理
 date: 2021-07-22
-next: mounted
+nextPost: vue2/mount
 category:
   - Vue
-type:
-  - vue2
+tags: ['vue2']
+excerpt: 'Vue2.x 框架初始化流程与响应式原理分析，包括 Vue 构造函数、_init 方法、initState 及 defineReactive'
 ---
 
 ## 开始
+
+从一个最简单的 Vue 应用入口开始，追踪 Vue 实例从创建到挂载的完整链路。
 
 ```js
 import Vue from "vue";
@@ -25,6 +27,8 @@ new Vue({
 
 ### vue-loader
 
+vue-loader 将 `.vue` 单文件组件转换为 JavaScript 模块。`import App from "./App.vue"` 导入的实际上是一个包含 `render`、`staticRenderFns` 等属性的组件选项对象。
+
 ```js
 import App from "./App.vue";
 console.log(App, "App");
@@ -33,6 +37,8 @@ console.log(App, "App");
 ![](./images/1680123400817160800.png)
 
 ### entry
+
+Vue 的入口文件按照平台不同有多个版本，Web 平台的入口在 `platforms/web/entry-runtime.ts`，它负责注册平台相关的指令、组件，并挂载 `$mount` 方法。
 
 ::: details Vue 入口
 
@@ -86,7 +92,7 @@ export default Vue;
 
 ### vue
 
-`core/index`
+`core/index` 是跨平台的 Vue 核心入口。它调用 `initGlobalAPI` 挂载静态方法和属性，然后导出 Vue 构造函数。
 
 ```js
 import Vue from "./instance/index";
@@ -146,6 +152,8 @@ export function initGlobalAPI(Vue: GlobalAPI) {
 :::
 
 ### instance
+
+`core/instance/index` 是 Vue 构造函数的定义位置。通过混入模式，分五个模块为 `Vue.prototype` 添加实例方法：
 
 ::: details instance
 `core/instance/index`
@@ -232,6 +240,8 @@ Vue.prototype._e
 
 ## \_init
 
+当我们执行 `new Vue(options)` 时，实际上调用了 `this._init(options)`。这是整个初始化流程的入口方法，内部按照固定顺序依次执行各个初始化阶段。
+
 ```js
 function Vue(options) {
   this._init(options);
@@ -315,6 +325,8 @@ function Vue(options) {
 
 ### vm.$options 处理
 
+`_init` 中首先进行选项合并，将用户传入的 options 与 Vue 构造函数的默认选项合并为 `vm.$options`。合并过程涉及父类选项的继承、mixins 的处理等。
+
 ```js
 vm.$options = mergeOptions(
     resolveConstructorOptions(vm.constructor as any),
@@ -326,6 +338,7 @@ vm.$options = mergeOptions(
 #### resolveConstructorOptions
 
 解析对象的 options 并且合并 Sub 上的 options
+
 ::: details resolveConstructorOptions
 
 ```js
@@ -417,36 +430,6 @@ export function mergeOptions(
 
 :::
 
-::: details resolveConstructorOptions
-
-```js
-export function resolveConstructorOptions(Ctor: typeof Component) {
-  let options = Ctor.options;
-  if (Ctor.super) {
-    const superOptions = resolveConstructorOptions(Ctor.super);
-    const cachedSuperOptions = Ctor.superOptions;
-    if (superOptions !== cachedSuperOptions) {
-      // super option changed,
-      // need to resolve new options.
-      Ctor.superOptions = superOptions;
-      // check if there are any late-modified/attached options (#4976)
-      const modifiedOptions = resolveModifiedOptions(Ctor);
-      // update base extend options
-      if (modifiedOptions) {
-        extend(Ctor.extendOptions, modifiedOptions);
-      }
-      options = Ctor.options = mergeOptions(superOptions, Ctor.extendOptions);
-      if (options.name) {
-        options.components[options.name] = Ctor;
-      }
-    }
-  }
-  return options;
-}
-```
-
-:::
-
 `props`在 `mergeOptions`时调用`normalizeProps`方法进行处理
 
 ```js
@@ -518,6 +501,8 @@ export function callHook(vm: Component, hook: string, args?: any[]) {
 **数据响应式的入口：分别处理 props、methods、data、computed、watch**
 **优先级：props、methods、data、computed 对象中的属性不能出现重复，优先级和列出顺序一致**
 **其中 computed 中的 key 不能和 props、data 中的 key 重复，methods 不影响**
+
+`initState` 按照上述优先级依次执行初始化，其中 data 和 props 的属性最终都会被代理到 vm 实例上，使得我们可以通过 `this.xxx` 直接访问。
 
 ```js
 export function initState(vm: Component) {
@@ -830,6 +815,8 @@ Vue.prototype.$watch = function (
 
 ## 响应式原理
 
+Vue 2.x 的响应式系统基于 `Object.defineProperty` 实现，整条链路涉及三个关键角色：**Observer**（将数据转为响应式）、**Dep**（管理依赖关系）、**Watcher**（订阅者，执行更新）。
+
 利用`defineProperty`对数据进行拦截,在`initState()`对 data 和 props 进行拦截，
 
 initState => initData => observe => Observer => defineReactive
@@ -923,6 +910,7 @@ export function queueWatcher(watcher: Watcher) {
 - 1、更新 flushing 为 ture，表示正在刷新队列，在此期间往队列中 push 新的 watcher 时需要特殊处理（将其放在队列的合适位置）
 - 2、按照队列中的 watcher.id 从小到大排序，保证先创建的 watcher 先执行，也配合 第一步
 - 3、遍历 watcher 队列，依次执行 watcher.before、watcher.run，并清除缓存的 watcher
+
 ::: details flushSchedulerQueue
 
 ```js
@@ -1121,6 +1109,7 @@ export function observe(value: any, shallow?: boolean): Observer | void {
 ### Observer
 
 对象的属性添加 getter 和 setter，用于依赖收集和派发更新：
+
 ::: details Observer
 
 ```js
@@ -1350,6 +1339,7 @@ export function defineReactive(
 ```
 
 :::
+
 ::: details Dep.target
 
 ```js
@@ -1735,6 +1725,8 @@ const render = function () {
 ```
 
 ## nextTick
+
+Vue 的异步更新队列策略：当数据变化时，watcher 不会立即执行更新，而是被推入一个队列，在下一个事件循环中批量执行。`nextTick` 就是这个机制的核心实现，它根据浏览器能力选择最优的异步任务调度方式（Promise → MutationObserver → setImmediate → setTimeout）。
 
 ```js
 // 存放要执行的队列 当 pending为false 才遍历执行
