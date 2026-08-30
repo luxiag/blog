@@ -247,9 +247,9 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
         Fragment: (runtime as unknown as { Fragment: unknown }).Fragment,
         jsx: (runtime as unknown as { jsx: unknown }).jsx,
         jsxs: (runtime as unknown as { jsxs: unknown }).jsxs,
-        action: undefined, // Provide action for Next.js Server Actions
-        requestAnimationFrame: typeof window !== 'undefined' ? window.requestAnimationFrame : undefined,
-        cancelAnimationFrame: typeof window !== 'undefined' ? window.cancelAnimationFrame : undefined,
+        action: undefined,
+        requestAnimationFrame: undefined,
+        cancelAnimationFrame: undefined,
       });
       return (result as { default: unknown }).default;
     } catch (e) {
@@ -606,8 +606,8 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     return (
       <>
         <style>{detailsArrowStyles}</style>
-        <div className="mdx-content">
-          <MDXComponent components={mdxComponents} />
+      <div className="mdx-content" suppressHydrationWarning>
+        <MDXComponent components={mdxComponents} />
         </div>
         <Lightbox
           isOpen={lightbox.isOpen}
@@ -622,7 +622,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
   return (
     <>
       <style>{detailsArrowStyles}</style>
-      <div className="mdx-content">
+      <div className="mdx-content" suppressHydrationWarning>
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
           rehypePlugins={rehypePlugins}
