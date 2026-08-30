@@ -1,22 +1,25 @@
 ---
 title: Vue3.5响应式原理分析，及Reactive和Ref源码解析
 date: 2024-12-05
-category:
-  - Vue
-tag:
+category: Vue
+tags:
   - Vue3
+excerpt: 深入剖析 Vue3.5 响应式系统的核心实现，从 Proxy 代理到依赖收集与触发，全面解读 reactive、ref、effect、Dep、Link 的源码设计与协作机制。
+nextPost: vue3/create-app
 ---
-
 
 Vue 最标志性的功能就是其低侵入性的响应式系统。组件状态都是由响应式的 JavaScript 对象组成的。当更改它们时，视图会随即自动更新。Vue 的响应式系统基本是基于运行时的。追踪和触发都是在浏览器中运行时进行的。运行时响应性的优点是，它可以在没有构建步骤的情况下工作，而且边界情况较少。
 
+与 Vue2 基于 `Object.defineProperty` 的实现不同，Vue3 采用了 ES6 的 `Proxy` + `Reflect` 来拦截对象的读写操作，从而实现了更深层次、更细粒度的响应式追踪。Vue2 的 `Object.defineProperty` 只能劫持已有属性，无法检测属性的新增和删除，对数组也需要额外重写方法；而 `Proxy` 可以拦截对象上的所有操作（包括属性新增、删除、`has`、`ownKeys` 等），并且天然支持嵌套对象的惰性代理。整个响应式系统的核心由三个部分组成：**Proxy** 负责拦截读写、**track** 负责在读取时收集当前活跃的副作用函数（Effect）、**trigger** 负责在写入时通知相关副作用重新执行。这三者协作，构成了 Vue3 "读取即追踪、修改即触发" 的响应式闭环。
+
 ## mini Reactive
 
-```vue
+在深入源码之前，先用一个最小化的实现来理解 Vue3 响应式的基本工作原理。这个示例展示了 Proxy + Reflect + Effect 三者如何配合，实现数据变化时自动更新视图。
+
+```js
 <div class="customReactive"> </div>
 
 <script setup>
-
 
 const user = reactive({
 
@@ -46,13 +49,13 @@ const reactive = (target) => {
         return reactive(res)
       }
       return res;
-    }
+    },
     set(target,key,value,receiver){
       let res = Reflect.set(target,key,value,receiver)
       trigger(target,key)
       return res
     }
- }) 
+ })
 }
 let activeEffect
 // track.js
@@ -96,9 +99,6 @@ const effect = (fn) => {
 }
 </script>
 
-
-
-
 ```
 
 ::: info Reflect
@@ -109,7 +109,6 @@ Reflect 是一个内置的对象，它提供拦截 JavaScript 操作的方法。
 
 ```js
 const state = reactive({
-
 
   name:'黎明',
   age:18
@@ -127,6 +126,8 @@ state.age = 20
 ```
 
 ## Proxy
+
+理解 Vue3 响应式的第一步是理解 Proxy。Proxy 是 Vue3 响应式系统的基石，它替代了 Vue2 中的 `Object.defineProperty`，提供了更强大、更完整的对象拦截能力。本节将介绍 Proxy 的基本用法以及它在集合类型（Map、Set 等）上的局限性——正是这些局限性催生了 Vue3 中 `collectionHandlers` 的特殊设计。
 
 Proxy 对象用于创建一个对象的代理，从而实现基本操作的拦截和自定义（如属性查找、赋值、枚举、函数调用等）。
 
@@ -156,7 +157,7 @@ let proxy = new Proxy(map, {});
 proxy.set('test', 1); // Error
 ```
 
-Internally, a Map stores all data in its [[MapData]] internal slot. The proxy doesn’t have such a slot. The built-in method Map.prototype.set method tries to access the internal property this.[[MapData]], but because this=proxy, can’t find it in proxy and just fails.
+Internally, a Map stores all data in its [[MapData]] internal slot. The proxy doesn't have such a slot. The built-in method Map.prototype.set method tries to access the internal property this.[[MapData]], but because this=proxy, can't find it in proxy and just fails.
 
 ```js
 let map = new Map();
@@ -192,7 +193,6 @@ alert(proxy.get('test')); // 1 (works!)
   </div>
   <script>
     const { createApp, reactive } = Vue
-    debugger
     const state = reactive({
       count: 0
     })
@@ -209,10 +209,11 @@ alert(proxy.get('test')); // 1 (works!)
 
 </html>
 
-
 ```
 
 ## reactive
+
+`reactive()` 是 Vue3 中最常用的响应式 API，它将一个普通对象转为深层响应式代理。本节从简化版入手，再深入源码，分析 `createReactiveObject` 如何根据目标类型选择不同的 Proxy Handler，以及 `baseHandlers`（处理普通对象和数组）和 `collectionHandlers`（处理 Map/Set 等集合类型）各自的设计思路。
 
 ```ts
 function reactive(){
@@ -356,7 +357,7 @@ const baseHandlers: ProxyHandler<object> = {
       if(targetIsArray) {
         // arrayInstrumentations
         /*
-        { 
+        {
            every(
               fn: (item: unknown, index: number, array: unknown[]) => unknown,
               thisArg?: unknown,
@@ -365,7 +366,7 @@ const baseHandlers: ProxyHandler<object> = {
             },
             //。。。
          }
-        */ 
+        */
         return arrayInstrumentations[key]
       }
       const res = Reflect.get(
@@ -379,14 +380,14 @@ const baseHandlers: ProxyHandler<object> = {
       track(target, 'get', key)
 
       return res
-  }
+  },
   set(target: Target, key: string | symbol, value: unknown, receiver: object) {
       if (!hadKey) {
         trigger(target, TriggerOpTypes.ADD, key, value)
       } else if (hasChanged(value, oldValue)) {
         trigger(target, TriggerOpTypes.SET, key, value, oldValue)
-      }    
-  }
+      }
+  },
   deleteProperty(
     target: Record<string | symbol, unknown>,
     key: string | symbol,
@@ -617,7 +618,7 @@ const collectionHandlers = {
   }
 }
 const instrumentations = {
-  get(target, key, receiver) { 
+  get(target, key, receiver) {
     track(target,get,key)
     return wrap(target.get(key))
   },
@@ -682,7 +683,7 @@ const instrumentations = {
       }
     }
   }
-}) 
+})
 ```
 
 ::: details collectionHandlers
@@ -726,8 +727,8 @@ function createInstrumentations(
     /**
     首先获取原始的 target 数据 value 和 key
     如果 key 也是响应式数据的话，对 key 进行依赖收集
-    对数据进行响应是处理并返回处理后的数据(即 Reactive 对象)   
-     */    
+    对数据进行响应是处理并返回处理后的数据(即 Reactive 对象)
+     */
     get(this: MapTypes, key: unknown) {
       // #1772: readonly(reactive(Map)) should return readonly + reactive version
       // of the value
@@ -939,6 +940,8 @@ function createIterableMethod(
 
 ## ref
 
+`reactive()` 只能处理对象类型，对于原始值（字符串、数字、布尔值等）则需要使用 `ref()`。`ref` 的实现原理与 `reactive` 不同：它不依赖 Proxy，而是通过 getter/setter 拦截 `.value` 的读写操作来实现依赖收集和触发。本节将介绍 `ref` 的源码实现，并与 `reactive` 的 Proxy 方案进行对比。
+
 `Getters/setters`
 
 ```js
@@ -1000,7 +1003,7 @@ class RefImpl<T = any> {
     const oldValue = this._rawValue
     if (hasChanged(newValue, oldValue)) {
       this._rawValue = newValue
-      this._value = newValue 
+      this._value = newValue
       this.dep.trigger()
     }
   }
@@ -1064,12 +1067,13 @@ class RefImpl<T = any> {
   }
 }
 
-
 ```
 
 :::
 
 ## Effect
+
+如果说 Proxy 和 getter/setter 是响应式系统的"感应器"，那么 Effect 就是系统的"执行引擎"。`ReactiveEffect` 是 Vue3 响应式中最核心的类，它封装了副作用函数，负责在依赖变化时重新执行。本节将分析 Effect 的完整生命周期：如何运行、如何收集依赖、如何在依赖变化时被通知和触发更新，以及 `startBatch` / `endBatch` 批处理机制如何避免多次触发。
 
 ```ts
 it('should observe basic properties', () => {
@@ -1098,7 +1102,7 @@ class ReactiveEffect {
   run(){
     //  effect 从 deps 数组中移除，然后清空 deps 数组。
     cleanupEffect(this)
-    //  
+    //
     prepareDeps(this)
     activeSub = this
     shouldTrack = true
@@ -1112,7 +1116,7 @@ class ReactiveEffect {
 
 ```ts
 function track(target,type,key) {
-   if (shouldTrack && activeSub) { 
+   if (shouldTrack && activeSub) {
     dep.track({target,type,key})
    //  ....
    }
@@ -1130,8 +1134,8 @@ function addSub(link) {
     if (currentTail !== link) {
       link.prevSub = currentTail
       if (currentTail) currentTail.nextSub = link
-    } 
-    // 更新订阅者链表 
+    }
+    // 更新订阅者链表
     link.dep.subs = link
 }
 ```
@@ -1151,7 +1155,7 @@ class Dep{
     this.notify()
   },
   notify(){
-    starBatch()
+    startBatch()
     // 遍历订阅者链表，触发effect
       for (let link = this.subs; link; link = link.prevSub) {
         if (link.sub.notify()) {
@@ -1180,7 +1184,7 @@ class ReactiveEffect{
   }
 }
 let batchDepth = 0
-function starBatch(){
+function startBatch(){
   batchDepth ++
 }
 function batch(sub) {
@@ -1360,6 +1364,8 @@ export class ReactiveEffect<T = any>
 
 ## Dep
 
+Dep 是连接"响应式数据"与"副作用函数"的桥梁。每当一个响应式属性被读取时，就会通过 `track` 创建或获取一个 Dep 实例，将当前活跃的 Effect 记录为订阅者；当属性被修改时，则通过 `trigger` 通知该 Dep 下的所有订阅者。Vue3.5 用双向链表（Link）替代了 Vue3.4 之前的 Set 数据结构来管理订阅者，显著提升了内存效率和遍历性能。本节将深入分析 Dep、track、trigger 的源码，以及 Link 双向链表的设计。
+
 - `targetMap`:存储了每个 "响应性对象属性" 关联的依赖；类型是 WeakMap
 - `depsMap`: 存储了每个属性的依赖；类型是 Map
 - `dep`: 存储了 effects ，一个 effects 集，这些 effect 在值发生变化时重新运行;类型是 Set
@@ -1409,7 +1415,7 @@ function track(target,type,key) {
       dep.key = key
     }
     dep.track()
-    
+
 }
 function trigger(target,type,key,newValue,oldValue,oldTarget) {
   const depsMap = targetMap.get(target)
@@ -1802,8 +1808,7 @@ export function track(target: object, type: TrackOpTypes, key: unknown): void {
     if (!dep) {
       depsMap.set(key, (dep = new Dep()))
     }
-    dep.track()    
-    // ...
+    dep.track()
   }
 }
 
@@ -1819,35 +1824,38 @@ class Dep {
 
 ```
 
-响应式步骤
+响应式系统的完整工作流程如下：
 
-```ts
-// 
-const obj = reactive({
-  name: 'zs',
-  age: 18
-})
-// reactive => Proxy
-function reactive() {
-  return new Proxy(obj,{
-    get(target,key){
-      //收集依赖
-      track(target,key)
-      return Reflect.get(target,key)
-    },
-    set(target,key,value){
-      // 触发依赖
-      trigger(target,key,value)
-      return Reflect.set(target,key,value)
-    }
-  })
-}
-// 获取obj.name时候触发track
-// track被handler处理过 对应type为获取方法
-function track(target,type,key){
+```mermaid
+flowchart TD
+  A["reactive(obj)"] -->|"创建 Proxy"| B["Proxy 代理对象"]
+  B -->|"读取 obj.key"| C["get 拦截器"]
+  C -->|"调用 track(target, key)"| D["Dep.track()"]
+  D -->|"创建 Link(activeSub, dep)"| E["双向链表建立订阅关系"]
+  E -->|"activeSub.deps ← link"| F["Effect 记录自身依赖"]
 
-}
+  B -->|"设置 obj.key = newVal"| G["set 拦截器"]
+  G -->|"调用 trigger(target, type, key)"| H["Dep.trigger()"]
+  H -->|"startBatch()"| I["开启批处理"]
+  I -->|"遍历 subs 链表"| J["ReactiveEffect.notify()"]
+  J -->|"batch(effect)"| K["加入批量更新队列"]
+  K -->|"endBatch()"| L["批量执行 Effect.run()"]
+  L -->|"重新执行 fn()"| C
+
+  style A fill:#4fc3f7,color:#000
+  style B fill:#81c784,color:#000
+  style D fill:#ffb74d,color:#000
+  style H fill:#e57373,color:#000
+  style L fill:#ba68c8,color:#fff
 ```
+
+**核心流程总结：**
+
+1. **初始化**：`reactive(obj)` 通过 `createReactiveObject` 创建 Proxy 代理对象，根据目标类型选择 `baseHandlers` 或 `collectionHandlers`
+2. **依赖收集（track）**：读取代理属性时触发 `get` 拦截，调用 `track()` → `Dep.track()` → 创建 `Link` 节点将当前 `ReactiveEffect` 与 `Dep` 关联
+3. **依赖触发（trigger）**：修改代理属性时触发 `set` 拦截，调用 `trigger()` → `Dep.trigger()` → `Dep.notify()` → 遍历订阅者链表通知所有 `ReactiveEffect`
+4. **批处理机制**：`startBatch()` / `endBatch()` 确保同一轮事件循环中多个属性变更只触发一次更新，避免重复执行副作用
+5. **Effect 生命周期**：`ReactiveEffect.run()` 执行时先清理旧依赖（`cleanupEffect`），再重新收集，保证依赖始终与最新执行路径一致
 
 ## 参考
 

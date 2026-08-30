@@ -1,13 +1,14 @@
 ---
 title: Vue3 patch
 date: 2024-12-18
-category:
-  - Vue
-tag:
+category: Vue
+tags:
   - Vue3
+excerpt: 深入分析 Vue3 渲染更新核心——patch 函数的完整执行流程，包括 vnode 类型分发、组件/元素/Fragment 更新策略，以及 diff 算法的五步处理过程。
+nextPost: vue3/diff
 ---
 
-
+`patch` 是 Vue3 渲染更新的核心函数。当组件的状态发生变化时，响应式系统会触发组件的重新渲染，而 `patch` 函数负责比较新旧虚拟节点（VNode），根据节点的类型分发到不同的更新策略：文本节点直接更新文本内容，元素节点走属性和子节点的 diff，组件节点决定是挂载还是更新，Fragment 处理多根节点场景。整个 patch 流程构成了 Vue3 从"数据变化"到"DOM 更新"的完整链路。
 
 组件挂载=>`mountComponent` => `setupRenderEffect`
 
@@ -43,6 +44,8 @@ class ReactiveEffect {
 ```
 
 # patchFlag
+
+在进入 patch 函数之前，需要先理解 `PatchFlags`——它是 Vue3 编译器为 VNode 生成的优化标记。编译器在模板编译阶段会分析每个节点的动态部分，用位运算标记哪些属性是动态的，这样 patch 过程就可以跳过静态部分，只处理真正变化的内容。理解 PatchFlags 是理解后续 patch 优化路径的前提。
 
 ```ts
 export enum PatchFlags {
@@ -87,6 +90,8 @@ export enum PatchFlags {
 ```
 
 # patch
+
+`patch` 函数是整个更新流程的入口。它接收新旧 VNode，首先判断是否需要卸载旧节点（类型不同时直接卸载重建），然后根据 `type` 和 `shapeFlag` 分发到不同的处理函数：文本、注释、静态节点、Fragment、原生元素、Vue 组件、Teleport、Suspense 各有对应的处理逻辑。这个分发机制是 Vue3 渲染更新的调度中心。
 
 ```ts
 const patch: PatchFn = (
@@ -208,12 +213,12 @@ const patch: PatchFn = (
   }
 }
 
-
 ```
 
-
-
 ## processText
+
+文本节点的处理是 patch 分发中最简单的分支。如果旧节点不存在，直接创建文本节点并插入；如果旧节点存在，只需比较文本内容是否变化，变化则更新 `nodeValue`。
+
 纯文本
 ```ts
   const processText: ProcessTextOrCommentFn = (n1, n2, container, anchor) => {
@@ -237,6 +242,9 @@ const patch: PatchFn = (
 ```
 
 ## processComponent
+
+组件节点的处理比文本节点复杂得多。当旧节点不存在时，需要区分是普通组件挂载还是 KeepAlive 组件激活；当旧节点存在时，需要通过 `shouldUpdateComponent` 判断是否真的需要更新——如果组件的 props、slots、指令等都没有变化，可以直接复用旧实例，跳过重新渲染，这是一个重要的性能优化点。
+
 Vue组件
 ```ts
   const processComponent = (
@@ -303,7 +311,10 @@ Vue组件
   }
 
 ```
+
 ### instance.update
+
+当 `shouldUpdateComponent` 判定组件需要更新时，`instance.update()` 会被调用。它本质上执行的是 `componentUpdateFn`——在组件首次挂载时创建的 `ReactiveEffect` 的回调。挂载阶段执行 `renderComponentRoot` 生成子树，更新阶段则对新旧子树调用 `patch`，递归地完成整棵组件树的更新。
 
 ```ts
 const effect = (instance.effect = new ReactiveEffect(componentUpdateFn))
@@ -337,7 +348,7 @@ const componentUpdateFn = () => {
         nextTree,
         // parent may have changed if it's in a teleport
         hostParentNode(prevTree.el!)!,
-        // anchor may have changed if it's in a fragment
+        // anchor may have changed if it's in a Fragment
         getNextHostNode(prevTree),
         instance,
         parentSuspense,
@@ -350,6 +361,8 @@ const componentUpdateFn = () => {
 ```
 
 ## processElement
+
+元素节点的处理分为两个阶段：挂载（`mountElement`）和更新（`patchElement`）。挂载阶段创建 DOM 元素、设置属性、挂载子节点；更新阶段则涉及更复杂的逻辑——如果编译器标记了 `dynamicChildren`，可以走 `patchBlockChildren` 的优化路径只 diff 动态子节点，否则执行 `patchChildren` 进行全量 diff。属性更新同样利用 `PatchFlags` 进行靶向更新：只更新标记为动态的 class、style、props 或 text。
 
 ```ts
   const processElement = (
@@ -420,7 +433,6 @@ const componentUpdateFn = () => {
     }
     parentComponent && toggleRecurse(parentComponent, true)
 
-
     // #9135 innerHTML / textContent unset needs to happen before possible
     // new children mount
     if (
@@ -474,7 +486,6 @@ const componentUpdateFn = () => {
           hostPatchProp(el, 'style', oldProps.style, newProps.style, namespace)
         }
 
-
         if (patchFlag & PatchFlags.PROPS) {
           const propsToUpdate = n2.dynamicProps!
           for (let i = 0; i < propsToUpdate.length; i++) {
@@ -510,9 +521,9 @@ const componentUpdateFn = () => {
   }
 ```
 
+### patchBlockChildren
 
-
-### patchBlockChildren 
+`patchBlockChildren` 是 Vue3 Block Tree 优化的关键函数。当编译器识别出动态子节点时，会收集到 `dynamicChildren` 数组中，patch 时只需要遍历这个数组进行 diff，而不需要遍历整棵子树。这就是 Vue3 相比 Vue2 在更新性能上的核心提升——从"全树遍历"变为"靶向更新"。
 
 ```ts
   const patchBlockChildren: PatchBlockChildrenFn = (
@@ -560,7 +571,9 @@ const componentUpdateFn = () => {
 
 ```
 
-## processFragment 
+## processFragment
+
+Fragment 是 Vue3 多根节点组件的基础。它本身不产生 DOM 元素，而是通过两个空文本节点（`fragmentStartAnchor` 和 `fragmentEndAnchor`）作为边界标记。更新时，Fragment 有两条路径：如果是稳定的 Fragment（`STABLE_FRAGMENT`，如 `v-for` 生成的模板），且存在 `dynamicChildren`，走 `patchBlockChildren` 优化路径；否则走 `patchChildren` 全量 diff。
 
 ```ts
   const processFragment = (
@@ -659,7 +672,9 @@ const componentUpdateFn = () => {
 
 ```
 
-# patchChildren 
+# patchChildren
+
+`patchChildren` 是子节点 diff 的调度函数。它根据 `patchFlag` 和新旧子节点的类型组合（文本/数组/空）选择不同的处理策略。如果有 `KEYED_FRAGMENT` 标记，走 `patchKeyedChildren`（带 key 的 diff）；如果是 `UNKEYED_FRAGMENT`，走 `patchUnkeyedChildren`（无 key 的 diff）；否则根据子节点类型组合进行简单的文本更新、挂载或卸载。这个函数是连接上层 patch 流程和底层 diff 算法的桥梁。
 
 ```ts
 
@@ -771,6 +786,8 @@ const componentUpdateFn = () => {
 ```
 
 ## patchKeyedChildren
+
+`patchKeyedChildren` 是 Vue3 diff 算法的核心实现，即经典的"双端 + 最长递增子序列"算法。它通过五个步骤处理子节点列表的更新，前四步是快速路径处理简单场景，第五步处理最复杂的乱序情况。整个算法的设计思路是：先用简单规则处理常见的首尾增删场景，只有无法快速处理时才进入构建索引映射和最长递增子序列的完整计算。
 
 ```ts
   // can be all-keyed or mixed
@@ -1048,6 +1065,9 @@ const componentUpdateFn = () => {
 ```
 
 ## patchUnkeyedChildren
+
+无 key 的子节点 diff 相对简单——没有 key 就无法建立精确的新旧节点映射关系，只能按索引逐个对比。先处理公共长度范围内的节点，然后根据新旧列表长度差异，多出的旧节点卸载、多出的新节点挂载。这也解释了为什么 Vue 总是建议为 `v-for` 添加 key——没有 key 时无法复用节点，只能按顺序暴力 diff。
+
 ```ts
   const patchUnkeyedChildren = (
     c1: VNode[],
@@ -1109,20 +1129,31 @@ const componentUpdateFn = () => {
     }
   }
 ```
-<!-- # summary
 
-**patchChildren**
+## 总结
 
-`i`指向新旧前置节点索引
-`e1` 旧节点长度
-`e2` 新节点长度
+**patchChildren 核心变量**
 
+- `i` 指向新旧前置节点索引
+- `e1` 旧节点结束索引
+- `e2` 新节点结束索引
 
-**理想情况**
-- 处理前置节点
+**理想情况（快速路径）**
+
+- **处理前置节点**：从头部开始，逐个对比相同类型的节点，遇到不同类型则停止
+
 ![](./images/patch/3662011735632172586.png)
-- 处理后置节点 -->
 
+- **处理后置节点**：从尾部开始，逐个对比相同类型的节点，遇到不同类型则停止
+- **新增节点**：前置和后置节点处理完后，如果旧节点已全部处理完（`i > e1`），新节点中剩余的即为需要新增的节点
+- **删除节点**：如果新节点已全部处理完（`i > e2`），旧节点中剩余的即为需要卸载的节点
+
+**非理想情况（乱序 diff）**
+
+1. 构建 key → index 映射表，用于快速查找新节点位置
+2. 遍历旧节点，通过 key 查找在新列表中的位置，能找到则 patch，找不到则 unmount
+3. 通过 `newIndexToOldIndexMap` 计算最长递增子序列，确定哪些节点不需要移动
+4. 倒序遍历新节点中未处理的部分，新增的节点执行 mount，需要移动的节点执行 move
 
 # 参考
 
