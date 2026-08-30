@@ -1,14 +1,16 @@
 ---
 title: Vue2.x框架原理分析-编译
 date: 2021-08-15
-next: vue-loader-code-analysis
+nextPost: vue2/vue-loader-code-analysis
 category:
   - Vue
-type: 
-  - vue2
+tags: ['vue2']
+excerpt: 'Vue2.x 模板编译原理分析，包括 parse、optimize、generate 三个阶段及 HTML 解析器'
 ---
 
 ## 前言
+
+Vue 的模板编译是将模板字符串转换为渲染函数的过程，这是运行时 + 编译版本的核心能力。了解编译过程有助于理解模板语法背后的实现原理，以及如何写出更高效的模板。
 
 ![](./images/1680123400810165446.png)
 
@@ -104,6 +106,8 @@ Vue.prototype.$mount = function (
 ```
 
 ## 流程
+
+模板编译分为三个阶段，每个阶段各有专职：
 
 ![](./images/1680123400713173220.png)
 ![](./images/1680123400728101022.png)
@@ -328,6 +332,8 @@ export function createCompileToFunctionFn(compile: Function): Function {
 
 ## parse
 
+parse 阶段的目标是将模板字符串转换为 AST（抽象语法树）。AST 是模板的中间表示，每个节点包含标签名、属性、子节点等信息。HTML 解析器通过正则匹配标签开始、标签结束、文本、注释等 token，配合栈结构维护父子关系。
+
 ![](./images/1680123400715085332.png)
 ![](./images/1680123400719161947.png)
 type 为 1 表示是普通元素，为 2 表示是表达式，为 3 表示是纯文本
@@ -368,6 +374,8 @@ export function parse(template: string, options: CompilerOptions): ASTElement {
 ```
 
 ## HTML 解析
+
+HTML 解析器 `parseHTML` 是整个 parse 阶段的核心。它逐字符扫描模板字符串，通过正则识别不同类型的 token，并通过回调函数将解析结果传递给外层的 AST 构建逻辑。
 
 流程
 `parseHTML`
@@ -723,6 +731,8 @@ function handleStartTag(match) {
 
 ## 文本解析
 
+当解析器遇到文本内容时，需要判断文本中是否包含 Vue 插值表达式（`{{ }}`）。纯文本生成 type=3 的 AST 节点，包含插值表达式的文本生成 type=2 的 AST 节点，`parseText` 函数负责提取插值表达式并构造 expression 字符串。
+
 ```js
 
     chars(text: string, start?: number, end?: number) {
@@ -867,7 +877,7 @@ export function parseText(text, delimiters) {
 
 ## optimize
 
-在优化阶段将所有静态节点都打上标记，这样在 patch 过程中就可以跳过对比这些节点。
+optimize 阶段的目标是标记 AST 中的静态节点和静态根节点。静态节点是指那些不需要参与更新的节点（没有绑定、没有指令），在 patch 阶段可以直接跳过对比，从而提升性能。静态根节点则是包含多个静态子节点的根级静态节点，可以被整体提升（hoisted），避免每次渲染都重新创建。
 
 - 在 AST 中找出所有静态节点并打上标记；
 - 在 AST 中找出所有静态根节点并打上标记；
@@ -1004,6 +1014,8 @@ function markStaticRoots(node: ASTNode, isInFor: boolean) {
 ```
 
 ## generate
+
+generate 阶段将 AST 转换为渲染函数的字符串形式。生成的代码使用 `with(this)` 包裹，通过 `_c`、`_v`、`_s` 等渲染辅助函数创建 VNode。不同类型的 AST 节点（v-for、v-if、v-once、slot 等）会走不同的代码生成函数。
 
 AST => render
 `template`

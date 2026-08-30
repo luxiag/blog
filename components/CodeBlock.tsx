@@ -54,6 +54,8 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   mdx: 'javascript',
   jsx: 'javascript',
   tsx: 'typescript',
+  html: 'xml',
+  svg: 'xml',
 };
 
 function resolveLanguage(className?: string) {

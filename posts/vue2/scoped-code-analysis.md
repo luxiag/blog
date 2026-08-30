@@ -1,14 +1,15 @@
 ---
 title: Vue2.x Scoped原理分析
-date:  2021-09-22
+date: 2021-09-22
 category:
   - Vue
-tags:
-  - loader
-  - vue2
+tags: ['loader', 'vue2']
+excerpt: 'Vue2.x Scoped CSS 原理分析，包括模板处理、样式处理、PostCSS 转换及深度选择器'
 ---
 
 ![](./images/1680123401111144500.png)
+
+Vue 的 Scoped CSS 通过为组件中的每个 DOM 元素添加唯一的 data 属性（如 `data-v-469af010`），并在 CSS 选择器中追加该属性选择器，实现样式的局部作用域。本篇分析 scoped 的实现原理，包括模板处理和样式处理两个阶段。
 
 ```css
 .hello[data-v-469af010] {
@@ -17,6 +18,8 @@ tags:
 ```
 
 ## 用法
+
+先了解 scoped CSS 的使用方式和注意事项，再深入其实现原理。
 
 ### Scoped CSS
 
@@ -99,6 +102,8 @@ tags:
 - **在递归组件中小心使用后代选择器!** 对选择器 `.a .b` 中的 CSS 规则来说，如果匹配 `.a` 的元素包含一个递归子组件，则所有的子组件中的 `.b` 都将被这个规则匹配。
 
 ## template 处理
+
+在 vue-loader 处理 `.vue` 文件时，会根据 style 标签是否带有 `scoped` 属性来决定是否注入 scopedId。template 的处理通过 `vue-template-compiler` 在编译 render 函数时，将 scopedId 作为 `data-v-xxx` 属性添加到每个元素上。
 
 ```js
 // lib/index
@@ -191,6 +196,8 @@ const compilerOptions = Object.assign(
 ```
 
 ## style 处理
+
+样式处理的核心是 `stylePostLoader`，它使用 `@vue/component-compiler-utils` 的 `compileStyle` 方法，将 CSS 选择器后追加 `[data-v-xxx]` 属性选择器，实现样式隔离。深度选择器（`>>>`、`/deep/`、`::v-deep`）的内容不会被追加属性选择器，从而允许样式穿透到子组件。
 
 ### vue-loader
 

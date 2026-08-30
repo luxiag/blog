@@ -1,11 +1,11 @@
 ---
 title: Vue2.x框架原理分析-组件挂载
 date: 2021-08-10
-next: parse
+nextPost: vue2/parse
 category:
   - Vue
-type:
-  - vue2
+tags: ['vue2']
+excerpt: 'Vue2.x 组件挂载原理分析，包括 mountComponent、render、createElement、patch 及 DOM-Diff 过程'
 ---
 
 ```mermaid
@@ -28,7 +28,11 @@ flowchart TB
 
 ```
 
+组件挂载是 Vue 从虚拟 DOM 到真实 DOM 的桥梁。上面的流程图展示了从 `_init` 到创建 VNode 的完整链路。本节将逐步分析每个环节的具体实现。
+
 ## mount
+
+挂载的入口是 `$mount` 方法，它的核心逻辑是调用 `mountComponent`。
 
 ```js
 // vue._init()
@@ -53,6 +57,12 @@ Vue.prototype.$mount = function (
 ## mountComponent
 
 ![](./images/1680123400811111106.png)  
+
+`mountComponent` 是挂载的核心函数。它做了三件关键的事情：
+
+1. 定义 `updateComponent` 函数，在其中调用 `_render` 生成 VNode，再调用 `_update` 将 VNode 渲染到 DOM
+2. 为当前组件创建一个 **渲染 watcher**，它会在数据变化时重新执行 `updateComponent`
+3. 调用 `beforeMount` 和 `mounted` 生命周期钩子
 
 `core/instance/lifecycle`
 
@@ -119,6 +129,8 @@ export function mountComponent(
 
 ### render
 
+`_render` 方法执行实例的 render 函数，生成 VNode 节点树。render 函数的来源有两种：用户手写的 render 函数，或模板编译生成的 render 函数。
+
 ::: details \_render
 
 ```js
@@ -180,6 +192,8 @@ export function mountComponent(
 :::
 
 ### createElement
+
+`createElement` 是创建 VNode 的工厂函数，它根据 tag 的类型分四种情况创建不同的 VNode：空节点、原生 HTML 标签、内置组件、用户自定义组件。
 
 ```js
 vnode = render.call(vm._renderProxy, vm.$createElement);
@@ -329,7 +343,12 @@ export function _createElement(
 
 ### createComponent
 
-节点是组件
+当 tag 是组件类型时，`createComponent` 负责创建组件类型的 VNode。它主要做了以下几件事：
+
+1. 通过 `extend` 将组件选项对象转换为构造函数
+2. 提取 props 数据和事件监听器
+3. 安装组件钩子函数（init、prepatch、insert、destroy）
+4. 创建并返回组件 VNode
 
 ```js
 export function createComponent(
@@ -435,21 +454,7 @@ const vnode = vm._render();
 vm._update(vnode, hydrating);
 ```
 
-::: details vnode
-
 ```js
-
-```
-
-:::
-
-```js
-/*
-
-
-mountComponent(vm,el) vm.$el = el
-*/
-
 Vue.prototype._update = function (vnode: VNode, hydrating?: boolean) {
   const vm: Component = this;
   const prevEl = vm.$el;
@@ -484,7 +489,7 @@ Vue.prototype._update = function (vnode: VNode, hydrating?: boolean) {
 
 ## createPathFunction
 
-DOM-Diff 过程叫做 patch 过程。patch,意为“补丁”，即指对旧的 VNode 修补，打补丁从而得到新的 VNode
+Vue 的 patch 过程（即 DOM-Diff 算法）是虚拟 DOM 的核心，它通过对比新旧 VNode 树，以最小的 DOM 操作量完成视图更新。patch,意为"补丁"，即指对旧的 VNode 修补，打补丁从而得到新的 VNode
 
 - 创建节点：新的 VNode 中有而旧的 oldVNode 中没有，就在旧的 oldVNode 中创建。
 - 删除节点：新的 VNode 中没有而旧的 oldVNode 中有，就从旧的 oldVNode 中删除。
@@ -956,6 +961,8 @@ function patchVnode(
 #### updateChildren
 
 ![](./images/1680123400816165854.png)
+
+`updateChildren` 是 Diff 算法的核心，它采用**双端对比**策略，通过四个指针（新旧节点列表的头尾）交叉对比，尽量复用已有 DOM 节点，减少 DOM 操作次数。对比规则按优先级如下：
 
 - 先把 newChildren 数组里的所有未处理子节点的第一个子节点和 oldChildren 数组里所有未处理子节点的第一个子节点做比对，如果相同，那就直接进入更新节点的操作；
 - 如果不同，再把 newChildren 数组里所有未处理子节点的最后一个子节点和 oldChildren 数组里所有未处理子节点的最后一个子节点做比对，如果相同，那就直接进入更新节点的操作；

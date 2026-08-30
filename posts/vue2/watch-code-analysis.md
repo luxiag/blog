@@ -3,9 +3,11 @@ title: Vue2.x watch原理分析
 date: 2021-10-01
 category:
   - Vue
-type: 
-  - vue2
+tags: ['vue2']
+excerpt: 'Vue2.x watch 原理分析，包括 initWatch、createWatcher、$watch 及深度监听与立即执行的实现'
 ---
+
+Vue 的 watch 侦听器是响应式系统的重要出口之一，它允许我们在数据变化时执行副作用。与 computed 的惰性求值不同，watch 是主动式的——当侦听的数据发生变化时，回调函数会被立即调用。本文从源码层面分析 watch 的初始化、`$watch` 方法、深度监听（deep）和立即执行（immediate）的实现机制。
 
 ::: details watch 使用
 
@@ -74,6 +76,8 @@ this.$watch('name',function (newName) {...})
 
 ## init
 
+watch 的初始化同样发生在 `initState` 阶段，在 computed 之后处理。`initWatch` 遍历 watch 对象的每个 key，由于 watch 的写法灵活（函数、字符串、对象、数组），需要通过 `createWatcher` 做一层兼容处理。
+
 ```js
 export function initState(vm: Component) {
   const opts = vm.$options;
@@ -98,6 +102,11 @@ function initWatch(vm: Component, watch: Object) {
 
 ### createWatcher
 
+`createWatcher` 是一个兼容性处理函数，它将 watch 各种不同的写法统一规范化，最终调用 `$watch` 创建 watcher 实例：
+
+- 如果 handler 是对象（如 `{ handler: fn, deep: true }`），则提取其中的 handler 函数和选项
+- 如果 handler 是字符串，则从 vm 实例上读取对应的方法
+
 ```js
 function createWatcher(
   vm: Component,
@@ -117,6 +126,8 @@ function createWatcher(
 ```
 
 ### $watch
+
+`$watch` 是 watch 的核心方法，它创建一个 **user watcher**（`options.user = true`），与渲染 watcher 和 computed watcher 并列为 Vue 中三种 watcher 类型。如果设置了 `immediate: true`，则立即执行一次回调。返回值是一个取消监听函数，调用 `watcher.teardown()` 即可停止侦听。
 
 ```js
 Vue.prototype.$watch = function (
@@ -176,6 +187,7 @@ class Watcher {
 :::
 
 匹配 vm 上的对象
+
 ::: details parsePath
 
 ```js
@@ -311,8 +323,12 @@ export function invokeWithErrorHandling(
 
 利用响应式数据 get 时的 dep.depend();进行依赖收集
 
+watch 的依赖收集发生在 user watcher 实例化时，流程与渲染 watcher 类似：
+
 new Watcher() => this.get() pushTarget(this)赋值为当前 watcher => this.getter() = parsePath(key) 实际是取 vm 上的值 => 触发 vm 上响应式数据收集 => dep.depend() 将 Dep.target = watcher 收集起来
 
 **派发更新**
+
+当侦听的数据发生变化时，触发派发更新：
 
 响应式数据发生变化 => this.set() => dep.notify() = watcher.update() = watcher.run()=>invokeWithErrorHandling() =>调用 watch 的 handler 函数

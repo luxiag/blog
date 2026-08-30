@@ -10,13 +10,12 @@ import { slugify } from './slugify';
 
 const postsDirectory = path.join(process.cwd(), 'posts');
 
-// 模块级缓存：避免重复读取和编译所有文章
-const allPostsCache: Post[] | null = null;
+const isDev = process.env.NODE_ENV === 'development';
 
-// 单篇文章缓存
+// 单篇文章缓存（开发模式禁用，以支持热更新）
 const postCache = new Map<string, Post>();
 
-// 元数据缓存
+// 元数据缓存（开发模式禁用，以支持热更新）
 let allPostsMetadataCache: Post[] | null = null;
 
 interface PostFile {
@@ -85,8 +84,6 @@ function transformMarkdownDetails(content: string): string {
       result.push('');
       result.push(`<details data-details-title="${escapedTitle}">`);
       result.push('');
-      result.push(`<summary>${escapedTitle}</summary>`);
-      result.push('');
       i++;
 
       while (i < lines.length) {
@@ -110,8 +107,8 @@ function transformMarkdownDetails(content: string): string {
 }
 
 export async function getPostData(slug: string): Promise<Post> {
-  // 如果已有缓存，直接返回
-  if (postCache.has(slug)) {
+  // 开发模式跳过缓存，每次重新读取文件
+  if (!isDev && postCache.has(slug)) {
     return postCache.get(slug)!;
   }
 
@@ -204,8 +201,10 @@ export async function getPostData(slug: string): Promise<Post> {
       nextPost: frontMatter.nextPost ? resolveNextPost(frontMatter.nextPost) : undefined,
     };
 
-    // 缓存结果
-    postCache.set(slug, post);
+    // 缓存结果（开发模式不缓存）
+    if (!isDev) {
+      postCache.set(slug, post);
+    }
     return post;
   } catch (error) {
     logger.error(`Error reading post ${slug}:`, error);
@@ -248,8 +247,8 @@ function resolveNextPost(nextPostSlug: string): { slug: string; title: string } 
 }
 
 export async function getAllPosts(): Promise<Post[]> {
-  // 列表页仅需要元数据，避免编译 MDX
-  if (allPostsMetadataCache) {
+  // 开发模式跳过缓存，每次重新读取文件
+  if (!isDev && allPostsMetadataCache) {
     return allPostsMetadataCache;
   }
 
@@ -287,8 +286,11 @@ export async function getAllPosts(): Promise<Post[]> {
     }
   }).filter((p): p is Post => p !== null);
 
-  allPostsMetadataCache = posts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  return allPostsMetadataCache;
+  const sorted = posts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  if (!isDev) {
+    allPostsMetadataCache = sorted;
+  }
+  return sorted;
 }
 
 export interface TocItem {

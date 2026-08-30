@@ -3,14 +3,15 @@ title: Vue-Router3.x 框架原理分析
 date: 2021-08-22
 category:
   - Vue
-type:
-  - vue2
-  - vue-router
+tags: ['vue2', 'vue-router']
+excerpt: 'Vue-Router 3.x 框架原理分析，包括路由匹配、跳转、守卫执行顺序及 router-view 更新机制'
 
 ---
 
-[]路由跳转匹配 - 子路由 孙路由跳转
-[]路由记录表的生成
+- 路由跳转匹配 - 子路由 孙路由跳转
+- 路由记录表的生成
+
+Vue-Router 是 Vue.js 的官方路由管理器，它通过维护一张路由映射表，将 URL 路径映射到对应的组件。本篇从 `Vue.use(VueRouter)` 的安装过程开始，分析路由匹配、跳转、守卫执行及 router-view 更新的完整链路。
 
 ```js
 import Vue from "vue";
@@ -40,6 +41,8 @@ new Vue({ router });
 ```
 
 ## install
+
+与 Vuex 类似，Vue-Router 通过 `Vue.use()` 安装时调用内部的 `install` 方法。`install` 的核心是通过全局 mixin 在每个组件的 `beforeCreate` 中注入路由实例，并注册 `RouterView` 和 `RouterLink` 全局组件。
 
 ::: details install
 
@@ -123,6 +126,8 @@ export function install(Vue) {
 }
 ```
 
+:::
+
 ::: details \_router.init
 
 ```js
@@ -192,6 +197,8 @@ export default class VueRouter {
 
 ## VueRouter
 
+`VueRouter` 构造函数根据传入的 routes 配置创建路由匹配器（matcher），并根据 mode 选项（hash/history/abstract）创建对应的 History 实例。
+
 ```js
 const routes = [
   { path: "/foo", component: Foo },
@@ -245,6 +252,8 @@ export default class VueRouter {
 :::
 
 ### createMatcher
+
+`createMatcher` 是路由匹配的核心，它将 routes 配置转换为路由记录（RouteRecord），构建 pathMap 和 nameMap 两张映射表。匹配时根据路径或名称从表中查找对应的 record。
 
 ::: details createMatcher
 
@@ -307,6 +316,7 @@ export function createRouteMap(
 ```
 
 :::
+
 更新路由映射表
 从 route 中匹配对应的路由信息
 
@@ -398,6 +408,8 @@ function addRouteRecord(pathList, pathMap, nameMap, route, parent, matchAs) {
 :::
 
 ## 路由跳转
+
+Vue-Router 提供了 `push`、`replace`、`go`、`back`、`forward` 五个导航方法。底层根据 mode 不同，分别使用 `history.pushState/replaceState` 或修改 `window.location.hash` 来改变 URL，然后通过 `transitionTo` 执行路由切换。
 
 ```js
 router.push(location, onComplete?, onAbort?)
@@ -562,6 +574,18 @@ function replaceHash(path) {
 路由导航获取顺序
 beforeRouteLeave => beforeEach => beforeRouteUpdate => beforeEnter(路由独享) =>beforeRouteEnter => beforeResolve => afterEach
 
+路由守卫是导航过程中的拦截机制，按照固定顺序依次执行。完整的导航解析流程为：
+
+1. **beforeRouteLeave**：失活组件的离开守卫
+2. **beforeEach**：全局前置守卫
+3. **beforeRouteUpdate**：复用组件的更新守卫
+4. **beforeEnter**：路由配置的独享守卫
+5. 解析异步组件
+6. **beforeRouteEnter**：激活组件的进入守卫
+7. **beforeResolve**：全局解析守卫
+8. 导航确认，更新 DOM
+9. **afterEach**：全局后置钩子
+
 ::: details 全局路由守卫
 
 ```js
@@ -577,6 +601,8 @@ router.afterEach((to, from) => {
   console.log("afterEach", to, from);
 });
 ```
+
+:::
 
 ::: details 路由独享的守卫
 
@@ -623,6 +649,8 @@ const router = new VueRouter({
 :::
 
 ## transitionTo
+
+`transitionTo` 是路由切换的核心方法。它先通过 `match` 匹配目标路由，然后调用 `confirmTransition` 确认是否可以跳转（执行路由守卫），最后通过 `updateRoute` 更新当前路由并触发视图更新。
 
 ::: details transitionTo
 
@@ -697,9 +725,12 @@ const router = new VueRouter({
 
 ```
 
+:::
+
 ### match
 
 根据 location 从 pathMap、nameMap 中找出对应的 record
+
 ::: details match
 
 ```js
@@ -885,14 +916,43 @@ function match (
 
 #### resolveQueue
 
-对比 from 和 to 的 matched
+对比 from 和 to 的 `matched` 数组，逐个比较路由记录，找到第一个不同的位置 `i`，以此为界将记录分为三组：
 
-current: a a/b a/b/c
-next: a a/b a/b/d a/b/d/e
+```mermaid
+flowchart TB
+    subgraph current["current.matched (from)"]
+        c0["a"]
+        c1["a/b"]
+        c2["a/b/c"]
+    end
+    subgraph next["next.matched (to)"]
+        n0["a"]
+        n1["a/b"]
+        n2["a/b/d"]
+        n3["a/b/d/e"]
+    end
 
-第三个不同
-next=》a a/b updated a/b/d a/b/d/e activated
-current => a/b/c deactivated
+    c0 ---|相同| n0
+    c1 ---|相同| n1
+    c2 -.-|"≠ 从 i=2 开始不同"| n2
+
+    subgraph result["分组结果"]
+        direction TB
+        updated["**updated** ← next.slice(0, i)<br/>[a, a/b]<br/>两边都有，参数可能变化"]
+        activated["**activated** ← next.slice(i)<br/>[a/b/d, a/b/d/e]<br/>新路由独有，需激活"]
+        deactivated["**deactivated** ← current.slice(i)<br/>[a/b/c]<br/>旧路由独有，需停用"]
+    end
+
+    n0 & n1 --> updated
+    n2 & n3 --> activated
+    c2 --> deactivated
+```
+
+| 分组 | 来源 | 结果 | 含义 |
+|------|------|------|------|
+| updated | `next.slice(0, i)` | `[a, a/b]` | 两个路由都匹配，但可能参数变化，需更新 |
+| activated | `next.slice(i)` | `[a/b/d, a/b/d/e]` | 新路由独有，需要激活 |
+| deactivated | `current.slice(i)` | `[a/b/c]` | 旧路由独有，需要停用 |
 
 ```js
 function resolveQueue(
@@ -1200,6 +1260,8 @@ runQueue(queue, iterator, () => {
 ```
 
 ## router-view 更新机制
+
+router-view 的更新依赖于 Vue 的响应式系统。在 `install` 阶段，`_route` 被定义为响应式属性。当路由切换时，`history.listen` 回调更新 `app._route`，触发依赖该属性的组件重新渲染。router-view 是一个函数式组件，它根据当前 `$route.matched` 和自身嵌套深度，渲染对应的路由组件。
 
 _route 改变触发更新
 

@@ -556,16 +556,13 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
 
       const getBodyContent = () => {
         if (titleFromAttr) {
-          if (Array.isArray(children) && children.length > 0) {
-            const firstChild = children[0];
-            if (React.isValidElement(firstChild) && typeof firstChild.type === 'string' && firstChild.type === 'summary') {
-              return children.slice(1);
-            }
-          }
           return children;
         }
         if (Array.isArray(children) && children.length > 0) {
           const firstChild = children[0];
+          if (React.isValidElement(firstChild) && typeof firstChild.type === 'string' && firstChild.type === 'summary') {
+            return children.slice(1);
+          }
           if (React.isValidElement(firstChild) && typeof firstChild.type === 'string' && firstChild.type === 'p') {
             return children.slice(1);
           }
