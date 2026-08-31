@@ -1,397 +1,796 @@
 ---
-title: 'Redis 练习题（含答案）：从数据结构到缓存与分布式锁'
+title: 'Redis 7 实战练习（含答案）：从五种数据类型到缓存、锁与排障'
 date: '2026-07-01'
-excerpt: '一份循序渐进、可动手的 Redis 练习题集，从 String/Hash/List/Set/ZSet 等数据结构，到缓存三大问题、分布式锁、Lua 原子脚本与限流，每题都配参考答案与讲解。配合《Redis 核心概念》和《Redis 缓存实战》一起练效果最佳。'
+excerpt: '面向初学者的 Redis 7 动手训练：用可执行命令完成五种基础类型、Bitmap/HLL/Geo/Stream、Lua 原子操作、缓存、分布式锁、限流与线上排障，并通过综合项目和面试速答达到工作实战水平。'
 tags: ['Redis', 'Cache', 'Backend', 'Exercises', 'Tutorial']
 ---
 
-# Redis 练习题（含答案）：从数据结构到缓存与分布式锁
+# Redis 7 实战练习（含答案）：从五种数据类型到缓存、锁与排障
 
-光看文章记不牢，动手敲一遍才是真懂。这份练习题按难度递进，覆盖 Redis 在真实项目里的主流用法。建议你先自己想解法，再展开看答案。
+这篇是[《Redis 核心概念与数据结构》](/posts/redis/redis-core-concepts)和[《Redis 缓存实战》](/posts/redis/redis-cache-in-depth)之后的动手训练。这里不再大段复述概念，而是让你完成一组从命令操作到并发安全、再到故障判断的任务。
 
-配套阅读：
+建议先只看“目标 / 提示 / 验收”，在终端完成后再展开答案。示例以 **Redis 7.x** 为基线；Hash 字段 TTL 是 **Redis 7.4+** 能力，会单独标注。
 
-- 数据结构和命令不熟的，先看[《Redis 核心概念与数据结构》](/posts/redis/redis-core-concepts)。
-- 缓存相关题目对应[《Redis 缓存实战》](/posts/redis/redis-cache-in-depth)。
+## 0. 准备环境与安全清理
 
-:::note
-题目默认用 `redis-cli` 执行。为方便重复练习，每题用独立的 key 前缀（如 `ex01:`）。答案是参考解法，生产中还需结合并发、容错与监控增强。
+### 0.1 启动一次性 Redis
+
+下面把端口只绑定到本机，并使用明确的 Redis 7.4 镜像，以便练习 7.4+ 的 Hash 字段 TTL：
+
+```bash
+docker run --name redis-lab \
+  -p 127.0.0.1:6379:6379 \
+  -d redis:7.4-alpine \
+  redis-server --appendonly no
+
+docker exec -it redis-lab redis-cli
+```
+
+进入 `redis-cli` 后确认版本和连通性：
+
+```redis
+PING
+INFO server
+```
+
+预期 `PING` 返回 `PONG`，`INFO server` 中的 `redis_version` 为 7.4.x。退出 CLI 用 `quit`。Windows PowerShell 不支持反斜杠续行时，可把 `docker run` 写成一行。
+
+:::warning
+这个容器没有配置密码，只适合绑定到 `127.0.0.1` 的本地练习。不要把无认证 Redis 暴露到公网，也不要在共享或生产实例执行本文命令。
+:::
+### 0.2 只清理练习键
+
+全文只使用 `lab:` 前缀。下面的 Bash 脚本显式执行完整的 `SCAN` 游标循环，并对每批键使用 `UNLINK` 异步回收内存：
+
+```bash
+cursor=0
+while :; do
+  mapfile -t rows < <(
+    docker exec redis-lab redis-cli --raw \
+      SCAN "$cursor" MATCH 'lab:*' COUNT 200
+  )
+  cursor="${rows[0]}"
+  keys=("${rows[@]:1}")
+
+  if ((${#keys[@]} > 0)); then
+    docker exec redis-lab redis-cli UNLINK "${keys[@]}"
+  fi
+
+  [[ "$cursor" == "0" ]] && break
+done
+```
+
+Windows PowerShell 可执行等价循环：
+
+```powershell
+$cursor = '0'
+do {
+  $rows = @(docker exec redis-lab redis-cli --raw SCAN $cursor MATCH 'lab:*' COUNT 200)
+  $cursor = $rows[0]
+
+  if ($rows.Count -gt 1) {
+    $keys = @($rows | Select-Object -Skip 1)
+    docker exec redis-lab redis-cli UNLINK @keys
+  }
+} while ($cursor -ne '0')
+```
+
+`COUNT` 只是单次扫描的工作量提示，不保证每批恰好返回 200 个键；游标回到 `0` 才算完成。`SCAN` 期间数据若同时变化，结果可能重复或遗漏，因此清理任务应可重试。不要用 `KEYS lab:*` 扫生产库，也不要把扫描结果一次性塞给一个超长 `DEL`。`UNLINK` 只把键从键空间移除，实际内存回收在后台进行。
+
+如果这个容器完全是一次性的，练完可直接删除：
+
+```bash
+docker rm -f redis-lab
+```
+
+---
+
+## Level 1：五种基础类型
+
+### 1.1 String：验证码与原子计数
+
+**目标**：写入 5 分钟验证码；首页 PV 连加 11 次。
+
+**提示**：过期应与写入同一条命令完成；计数不需要“先读再写”。
+
+**验收**：验证码值为 `834271` 且 TTL 在 1～300 秒；PV 为 `11`。
+
+::: details 参考答案
+```redis
+SET lab:l1:code:alice 834271 EX 300
+GET lab:l1:code:alice
+TTL lab:l1:code:alice
+INCR lab:l1:pv:home
+INCRBY lab:l1:pv:home 10
+GET lab:l1:pv:home
+```
+
+预期 `GET lab:l1:code:alice` 返回 `834271`，PV 返回 `11`。`SET ... EX` 避免“写入成功、设置过期失败”留下永久键。
+
+库存不能简单照搬计数器。下面只能作为**反例**：
+
+```redis
+DECR lab:l1:stock
+# 小于 0 后再 INCR 回滚：并发观察到负数，回滚也可能因进程崩溃而丢失
+```
+
+不要把“`DECR` 成负数再回滚”作为正确库存方案；Level 3 会用 Lua 在扣减前判断。
+
+```redis
+UNLINK lab:l1:code:alice lab:l1:pv:home lab:l1:stock
+```
+:::
+
+### 1.2 Hash：局部更新与字段 TTL
+
+**目标**：保存用户姓名、年龄、城市，年龄加 1；再让 `login_code` 字段 60 秒后过期。
+
+**提示**：普通 Hash 操作适用于 Redis 7.x；字段 TTL 命令要求 Redis 7.4+。
+
+**验收**：年龄为 `19`；`HTTL` 返回 1～60；其他字段不随 `login_code` 过期。
+
+::: details 参考答案
+```redis
+HSET lab:l1:user:1001 name Alice age 18 city Shanghai login_code 834271
+HINCRBY lab:l1:user:1001 age 1
+HGETALL lab:l1:user:1001
+HEXPIRE lab:l1:user:1001 60 FIELDS 1 login_code
+HTTL lab:l1:user:1001 FIELDS 1 login_code
+```
+
+`HEXPIRE`、`HTTL` 是 Redis **7.4+** 的 Hash 字段 TTL 能力。`HTTL` 对每个字段返回一个结果；这里应看到 1～60 的剩余秒数。Redis 7.0～7.2 没有字段 TTL，应把临时字段拆成独立键，或实现带时间戳的逻辑过期，不能误以为 `EXPIRE HashKey` 只会过期一个字段。
+
+```redis
+UNLINK lab:l1:user:1001
+```
+:::
+
+### 1.3 List：可确认的简单队列
+
+**目标**：按 job-1、job-2、job-3 的顺序入队并取出一个任务；处理失败时把任务放回。
+
+**提示**：`LMOVE` 能把元素从待处理列表原子移动到处理中列表。
+
+**验收**：第一次取到 `job-1`，处理中列表包含它；确认后两个列表都不再包含它。
+
+::: details 参考答案
+```redis
+RPUSH lab:l1:jobs job-1 job-2 job-3
+LMOVE lab:l1:jobs lab:l1:processing LEFT RIGHT
+LRANGE lab:l1:processing 0 -1
+LREM lab:l1:processing 1 job-1
+LRANGE lab:l1:jobs 0 -1
+```
+
+预期 `LMOVE` 返回 `job-1`。成功后用 `LREM` 确认；失败时可以反向 `LMOVE lab:l1:processing lab:l1:jobs RIGHT LEFT` 放回。阻塞消费可用 Redis 6.2+ 的 `BLMOVE`。若需要消费组、消息确认、故障恢复和历史记录，优先使用 Level 2 的 Stream。
+
+```redis
+UNLINK lab:l1:jobs lab:l1:processing
+```
+:::
+### 1.4 Set：去重与共同关注
+
+**目标**：统计去重访客，并求 Alice 与 Bob 的共同关注。
+
+**提示**：分别使用基数统计和集合交集。
+
+**验收**：UV 为 `3`；共同关注为 `u2`、`u3`，顺序不保证。
+
+::: details 参考答案
+```redis
+SADD lab:l1:uv 1001 1002 1003
+SADD lab:l1:uv 1002
+SCARD lab:l1:uv
+SADD lab:l1:follow:alice u1 u2 u3
+SADD lab:l1:follow:bob u2 u3 u4
+SINTER lab:l1:follow:alice lab:l1:follow:bob
+```
+
+`SADD` 对已存在成员返回 0，因此重复访问不会增加 `SCARD`。若集合可能非常大，应评估 `SINTER` 的计算量和返回结果大小。
+
+```redis
+UNLINK lab:l1:uv lab:l1:follow:alice lab:l1:follow:bob
+```
+:::
+
+### 1.5 ZSet：排行榜
+
+**目标**：建立积分榜，取前两名；Bob 加 30 分后查看名次。
+
+**提示**：Redis 6.2+ 优先使用统一的 `ZRANGE` 语法。
+
+**验收**：初始前两名为 Cindy 120、Alice 100；Bob 加分后排名索引为 `0`。
+
+::: details 参考答案
+```redis
+ZADD lab:l1:rank 100 Alice 95 Bob 120 Cindy
+ZRANGE lab:l1:rank 0 1 REV WITHSCORES
+ZINCRBY lab:l1:rank 30 Bob
+ZREVRANK lab:l1:rank Bob
+```
+
+`ZRANGE ... REV` 是 Redis 6.2+ 推荐写法。旧版兼容命令是 `ZREVRANGE lab:l1:rank 0 1 WITHSCORES`。`ZREVRANK` 从 0 开始，面向用户展示时通常加 1。
+
+```redis
+UNLINK lab:l1:rank
+```
 :::
 
 ---
 
-## 0. 热身：安全地清理练习数据
+## Level 2：Bitmap、HyperLogLog、Geo 与 Stream
 
-**题目**：删除所有以 `ex` 开头的 key，且不能阻塞 Redis。
+### 2.1 Bitmap：连续签到
 
-::: details 查看答案
-用 `SCAN` 游标式分批扫描，对每批结果再删除，**绝不能用 `KEYS ex*`**（会阻塞单线程的 Redis）：
+**目标**：用一个 String 记录用户当月第 1、2、5 天签到，统计签到天数，并判断第 3 天是否签到。
 
+**提示**：位偏移从 0 开始，因此第 N 天使用 N-1。
+
+**验收**：签到数为 `3`；第 3 天返回 `0`。
+
+::: details 参考答案
 ```redis
-SCAN 0 MATCH ex* COUNT 100
+SETBIT lab:l2:sign:1001:202607 0 1
+SETBIT lab:l2:sign:1001:202607 1 1
+SETBIT lab:l2:sign:1001:202607 4 1
+BITCOUNT lab:l2:sign:1001:202607
+GETBIT lab:l2:sign:1001:202607 2
 ```
 
-拿到每批返回的 key 后用 `DEL` 删除，循环直到游标回到 0。生产中通常用脚本封装这个循环。
+Bitmap 不是独立数据类型，底层仍是 String。用户 ID 若直接作为超大偏移可能造成稀疏空间浪费，实际系统常用连续内部编号或按桶拆分。
+
+```redis
+UNLINK lab:l2:sign:1001:202607
+```
+:::
+
+### 2.2 HyperLogLog：低内存近似 UV
+
+**目标**：记录 3 个独立访客，其中 1002 重复一次。
+
+**提示**：使用 `PFADD` 与 `PFCOUNT`，接受近似值。
+
+**验收**：小样本通常返回 `3`，业务判断必须允许估算误差。
+
+::: details 参考答案
+```redis
+PFADD lab:l2:hll:uv 1001 1002 1003
+PFADD lab:l2:hll:uv 1002
+PFCOUNT lab:l2:hll:uv
+```
+
+HyperLogLog 适合只关心基数、不需要取回成员的超大 UV。它是近似统计，标准误差约 0.81%；要求精确或需要成员明细时用 Set。
+
+```redis
+UNLINK lab:l2:hll:uv
+```
+:::
+
+### 2.3 Geo：附近城市
+
+**目标**：写入上海、杭州、北京坐标，查上海 300 km 内的城市并返回距离。
+
+**提示**：经度在前、纬度在后。
+
+**验收**：结果包含上海、杭州，不包含北京。
+
+::: details 参考答案
+```redis
+GEOADD lab:l2:cities 121.4737 31.2304 Shanghai 120.1551 30.2741 Hangzhou 116.4074 39.9042 Beijing
+GEOSEARCH lab:l2:cities FROMMEMBER Shanghai BYRADIUS 300 km ASC WITHDIST
+```
+
+距离是近似地球模型计算结果，不能代替高精度测绘。Geo 底层使用 ZSet；成员更新仍用 `GEOADD`。
+
+```redis
+UNLINK lab:l2:cities
+```
+:::
+
+### 2.4 Stream：消费组、确认与恢复线索
+
+**目标**：创建消费组，写入两条订单消息，让消费者 `c1` 读取并确认一条。
+
+**提示**：消费组中的 `>` 表示读取从未投递给该组的新消息。
+
+**验收**：`XREADGROUP` 返回两条；确认一条后 `XPENDING` 汇总中仍有一条待确认。
+
+::: details 参考答案
+```redis
+XGROUP CREATE lab:l2:orders workers 0 MKSTREAM
+XADD lab:l2:orders * orderId o-1001 amount 99
+XADD lab:l2:orders * orderId o-1002 amount 199
+XREADGROUP GROUP workers c1 COUNT 2 STREAMS lab:l2:orders >
+XPENDING lab:l2:orders workers
+```
+
+复制第一条消息的实际 ID，再执行：
+
+```redis
+XACK lab:l2:orders workers 这里替换为第一条消息ID
+XPENDING lab:l2:orders workers
+```
+
+预期确认数为 `1`，待确认数从 2 变为 1。消费者崩溃后，消息会留在 Pending Entries List；生产消费者要处理超时消息，可用 `XAUTOCLAIM` 转移后重试。Stream 提供的是构建可靠消费所需的机制，并不自动保证业务“恰好一次”；业务仍需幂等。
+
+```redis
+UNLINK lab:l2:orders
+```
+:::
+---
+
+## Level 3：Lua 原子操作
+
+Lua 脚本执行期间不会被其他命令插入，但“原子”不等于“出错自动回滚”：脚本中某条命令报错时，之前已执行的写入不会像数据库事务那样撤销。生产脚本应先校验参数与键类型，并保持短小，避免长时间阻塞 Redis。
+
+### 3.1 扣减库存且保留 TTL
+
+**目标**：库存存在且大于 0 时才减 1；售罄返回 `-1`，键不存在返回 `-2`；扣减不能清除原 TTL。
+
+**提示**：不要读取后用不带过期参数的 `SET` 覆盖库存；整数键上的 `DECR` 会保留已有 TTL。
+
+**验收**：初始库存 2、TTL 300 秒；扣减返回 `1`，扣减后 TTL 仍大于 0。
+
+::: details 参考答案
+```redis
+SET lab:l3:stock:2001 2 EX 300
+TTL lab:l3:stock:2001
+EVAL "local v=redis.call('GET',KEYS[1]); if not v then return -2 end; v=tonumber(v); if not v then return redis.error_reply('stock is not an integer') end; if v<=0 then return -1 end; return redis.call('DECR',KEYS[1])" 1 lab:l3:stock:2001
+TTL lab:l3:stock:2001
+GET lab:l3:stock:2001
+```
+
+预期脚本返回 `1`，最终库存为 `1`，TTL 只因时间流逝略有减少而不会变成 `-1`。危险写法是脚本内 `SET key newValue`：不带 `KEEPTTL` 会清掉 TTL。这里直接 `DECR`，既原子扣减又保留过期时间。
+
+再次扣减到 0 后，下一次返回 `-1`，库存不会出现负数：
+
+```redis
+EVAL "local v=redis.call('GET',KEYS[1]); if not v then return -2 end; v=tonumber(v); if not v then return redis.error_reply('stock is not an integer') end; if v<=0 then return -1 end; return redis.call('DECR',KEYS[1])" 1 lab:l3:stock:2001
+EVAL "local v=redis.call('GET',KEYS[1]); if not v then return -2 end; v=tonumber(v); if not v then return redis.error_reply('stock is not an integer') end; if v<=0 then return -1 end; return redis.call('DECR',KEYS[1])" 1 lab:l3:stock:2001
+GET lab:l3:stock:2001
+UNLINK lab:l3:stock:2001
+```
+:::
+
+### 3.2 ZSet 延迟队列：先看清交付语义
+
+**目标**：原子取出并删除最多 100 个到期任务，避免多个消费者拿到同一任务。
+
+**提示**：Redis 6.2+ 用 `ZRANGE ... BYSCORE`；“取出并删除”意味着任务返回后就不在 Redis 中。
+
+**验收**：第一次返回 `task-1`、`task-2`，第二次返回空数组。
+
+::: details 参考答案
+```redis
+ZADD lab:l3:delay 1000 task-1 2000 task-2 9999999999999 task-future
+ZRANGE lab:l3:delay -inf 2000 BYSCORE LIMIT 0 100
+EVAL "local items=redis.call('ZRANGE',KEYS[1],'-inf',ARGV[1],'BYSCORE','LIMIT',0,ARGV[2]); for _,member in ipairs(items) do redis.call('ZREM',KEYS[1],member) end; return items" 1 lab:l3:delay 2000 100
+EVAL "local items=redis.call('ZRANGE',KEYS[1],'-inf',ARGV[1],'BYSCORE','LIMIT',0,ARGV[2]); for _,member in ipairs(items) do redis.call('ZREM',KEYS[1],member) end; return items" 1 lab:l3:delay 2000 100
+```
+
+兼容旧版可用 `ZRANGEBYSCORE`，Redis 6.2+ 优先统一到 `ZRANGE ... BYSCORE`。
+
+这个方案是**至多一次**：任务在脚本中先从 ZSet 删除，再交给应用处理；消费者拿到结果后若崩溃，任务已经丢失。它适合允许丢失或可由其他系统补偿的轻量定时任务。需要确认、重试和消费者崩溃恢复时，推荐用 **Stream 消费组**：到期调度器把任务写入 Stream，消费者处理成功后 `XACK`，超时 Pending 用 `XAUTOCLAIM` 恢复。
+
+```redis
+UNLINK lab:l3:delay
+```
 :::
 
 ---
 
-## 一、String / TTL / 计数器（基础）
+## Level 4：缓存工程题
 
-### 1.1 验证码与过期
+### 4.1 同时处理穿透与雪崩
 
-**题目**：写入登录验证码 `ex01:code:alice = 123456`，5 分钟后过期，并查看剩余 TTL。
+**目标**：设计“按 ID 查询商品”的缓存结果：数据库不存在时不反复查库；正常商品的 TTL 不集中到同一秒。
 
-::: details 查看答案
+**提示**：为空结果设置短 TTL；正常值使用基础 TTL 加随机抖动。
+
+**验收**：不存在商品命中空标记；正常商品 TTL 分布在 600～660 秒。
+
+::: details 参考答案
+数据库返回空时写短期空标记：
+
 ```redis
-SET ex01:code:alice 123456 EX 300
-TTL ex01:code:alice
-GET ex01:code:alice
+SET lab:l4:item:404 __NULL__ EX 60
+GET lab:l4:item:404
 ```
-`EX 300` 表示 300 秒后自动过期。验证码这类临时数据**必须设 TTL**，否则会堆积占内存。
+
+数据库返回商品时，由应用生成 600～660 的随机 TTL，再执行一条原子写入命令：
+
+```redis
+SET lab:l4:item:1001 "{\"id\":1001,\"name\":\"keyboard\"}" EX 637
+TTL lab:l4:item:1001
+```
+
+应用读到 `__NULL__` 时直接返回“不存在”，但仍要校验 ID 格式、做访问控制或配合布隆过滤器，避免攻击者制造海量不同的空键。TTL 抖动只能降低同批过期造成的雪崩风险，还需要限流、熔断、降级和数据库容量保护。
+
+```redis
+UNLINK lab:l4:item:404 lab:l4:item:1001
+```
 :::
 
-### 1.2 原子计数器
+### 4.2 热点缓存击穿
 
-**题目**：统计首页 PV，每访问一次加 1，再一次性加 10。
+**目标**：热点键失效时只让一个请求回源重建，其余请求等待后重读缓存。
 
-::: details 查看答案
+**提示**：用带随机 token 和租约的互斥锁；未获得锁的请求不能直接打数据库。
+
+**验收**：第一个 `SET ... NX` 返回 `OK`，第二个返回空；缓存写入后使用校验 token 的 Lua 释放锁。
+
+::: details 参考答案
 ```redis
-INCR ex01:pv:home
-INCRBY ex01:pv:home 10
-GET ex01:pv:home
+SET lab:l4:lock:item:1001 token-request-a NX PX 5000
+SET lab:l4:lock:item:1001 token-request-b NX PX 5000
 ```
-`INCR` 是原子操作，高并发下也不会算错，这是用 Redis 做计数器的核心优势。
+
+获得锁的请求再次检查缓存，仍未命中才查数据库并重建：
+
+```redis
+GET lab:l4:item:1001
+SET lab:l4:item:1001 "{\"id\":1001,\"name\":\"keyboard\"}" EX 637
+EVAL "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end" 1 lab:l4:lock:item:1001 token-request-a
+```
+
+未获得锁的请求应做**有上限、带抖动**的短暂等待，然后重读缓存；不能无限自旋，也不能全部绕过锁回源。锁超时必须覆盖正常重建时间，但仍要接受失败并降级。更完整的锁边界见 Level 5。
+
+```redis
+UNLINK lab:l4:item:1001 lab:l4:lock:item:1001
+```
 :::
 
-### 1.3 简单库存扣减（体会原子性）
+### 4.3 数据库与缓存一致性
 
-**题目**：商品 `ex01:stock:2001` 初始 5 件，每次下单减 1，库存不足要能识别。
+**目标**：更新商品价格后，让后续读尽快看到新值，并说明失败处理。
 
-::: details 查看答案
+**提示**：常见做法是先提交数据库事务，再删除缓存，而不是同时“双写值”。
+
+**验收**：能说清数据库更新成功但删缓存失败时如何补偿。
+
+::: details 参考答案
+推荐业务顺序：
+
+1. 在数据库事务中更新价格并提交。
+2. 提交成功后执行 `UNLINK lab:l4:item:1001`。
+3. 下一次读取缓存未命中，从数据库加载新值并回填。
+
 ```redis
-SET ex01:stock:2001 5
-DECR ex01:stock:2001
+UNLINK lab:l4:item:1001
 ```
-`DECR` 返回扣减后的值。如果返回 `-1`，说明超卖了，需要 `INCR` 回滚并提示售罄。但"判断 + 扣减"两步在高并发下仍有隐患，更稳的做法是用 Lua 把它们合成一个原子操作（见第六章）。
+
+删除失败不能静默忽略。可通过事务消息、Outbox/CDC 或可靠重试任务继续失效缓存，并监控重试积压。这个模式缩小而不是消灭不一致窗口；若业务要求严格线性一致，不能只依赖普通 Cache-Aside。
+:::
+---
+
+## Level 5：分布式锁
+
+### 5.1 获取、释放与续期
+
+**目标**：获取 10 秒订单锁；只能由持有者释放和续期。
+
+**提示**：token 必须对每次加锁唯一；校验 token 与修改锁必须原子化。
+
+**验收**：错误 token 释放/续期返回 `0`，正确 token 返回 `1`。
+
+::: details 参考答案
+获取锁：
+
+```redis
+SET lab:l5:lock:order:42 550e8400-e29b-41d4-a716-446655440000 NX PX 10000
+PTTL lab:l5:lock:order:42
+```
+
+安全释放：
+
+```redis
+EVAL "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end" 1 lab:l5:lock:order:42 wrong-token
+EVAL "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end" 1 lab:l5:lock:order:42 550e8400-e29b-41d4-a716-446655440000
+```
+
+重新获取后，安全续期：
+
+```redis
+SET lab:l5:lock:order:42 550e8400-e29b-41d4-a716-446655440001 NX PX 10000
+EVAL "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('PEXPIRE',KEYS[1],ARGV[2]) else return 0 end" 1 lab:l5:lock:order:42 wrong-token 10000
+EVAL "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('PEXPIRE',KEYS[1],ARGV[2]) else return 0 end" 1 lab:l5:lock:order:42 550e8400-e29b-41d4-a716-446655440001 10000
+```
+
+看门狗应在租约明显到期前续期，并在业务结束时停止。若续期失败，持有者必须把自己视为**已丢锁**，不能假定仍有所有权。
+
+```redis
+UNLINK lab:l5:lock:order:42
+```
+:::
+
+### 5.2 为什么 token 和续期仍不够
+
+**目标**：解释进程长暂停和网络分区下，为什么一个“看起来正确”的锁仍可能让两个执行者先后修改同一资源。
+
+**提示**：考虑持有者暂停超过租约后恢复，以及续期响应超时。
+
+**验收**：答案包含 GC pause、网络分区/超时、过期后的旧持有者，以及下游 fencing token。
+
+::: details 参考答案
+典型时序如下：
+
+1. A 获得 10 秒锁，开始处理。
+2. A 因长时间 GC pause、机器挂起或调度停顿超过 10 秒，锁自动过期。
+3. B 获得同一把锁并完成写入。
+4. A 恢复后并不知道锁已丢失，继续把旧结果写到数据库。
+
+网络分区或超时也会造成“不知道命令是否成功”：续期请求可能没有到达 Redis，也可能已经成功但响应丢失。随机 token 能防止 A 误删 B 的锁，续期能降低正常长任务过期的概率，但两者都不能阻止**已过期的旧持有者继续操作外部资源**。
+
+解决关键资源写入时，使用单调递增的 **fencing token**。每次成功获得锁同时获取更大的序号，下游存储记录已接受的最大序号，并拒绝更小或相等的旧序号。只有下游真正执行这个检查，fencing 才有效。
+:::
+
+### 5.3 获取锁并发放 fencing token
+
+**目标**：成功加锁时返回递增 fencing token；失败返回 0。
+
+**提示**：锁键与序号键在 Redis Cluster 中必须位于同一槽，可使用相同 hash tag。
+
+**验收**：第一次返回 `1`，锁未释放时第二次返回 `0`；释放后再次获取返回 `2`。
+
+::: details 参考答案
+```redis
+EVAL "local ok=redis.call('SET',KEYS[1],ARGV[1],'NX','PX',ARGV[2]); if not ok then return 0 end; return redis.call('INCR',KEYS[2])" 2 lab:l5:{order:42}:lock lab:l5:{order:42}:fence token-a 10000
+EVAL "local ok=redis.call('SET',KEYS[1],ARGV[1],'NX','PX',ARGV[2]); if not ok then return 0 end; return redis.call('INCR',KEYS[2])" 2 lab:l5:{order:42}:lock lab:l5:{order:42}:fence token-b 10000
+EVAL "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end" 1 lab:l5:{order:42}:lock token-a
+EVAL "local ok=redis.call('SET',KEYS[1],ARGV[1],'NX','PX',ARGV[2]); if not ok then return 0 end; return redis.call('INCR',KEYS[2])" 2 lab:l5:{order:42}:lock lab:l5:{order:42}:fence token-b 10000
+```
+
+`{order:42}` 让两个键落入 Redis Cluster 同一槽，脚本才能访问。第二次成功获取应返回 2。下游数据库更新要带 token，例如只允许 `incoming_fence > last_fence`；若下游无法做条件写，fencing token 只是一个数字，不能提供保护。
+
+```redis
+UNLINK lab:l5:{order:42}:lock lab:l5:{order:42}:fence
+```
 :::
 
 ---
 
-## 二、Hash（对象存储）
+## Level 6：限流
 
-### 2.1 存用户资料并局部更新
+### 6.1 原子固定窗口
 
-**题目**：用 Hash 存用户 1001（name=Alice, age=18, city=Shanghai），然后把 age 加 1。
+**目标**：同一用户每个 60 秒窗口最多 3 次；计数与首次设置过期必须原子化。
 
-::: details 查看答案
+**提示**：只在计数从 0 变 1 时设置 TTL；应用为每个时间窗口生成不同的键。
+
+**验收**：前 3 次允许，第 4 次拒绝；键始终有正 TTL。
+
+::: details 参考答案
+为了便于重复执行，先清理固定窗口键，然后连续调用四次：
+
 ```redis
-HSET ex02:user:1001 name Alice age 18 city Shanghai
-HINCRBY ex02:user:1001 age 1
-HGETALL ex02:user:1001
+UNLINK lab:l6:fixed:1001:window-1
+EVAL "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('PEXPIRE',KEYS[1],ARGV[2]) end; local ttl=redis.call('PTTL',KEYS[1]); if n<=tonumber(ARGV[1]) then return {1,n,ttl} else return {0,n,ttl} end" 1 lab:l6:fixed:1001:window-1 3 60000
+EVAL "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('PEXPIRE',KEYS[1],ARGV[2]) end; local ttl=redis.call('PTTL',KEYS[1]); if n<=tonumber(ARGV[1]) then return {1,n,ttl} else return {0,n,ttl} end" 1 lab:l6:fixed:1001:window-1 3 60000
+EVAL "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('PEXPIRE',KEYS[1],ARGV[2]) end; local ttl=redis.call('PTTL',KEYS[1]); if n<=tonumber(ARGV[1]) then return {1,n,ttl} else return {0,n,ttl} end" 1 lab:l6:fixed:1001:window-1 3 60000
+EVAL "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('PEXPIRE',KEYS[1],ARGV[2]) end; local ttl=redis.call('PTTL',KEYS[1]); if n<=tonumber(ARGV[1]) then return {1,n,ttl} else return {0,n,ttl} end" 1 lab:l6:fixed:1001:window-1 3 60000
 ```
-用 Hash 而非 String+JSON 的好处：能单独更新某个字段（如 age），不用读出整个对象再写回。
+
+每次返回 `{是否允许, 当前计数, 剩余毫秒}`，实际 CLI 会逐行显示数组。把 `INCR` 和 `EXPIRE` 分成两条命令是错误做法：进程可能在两者之间失败，留下永不过期的计数键。固定窗口仍有边界突刺问题，两个相邻窗口交界处可短时间放过接近两倍流量。
+
+```redis
+UNLINK lab:l6:fixed:1001:window-1
+```
 :::
+### 6.2 原子滑动窗口，拒绝请求不入队
 
-### 2.2 Hash 字段级过期怎么做
+**目标**：任意 60 秒内最多 3 次。清理、计数、判断、写入必须在一个脚本内；被拒绝的请求不能写入 ZSet。
 
-**题目**：Hash 不支持字段级 TTL，如果想让某个字段过期，你会怎么做？
+**提示**：用 Redis `TIME` 取得服务端时间；member 使用全局唯一请求 ID。
 
-::: details 查看答案
-常见三种方案：
-- **拆成独立 key**：`ex02:user:1001:token` 单独存并设 TTL。
-- **逻辑过期**：字段值里带上 `expiresAt` 时间戳，读取时自己判断是否过期。
-- **辅助 ZSet**：用一个 ZSet 存"字段名 → 过期时间戳"，定期扫描清理。
+**验收**：前 3 次返回允许，第 4 次拒绝；`ZCARD` 仍为 `3`。
 
-（注：Redis 7.4+ 开始为 Hash 字段提供了原生 TTL 命令 `HEXPIRE`，但低版本仍需用上述方案。）
+::: details 参考答案
+```redis
+UNLINK lab:l6:sliding:1001
+EVAL "local t=redis.call('TIME'); local now=t[1]*1000+math.floor(t[2]/1000); local window=tonumber(ARGV[1]); local limit=tonumber(ARGV[2]); redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',now-window); local count=redis.call('ZCARD',KEYS[1]); if count>=limit then return {0,count,redis.call('PTTL',KEYS[1])} end; redis.call('ZADD',KEYS[1],now,ARGV[3]); redis.call('PEXPIRE',KEYS[1],window*2); return {1,count+1,redis.call('PTTL',KEYS[1])}" 1 lab:l6:sliding:1001 60000 3 req-001
+EVAL "local t=redis.call('TIME'); local now=t[1]*1000+math.floor(t[2]/1000); local window=tonumber(ARGV[1]); local limit=tonumber(ARGV[2]); redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',now-window); local count=redis.call('ZCARD',KEYS[1]); if count>=limit then return {0,count,redis.call('PTTL',KEYS[1])} end; redis.call('ZADD',KEYS[1],now,ARGV[3]); redis.call('PEXPIRE',KEYS[1],window*2); return {1,count+1,redis.call('PTTL',KEYS[1])}" 1 lab:l6:sliding:1001 60000 3 req-002
+EVAL "local t=redis.call('TIME'); local now=t[1]*1000+math.floor(t[2]/1000); local window=tonumber(ARGV[1]); local limit=tonumber(ARGV[2]); redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',now-window); local count=redis.call('ZCARD',KEYS[1]); if count>=limit then return {0,count,redis.call('PTTL',KEYS[1])} end; redis.call('ZADD',KEYS[1],now,ARGV[3]); redis.call('PEXPIRE',KEYS[1],window*2); return {1,count+1,redis.call('PTTL',KEYS[1])}" 1 lab:l6:sliding:1001 60000 3 req-003
+EVAL "local t=redis.call('TIME'); local now=t[1]*1000+math.floor(t[2]/1000); local window=tonumber(ARGV[1]); local limit=tonumber(ARGV[2]); redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',now-window); local count=redis.call('ZCARD',KEYS[1]); if count>=limit then return {0,count,redis.call('PTTL',KEYS[1])} end; redis.call('ZADD',KEYS[1],now,ARGV[3]); redis.call('PEXPIRE',KEYS[1],window*2); return {1,count+1,redis.call('PTTL',KEYS[1])}" 1 lab:l6:sliding:1001 60000 3 req-004
+ZCARD lab:l6:sliding:1001
+ZRANGE lab:l6:sliding:1001 0 -1
+```
+
+第四次在 `count >= limit` 时直接返回，没有执行 `ZADD`，因此拒绝请求 `req-004` 不会污染窗口。脚本仍可能删除窗口外旧记录，这是维护窗口状态，不是记录被拒绝请求。请求 ID 必须唯一，否则同名 member 会覆盖旧记录。该方案精确但每个允许请求都占一个 ZSet member，高流量场景要评估内存和脚本耗时。
+
+```redis
+UNLINK lab:l6:sliding:1001
+```
 :::
 
 ---
 
-## 三、List（队列）
+## Level 7：排障与安全运维
 
-### 3.1 FIFO 队列
+### 7.1 扫描并分批删除
 
-**题目**：往队列 `ex03:q` 放入 job1/job2/job3，按先进先出取出。
+**目标**：删除 `lab:l7:temp:*`，不能使用 `KEYS`，不能一次性同步删除大量大键。
 
-::: details 查看答案
-```redis
-LPUSH ex03:q job1 job2 job3
-RPOP ex03:q
-```
-`LPUSH`（左进）+ `RPOP`（右出）实现 FIFO。注意 `LPUSH ex03:q job1 job2 job3` 后，列表从左到右是 `job3 job2 job1`，所以 `RPOP` 先取到 job1。
-:::
+**提示**：必须循环到游标回到 0；每批用 `UNLINK`。
 
-### 3.2 阻塞式消费
+**验收**：最终完整扫描不再返回匹配键；脚本能处理空批次。
 
-**题目**：消费者阻塞等待队列 `ex03:q2`，最多等 5 秒，没数据就返回空。
-
-::: details 查看答案
-```redis
-BRPOP ex03:q2 5
-```
-`BRPOP` 在队列为空时阻塞等待，避免消费者空转轮询。这是 List 做简单任务队列的常用方式。
-:::
-
----
-
-## 四、Set（去重与关系运算）
-
-### 4.1 统计独立访客 UV
-
-**题目**：把访问用户 ID 加入 `ex04:uv:2026-07-01`，重复访问只算一次，统计 UV。
-
-::: details 查看答案
-```redis
-SADD ex04:uv:2026-07-01 1001 1002 1003
-SADD ex04:uv:2026-07-01 1002
-SCARD ex04:uv:2026-07-01
-```
-Set 自动去重，`SCARD` 返回去重后的数量。1002 加了两次也只算一个，结果是 3。
-:::
-
-### 4.2 共同关注
-
-**题目**：求 A、B 两个用户的共同关注。
-
-::: details 查看答案
-```redis
-SADD ex04:follow:a u1 u2 u3
-SADD ex04:follow:b u2 u3 u4
-SINTER ex04:follow:a ex04:follow:b
-```
-`SINTER` 求交集，返回 u2、u3。集合运算是 Set 的一大杀手锏。
-:::
-
----
-
-## 五、ZSet（排行榜与延迟队列）
-
-### 5.1 TopN 排行榜
-
-**题目**：积分榜 Alice=100、Bob=95、Cindy=120，查前 2 名并给 Bob 加 10 分后查他的排名。
-
-::: details 查看答案
-```redis
-ZADD ex05:rank 100 Alice 95 Bob 120 Cindy
-ZREVRANGE ex05:rank 0 1 WITHSCORES
-ZINCRBY ex05:rank 10 Bob
-ZREVRANK ex05:rank Bob
-```
-`ZREVRANGE` 按分数从高到低取。`ZREVRANK` 返回的排名从 0 开始，展示给用户时要 +1。
-:::
-
-### 5.2 延迟队列
-
-**题目**：把任务按"执行时间戳"放入延迟队列，取出所有已到期的任务。
-
-::: details 查看答案
-```redis
-ZADD ex05:delay 1751328000 t1 1751328060 t2
-ZRANGEBYSCORE ex05:delay -inf 1751328000 LIMIT 0 100
-```
-把执行时间戳当作 score，用 `ZRANGEBYSCORE` 取出 score ≤ 当前时间的任务。取出后要删除避免重复消费——并发下"取 + 删"应该用 Lua 做成原子操作（见 6.2）。
-:::
-
----
-
-## 六、Lua 原子脚本
-
-Lua 脚本在 Redis 内部单线程执行，天然原子，适合把"检查 + 修改"这类多步操作合并。
-
-### 6.1 原子扣减库存（防超卖）
-
-**题目**：库存在 `ex06:stock:2001`，库存 ≥ 1 才扣减并返回新库存，否则返回 -1。
-
-::: details 查看答案
-```redis
-EVAL "local v = tonumber(redis.call('GET', KEYS[1]) or '0'); if v <= 0 then return -1 end; v = v - 1; redis.call('SET', KEYS[1], v); return v" 1 ex06:stock:2001
-```
-关键在于"读库存 → 判断 → 扣减"三步在脚本里一次性原子完成，中间不会被其他请求插入，从根本上杜绝超卖。这比"先 DECR 再判断回滚"更可靠。
-:::
-
-### 6.2 延迟队列"取并删"原子化
-
-**题目**：从延迟队列取出最多 100 个到期任务，并同时删除，保证并发下不重复取。
-
-::: details 查看答案
-```redis
-EVAL "local z=KEYS[1]; local now=tonumber(ARGV[1]); local limit=tonumber(ARGV[2]); local items=redis.call('ZRANGEBYSCORE', z, '-inf', now, 'LIMIT', 0, limit); if #items==0 then return items end; redis.call('ZREM', z, unpack(items)); return items" 1 ex05:delay 1751328000 100
-```
-"取出"和"删除"合并成一个原子脚本，避免两个消费者同时取到同一批任务。（注意 `unpack` 在不同 Redis/Lua 版本行为略有差异，生产脚本要更健壮。）
-:::
-
----
-
-## 七、缓存综合（穿透 / 击穿 / 雪崩）
-
-对应[《Redis 缓存实战》](/posts/redis/redis-cache-in-depth)，这几题把三大问题串起来。
-
-### 7.1 缓存空值防穿透
-
-**题目**：对数据库里也不存在的用户，如何避免每次请求都打到数据库？
-
-::: details 查看答案
-```redis
-SET ex07:user:404 __NULL__ EX 60
-GET ex07:user:404
-```
-查库为空时，往缓存写一个短 TTL 的空标记 `__NULL__`。业务读到它就当作"不存在"直接返回，不再查库。TTL 设短一点，避免数据真被创建后长时间读到空。
-:::
-
-### 7.2 TTL 抖动防雪崩
-
-**题目**：一批同类 key 想在 10 分钟基础上错开过期，怎么设？
-
-::: details 查看答案
-在代码里给 TTL 加随机值，Redis 侧照常 `SET ... EX`：
-
-```
-ttl = 600 + random(0, 60)   # 10 分钟 + 0~60 秒随机
-SET ex07:item:1 value EX <ttl>
-```
-错开过期时间，避免大量 key 在同一秒集体失效把数据库压垮。
-:::
-
-### 7.3 互斥锁防击穿
-
-**题目**：热点 key 失效瞬间，只让一个请求回源重建，其他请求不要一起打库。
-
-::: details 查看答案
-```redis
-SET ex07:lock:hotkey <token> NX PX 3000
-```
-`NX` 保证只有一个请求能拿到锁去重建缓存；没拿到锁的请求 sleep 一小会儿后重试读缓存。`PX 3000` 给锁设过期，防止重建线程挂了导致锁永不释放。释放锁要校验 token（见 8.2）。
-:::
-
----
-
-## 八、分布式锁
-
-### 8.1 获取锁
-
-**题目**：获取任务锁 `ex08:lock:job`，持有 10 秒。
-
-::: details 查看答案
-```redis
-SET ex08:lock:job <random-token> NX PX 10000
-```
-- `NX`：只有 key 不存在时才设置成功（保证互斥）。
-- `PX 10000`：10 秒后自动过期，防止持锁者宕机导致死锁。
-- value 用**随机 token**：标识锁的归属，释放时校验，避免误删别人的锁。
-:::
-
-### 8.2 安全释放锁（防误删）
-
-**题目**：只允许持锁者释放自己的锁，怎么保证？
-
-::: details 查看答案
-用 Lua 把"校验 token + 删除"合成原子操作：
+::: details 参考答案
+先制造少量数据：
 
 ```redis
-EVAL "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end" 1 ex08:lock:job <random-token>
+MSET lab:l7:temp:1 a lab:l7:temp:2 b lab:l7:keep c
 ```
-为什么必须原子？如果先 `GET` 校验、再 `DEL`，两步之间锁可能刚好过期并被别人获取，你的 `DEL` 就会误删别人的锁。Lua 脚本消除了这个中间窗口。
-:::
 
-### 8.3 锁续期（看门狗）
+使用本文 0.2 节的完整游标脚本，把匹配模式改为 `lab:l7:temp:*`。关键点不是只执行一次 `SCAN 0`，而是把每次返回的第一个值作为下一次游标，直到它变成 `0`；中间批次即使没有键也必须继续。
 
-**题目**：业务要执行 30 秒，但锁只有 10 秒，怎么避免锁提前过期被别人抢走？
-
-::: details 查看答案
-启动一个后台定时任务（看门狗），每隔几秒给锁续期，续期前必须校验 token：
+验证：
 
 ```redis
-EVAL "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end" 1 ex08:lock:job <random-token> 10000
+SCAN 0 MATCH lab:l7:temp:* COUNT 100
+GET lab:l7:keep
+UNLINK lab:l7:keep
 ```
-校验 token 是为了确保只给"自己的锁"续期。Redisson 等成熟客户端已内置了看门狗机制，生产中建议直接用它们而非手写。
+
+首次扫描完成时可能已经返回游标 0；若不是，仍要继续循环。`SCAN` 不提供扫描期间变化数据的一致快照，删除器应允许重复执行。
 :::
 
----
+### 7.2 判断大 key，而不是只看一个数字
 
-## 九、限流（进阶）
+**目标**：比较 String 与 Hash 的逻辑规模和内存估算，并说明 `MEMORY USAGE` 的边界。
 
-### 9.1 固定窗口计数
+**提示**：同时看元素数量、值大小、访问延迟和删除影响。
 
-**题目**：限制用户 1001 每分钟最多 100 次请求。
+**验收**：能解释 `SAMPLES 0` 更精确但可能更贵，返回值也不等于实例总内存影响。
 
-::: details 查看答案
+::: details 参考答案
 ```redis
-INCR ex09:rl:1001:202607011230
-EXPIRE ex09:rl:1001:202607011230 60
+SET lab:l7:blob 0123456789
+HSET lab:l7:profile name Alice city Shanghai role admin
+STRLEN lab:l7:blob
+HLEN lab:l7:profile
+MEMORY USAGE lab:l7:blob
+MEMORY USAGE lab:l7:profile
+MEMORY USAGE lab:l7:profile SAMPLES 0
 ```
-key 里拼上"当前分钟"，`INCR` 后判断是否超过 100。缺点是**窗口边界突刺**：在两分钟交界处可能短时间内放过近 200 次请求。
+
+`MEMORY USAGE key` 返回该键及其值在 Redis 数据结构中的**近似内存字节数**。对嵌套类型默认抽样估算；`SAMPLES 0` 会检查全部嵌套元素，更精确，但对大集合本身可能造成较高 CPU/延迟开销，不要在高峰对大量键滥用。
+
+它不能单独代表该键对实例的全部成本：还要考虑内存碎片、复制/AOF、客户端输出缓冲、网络返回体、命令复杂度以及删除时延。排查通常结合：
+
+```bash
+docker exec redis-lab redis-cli --bigkeys
+```
+
+`--bigkeys` 通过扫描找各类型“逻辑规模”较大的键，并非精确内存排行榜；它仍会对实例产生扫描和类型命令负载，应在低峰限速执行。发现大键后按类型用 `STRLEN`、`HLEN`、`LLEN`、`SCARD`、`ZCARD` 复核，并优先用 `UNLINK` 删除。
+
+```redis
+UNLINK lab:l7:blob lab:l7:profile
+```
 :::
 
-### 9.2 ZSet 滑动窗口（更精确）
+### 7.3 正确解读 SLOWLOG
 
-**题目**：用滑动窗口更精确地限流：任意 60 秒内不超过 100 次。
+**目标**：查看慢日志配置与最近 10 条记录，并说明为什么“客户端很慢”不一定出现在慢日志里。
 
-::: details 查看答案
-思路：member 用唯一请求 id，score 用毫秒时间戳。每次请求先清理窗口外的旧记录，再统计窗口内数量：
+**提示**：慢日志只统计 Redis 执行命令的时间。
 
+**验收**：能说出阈值单位，以及网络、排队和返回大响应的边界。
+
+::: details 参考答案
 ```redis
-ZADD ex09:sw:1001 1751328000123 req-1
-ZREMRANGEBYSCORE ex09:sw:1001 -inf 1751327940123
-ZCARD ex09:sw:1001
-EXPIRE ex09:sw:1001 120
-```
-`ZREMRANGEBYSCORE` 删掉 60 秒前的记录，`ZCARD` 统计窗口内请求数。生产上通常把"添加 + 清理 + 计数 + 判断"用一个 Lua 脚本原子完成。
-:::
-
----
-
-## 十、性能与排障（理解题）
-
-### 10.1 为什么线上禁用 KEYS
-
-**题目**：为什么生产环境不能用 `KEYS pattern`？用什么替代？
-
-::: details 查看答案
-Redis 执行命令是单线程的，`KEYS` 会一次性遍历全部 key，key 多时会长时间阻塞，期间所有其他请求都被卡住，等于一次事故。替代方案是 `SCAN`：
-
-```redis
-SCAN 0 MATCH user:* COUNT 100
-```
-`SCAN` 是游标式分批扫描，每次只取一小批，不会长时间阻塞。
-:::
-
-### 10.2 定位大 key
-
-**题目**：怀疑有大 key 拖慢了 Redis，如何排查它多大？
-
-::: details 查看答案
-先用 `SCAN` 找可疑 key，再按类型查大小：
-
-```redis
-STRLEN key   # String 长度
-HLEN key     # Hash 字段数
-LLEN key     # List 长度
-SCARD key    # Set 元素数
-ZCARD key    # ZSet 元素数
-```
-另外 `redis-cli --bigkeys` 可以扫描整库找出各类型最大的 key。发现大 key 后应考虑拆分或调整数据结构。
-:::
-
-### 10.3 查看慢命令
-
-**题目**：如何查看最近的慢命令？
-
-::: details 查看答案
-```redis
+CONFIG GET slowlog-log-slower-than
+CONFIG GET slowlog-max-len
+SLOWLOG LEN
 SLOWLOG GET 10
 ```
-返回最近 10 条超过阈值的慢命令，用于定位是哪些命令拖慢了实例。阈值由 `slowlog-log-slower-than` 配置。
+
+`slowlog-log-slower-than` 的单位是**微秒**；负数表示禁用，0 表示记录所有命令，不应在生产长期设置为 0。`SLOWLOG GET 10` 返回 ID、时间戳、执行耗时、命令参数等信息。
+
+SLOWLOG 的耗时只覆盖 Redis 在线程中执行命令的阶段，不包含客户端到服务端的网络传输，也不包含把响应发送给客户端的 I/O。客户端连接池等待、网络抖动、事件循环排队、超大返回值传输都可能让端到端延迟很高，却没有对应慢日志。排障要把客户端指标、Redis 延迟/CPU、连接数、网络、`INFO commandstats` 与 SLOWLOG 时间线一起看。不要为了“清爽”随意 `SLOWLOG RESET`，它会删除现场证据。
+:::
+---
+
+## 综合项目：秒杀订单入口
+
+**目标**：为商品 1001 实现一个最小可用的订单入口：同一请求不能重复扣库存；库存大于 0 才扣减；成功订单写入 Stream；库存 TTL 必须保留。
+
+**提示**：库存键、幂等键和 Stream 在 Redis Cluster 中应使用相同 hash tag；Lua 原子化“查重、检查库存、扣减、写消息”。
+
+**验收**：库存 2 时，`req-001` 首次成功、重试返回重复；`req-002` 成功；`req-003` 售罄。最终库存为 0、Stream 两条消息、库存 TTL 仍大于 0。
+
+::: details 参考答案
+初始化：
+
+```redis
+SET lab:project:{p1001}:stock 2 EX 600
+DEL lab:project:{p1001}:orders lab:project:{p1001}:req:req-001 lab:project:{p1001}:req:req-002 lab:project:{p1001}:req:req-003
+```
+
+脚本返回约定：成功返回 Stream 消息 ID；重复请求返回字符串 `DUPLICATE`；售罄返回 `SOLD_OUT`；库存不存在返回 `STOCK_NOT_FOUND`。
+
+```redis
+EVAL "local old=redis.call('GET',KEYS[2]); if old then return 'DUPLICATE' end; local stock=redis.call('GET',KEYS[1]); if not stock then return 'STOCK_NOT_FOUND' end; stock=tonumber(stock); if not stock then return redis.error_reply('stock is not an integer') end; if stock<=0 then return 'SOLD_OUT' end; redis.call('SET',KEYS[2],'ACCEPTED','EX',ARGV[3]); redis.call('DECR',KEYS[1]); return redis.call('XADD',KEYS[3],'*','orderId',ARGV[1],'requestId',ARGV[2],'productId','1001')" 3 lab:project:{p1001}:stock lab:project:{p1001}:req:req-001 lab:project:{p1001}:orders order-001 req-001 86400
+EVAL "local old=redis.call('GET',KEYS[2]); if old then return 'DUPLICATE' end; local stock=redis.call('GET',KEYS[1]); if not stock then return 'STOCK_NOT_FOUND' end; stock=tonumber(stock); if not stock then return redis.error_reply('stock is not an integer') end; if stock<=0 then return 'SOLD_OUT' end; redis.call('SET',KEYS[2],'ACCEPTED','EX',ARGV[3]); redis.call('DECR',KEYS[1]); return redis.call('XADD',KEYS[3],'*','orderId',ARGV[1],'requestId',ARGV[2],'productId','1001')" 3 lab:project:{p1001}:stock lab:project:{p1001}:req:req-001 lab:project:{p1001}:orders order-001 req-001 86400
+EVAL "local old=redis.call('GET',KEYS[2]); if old then return 'DUPLICATE' end; local stock=redis.call('GET',KEYS[1]); if not stock then return 'STOCK_NOT_FOUND' end; stock=tonumber(stock); if not stock then return redis.error_reply('stock is not an integer') end; if stock<=0 then return 'SOLD_OUT' end; redis.call('SET',KEYS[2],'ACCEPTED','EX',ARGV[3]); redis.call('DECR',KEYS[1]); return redis.call('XADD',KEYS[3],'*','orderId',ARGV[1],'requestId',ARGV[2],'productId','1001')" 3 lab:project:{p1001}:stock lab:project:{p1001}:req:req-002 lab:project:{p1001}:orders order-002 req-002 86400
+EVAL "local old=redis.call('GET',KEYS[2]); if old then return 'DUPLICATE' end; local stock=redis.call('GET',KEYS[1]); if not stock then return 'STOCK_NOT_FOUND' end; stock=tonumber(stock); if not stock then return redis.error_reply('stock is not an integer') end; if stock<=0 then return 'SOLD_OUT' end; redis.call('SET',KEYS[2],'ACCEPTED','EX',ARGV[3]); redis.call('DECR',KEYS[1]); return redis.call('XADD',KEYS[3],'*','orderId',ARGV[1],'requestId',ARGV[2],'productId','1001')" 3 lab:project:{p1001}:stock lab:project:{p1001}:req:req-003 lab:project:{p1001}:orders order-003 req-003 86400
+GET lab:project:{p1001}:stock
+TTL lab:project:{p1001}:stock
+XLEN lab:project:{p1001}:orders
+XRANGE lab:project:{p1001}:orders - +
+```
+
+相同 `{p1001}` hash tag 让三个键在 Redis Cluster 中同槽。脚本执行不被其他请求插入；`DECR` 不会清除库存 TTL。幂等键记录成功请求 24 小时，实际保留时长应覆盖上游最大重试周期。
+
+生产版还要补齐：入口先执行 Level 6 限流；Stream 消费者用消费组、`XACK`、`XAUTOCLAIM` 和数据库唯一约束实现幂等落单；监控 Pending、库存与消息差异；对脚本参数和键类型做预检。还要记住 Lua 出错不自动回滚：部署前应确保 Stream 和库存键类型正确，并用测试覆盖错误路径。
+
+```redis
+UNLINK lab:project:{p1001}:stock lab:project:{p1001}:orders lab:project:{p1001}:req:req-001 lab:project:{p1001}:req:req-002 lab:project:{p1001}:req:req-003
+```
 :::
 
 ---
 
-## 结语
+## 面试速答
 
-这套题覆盖了 Redis 在项目里的主流用法：数据结构选型、缓存三大问题、分布式锁、Lua 原子脚本、限流和排障。建议的练习节奏：
+### 1. `SET key value NX PX 10000` 是否等于“绝对安全的分布式锁”？
 
-1. 先把一到五章的数据结构题敲熟，形成"需求 → 结构"的直觉。
-2. 再攻六到九章，这些是把 Redis 用"稳"的关键（原子性、缓存防护、锁）。
-3. 最后十章的排障题，理解"为什么"比记命令更重要。
+不是。它提供带租约的互斥尝试，但仍要有唯一 token、安全释放/续期，并处理 GC pause、网络分区、故障切换和旧持有者恢复。关键外部写入应由下游校验 fencing token。
 
-练完记得回头对照[《Redis 核心概念》](/posts/redis/redis-core-concepts)和[《Redis 缓存实战》](/posts/redis/redis-cache-in-depth)，把命令背后的原理再串一遍。
+### 2. 为什么不能用 `DECR` 到负数后再 `INCR` 回滚库存？
+
+负数会被并发请求观察到，而且进程可能在回滚前崩溃。应把“读取、判断、扣减”放进 Lua，库存不足时不做写入。
+
+### 3. Lua 脚本“原子”是否意味着报错会回滚？
+
+不意味着。原子指脚本执行期间不会插入其他命令；后续命令报错时，之前的写入可能已经生效，所以应先校验再写入。
+
+### 4. 为什么固定窗口的 `INCR` 和 `EXPIRE` 要放在一个脚本里？
+
+分成两条时，客户端可能在 `INCR` 后失败，留下永久计数键。脚本只在首次计数时设置 TTL，并一起返回是否允许。
+
+### 5. 滑动窗口被拒绝的请求应不应该 `ZADD`？
+
+不应该。应先原子清理、计数和判断，达到上限直接返回；否则拒绝流量会继续占用窗口与内存。
+
+### 6. `SCAN` 一次返回空数组，是否代表扫描结束？
+
+不是。只有返回游标为 0 才结束；空批次也要继续。扫描期间集合变化还可能导致重复或遗漏，调用方应可重试、可幂等。
+
+### 7. ZSet 延迟队列原子“取并删”是什么交付语义？
+
+至多一次。任务删掉后消费者若崩溃会丢失。需要确认与恢复时，用 Stream 消费组和 Pending 机制。
+
+### 8. Stream 消费组是否自动提供“恰好一次”？
+
+不提供。Pending、`XACK` 和 `XAUTOCLAIM` 支持恢复，但消息可能重投，业务侧仍需幂等键或数据库唯一约束。
+
+### 9. Redis 7.x 的 Hash 都支持字段 TTL 吗？
+
+不是。`HEXPIRE`、`HTTL` 等字段 TTL 命令从 Redis 7.4 开始提供；7.0～7.2 需要拆独立键或做逻辑过期。
+
+### 10. `MEMORY USAGE` 能否直接找出所有危险大 key？
+
+不能。它是单键结构内存估算，嵌套类型可能抽样；还要结合元素数量、访问复杂度、响应大小、删除成本、碎片和复制/AOF 开销。
+
+### 11. 客户端请求耗时 500 ms，为什么 SLOWLOG 可能没有记录？
+
+SLOWLOG 只记 Redis 执行命令阶段的耗时，不含连接池等待、网络传输和响应发送 I/O。要联合客户端、网络和 Redis 指标排查。
+
+### 12. Redis Cluster 中 Lua 访问多个键要注意什么？
+
+所有键必须在同一 hash slot。可把相同 hash tag 放进键名，例如 `a:{order42}` 与 `b:{order42}`，同时避免形成无法拆分的超大热点槽。
+
+---
+
+## 完成标准
+
+如果你能不看答案独立完成以下事项，就已经具备常见工作任务和面试题的基础：
+
+- 根据查询和更新模式选择 String、Hash、List、Set、ZSet 或高级结构；
+- 识别“检查 + 写入”的竞态，并用短小 Lua 脚本原子化；
+- 讲清缓存穿透、击穿、雪崩和一致性的工程取舍；
+- 不把租约锁当成绝对正确性保证，知道 fencing token 的作用；
+- 写出正确的固定/滑动窗口限流，理解拒绝路径；
+- 用完整 `SCAN` 循环、`UNLINK`、逻辑规模、`MEMORY USAGE` 与 SLOWLOG 安全排障。
+
+最后运行 0.2 节脚本清理所有 `lab:*` 键，或直接 `docker rm -f redis-lab` 删除一次性容器。需要回顾原理时，再返回[《Redis 核心概念与数据结构》](/posts/redis/redis-core-concepts)和[《Redis 缓存实战》](/posts/redis/redis-cache-in-depth)。

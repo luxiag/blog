@@ -1,284 +1,717 @@
 ---
-title: 'Redis 核心概念与数据结构：从内存模型到八大数据类型'
+title: 'Redis 核心概念：从零建立数据结构、持久化与性能心智模型'
 date: '2026-07-01'
-excerpt: 'Redis 到底是什么、为什么快、怎么选数据结构？本文从"内存 + 单线程"的核心模型讲起，系统梳理 String/Hash/List/Set/ZSet 等八大数据结构的原理与适用场景，帮你打好用好 Redis 的地基。'
+excerpt: '面向零基础读者的 Redis 7.x 系统入门：从最小环境、Key 与 TTL，到五类基础类型、Stream、持久化、内存淘汰、性能排查和完整业务案例。'
 tags: ['Redis', 'Database', 'Backend', 'Tutorial']
+nextPost: 'redis/redis-cache-in-depth'
 ---
 
-# Redis 核心概念与数据结构：从内存模型到八大数据类型
+# Redis 核心概念：从零建立数据结构、持久化与性能心智模型
 
-很多人对 Redis 的第一印象是"缓存"，但这只是它最出名的一个用途。要真正用好 Redis，得先搞清楚两个更根本的问题：
+Redis 常被叫作“缓存”，但缓存只是它的一种用法。更准确的心智模型是：
 
-1. **它凭什么这么快？**（理解这个，你才知道什么操作能用、什么操作会拖垮它）
-2. **它提供了哪些数据结构，分别适合干什么？**（选对数据结构，是用好 Redis 的一半）
+> Redis 是一个以内存数据为主、按 key 访问、提供多种数据结构，并支持过期、持久化、复制和消息能力的数据服务。
 
-这篇文章不讲缓存的具体套路（那是[缓存专题](/posts/redis/redis-cache-in-depth)的内容），而是先把地基打牢：Redis 的内存模型和数据结构。读完你会对"该在什么场景下用哪种结构"有清晰的判断。
+本文面向第一次接触 Redis 的读者，以 **Redis 7.x** 为主要基线。涉及 Redis 7.4 及以上版本才有的能力会单独标注；本文不把 7.x 或 7.4 称为“最新版本”。缓存击穿、一致性等问题请继续阅读[Redis 缓存深入专题](/posts/redis/redis-cache-in-depth)，动手练习可配合[Redis 练习题（含答案）](/posts/redis/redis-exercises-with-answers)。
 
-:::note
-本文以 Redis 6/7 的常见能力为参考。不同版本命令与实现细节可能略有差异，涉及版本相关特性时会特别说明。
+## 学习目标
+
+读完本文，你应该能够：
+
+- 用 Docker 启动 Redis，并通过 `redis-cli` 完成最小验证；
+- 准确解释 Redis 为什么快，以及“单线程”究竟指什么；
+- 为 key 设计命名和 TTL，并理解过期不等于到点立即释放内存；
+- 在 String、Hash、List、Set、ZSet 之间做出选择；
+- 知道 Bitmap、HyperLogLog、Geo 和 Stream 各自解决什么问题；
+- 说清 RDB、AOF、内存淘汰和常见性能风险；
+- 用 pipeline、`SCAN` 等工具写出更稳妥的生产代码。
+
+## 一、先跑起来：Docker 与 redis-cli 最小环境
+
+为什么先搭环境？因为 Redis 的许多边界，亲手执行一次比背概念更容易记住。
+
+### 1. 启动 Redis 7
+
+下面把容器命名为 `redis7`，映射本机 `6379` 端口，并开启 AOF。镜像标签固定在 Redis 7 大版本，适合本文练习；正式项目应按团队策略固定到经过验证的具体补丁版本。
+
+```powershell
+docker run --name redis7 -d -p 6379:6379 redis:7 redis-server --appendonly yes
+docker ps --filter "name=redis7"
+```
+
+预期：第二条命令能看到状态为 `Up` 的 `redis7` 容器。
+
+连接容器内的命令行：
+
+```powershell
+docker exec -it redis7 redis-cli
+```
+
+进入后执行：
+
+```redis
+PING
+SET hello redis
+GET hello
+DEL hello
+```
+
+预期结果依次为：`PONG`、`OK`、`"redis"`、`(integer) 1`。
+
+也可以不进入交互模式，直接执行单条命令：
+
+```powershell
+docker exec redis7 redis-cli PING
+```
+
+预期输出：`PONG`。
+
+练习结束后的清理命令：
+
+```powershell
+docker rm -f redis7
+```
+
+:::warning
+本地示例没有配置密码，也没有启用 TLS，只适合个人开发环境。不要把未鉴权的 `6379` 端口暴露到公网。
 :::
 
----
+## 二、Redis 为什么快，“单线程”又是什么意思
 
-## 一、Redis 是什么：一句话认知
+先问为什么：只有理解执行模型，才能知道一条慢命令为什么会拖慢其他请求。
 
-先给一个准确的定义：
+### 1. 快来自一组因素，不是一个口号
 
-> Redis（**Re**mote **Di**ctionary **S**erver）是一个**以内存为主存储**、支持**多种数据结构**、提供**可选持久化**与**高可用**能力的键值（Key-Value）数据库。
+Redis 常见操作快，主要因为：
 
-拆开看三个关键词：
+1. **数据主要在内存中**：多数命令不需要等待随机磁盘 I/O；
+2. **高效的数据结构与紧凑编码**：Redis 会根据元素数量和大小选择合适的内部表示；
+3. **事件驱动与 I/O 多路复用**：一个线程可以管理许多网络连接；
+4. **核心命令通常串行执行**：减少共享数据上的锁竞争和线程切换；
+5. **批处理和网络优化**：pipeline 能减少网络往返，Redis 6 起还可使用 I/O 线程辅助网络读写。
 
-- **以内存为主**：数据主要放在内存里，所以读写极快，但也意味着容量受内存限制、断电会丢（靠持久化弥补）。
-- **多种数据结构**：它不像普通 KV 那样只能存字符串，还能存列表、哈希、集合、有序集合等，这是它比 Memcached 强大的地方。
-- **键值数据库**：所有数据都通过一个唯一的 key 来存取。
+不能把它简化为“CPU 几乎不是瓶颈”。当命令计算量大、key 很大、Lua 脚本耗时，或实例吞吐接近上限时，CPU 完全可能成为瓶颈；网络、内存带宽、持久化 I/O 也都可能成为瓶颈。
 
----
+### 2. “单线程”主要指核心命令执行路径
 
-## 二、Redis 为什么快：三个核心原因
+日常所说的 Redis 单线程，是指绝大多数数据命令在主线程中按顺序执行。它**不表示 Redis 进程只有一个线程**：后台持久化、异步释放、网络 I/O 等工作可以使用子进程或其他线程；部分命令和模块也有自己的执行特点。
 
-理解"为什么快"不是为了背面试题，而是为了知道**什么操作是安全的、什么操作会出事**。
+这个模型带来两个重要结论：
 
-### 1. 数据在内存里
-
-内存的读写速度比磁盘快几个数量级。传统数据库很多时间花在磁盘 I/O 上，而 Redis 直接操作内存，这是它快的最根本原因。
-
-### 2. 单线程处理命令（避免了锁竞争）
-
-这是最反直觉、也最重要的一点：**Redis 处理命令的核心是单线程的**。
-
-初学者常问：单线程不是更慢吗？恰恰相反，在 Redis 的场景下单线程反而是优势：
-
-- 内存操作本身极快，CPU 几乎不是瓶颈，瓶颈在网络和内存带宽。
-- 单线程意味着**没有多线程的锁竞争和上下文切换开销**。
-- 所有命令**串行执行**，天然保证了单个命令的原子性——这一点后面理解并发和原子操作时非常关键。
+- 单条命令的执行过程通常不会被另一条普通命令插入，因此 `INCR` 这类命令具有原子性；
+- 主线程正在处理耗时命令时，后续命令就要排队，所以 O(N) 操作、大 key、复杂脚本必须谨慎。
 
 :::important
-"单线程"是理解 Redis 的钥匙。因为命令是一条条排队执行的，所以**一条慢命令会阻塞后面所有请求**。这就是为什么线上要极力避免 `KEYS *`、大 key 的全量遍历这类操作——它们会让整个 Redis 卡住。
+Redis 快不等于每条命令都快。判断风险时同时看时间复杂度、实际元素数量、元素大小和调用频率。
 :::
 
-:::note
-严格来说，Redis 6 引入了多线程 I/O（用多线程处理网络读写），但**命令的执行**依然是单线程的。所以"单线程"这个心智模型仍然成立。
-:::
+## 三、先设计 Key，再设计 Value
 
-### 3. 高效的底层数据结构 + I/O 多路复用
+Redis 是 key-value 数据库。数据类型属于 value，而 key 本身始终是字符串。
 
-Redis 为每种数据类型都做了精心优化的底层实现（比如小数据用紧凑编码省内存），并用 I/O 多路复用（epoll 等）在单线程里高效处理成千上万的连接。这些是锦上添花的工程优化。
+### 1. Key 命名
 
----
+推荐格式：`业务:对象:标识:用途`。
 
-## 三、Key 的设计：一个容易被忽视的基本功
-
-在讲数据结构前，先说 key。很多线上问题都源于 key 设计不当。
-
-### 命名规范：用冒号分隔的层级结构
-
-推荐用 `业务:对象:标识` 的命名方式：
-
-```redis
-user:profile:1001
-order:detail:90001
-rate_limit:ip:1.2.3.4
+```text
+shop:user:1001:profile
+shop:order:90001:detail
+shop:product:42:stock
+shop:login-code:alice@example.com
 ```
 
-好处是可读、不易冲突、便于用 `SCAN` 批量管理。
+好处是可读、减少冲突、便于按前缀观测。key 也占内存，不要为了“结构化”无限拉长；在 Redis Cluster 中，还要提前考虑 hash tag 和跨 key 操作是否落在同一槽位。
 
-### 每个 key 都该考虑 TTL（过期时间）
+### 2. TTL 是数据生命周期，不是可选装饰
 
-Redis 支持给 key 设置存活时间，到点自动删除：
+写入临时数据时，最好在同一条命令中设置 TTL，避免 `SET` 成功但 `EXPIRE` 没执行造成永久 key。
 
 ```redis
-SET code:login:alice 123456 EX 300   # 300 秒后自动过期
-TTL code:login:alice                  # 查看剩余存活时间（秒）
+SET demo:login-code 123456 EX 300
+TTL demo:login-code
+PTTL demo:login-code
+DEL demo:login-code
 ```
+
+预期：`SET` 返回 `OK`；`TTL` 返回不大于 300 的正整数；`PTTL` 返回剩余毫秒数；`DEL` 返回 `1`。
+
+`TTL` 的特殊结果必须记住：
+
+| 返回值 | 含义 |
+|---|---|
+| 正整数或 `0` | 剩余秒数 |
+| `-1` | key 存在，但没有过期时间 |
+| `-2` | key 不存在 |
+
+几个常用边界：
+
+- `SET key value` 默认会移除旧 TTL；要保留旧 TTL，可使用 Redis 6 起支持的 `KEEPTTL`；
+- `EXPIRE key seconds NX` 只在 key 尚无 TTL 时设置，`XX` 只在已有 TTL 时更新；
+- 过期时间以服务端时间为准，生产环境要保持时钟可靠；
+- 过期 key 不保证在时间一到就立刻从内存中物理删除，后文会解释删除机制。
+
+```redis
+SET demo:session value EX 60
+SET demo:session new-value KEEPTTL
+TTL demo:session
+DEL demo:session
+```
+
+预期：第二条命令后 TTL 仍为正数，而不是 `-1`。
+
+### 3. Hash 字段过期是 Redis 7.4 及以上特性
+
+Redis 7.0 到 7.2 只能给整个 Hash key 设置 TTL。**Redis 7.4 起**才提供 Hash 字段级过期命令，例如 `HEXPIRE`、`HPEXPIRE`、`HEXPIREAT`、`HPEXPIREAT`，并可用 `HTTL`、`HPTTL` 等命令查询。
+
+在 Redis 7.4 及以上可执行：
+
+```redis
+HSET demo:user:1001 name Alice verify-code 654321
+HEXPIRE demo:user:1001 60 FIELDS 1 verify-code
+HTTL demo:user:1001 FIELDS 2 name verify-code
+DEL demo:user:1001
+```
+
+预期：`HEXPIRE` 返回包含 `1` 的数组，表示已为字段设置过期；`HTTL` 中 `name` 对应 `-1`，`verify-code` 对应不大于 60 的非负值。Redis 7.2 及更早版本会报未知命令，此时应拆成独立 key，或只给整个 Hash 设置 TTL。
+
+## 四、五类基础数据类型
+
+学习数据类型时不要只背命令。每一类都按“为什么需要、是什么、怎么用、边界在哪里”来理解。
+
+### 1. String：缓存、计数器和简单状态
+
+**为什么需要：** 大量业务数据只需要“一个 key 对应一个值”，或者需要原子计数。
+
+**是什么：** String 可以保存文本、整数语义的数据或二进制内容，单个 value 最大为 512 MB；但接近这个上限的 value 通常已经是危险的大 key。
+
+```redis
+SET demo:article:title "Redis 入门"
+GET demo:article:title
+INCR demo:article:views
+INCRBY demo:article:views 9
+MGET demo:article:title demo:article:views
+DEL demo:article:title demo:article:views
+```
+
+预期：两次计数分别返回 `1` 和 `10`；`MGET` 返回标题与 `"10"`；最后 `DEL` 返回 `2`。
+
+**怎么用：**
+
+- 缓存序列化后的 JSON；
+- 用 `INCR`、`INCRBY` 做访问量和序号；
+- 用 `SET key value NX EX seconds` 做带过期的“仅不存在时写入”。
+
+**边界：**
+
+- JSON 适合整体读写，不适合频繁更新单字段；
+- 计数命令本身原子，不代表“先读、业务判断、再写”这一组操作原子；
+- 大字符串会增加网络传输、复制、持久化和删除成本。
+
+### 2. Hash：需要局部读写的对象
+
+**为什么需要：** 用户资料、商品属性等对象经常只更新一个字段，没必要每次重写整段 JSON。
+
+**是什么：** 一个 Redis key 下保存多个 field-value 对。
+
+```redis
+HSET demo:user:1001 name Alice age 18 city Shanghai
+HGET demo:user:1001 name
+HMGET demo:user:1001 name age
+HINCRBY demo:user:1001 age 1
+HGETALL demo:user:1001
+DEL demo:user:1001
+```
+
+预期：`HGET` 返回 `"Alice"`；年龄自增后为 `19`；`HGETALL` 返回全部字段和值；最后删除返回 `1`。
+
+**怎么用：** 保存需要局部更新的小对象，使用 `HGET`、`HMGET` 精确读取所需字段。
+
+**边界：**
+
+- field 太多时，`HGETALL` 是 O(N) 操作，可能产生大响应；可考虑 `HSCAN` 分批读取；
+- Hash 不是关系表，没有 join、外键和复杂查询；
+- Redis 7.4 以前不能让单个 field 独立过期。
+
+### 3. List：有顺序的双端队列
+
+**为什么需要：** 某些数据天然有先后顺序，并需要从头尾快速推入或弹出。
+
+**是什么：** 按插入顺序保存字符串元素的双端列表。
+
+```redis
+RPUSH demo:queue job-1 job-2 job-3
+LRANGE demo:queue 0 -1
+LPOP demo:queue
+BLPOP demo:queue 1
+DEL demo:queue
+```
+
+预期：`LRANGE` 返回 `job-1` 到 `job-3`；`LPOP` 返回 `"job-1"`；`BLPOP` 返回 key 和 `job-2`；最后清理剩余列表。
+
+**怎么用：** 小型任务队列、最近记录列表、固定长度列表。限制列表长度可在写入后使用 `LTRIM`。
+
+**边界：**
+
+- List 消费后消息即被移除，原生不提供消费组、确认和待处理列表；可靠消费优先考虑 Stream；
+- `LRANGE key 0 -1` 会一次返回全部元素，大列表中应限制范围；
+- 阻塞命令会等待连接，但不会让 Redis 主线程停在那里等。
+
+### 4. Set：去重和集合关系
+
+**为什么需要：** 标签、参与者、共同关注等场景关心“是否存在”和“是否重复”，不关心元素顺序。
+
+**是什么：** 无序且元素唯一的字符串集合。
+
+```redis
+SADD demo:team:a alice bob cindy
+SADD demo:team:b bob david
+SISMEMBER demo:team:a alice
+SINTER demo:team:a demo:team:b
+SCARD demo:team:a
+DEL demo:team:a demo:team:b
+```
+
+预期：第一次 `SADD` 返回 `3`；`SISMEMBER` 返回 `1`；交集为 `bob`；集合大小为 `3`；最后删除返回 `2`。
+
+**怎么用：** 精确去重、成员判断、交并差集。
+
+**边界：**
+
+- `SMEMBERS` 会返回整个集合，大集合用 `SSCAN`；
+- `SINTER` 等集合运算的成本取决于参与集合的规模，线上要控制规模并评估结果集；
+- 只统计海量近似 UV 时，HyperLogLog 往往比 Set 更省内存。
+
+### 5. ZSet：按 score 排序的唯一成员集合
+
+**为什么需要：** 排行榜和按时间调度既要求成员唯一，又要求动态排序。
+
+**是什么：** 每个 member 关联一个浮点 score，先按 score 排序，同分时再按 member 的字典序处理。
+
+Redis 6.2 起优先使用统一的 `ZRANGE` 新语法：
+
+```redis
+ZADD demo:rank 100 alice 95 bob 120 cindy
+ZRANGE demo:rank 0 2 REV WITHSCORES
+ZINCRBY demo:rank 10 bob
+ZREVRANK demo:rank bob
+ZRANGE demo:rank +inf 100 BYSCORE REV WITHSCORES
+DEL demo:rank
+```
+
+预期：第一次查询按高到低返回 `cindy 120`、`alice 100`、`bob 95`；加分后 bob 为 `105`，反向排名为 `1`（排名从 0 开始）；最后删除返回 `1`。
+
+旧命令 `ZREVRANGE`、`ZRANGEBYSCORE` 等仍可用于兼容旧代码，但 Redis 6.2 及以上的新代码建议使用 `ZRANGE ... REV` 和 `ZRANGE ... BYSCORE`。
+
+**怎么用：** 排行榜、延迟任务索引、时间窗口索引。
+
+**边界：**
+
+- score 是双精度浮点数；超大整数作为 score 时要注意精度边界；
+- 取大范围结果仍可能很慢；
+- 多个成员 score 相同不表示顺序随机。
+
+## 五、三种专用能力：Bitmap、HyperLogLog、Geo
+
+它们不是独立于基础结构的万能类型，而是针对特定问题提供的命令能力。
+
+### 1. Bitmap：密集整数编号上的布尔状态
+
+Bitmap 基于 String 的位操作。偏移量从 0 开始，适合用户编号较密集的签到、在线状态等二值数据。
+
+```redis
+SETBIT demo:sign:1001:2026-07 0 1
+SETBIT demo:sign:1001:2026-07 4 1
+GETBIT demo:sign:1001:2026-07 4
+BITCOUNT demo:sign:1001:2026-07
+STRLEN demo:sign:1001:2026-07
+DEL demo:sign:1001:2026-07
+```
+
+预期：第 5 天状态为 `1`，签到数为 `2`。`STRLEN` 返回实际分配的字节数；“一个月 31 天”是 31 个 bit 的逻辑范围，不应说成“只占 31 bit”，因为存储按字节扩展，key 和对象元数据也占内存。
+
+边界：如果第一次就设置极大的 offset，Redis 需要扩展字符串并分配中间空间；稀疏且编号巨大的数据不适合 Bitmap。
+
+### 2. HyperLogLog：固定小内存的近似去重计数
+
+```redis
+PFADD demo:uv user-1 user-2 user-3 user-1
+PFCOUNT demo:uv
+DEL demo:uv
+```
+
+预期：示例通常返回近似值 `3`。HyperLogLog 的标准误差约为 0.81%，单个结构通常最多使用约 12 KB；它只适合近似基数统计，不能列出成员，也不能用于金额、库存等精确业务。
+
+### 3. Geo：经纬度附近搜索
+
+Geo 底层使用 ZSet 表示位置，适合附近门店、骑手等搜索。
+
+```redis
+GEOADD demo:shops 121.4737 31.2304 shop-a 121.4800 31.2350 shop-b
+GEOSEARCH demo:shops FROMLONLAT 121.4737 31.2304 BYRADIUS 3 km WITHDIST ASC
+GEODIST demo:shops shop-a shop-b km
+DEL demo:shops
+```
+
+预期：附近搜索返回店铺及距离，`GEODIST` 返回两点距离。Geo 适合地球表面附近搜索，不替代专业 GIS 的多边形、路线规划和复杂空间分析。
+
+## 六、Stream：可靠消费的入门心智模型
+
+List 能传递任务，但消费者取走后若处理失败，消息不容易恢复。Stream 提供消息 ID、消费组、确认和待处理消息列表，更适合需要“至少处理一次”语义的场景。
+
+### 1. 最小可靠消费流程
+
+先写入一条消息并创建消费组：
+
+```redis
+XADD demo:orders * order-id 90001 action paid
+XGROUP CREATE demo:orders workers 0 MKSTREAM
+XREADGROUP GROUP workers consumer-1 COUNT 1 STREAMS demo:orders >
+```
+
+预期：`XADD` 返回形如 `1710000000000-0` 的消息 ID；创建组返回 `OK`；读取返回字段 `order-id` 和 `action`。记下返回的消息 ID，再执行：
+
+```redis
+XPENDING demo:orders workers
+XACK demo:orders workers <消息ID>
+XPENDING demo:orders workers
+DEL demo:orders
+```
+
+请把 `<消息ID>` 替换为实际 ID。预期：确认前 pending 数为 `1`，`XACK` 返回 `1`，确认后 pending 数为 `0`。
+
+### 2. 必须理解的边界
+
+- `XREADGROUP` 读取不等于处理成功，业务成功后才执行 `XACK`；
+- 消费者崩溃会留下 pending 消息，可用 `XAUTOCLAIM` 转移长时间未处理的消息；
+- “至少一次”意味着消息可能重复，消费者必须按业务 ID 做幂等；
+- Stream 不会自动无限安全地保留消息，应使用 `MAXLEN` 或 `MINID` 制定裁剪策略并监控积压；
+- Redis 持久化和复制策略会影响消息在故障时的耐久性，Stream 不是天然零丢失的专业消息系统。
+
+## 七、RDB 与 AOF：内存数据如何落盘
+
+为什么需要持久化？因为 Redis 的主要数据在内存中，进程退出或机器故障后，需要从磁盘恢复数据。但持久化并不等于绝对不丢数据，也不替代备份。
+
+### 1. RDB：某个时刻的快照
+
+RDB 会生成某一时刻的数据快照文件。常见触发方式包括配置规则、手动 `BGSAVE` 和关闭流程。
+
+```redis
+BGSAVE
+LASTSAVE
+```
+
+预期：`BGSAVE` 通常返回 `Background saving started`，`LASTSAVE` 返回最近成功保存的 Unix 时间戳。
+
+优点：文件紧凑，适合备份和较快的全量恢复。边界：两次快照之间的写入可能丢失；fork 和写时复制在大内存、写入密集时会带来 CPU、内存和延迟压力。
+
+### 2. AOF：记录写命令
+
+AOF 追加记录会改变数据的命令，重启时通过重放恢复。Redis 7 使用多部件 AOF 机制管理基础文件、增量文件和清单。
+
+常见 `appendfsync` 策略：
+
+| 策略 | 含义 | 取舍 |
+|---|---|---|
+| `always` | 每次写命令都尝试刷盘 | 更强耐久性，吞吐和延迟成本最高 |
+| `everysec` | 通常每秒刷盘 | 常用折中，故障时理论上可能丢约 1 秒数据 |
+| `no` | 交给操作系统决定刷盘 | 性能较好，丢失窗口更不可控 |
+
+查看本地实例配置：
+
+```redis
+CONFIG GET appendonly
+CONFIG GET appendfsync
+INFO persistence
+```
+
+Docker 启动示例使用了 `--appendonly yes`，默认通常搭配 `everysec`。生产环境是否允许 `CONFIG` 命令取决于权限配置。
+
+### 3. 怎么选
+
+- 纯可重建缓存：可根据恢复成本决定是否持久化；
+- 更关心恢复速度和定期备份：使用 RDB；
+- 更关心降低数据丢失窗口：使用 AOF；
+- 常见生产方案是 RDB 与 AOF 结合，并把备份复制到独立故障域。
 
 :::warning
-**临时数据一定要设 TTL**。验证码、会话、临时锁这类数据如果忘了设过期，会在内存里越积越多，最终导致内存暴涨。这是初学者最常踩的坑之一。
+复制、高可用、RDB、AOF 都不能代替经过恢复演练的备份。误删命令可能被同步、被持久化，也可能进入备份。
 :::
 
----
+## 八、过期删除、maxmemory 与淘汰策略
 
-## 四、八大数据结构：原理与适用场景
+这三者经常被混淆：
 
-这是本文的核心。Redis 的威力来自它丰富的数据结构。下面按"最常用 → 进阶"的顺序讲，每种都配上适用场景。
+- **过期删除**处理已经到期的 key；
+- **maxmemory** 是实例允许用于数据等用途的内存上限配置；
+- **淘汰策略**决定达到上限且需要继续写入时，选择哪些 key 腾空间。
 
-```mermaid
-graph TD
-  R[Redis 数据结构] --> S[String 字符串]
-  R --> H[Hash 哈希]
-  R --> L[List 列表]
-  R --> ST[Set 集合]
-  R --> Z[ZSet 有序集合]
-  R --> B[Bitmap 位图]
-  R --> HL[HyperLogLog]
-  R --> G[Geo 地理位置]
-```
+### 1. 过期 key 如何删除
 
-### 1. String（字符串）—— 最基础、最常用
+Redis 结合两类方式：
 
-String 是最简单的类型，一个 key 对应一个值。别被"字符串"三个字骗了，它能存的远不止文本。
+- **惰性删除**：访问 key 时发现已过期，再删除；
+- **主动过期**：后台周期性抽样检查带 TTL 的 key，并删除其中已过期者。
 
-```redis
-SET user:name:1001 "Alice"
-GET user:name:1001
+因此，TTL 到点后逻辑上已不可见，但物理内存释放可能略有延迟。大量 key 在同一时刻过期还可能造成延迟波动，业务上可给 TTL 加合理随机抖动。
 
-INCR page:view:home        # 计数器：原子 +1
-INCRBY counter:download 10 # 原子 +10
-```
+### 2. maxmemory 与淘汰策略
 
-**适用场景：**
-- 缓存对象（通常把对象序列化成 JSON 存进去）
-- 计数器（`INCR` 是原子操作，天然线程安全，适合 PV/点赞数）
-- 分布式 ID 生成（配合 `INCR`）
-
-### 2. Hash（哈希）—— 存对象的字段
-
-Hash 就像"key 里面又装了一个小 map"，适合存有多个字段的对象。
+查看配置：
 
 ```redis
-HSET user:1001 name "Alice" age 18 city "Shanghai"
-HGET user:1001 name        # 只取一个字段
-HGETALL user:1001          # 取所有字段
-HINCRBY user:1001 age 1    # 对某个字段做原子自增
+CONFIG GET maxmemory
+CONFIG GET maxmemory-policy
+INFO memory
 ```
 
-**Hash vs String 存对象怎么选？**
-- 如果经常需要**单独更新对象的某个字段**（比如只改 age），用 Hash，避免每次读写整段 JSON。
-- 如果总是整体读写，用 String 存 JSON 更简单。
+常见策略：
 
-### 3. List（列表）—— 有序的双端队列
+| 策略 | 候选范围 | 行为 |
+|---|---|---|
+| `noeviction` | 无 | 达到限制后，可能增加内存的写命令报错 |
+| `allkeys-lru` | 全部 key | 近似淘汰最久未使用的 key |
+| `allkeys-lfu` | 全部 key | 近似淘汰访问频率最低的 key |
+| `allkeys-random` | 全部 key | 随机淘汰 |
+| `volatile-lru` | 仅带 TTL 的 key | 在候选 key 中按近似 LRU 淘汰 |
+| `volatile-lfu` | 仅带 TTL 的 key | 在候选 key 中按近似 LFU 淘汰 |
+| `volatile-ttl` | 仅带 TTL 的 key | 优先淘汰剩余 TTL 较短者 |
+| `volatile-random` | 仅带 TTL 的 key | 随机淘汰带 TTL 的 key |
 
-List 是一个有序的字符串列表，可以从两端插入和弹出。
+Redis 的 LRU/LFU 是基于采样的近似策略，不是维护全量精确排序。若选择 `volatile-*` 却没有足够带 TTL 的候选 key，写入仍可能失败。
+
+怎么选没有通用答案：纯缓存常考虑 `allkeys-lru` 或 `allkeys-lfu`；缓存与不可丢数据混用时，淘汰边界和实例隔离更重要；任何策略都要配合内存、evicted keys、命中率和写入错误监控。
+
+## 九、性能基本功：pipeline、SCAN、大 key 与热 key
+
+### 1. pipeline：减少网络往返，不是事务
+
+逐条发送 1000 个命令会产生大量网络往返。pipeline 可以一次发送一批命令，再批量读取结果。
+
+在同一环境中，可以用随镜像提供的 `redis-benchmark` 直观看到 pipeline 深度对网络往返的影响：
+
+```powershell
+docker exec redis7 redis-benchmark -t ping -n 10000 -P 1 -q
+docker exec redis7 redis-benchmark -t ping -n 10000 -P 16 -q
+```
+
+预期：两条命令都输出 `PING_INLINE` 和 `PING_MBULK` 的每秒请求数与延迟摘要；具体数值取决于机器负载，不能把某次结果当作容量结论。`PING` 不写入业务数据，因此无需清理。
+
+边界：pipeline 只是批量传输，命令仍逐条执行，其他客户端的命令可能穿插；它不提供事务原子性。批次太大会占用客户端和服务端缓冲、放大延迟，应按响应大小和延迟目标分批。
+
+### 2. SCAN：渐进遍历，不等于“完全不阻塞”
 
 ```redis
-LPUSH queue:email job1     # 从左边推入
-LPUSH queue:email job2
-RPOP queue:email           # 从右边弹出 → 实现 FIFO 队列
-BRPOP queue:email 5        # 阻塞式弹出，最多等 5 秒
+SET demo:scan:1 a
+SET demo:scan:2 b
+SCAN 0 MATCH demo:scan:* COUNT 100
+DEL demo:scan:1 demo:scan:2
 ```
 
-**适用场景：**
-- 简单的消息队列（`LPUSH` + `BRPOP`）
-- 小规模的时间线、最新消息列表
+`SCAN` 每次只做有限工作，通常比 `KEYS demo:*` 更适合生产遍历，但不能绝对描述为“不阻塞”：每次调用仍在主线程执行，过大的 `COUNT`、复杂匹配、巨大元素或高频扫描仍会消耗时间。
+
+还要记住：
+
+- 返回游标为 `0` 才代表一轮结束；
+- `COUNT` 是提示，不保证每批数量；
+- 扫描期间数据变化时，结果可能重复；一轮扫描中持续存在的元素会被返回，但应用通常仍需能处理重复；
+- Hash、Set、ZSet 分别使用 `HSCAN`、`SSCAN`、`ZSCAN`。
+
+### 3. 大 key：不是只看 key 名，而是看 value 规模
+
+大 key 可能是一个巨大字符串，也可能是包含大量字段或元素的集合。风险包括：读取响应大、网络拥塞、主线程执行时间长、复制和持久化成本高、删除时延迟抖动。
+
+检查工具示例：
+
+```powershell
+docker exec redis7 redis-cli --bigkeys
+docker exec redis7 redis-cli MEMORY USAGE some:key
+docker exec redis7 redis-cli SLOWLOG GET 10
+```
+
+`--bigkeys` 是采样/扫描式辅助工具，结果受数据类型和扫描过程影响；生产执行前仍需评估负载。治理方式包括拆分数据、限制单次返回范围、避免 `HGETALL`/`SMEMBERS` 全量读取，并在合适场景用 `UNLINK` 代替同步 `DEL` 进行异步释放。
+
+### 4. 热 key：少数 key 承担过多流量
+
+热 key 可能让单个实例、分片或网络连接成为瓶颈，即使该 key 并不大。常见对策：
+
+- 在允许短暂不一致时增加应用本地缓存；
+- 将可拆分的计数或集合按业务维度分片，再聚合；
+- 请求合并、限流，避免缓存失效瞬间回源风暴；
+- 结合业务指标、`INFO commandstats`、延迟监控和客户端观测定位，避免只凭猜测拆 key。
+
+不能盲目给同一个 key 加随机后缀：这会改变一致性、原子性和读取聚合方式。
+
+## 十、数据结构选型表
+
+| 需求 | 首选 | 为什么 | 主要边界 |
+|---|---|---|---|
+| 整体缓存对象 | String | 简单，单次读写 | 局部更新要重写整体 |
+| 对象字段局部更新 | Hash | 可独立读写字段 | 大 Hash 避免 `HGETALL` |
+| 原子计数 | String | `INCRBY` 原子 | 复合判断需脚本或事务 |
+| 双端列表、简单队列 | List | 头尾操作方便 | 无消费确认 |
+| 可靠消费入门 | Stream | 消费组、pending、ack | 需幂等、裁剪和积压治理 |
+| 精确去重、成员关系 | Set | 唯一性和集合运算 | 大集合运算成本高 |
+| 排行榜、时间索引 | ZSet | 按 score 排序 | 大范围查询仍昂贵 |
+| 密集编号布尔状态 | Bitmap | 位操作节省 value 空间 | 大 offset 稀疏浪费 |
+| 海量近似 UV | HyperLogLog | 固定小内存 | 近似且不能取成员 |
+| 附近位置搜索 | Geo | 原生距离与半径搜索 | 不替代专业 GIS |
+
+一个简单决策顺序：先问是否需要排序，再问是否需要去重，再问是否需要局部字段更新；若都不需要，String 往往是最简单的选择。不要为了展示技巧而使用复杂结构。
+
+## 十一、完整业务案例：限量优惠券领取
+
+把前面的知识串起来：系统发放 100 张优惠券，需要防止同一用户重复领取，并展示实时领取榜。这个案例用：
+
+- String 保存库存；
+- Set 保存已领取用户，保证成员唯一；
+- ZSet 按领取时间排序；
+- Stream 发送后续订单事件；
+- Lua 把“判断重复、判断库存、扣减、记录领取”放在服务端原子执行。
 
 :::note
-List 做队列缺少"消息确认、重试"等机制。需要可靠消息时，用后面会提到的 Stream 更合适。
+这是学习案例，不是完整生产系统。真实项目还要处理 Redis Cluster 槽位、持久化与故障切换、数据库最终一致性、消息幂等、审计和风控。
 :::
 
-### 4. Set（集合）—— 无序、去重
-
-Set 存的是一堆不重复的元素，且支持集合运算。
+### 1. 初始化
 
 ```redis
-SADD user:1001:tags "vip" "new"
-SISMEMBER user:1001:tags "vip"   # 判断是否存在
-SCARD user:1001:tags             # 元素个数
-
-# 集合运算
-SINTER follow:a follow:b         # 交集 → 共同关注
-SUNION tags:a tags:b             # 并集
+SET demo:coupon:2026:stock 100
+DEL demo:coupon:2026:users demo:coupon:2026:rank demo:coupon:2026:events
 ```
 
-**适用场景：**
-- 去重（比如用户标签、独立访客 UV）
-- 集合运算（共同好友、共同关注）
+预期：`SET` 返回 `OK`；首次清理通常返回 `0`。
 
-### 5. Sorted Set / ZSet（有序集合）—— 排行榜神器
+### 2. 原子领取脚本
 
-ZSet 是 Set 的升级版：每个元素额外带一个 **score（分数）**，Redis 会按 score 自动排序。这是非常强大的一种结构。
+在 `redis-cli` 中执行下面的 `EVAL`。三个 key 使用同一个 `demo:coupon:2026` 前缀；若部署在 Redis Cluster，应使用一致的 hash tag，例如 `coupon:{2026}:stock`、`coupon:{2026}:users`、`coupon:{2026}:rank`，保证脚本涉及的 key 位于同一槽位。
 
 ```redis
-ZADD leaderboard 100 "alice" 95 "bob" 120 "cindy"
-ZREVRANGE leaderboard 0 9 WITHSCORES  # 取分数最高的前 10 名
-ZINCRBY leaderboard 5 "bob"           # 给 bob 加 5 分
-ZREVRANK leaderboard "bob"            # 查 bob 的排名（从 0 开始）
+EVAL "if redis.call('SISMEMBER', KEYS[2], ARGV[1]) == 1 then return 'ALREADY_CLAIMED' end; local stock = tonumber(redis.call('GET', KEYS[1]) or '0'); if stock <= 0 then return 'SOLD_OUT' end; redis.call('DECR', KEYS[1]); redis.call('SADD', KEYS[2], ARGV[1]); redis.call('ZADD', KEYS[3], ARGV[2], ARGV[1]); return 'OK'" 3 demo:coupon:2026:stock demo:coupon:2026:users demo:coupon:2026:rank user-1001 1767225600000
 ```
 
-**适用场景：**
-- 排行榜（按分数排序，实时更新）
-- 延迟队列（把"执行时间戳"当作 score，按时间取出到期任务）
-- 滑动窗口限流（把时间戳当 score）
+预期返回 `"OK"`。相同用户再次执行会返回 `"ALREADY_CLAIMED"`，库存不会重复扣减。
 
-### 6. Bitmap（位图）—— 用比特省内存
-
-Bitmap 本质上是 String，但把它当作一长串二进制位来操作。适合"只有两种状态"的海量数据。
+验证状态：
 
 ```redis
-SETBIT sign:1001:2026-07 0 1   # 第 1 天签到（偏移量 0 置 1）
-SETBIT sign:1001:2026-07 4 1   # 第 5 天签到
-BITCOUNT sign:1001:2026-07     # 统计签到了多少天
+GET demo:coupon:2026:stock
+SISMEMBER demo:coupon:2026:users user-1001
+ZRANGE demo:coupon:2026:rank 0 -1 WITHSCORES
 ```
 
-**适用场景：** 签到、日活标记、布尔状态统计。一个用户一个月的签到只占 31 个 bit，极省内存。
+预期：库存为 `99`，成员判断为 `1`，榜单包含 `user-1001` 和时间戳 score。
 
-### 7. HyperLogLog —— 超省内存的近似计数
+### 3. 写入后续事件并可靠消费
 
-当你要统计"有多少个不重复的元素"（比如网站 UV），但数据量巨大、又不需要绝对精确时，HyperLogLog 能用极小的内存（约 12KB）估算出接近真实的数量。
+只有领取脚本返回 `OK` 时，应用才写入事件：
 
 ```redis
-PFADD uv:2026-07-01 user1 user2 user3
-PFCOUNT uv:2026-07-01          # 返回近似的去重数量
+XADD demo:coupon:2026:events * user-id user-1001 coupon-id 2026
+XGROUP CREATE demo:coupon:2026:events order-service 0 MKSTREAM
+XREADGROUP GROUP order-service worker-1 COUNT 1 STREAMS demo:coupon:2026:events >
 ```
 
-:::note
-关键词是"近似"：它省内存，但结果有约 0.81% 的标准误差，不适合需要精确计数的场景（比如金额、库存）。
-:::
+消费者根据 `coupon-id + user-id` 做幂等落库，数据库提交成功后再 `XACK`。如果“领取成功”和“写 Stream”之间应用崩溃，事件会缺失，因此生产实现还需要补偿任务，或使用同一 Lua 脚本同时 `XADD`，并结合数据库幂等与对账机制。Redis 原子操作不能自动变成 Redis 与数据库之间的分布式事务。
 
-### 8. Geo（地理位置）—— 附近的人/店
+### 4. 设置生命周期与清理
 
-Geo 基于 ZSet 实现，用来存储经纬度并做距离计算。
+活动数据保留 7 天：
 
 ```redis
-GEOADD shops 121.4737 31.2304 "shop_a"
-GEOSEARCH shops FROMLONLAT 121.4737 31.2304 BYRADIUS 3 km WITHDIST ASC
+EXPIRE demo:coupon:2026:stock 604800
+EXPIRE demo:coupon:2026:users 604800
+EXPIRE demo:coupon:2026:rank 604800
+EXPIRE demo:coupon:2026:events 604800
 ```
 
-**适用场景：** "附近的店铺/司机/用户"、按距离排序。
-
----
-
-## 五、时间复杂度意识：不是所有操作都 O(1)
-
-Redis 快，但**不代表每个命令都快**。因为是单线程，一条慢命令会拖垮整个实例。记住这几类"危险命令"：
-
-| 命令 | 复杂度 | 风险 |
-|------|--------|------|
-| `GET` / `SET` / `INCR` | O(1) | 安全 |
-| `HGET` / `SADD` | O(1) | 安全 |
-| `LRANGE` / `SMEMBERS` / `HGETALL` | O(N) | 大集合时慢 |
-| `KEYS pattern` | O(N) 全库 | **线上禁用** |
-
-:::warning
-线上要遍历 key，**永远用 `SCAN` 而不是 `KEYS`**。`KEYS *` 会一次性遍历全部 key 并阻塞 Redis，在生产环境几乎等于一次事故。`SCAN` 则是分批游标式扫描，不会长时间阻塞：
+完整练习结束后清理：
 
 ```redis
-SCAN 0 MATCH user:* COUNT 100
+DEL demo:coupon:2026:stock demo:coupon:2026:users demo:coupon:2026:rank demo:coupon:2026:events
 ```
-:::
 
----
+预期返回实际存在并删除的 key 数量。
 
-## 六、一页速查：需求到数据结构怎么选
+这个案例的关键不是脚本语法，而是四个边界：
 
-| 需求 | 推荐结构 | 关键命令 |
-|------|---------|---------|
-| 缓存对象、计数器 | String | `SET` / `INCR` |
-| 存对象且要局部更新 | Hash | `HSET` / `HINCRBY` |
-| 简单队列 | List | `LPUSH` / `BRPOP` |
-| 去重、集合运算 | Set | `SADD` / `SINTER` |
-| 排行榜、延迟队列 | ZSet | `ZADD` / `ZREVRANGE` |
-| 签到、布尔统计 | Bitmap | `SETBIT` / `BITCOUNT` |
-| 海量近似去重计数 | HyperLogLog | `PFADD` / `PFCOUNT` |
-| 附近的人/店 | Geo | `GEOADD` / `GEOSEARCH` |
+1. 单条 `DECR` 原子，不代表“检查库存再扣减”原子；
+2. Set 能防重复，但只有放入同一个原子脚本才不会产生竞态；
+3. Stream 提供确认机制，消费者仍须幂等；
+4. Redis 与数据库之间仍要靠幂等、补偿和对账保证最终一致。
 
----
+## 十二、常见面试题
 
-## 小结
+### 1. Redis 为什么快？
 
-这篇文章帮你建立了用好 Redis 的两块地基：
+数据主要在内存；核心命令路径通常串行，减少锁竞争；使用高效数据结构、紧凑编码、事件驱动和 I/O 多路复用；还可通过 pipeline 减少网络往返。回答时不要说“CPU 永远不是瓶颈”。
 
-1. **内存 + 单线程模型** —— 它是快的原因，也是"慢命令会阻塞一切"的原因。理解它，你就懂了为什么要避免大 key 和 `KEYS *`。
-2. **八大数据结构** —— 选对结构是用好 Redis 的一半。记住那张速查表，遇到需求先想"这该用哪种结构"。
+### 2. Redis 真的是单线程吗？
 
-打好这个地基后，下一步就是把 Redis 最经典的用途——**缓存**——彻底搞明白。这部分内容多、坑也多，我单独放在了[《Redis 缓存实战：从读写模式到一致性与三大问题》](/posts/redis/redis-cache-in-depth)里。
+核心数据命令通常由主线程顺序执行，但 Redis 进程并非只有一个线程。网络 I/O、异步释放、持久化等工作可由其他线程或子进程协助。
 
-想动手巩固数据结构，可以配合[《Redis 练习题（含答案）》](/posts/redis/redis-exercises-with-answers)一起做。
+### 3. String 存 JSON 和 Hash 怎么选？
+
+整体读写、结构简单时选 String；频繁局部更新或读取字段时选 Hash。还要比较序列化成本、字段数量、内存编码和客户端访问模式。
+
+### 4. `KEYS` 和 `SCAN` 有什么区别？
+
+`KEYS` 一次遍历并返回所有匹配 key，数据量大时会长时间占用主线程并产生大响应。`SCAN` 用游标分批遍历，更适合生产，但单次调用仍执行工作，不能说绝对不阻塞；还要处理游标、重复结果和并发变化。
+
+### 5. RDB 和 AOF 怎么选？
+
+RDB 是时间点快照，文件紧凑、恢复快，但快照间可能丢数据；AOF 记录写命令，通常可缩小丢失窗口，但文件和重写成本更高。生产常组合使用，并配合异地备份和恢复演练。
+
+### 6. key 到期后为什么内存可能没有立刻下降？
+
+Redis 使用惰性删除与主动抽样过期，物理删除可能滞后；内存分配器也不一定立即把释放空间归还操作系统。应同时观察逻辑 key、`used_memory`、碎片率和工作集。
+
+### 7. LRU 是精确的吗？
+
+不是。Redis 的 LRU 和 LFU 淘汰使用采样近似实现，以较低元数据和计算成本换取接近目标的效果。
+
+### 8. pipeline、事务和 Lua 有什么区别？
+
+pipeline 减少网络往返，不保证一组命令原子；`MULTI/EXEC` 让命令按队列连续执行，但不提供传统数据库式回滚；Lua 脚本可把复合逻辑放到服务端原子执行，但耗时脚本会阻塞主线程。
+
+### 9. 缓存雪崩、击穿、穿透分别是什么？
+
+大量 key 同时失效导致回源压力是雪崩；热点 key 失效时并发回源是击穿；持续查询不存在的数据、缓存无法命中是穿透。系统方案见[Redis 缓存深入专题](/posts/redis/redis-cache-in-depth)。
+
+### 10. Redis 能保证消息绝不丢、绝不重复吗？
+
+不能只靠一句“用了 Stream”就保证。持久化、复制确认、故障切换、裁剪策略和消费者确认都会影响丢失窗口；至少一次消费还会带来重复，因此业务端必须幂等。
+
+## 十三、工作检查表
+
+### 上线前
+
+- [ ] key 使用稳定命名空间，长度和数量可控；
+- [ ] 每类临时 key 都设置 TTL，持久 key 是有意识的决定；
+- [ ] Redis 7.4 字段过期等能力已与实际服务端版本核对；
+- [ ] 已评估数据类型、命令复杂度、单次结果大小和峰值频率；
+- [ ] 没有在线请求使用 `KEYS`、无界 `HGETALL`、`SMEMBERS` 或 `LRANGE 0 -1` 读取大集合；
+- [ ] pipeline 有批次上限，Lua 脚本有耗时和输入规模边界；
+- [ ] Stream 消费者实现幂等、成功后确认、pending 恢复和积压监控；
+- [ ] `maxmemory` 与淘汰策略符合“哪些数据允许丢”的业务约束；
+- [ ] 持久化、复制、备份和恢复演练满足可接受的数据丢失窗口；
+- [ ] Redis 不暴露公网，认证、TLS、ACL 和危险命令权限按环境配置。
+
+### 运行中
+
+- [ ] 监控内存、碎片率、连接数、命中率、淘汰数、过期数和写入错误；
+- [ ] 监控延迟、慢日志、CPU、网络、持久化状态和复制延迟；
+- [ ] 定期识别大 key、热 key 与无 TTL 的异常 key；
+- [ ] `SCAN`、诊断命令和批量任务有限速，避免与业务高峰争抢资源；
+- [ ] 容量评估保留 fork、复制缓冲、客户端缓冲和内存碎片空间；
+- [ ] 故障后不仅确认实例恢复，还核对数据完整性、消费积压和数据库一致性。
+
+## 总结：把 Redis 看成一台“单线程处理核心命令的数据结构服务器”
+
+建立 Redis 心智模型，可以记住四句话：
+
+1. Redis 主要在内存中工作，所以常见操作快，但 CPU、网络、内存和磁盘都可能成为瓶颈；
+2. 核心命令通常顺序执行，所以单命令原子，也所以慢命令会影响其他请求；
+3. 先设计 key、生命周期和数据规模，再选择 String、Hash、List、Set、ZSet 或专用能力；
+4. 持久化、淘汰、可靠消费和性能治理都是显式取舍，不是打开一个开关就万事大吉。
+
+接下来可以进入[Redis 缓存深入专题](/posts/redis/redis-cache-in-depth)，系统学习缓存模式、一致性以及雪崩、击穿和穿透；也可以通过[Redis 练习题（含答案）](/posts/redis/redis-exercises-with-answers)验证自己是否真正掌握了这些概念。
