@@ -43,7 +43,43 @@ public class ProductsController : ControllerBase
 
 ## [ApiController] 约定详解
 
-`[ApiController]` 不只是"自动模型验证"，它启用了多项约定，每一条都在减少你的样板代码：
+`[ApiController]` 不只是"自动模型验证"，它启用了多项约定，每一条都在减少你的样板代码。
+
+### 模型验证是什么
+
+模型验证（Model Validation）是指：ASP.NET Core 先把请求体、路由参数或查询字符串转换成 C# 对象，再检查这个对象是否满足预先定义的规则。
+
+下面的请求模型使用 `System.ComponentModel.DataAnnotations` 中的特性声明验证规则：
+
+```csharp
+using System.ComponentModel.DataAnnotations;
+
+public class CreateProductRequest
+{
+    [Required(ErrorMessage = "商品名称不能为空")]
+    [StringLength(100, ErrorMessage = "商品名称不能超过 100 个字符")]
+    public string Name { get; set; } = string.Empty;
+
+    [Range(typeof(decimal), "0.01", "999999", ErrorMessage = "商品价格必须在 0.01 到 999999 之间")]
+    public decimal Price { get; set; }
+}
+```
+
+如果客户端提交空名称和负数价格：
+
+```json
+{
+  "name": "",
+  "price": -10
+}
+```
+
+验证结果会分别指出 `Name` 不符合 `[Required]`、`Price` 不符合 `[Range]`。这里需要区分两个连续的步骤：
+
+1. **模型绑定（Model Binding）**：把 JSON、路由参数或查询字符串转换成 C# 对象。
+2. **模型验证（Model Validation）**：检查绑定后的对象是否满足 `[Required]`、`[StringLength]`、`[Range]` 等规则。
+
+模型验证适合处理字段必填、字符串长度和数值范围等输入规则。“商品是否存在”“库存是否充足”这类需要访问数据库或结合业务状态才能判断的规则，应放在业务服务中验证。
 
 **自动 400 响应**：模型验证失败时，框架自动返回 HTTP 400，不需要手动检查 `ModelState.IsValid`。
 
@@ -102,15 +138,58 @@ public ActionResult<ProductDto> Create(CreateProductRequest request)
 
 ## Action 返回类型
 
+这里的“Action 返回类型”指的是**控制器方法的返回值类型**，不是方法名。控制器中用于处理 HTTP 请求的公开方法称为 Action，例如：
+
+```csharp
+[HttpGet("{id:int}")]
+public ActionResult<ProductDto> GetById(int id)
+{
+    return Ok(new ProductDto(id, "Keyboard", 199m));
+}
+```
+
+方法签名可以拆成下面几部分：
+
+- `public`：访问修饰符。
+- `ActionResult<ProductDto>`：方法的返回类型。
+- `GetById`：方法名。
+- `int id`：方法参数。
+
 常见返回类型：
 
 | 返回类型 | 场景 |
 |---|---|
-| `IActionResult` | 灵活返回不同状态码 |
-| `ActionResult<T>` | 返回具体数据，同时支持状态码 |
-| `T` | 简单返回数据，不推荐复杂场景 |
+| `IActionResult` | 灵活返回不同状态码，但方法签名不描述成功响应的数据类型 |
+| `ActionResult<T>` | 既描述成功响应的数据类型，也允许返回不同状态码 |
+| `T` | 直接返回数据，适合只会产生成功响应的简单场景 |
 
-推荐使用 `ActionResult<T>`：
+### IActionResult
+
+`IActionResult` 表示 Action 返回某一种 HTTP 操作结果，因此可以根据执行情况返回不同状态码：
+
+```csharp
+[HttpGet("{id:int}")]
+public IActionResult GetById(int id)
+{
+    if (id <= 0)
+    {
+        return BadRequest("商品 ID 必须大于 0");
+    }
+
+    if (id != 1)
+    {
+        return NotFound();
+    }
+
+    return Ok(new ProductDto(1, "Keyboard", 199m));
+}
+```
+
+这种写法很灵活，但仅从 `IActionResult` 无法看出接口成功时返回的是 `ProductDto`。
+
+### `ActionResult<T>`
+
+`ActionResult<T>` 中的 `T` 是类型占位符。`ActionResult<ProductDto>` 表示这个 Action 成功时主要返回 `ProductDto`，同时也可以返回 `NotFound()`、`BadRequest()` 等 HTTP 结果，因此通常推荐用于 Web API：
 
 ```csharp
 [HttpGet("{id:int}")]
@@ -127,6 +206,59 @@ public ActionResult<ProductDto> GetById(int id)
 }
 ```
 
+成功时也可以直接返回 `T`，ASP.NET Core 会把它转换为响应结果：
+
+```csharp
+return product;
+```
+
+如果接口返回集合，可以把 `T` 换成集合类型：
+
+```csharp
+[HttpGet]
+public ActionResult<List<ProductDto>> GetAll()
+{
+    return Ok(new List<ProductDto>
+    {
+        new(1, "Keyboard", 199m),
+        new(2, "Mouse", 99m)
+    });
+}
+```
+
+### 直接返回 T
+
+直接使用业务类型作为返回类型时，写法最简单：
+
+```csharp
+[HttpGet("{id:int}")]
+public ProductDto GetById(int id)
+{
+    return new ProductDto(id, "Keyboard", 199m);
+}
+```
+
+但这个方法只能返回 `ProductDto`，不能直接返回 `NotFound()` 等其他结果，因此不适合需要表达失败状态的接口。
+
+异步 Action 通常在外层增加 `Task`：
+
+```csharp
+[HttpGet("{id:int}")]
+public async Task<ActionResult<ProductDto>> GetByIdAsync(int id)
+{
+    ProductDto? product = await FindProductAsync(id);
+
+    if (product is null)
+    {
+        return NotFound();
+    }
+
+    return Ok(product);
+}
+```
+
+这里的 `Task` 表示异步操作，Action 最终产生的结果仍然是 `ActionResult<ProductDto>`。
+
 ## 常用结果方法
 
 | 方法 | 状态码 | 场景 |
@@ -139,6 +271,96 @@ public ActionResult<ProductDto> GetById(int id)
 | `Forbid()` | 403 | 无权限 |
 | `NotFound()` | 404 | 资源不存在 |
 | `Conflict(...)` | 409 | 状态冲突 |
+
+这些方法由 `ControllerBase` 提供，不需要为每个方法单独引入包。控制器继承 `ControllerBase` 后就可以直接调用它们；项目通常仍需要 `using Microsoft.AspNetCore.Mvc;` 来使用控制器基类和相关特性。
+
+### 与统一 JSON 响应的关系
+
+`Ok()`、`NotFound()` 等方法负责设置真正的 **HTTP 状态码**，而 `{ code, data, msg }` 负责定义项目自己的 **JSON 响应结构**。两者并不冲突，通常应该结合使用。
+
+先定义统一响应模型。C# 属性名经过 ASP.NET Core 默认的 camelCase JSON 序列化后，会分别变成 `code`、`data` 和 `msg`：
+
+```csharp
+public sealed record ApiResponse<T>(
+    int Code,
+    T? Data,
+    string Msg
+);
+```
+
+查询接口可以同时返回标准 HTTP 状态和统一响应体：
+
+```csharp
+[HttpGet("{id:int}")]
+public ActionResult<ApiResponse<ProductDto>> GetById(int id)
+{
+    ProductDto? product = FindProduct(id);
+
+    if (product is null)
+    {
+        return NotFound(new ApiResponse<ProductDto>(
+            Code: 404,
+            Data: null,
+            Msg: "商品不存在"
+        ));
+    }
+
+    return Ok(new ApiResponse<ProductDto>(
+        Code: 200,
+        Data: product,
+        Msg: "查询成功"
+    ));
+}
+```
+
+查询成功时，真正的 HTTP 状态是 `200 OK`，响应体为：
+
+```json
+{
+  "code": 200,
+  "data": {
+    "id": 1,
+    "name": "Keyboard",
+    "price": 199
+  },
+  "msg": "查询成功"
+}
+```
+
+商品不存在时，应通过 `NotFound(...)` 返回真正的 `404 Not Found`，同时让响应体中的 `code` 也保持为 404：
+
+```json
+{
+  "code": 404,
+  "data": null,
+  "msg": "商品不存在"
+}
+```
+
+不建议错误发生时仍调用 `Ok(...)`，只在响应体中写入 404：
+
+```csharp
+// 不推荐：真正的 HTTP 状态仍然是 200
+return Ok(new ApiResponse<ProductDto>(404, null, "商品不存在"));
+```
+
+如果所有请求都返回 HTTP 200，浏览器、网关、缓存和监控系统都会把失败请求判断为成功，客户端也必须额外检查响应体中的 `code`。因此，通常应让 HTTP 状态码与响应体中的状态保持一致。
+
+创建资源时，`CreatedAtAction(...)` 除了返回 `201 Created`，还会生成指向新资源的 `Location` 响应头：
+
+```csharp
+return CreatedAtAction(
+    nameof(GetById),
+    new { id = product.Id },
+    new ApiResponse<ProductDto>(201, product, "创建成功")
+);
+```
+
+需要注意，`NoContent()` 表示 `204 No Content`，按照 HTTP 语义不能包含 JSON 响应体。如果项目规定所有成功响应都必须包含统一结构，就不应对该接口使用 `NoContent()`，而应根据团队约定返回 `Ok(...)`。
+
+:::tip 统一响应不只涉及 Controller
+`[ApiController]` 自动生成的模型验证 400 响应默认使用 `ValidationProblemDetails`，未处理异常也可能使用其他错误格式。如果项目要求所有错误都使用 `{ code, data, msg }`，应在全局统一配置模型验证响应和异常处理，而不是在每个 Action 中重复包装。
+:::
 
 ## 用 DTO 表达请求和响应
 
