@@ -1,12 +1,12 @@
 ---
-title: 'FastAPI + SQLAlchemy 2.x + PostgreSQL + Alembic：生产级数据层实战'
+title: 'FastAPI 数据层分步实战：SQLAlchemy 2.x、PostgreSQL 与 Alembic'
 date: '2026-08-18'
-excerpt: '面向已有 SQL 基础的前端开发者，从同步执行边界、SQLAlchemy 2.x 类型化模型与事务分层，到 PostgreSQL 约束、并发控制、连接池和 Alembic 零停机迁移，搭建一套可运行的 FastAPI 数据层。'
+excerpt: '承接 FastAPI 项目分层教程，按可执行步骤把内存 CRUD 升级为 SQLAlchemy 2.x + PostgreSQL 数据层，并完成事务分层、约束映射、乐观锁、测试与 Alembic 安全迁移。'
 tags: ['python', 'fastapi', 'sqlalchemy', 'postgresql', 'alembic', 'backend']
 nextPost: 'python/fastapi-authentication-authorization'
 ---
 
-# FastAPI + SQLAlchemy 2.x + PostgreSQL + Alembic：生产级数据层实战
+# FastAPI 数据层分步实战：SQLAlchemy 2.x、PostgreSQL 与 Alembic
 
 前端开发者开始写 API 时，最容易低估的通常不是 SQL，而是 SQL 外面的边界：一个请求何时取得连接、谁提交事务、唯一性冲突如何变成稳定的 HTTP 响应、应用发布与表结构变更怎样错峰，以及一次看似普通的列表查询为什么会突然发出上百条 SQL。
 
@@ -24,6 +24,82 @@ nextPost: 'python/fastapi-authentication-authorization'
 :::important 本文的同步选择
 同步不是“在事件循环里直接跑阻塞 SQL”。路由和数据库依赖使用普通 `def`，FastAPI 会把它们放进线程池执行；每个请求持有自己的同步 `Session`。不要把同步 SQLAlchemy 调用塞进 `async def` 路由，否则会阻塞事件循环。也不要在同一套调用链中混用同步与异步 engine/session；需要异步数据库访问时，应整条链路一起切换。
 :::
+
+<ProgressIndicator
+  current="python/fastapi-sqlalchemy-alembic"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic 校验" },
+    { slug: "python/fastapi-crud-error-handling", title: "CRUD 与错误" },
+    { slug: "python/fastapi-project-structure-dependency", title: "分层与依赖" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+## 开始前确认
+
+- **前置文章**：已完成“项目结构与依赖注入”，理解路由、Pydantic v2、内存 CRUD 和统一 HTTP 错误；SQL 基础不足时先补上文链接。
+- **起始项目状态**：现有文章 API 已按 router / service / repository 分层，当前 repository 仍使用内存数据，`pytest` 能跑通基础 CRUD。
+- **依赖与服务**：Python 3.12+、FastAPI、Pydantic v2、SQLAlchemy 2.x、Alembic 1.x、Psycopg 3，以及一个可丢弃的 PostgreSQL 开发库和独立测试库。
+
+### Windows 命令与外部服务边界
+
+本文命令默认在项目根目录执行。PowerShell 激活虚拟环境使用 `.venv\Scripts\Activate.ps1`；若执行策略阻止脚本，可改用 `.venv\Scripts\python.exe -m ...`，不要为了教程永久放宽系统策略。PostgreSQL、测试数据库与数据库账号属于外部服务：先确认端口和连接串，再执行迁移；绝不能把示例密码、真实 `.env` 或生产连接串提交到仓库，也不要对生产库练习 `downgrade`、删列或重建 schema。
+
+## 本文总路线
+
+<Steps>
+
+### 步骤 1：固定同步数据库执行边界
+阅读“一”，画出请求、Session、事务、连接和线程池关系。**完成信号**：能解释为什么同步 Session 配普通 `def` 路由，且请求 Session 不进入后台任务。
+
+### 步骤 2：创建项目骨架并安装依赖
+按“二”建立目录、`pyproject.toml` 和 `.env`。**完成信号**：PowerShell 中导入 `fastapi`、`sqlalchemy`、`alembic`、`psycopg` 均成功，配置对象能读取开发连接串。
+
+### 步骤 3：定义 Base、Author 与 Post
+按“三”加入命名约定、类型化字段、关系和数据库约束。**完成信号**：`Base.metadata` 同时包含 `authors` 与 `posts`，唯一键、外键和版本列名称可检查。
+
+### 步骤 4：建立 Engine、连接池和请求级 Session
+按“四”配置进程级 Engine 与 `SessionFactory`。**完成信号**：连续请求各自获得并关闭 Session，连接归还池且没有每请求创建 Engine。
+
+### 步骤 5：分离 ORM 与 Pydantic 契约
+按“五”创建输入、更新、输出和分页模型。**完成信号**：非法 slug/空标题被 422 拒绝，PATCH 能区分“省略字段”和“显式 null”。
+
+### 步骤 6：实现不提交事务的 Repository
+按“六”完成查询、创建、删除和关系加载。**完成信号**：Repository 只 `flush()` 不 `commit()`，列表排序稳定，并能说明如何避免 N+1。
+
+### 步骤 7：在 Service 中封装事务与冲突
+按“七”实现完整业务事务、约束名映射和乐观锁。**完成信号**：重复 slug 返回稳定 409，失败事务已回滚，旧 `version_id` 更新必定冲突。
+
+### 步骤 8：接通路由和统一异常响应
+按“八”装配 CRUD 路由、异常处理器与健康检查。**完成信号**：创建、列表、读取、更新、删除形成 HTTP 闭环，404/409 不暴露 SQL 或数据库异常原文。
+
+### 步骤 9：初始化 Alembic 并连接 metadata
+按“九”的初始化、`env.py` 和基线迁移执行。**完成信号**：空开发库可 `alembic upgrade head`，`alembic current` 指向唯一 head，候选迁移已人工审查。
+
+### 步骤 10：演练 expand、backfill、contract
+继续完成 nullable 扩展、分批回填和约束收紧。**完成信号**：每个 revision 可独立解释，旧代码与新结构存在明确兼容窗口，大表回填不被塞进无界长事务。
+
+### 步骤 11：处理 PostgreSQL 并发索引边界
+按 9.8 将并发索引放入独立 autocommit revision。**完成信号**：能检查索引是否有效，并说明它为何不能放在普通迁移事务里。
+
+### 步骤 12：用真实 PostgreSQL 覆盖依赖并测试
+按“十”建立测试 Engine、外层事务和 FastAPI dependency override。**完成信号**：CRUD、重复约束、404、409 测试通过，测试结束后数据自动回滚。
+
+### 步骤 13：按症状排查会话、查询和迁移故障
+逐项复现“十一”的 rollback、detached、N+1、池耗尽和 multiple heads。**完成信号**：每类故障都有可观察症状、定位命令和不会破坏共享历史的修复方式。
+
+### 步骤 14：完成上线边界检查
+对照“十二、十三”核对容量、迁移、备份和执行模型。**完成信号**：上线清单全部有配置、测试输出或演练记录，而不是口头确认。
+
+</Steps>
 
 下面按“为什么 → 是什么 → 怎么做 → 完整示例 → 生产边界”的顺序展开。
 
@@ -1575,3 +1651,21 @@ alembic upgrade head
 真正生产可用的数据层，不是把 ORM CRUD 拼出来，而是把边界做清楚：FastAPI 的线程池承接同步调用，Session 隔离请求，Service 拥有事务，Repository 保持可组合，PostgreSQL 约束裁决并发，版本列暴露写冲突，连接池受容量预算约束，Alembic 则把结构变化拆成可审查、可演进的发布步骤。
 
 当这些边界稳定后，业务代码反而会变简单：路由只处理 HTTP，Service 表达用例，Repository 表达查询。下一步可在这套数据层上继续加入认证、授权、审计与多租户隔离，而不必重新争论“到底谁应该 commit”。
+
+## 动手练习
+
+1. 为文章 API 增加 `status` 字段，完整走一遍 expand → backfill → contract，并保存每个 revision 的审查说明。
+2. 同时发起两个携带相同 `expected_version` 的更新请求，证明只有一个成功，另一个收到稳定 409。
+3. 打开 SQL 统计，构造 20 篇文章与作者列表，证明 eager loading 后查询数不随文章数量线性增长。
+
+## 验收清单
+
+- [ ] PowerShell 能从空开发库执行 `alembic upgrade head`，`alembic heads` 只有一个结果。
+- [ ] 创建、分页、更新、删除、重复 slug、错误作者和过期版本测试全部通过。
+- [ ] 客户端只收到业务化 404/409；数据库原文、SQL、表名和堆栈只留在服务端受控日志。
+- [ ] 请求 Session、后台任务 Session、测试 Session 各自独立，任何失败路径都能回滚并释放连接。
+- [ ] 已保存迁移演练、连接池预算和真实 PostgreSQL 测试结果。
+
+## 下一步
+
+继续阅读 [FastAPI 认证授权分步实战](/posts/python/fastapi-authentication-authorization)。下一篇先建立最小 JWT 登录与服务端权限入口，再逐层深入 refresh rotation、RBAC 和资源隔离；不要把完整生产安全体系一次性复制进第一步。

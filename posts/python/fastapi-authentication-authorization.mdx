@@ -1,12 +1,12 @@
 ---
-title: 'FastAPI / Pydantic v2 生产级认证授权：JWT、Refresh Rotation、RBAC 与资源隔离'
+title: 'FastAPI 认证授权分步实战：从 JWT 最小闭环到 Refresh Rotation 与 RBAC'
 date: '2026-08-18'
-excerpt: '从威胁模型与信任边界出发，使用 FastAPI、Pydantic v2、SQLAlchemy 2.x、Argon2id、短期 JWT 与可撤销的 refresh token family，构建默认拒绝、可轮换、可审计的生产级认证授权体系。'
+excerpt: '承接 SQLAlchemy 数据层，先按简化路径跑通密码哈希、短期 JWT 与服务端权限入口，再按生产深化路径加入 refresh rotation、RBAC、资源隔离、CSRF、限流、审计与撤销。'
 tags: ['python', 'fastapi', 'pydantic-v2', 'authentication', 'authorization', 'security', 'jwt', 'sqlalchemy']
 nextPost: 'python/fastapi-redis-background-tasks'
 ---
 
-# FastAPI / Pydantic v2 生产级认证授权
+# FastAPI 认证授权分步实战：从 JWT 最小闭环到 Refresh Rotation 与 RBAC
 
 “能登录”不等于“认证系统安全”。真正困难的部分不是签发一个 JWT，而是回答这些问题：数据库泄露后攻击者能得到什么？refresh token 被复制并在两个地点使用时怎么办？用户被禁用、改密或退出后，已经签发的 access token 何时失效？`GET /documents/{id}` 如何避免读到别人的文档？代理传来的 IP 是否可信？密钥如何轮换而不中断服务？
 
@@ -15,6 +15,93 @@ nextPost: 'python/fastapi-redis-background-tasks'
 :::important 先划清产品边界
 本文实现的是单个产品内的第一方账号、会话与授权，不是 OIDC/OAuth 身份平台的替代品。复杂企业身份、SSO、MFA、SAML/OIDC 联邦、设备风控、账号恢复与合规目录同步，应优先采用经过审计的托管 IdP；应用只验证 IdP 令牌并实施本地资源授权。不要把“自研 JWT 登录”宣传成等价能力。
 :::
+
+<ProgressIndicator
+  current="python/fastapi-authentication-authorization"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic 校验" },
+    { slug: "python/fastapi-crud-error-handling", title: "CRUD 与错误" },
+    { slug: "python/fastapi-project-structure-dependency", title: "分层与依赖" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+## 开始前确认
+
+- **前置文章**：先完成 [SQLAlchemy 与 Alembic](/posts/python/fastapi-sqlalchemy-alembic)，能创建迁移、使用请求级同步 Session，并把事务放在 service。
+- **起始项目状态**：文章 API 已有真实 PostgreSQL 数据层、统一 404/409 和测试；此时还没有用户登录，也不信任客户端传来的用户 ID、角色或租户。
+- **依赖与服务**：Python 3.12+、FastAPI、Pydantic v2、SQLAlchemy 2.x、Psycopg 3、PyJWT、pwdlib/Argon2、PostgreSQL；生产深化步骤还需要 Redis 7+、邮件 provider 或持久化 outbox、可信代理和 secrets manager。
+
+### 先走哪条路径
+
+**简化学习路径（先做）**只完成密码哈希、固定算法短期 access JWT、`current_user` 依赖、一个受保护接口和 401/403/404 测试。做到这里就停下来验收，不要在第一步复制 refresh family、CSRF、邮件、限流和完整 RBAC。
+
+**生产深化路径（后做）**建立在简化路径已通过测试之上，再加入 refresh rotation/reuse detection、服务端 RBAC、tenant/owner 资源隔离、撤销、重置、限流、审计和密钥轮换。正文给出的是这一深化实现，必须按步骤逐层启用。
+
+:::important 权限必须同时守住三层
+客户端入口可以按权限隐藏或禁用，但它只改善体验；方法调用必须由 FastAPI dependency/service 再次拦截；数据库资源查询还要带 `tenant_id`/`owner_id`。失败反馈保持稳定：无可信身份返回 401，身份可信但动作不允许返回 403，为防资源枚举的跨租户/越权查询统一返回 404。任何一层都不能依赖前端自报 `role`。
+:::
+
+### Windows 命令与外部服务边界
+
+PowerShell 中使用 `.venv\Scripts\Activate.ps1`，或直接调用 `.venv\Scripts\python.exe`；Cookie 的 `Secure`、SameSite、Origin、可信代理和 HTTPS 行为不能只靠本机 `http://127.0.0.1` 证明。PostgreSQL、Redis、邮件 provider、KMS/secrets manager 和反向代理都是外部边界：本地可用隔离容器或 Mailpit 替代，生产必须注入真实适配器；禁止把 token、Cookie、密码、重置链接或密钥打印到终端和日志。
+
+## 本文总路线
+
+<Steps>
+
+### 步骤 1：写威胁模型和信任边界
+完成“一”的威胁表，明确哪些输入不可信。**完成信号**：至少列出伪造、重放、IDOR、用户枚举和限流失效的控制与残余风险。
+
+### 步骤 2：完成简化登录闭环
+从“二、三、四”的密码与 JWT 内容中只实现 Argon2 哈希、固定算法 access token、登录接口和 `current_user`。**完成信号**：正确密码得到短期 token，错误密码与未知邮箱同形失败，受保护接口拒绝缺失/伪造 token。
+
+### 步骤 3：把权限放到服务端入口和资源查询
+先实现一个 permission dependency，并让查询同时约束 tenant/owner。**完成信号**：前端即使直接调用方法也无法绕过；允许返回 200，缺身份 401，缺动作权限 403，跨租户统一 404。
+
+### 步骤 4：确定 Cookie、Bearer、CSRF 与 CORS 策略
+按“三”记录客户端存储和跨站边界。**完成信号**：团队能说明哪些请求自动带 Cookie、哪些接口校验 CSRF/Origin，credentialed CORS 没有通配 origin。
+
+### 步骤 5：建立配置、数据库和迁移骨架
+按“四”的配置与模型创建用户、角色、权限、refresh、一次性 token、文档和审计表。**完成信号**：Alembic 在空 PostgreSQL 上升级成功，唯一约束、外键和索引真实存在。
+
+### 步骤 6：收紧 Pydantic 输入输出
+实现邮箱规范化、密码长度、extra forbid 和最小输出。**完成信号**：空白/非法/超长输入被拒绝，响应不含密码哈希、token 摘要或内部角色表结构。
+
+### 步骤 7：实现固定算法 JWT 与高熵 opaque token
+完成 `security.py`。**完成信号**：缺 claim、错误 `kid/iss/aud/type`、过期 token 全部失败，数据库和日志中没有 refresh 明文。
+
+### 步骤 8：加入 Redis 原子限流
+完成认证敏感端点限流与故障策略。**完成信号**：超过阈值返回 429，Redis 不可用时按约定受控 503，而不是静默放行。
+
+### 步骤 9：实现 refresh rotation 和复用检测
+按 services 的事务顺序原子消费旧 token、创建 successor、撤销重放 family。**完成信号**：同一 refresh 并发使用时只有一个首次成功，随后整条 family 不再可用。
+
+### 步骤 10：加入验证、重置与撤销
+实现单用途短期 token、logout 和 revoke-all。**完成信号**：重置成功同时消费 token、更新密码版本并撤销会话，任一步失败都整体回滚。
+
+### 步骤 11：实现 RBAC dependency 与资源级授权
+按 dependencies 和 router 装配 permission、tenant、owner 条件。**完成信号**：权限矩阵每个入口、方法和资源查询都有服务端测试，客户端自报角色无效。
+
+### 步骤 12：装配认证路由、Cookie 和应用入口
+接通 register/login/refresh/logout、CORS、可信代理与 mailer/outbox adapter。**完成信号**：应用缺少关键生产适配器时拒绝启动，Cookie 属性和公开错误文案符合策略。
+
+### 步骤 13：执行单元、集成、并发和浏览器安全测试
+按“五”覆盖 token 边界、PostgreSQL 事务、rotation 竞争、CSRF/CORS 和 Redis 故障。**完成信号**：真实 PostgreSQL/Redis 测试通过，日志扫描找不到任何敏感凭证。
+
+### 步骤 14：完成密钥、租户、审计与 IdP 决策
+按“六、七”演练 key ring、pepper 版本、break-glass 与审计告警。**完成信号**：上线检查有负责人和证据，并明确何时停止自研、转向托管 IdP。
+
+</Steps>
+
 ## 一、为什么认证授权必须从威胁模型开始
 
 没有威胁模型时，团队常把安全需求写成“密码加密、接口加 JWT”，却遗漏真正的攻击路径。本文假设：
@@ -1494,3 +1581,21 @@ Bearer access 放内存可降低持久化窃取，但页面刷新后需要 refre
 - [ ] 单元、PostgreSQL 集成、真实并发、冻结时间边界和代理拓扑测试全部通过。
 
 生产级认证授权不是一个装饰器，而是一组跨越密码学、事务、浏览器、代理、数据库、运维和产品恢复流程的不变量。先明确威胁与信任边界，再让短期 access、可追踪 refresh family、默认拒绝授权和可审计撤销共同工作，系统才有能力在凭证泄露和权限变化时做出可预测的安全响应。
+
+## 动手练习
+
+1. 只按简化路径实现登录、短期 JWT、`current_user` 和一个受保护文档接口；通过测试后再创建 refresh 分支。
+2. 为 `reader/editor/admin` 制作权限矩阵，从客户端隐藏入口、直接调用受限方法、伪造租户 ID 三条路径分别验证服务端结果。
+3. 用两个独立客户端并发刷新同一 token，记录首个响应和 family 最终状态，证明 reuse 策略按设计生效。
+
+## 验收清单
+
+- [ ] 简化闭环与生产深化代码有清楚阶段边界，初学步骤不依赖完整 refresh/RBAC 才能运行。
+- [ ] 所有权限操作同时覆盖客户端入口体验、服务端 dependency/service 拦截、tenant/owner 查询和失败反馈。
+- [ ] 401、403、404、429、受控 503 的语义稳定，公开响应不泄露账号、资源或底层异常细节。
+- [ ] refresh、reset、verify 只存摘要并原子消费；并发、撤销、CSRF、CORS 和 Redis 故障测试通过。
+- [ ] 日志与审计中没有密码、JWT、Cookie、Authorization、token 摘要或重置链接。
+
+## 下一步
+
+继续阅读 [FastAPI Redis 与后台任务分步实战](/posts/python/fastapi-redis-background-tasks)。下一篇先把 Redis 当可降级缓存和原子限流器，再进入 Dramatiq、幂等 Job 与 Outbox；认证权限仍以服务端数据库策略为准，不能被缓存替代。

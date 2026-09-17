@@ -1,12 +1,12 @@
 ---
-title: 'FastAPI + Redis 后台任务实战：缓存、限流与 Dramatiq 可靠队列'
+title: 'FastAPI Redis 与后台任务分步实战：从缓存到 Dramatiq 可靠队列'
 date: '2026-08-18'
-excerpt: '面向 Python 3.12+ 的生产实践：用 redis-py 5.x 管理 FastAPI 异步连接池，以 Cache Aside、限流和锁构建 Redis 基础设施，并以 Dramatiq + Redis 实现可重试、幂等、可观测的持久化后台任务。'
+excerpt: '承接认证授权项目，先分步接入 Redis 生命周期、Cache Aside、限流与故障降级，再单独进入 Dramatiq、幂等 Job、Outbox、重试、调度和可观测的可靠任务阶段。'
 tags: ['python', 'fastapi', 'redis', 'dramatiq', 'background-tasks', 'backend']
 nextPost: 'python/python-backend-integration-testing'
 ---
 
-# FastAPI + Redis 后台任务实战：缓存、限流与 Dramatiq 可靠队列
+# FastAPI Redis 与后台任务分步实战：从缓存到 Dramatiq 可靠队列
 
 FastAPI 的请求处理很快，但真实系统很少只做一次数据库查询：商品详情需要缓存，接口需要限流，发邮件、生成报表、调用第三方 API 又不该阻塞响应。Redis 可以同时承担缓存、计数器、短租约协调和任务 Broker，但这些角色的可靠性要求并不相同。
 
@@ -21,6 +21,88 @@ FastAPI 的请求处理很快，但真实系统很少只做一次数据库查询
 :::important 先确定可靠性语义
 Redis Broker 与 Dramatiq **不提供 exactly-once（恰好一次）保证**。消息可能因 Worker 崩溃、确认丢失或重试而执行多次，也可能因为错误配置、数据丢失或超过保留边界而不可恢复。生产代码应按 **at-least-once（至少一次）+ 业务幂等 + 可追踪失败** 设计，而不是假设任务只运行一次。
 :::
+
+<ProgressIndicator
+  current="python/fastapi-redis-background-tasks"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic 校验" },
+    { slug: "python/fastapi-crud-error-handling", title: "CRUD 与错误" },
+    { slug: "python/fastapi-project-structure-dependency", title: "分层与依赖" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+## 开始前确认
+
+- **前置文章**：已完成认证授权篇，项目有真实 PostgreSQL、请求身份和受保护路由；理解服务端权限不能依赖缓存。
+- **起始项目状态**：数据库是唯一事实源，API 尚未缓存详情，也没有可靠 Worker；同步 SQLAlchemy 工作单元已经能独立创建、提交/回滚和关闭 Session。
+- **依赖与服务**：Python 3.12+、FastAPI、redis-py 5.x、同步 SQLAlchemy 2.x + Psycopg 3、Dramatiq；本地需要 Redis 7+ 与 PostgreSQL，可靠任务阶段还需要独立 Worker 和 Outbox 发布器进程。
+
+### 两阶段边界：先缓存，再可靠任务
+
+**阶段 A（缓存与流量控制）**只完成 Redis 生命周期、Cache Aside、提交后失效、限流和短租约。此阶段 Redis 可以在明确护栏下故障降级，数据库仍是真相。
+
+**阶段 B（可靠任务）**再启动 Dramatiq、Job 状态、重试、Outbox、调度、对账和告警。`BackgroundTasks` 只用于短小、可丢、无需跨进程重试的响应后收尾；必须完成、要重试、要审计或要独立扩缩容的工作进入 Dramatiq。不要从一个 `BackgroundTasks.add_task()` 示例直接跳到“可靠任务已完成”。
+
+### Windows 命令与外部服务边界
+
+PowerShell 可用 `docker compose up --build` 启动 PostgreSQL、Redis、API、Worker 和 Outbox；未安装 Docker 时需自行启动服务并核对端口。`dramatiq ...` 和 `python -m app.outbox_publisher` 是长驻进程，应各开一个终端，不要在会阻塞的普通命令窗口里误判为失败。Redis 缓存与 Broker 在生产上可能需要拆分故障域；外部邮件/HTTP provider 必须使用测试 stub 或隔离沙箱，禁止教程测试向真实收件人发送消息。
+
+## 本文总路线
+
+<Steps>
+
+### 步骤 1：为每类工作选择执行模型
+按“一”区分 `BackgroundTasks`、`asyncio.Queue` 与 Dramatiq。**完成信号**：团队清单中的每个任务都写明可否丢失、是否重试、是否跨进程和采用方案。
+
+### 步骤 2：搭建项目与双 I/O 边界
+按“二”安装依赖并保留同步数据库主线。**完成信号**：异步 Redis 与同步 SQLAlchemy 没有混用 Session，线程池工作单元会自行关闭 Session。
+
+### 步骤 3：管理 Redis 连接池生命周期
+按“三”在 lifespan 中创建/关闭客户端并注入路由。**完成信号**：启动时能 ping，关闭后连接释放，连接总量有“每进程 × 进程数”预算。
+
+### 步骤 4：实现 Cache Aside 读取
+按“四”加入版本化 key、TTL 抖动、空值和 DTO 序列化。**完成信号**：miss 回源并回填，hit 不查数据库，不存在值使用短 TTL 哨兵。
+
+### 步骤 5：实现提交后失效与降级护栏
+完成更新工作单元、删缓存和 RedisError 策略。**完成信号**：数据库提交失败时不删缓存；Redis 中断时受控回源，数据库并发与超时不会失控。
+
+### 步骤 6：加入原子限流
+按“五”执行 Lua 计数与过期。**完成信号**：阈值内放行、超限返回 429 和 Retry-After，安全端点的 fail-open/fail-closed 已明确。
+
+### 步骤 7：只把 Redis 锁当短租约
+按“六”实现带随机 token 的获取和比较删除。**完成信号**：锁过期后旧持有者不能删除新租约，业务正确性仍由数据库约束/条件更新保证。
+
+### 步骤 8：配置独立 Dramatiq Broker 和 Worker
+进入阶段 B，完成“七”的 broker 与队列。**完成信号**：API 能发布，独立 Worker 能消费；进程重启边界与队列隔离可观察。
+
+### 步骤 9：实现幂等 Job 和有限重试
+加入唯一幂等键、状态行、外部调用超时、永久/暂时错误分类。**完成信号**：重复消息不重复副作用，暂时错误退避重试，永久错误可查询且不热循环。
+
+### 步骤 10：暴露 202 API 并记录直接发送缺口
+先按“先提交，再发送”跑通最小闭环。**完成信号**：重复请求得到同一 Job ID，并能准确指出提交后、send 前崩溃会留下 pending 的窗口。
+
+### 步骤 11：用事务 Outbox 关闭消息丢失窗口
+按“八”让 Job 与 Outbox 同事务提交并独立发布。**完成信号**：业务回滚时无 Outbox；发布器崩溃重启后最终投递，重复投递仍被 Actor 幂等吸收。
+
+### 步骤 12：配置队列、重试、对账和定时入队
+完成 Worker 命令、失败上限、“九”的调度器。**完成信号**：陈旧/卡住 Job 可发现和受控重放，同一天重复调度使用相同幂等键。
+
+### 步骤 13：验证优雅关闭和 Compose 拓扑
+按“十、十一”分别停止 API、Worker 和 Outbox。**完成信号**：停止接单、在宽限期内处理在途、强杀后任务可重跑，所有连接最终释放。
+
+### 步骤 14：接入指标、日志、告警和生产检查
+按“十二、十三”观察缓存降级、队列年龄、Outbox 年龄、重试和卡住 Job。**完成信号**：每个告警都有阈值、排查入口、恢复动作和一次演练记录。
+
+</Steps>
 
 ---
 
@@ -1198,3 +1280,21 @@ FastAPI 与 Redis 的生产集成，难点不在 `await redis.get()` 或 `actor.
 7. 定时任务只负责入队；优雅关闭、指标和告警让系统在故障时可恢复、可解释。
 
 当缓存可以降级、消息可以重复、进程可以随时退出都被当作正常条件来设计时，这套系统才真正接近生产可用。
+
+## 动手练习
+
+1. 先只启动 API、PostgreSQL 与缓存 Redis，测量 miss、hit、空值、提交后失效和 Redis 中断回源，不启动 Worker。
+2. 再启动 Dramatiq 与 Outbox，连续两次提交相同幂等键，并在发布后、标记前停止发布器，验证恢复后没有丢消息和重复副作用。
+3. 分别停止 API、Worker、Outbox 和 Redis，记录队列年龄、Outbox 年龄、数据库压力与恢复时间。
+
+## 验收清单
+
+- [ ] 每项后台工作都明确属于 `BackgroundTasks`、进程内队列或 Dramatiq，可靠任务没有误用请求进程收尾机制。
+- [ ] Cache Aside 的 key、TTL、空值、提交后失效与 Redis 故障护栏测试通过。
+- [ ] Job/Outbox 同事务提交，Actor 使用稳定幂等键，暂时错误有限重试，永久错误可查询。
+- [ ] API、Worker、Outbox 可独立启动和关闭，Session/连接不会跨线程、请求或任务共享。
+- [ ] 缓存与 Broker 的容量、持久化、淘汰、故障域和告警策略有明确记录。
+
+## 下一步
+
+继续阅读 [FastAPI 后端集成测试分步实战](/posts/python/python-backend-integration-testing)。下一篇会用真实 PostgreSQL、Redis 和 Testcontainers，按环境 → 容器 → 迁移 → fixtures → API → 权限 → Redis → 故障 → CI 的顺序验证本篇边界。

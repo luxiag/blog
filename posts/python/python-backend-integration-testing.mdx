@@ -1,12 +1,12 @@
 ---
-title: 'Python 后端集成测试：用真实 PostgreSQL、Redis 与 Testcontainers 构建可信测试'
+title: 'FastAPI 后端集成测试分步实战：PostgreSQL、Redis 与 Testcontainers'
 date: '2026-08-18'
-excerpt: '面向已有 pytest 基础的读者，系统讲解 FastAPI 后端的集成测试：测试金字塔、Testcontainers、真实 PostgreSQL/Redis、Alembic 迁移、依赖覆盖、事务隔离、鉴权、缓存、任务、契约、并发幂等、故障注入与 CI 质量门禁。'
+excerpt: '承接数据库、认证与 Redis 任务项目，按环境、容器、迁移、fixtures、API、权限、Redis、故障和 CI 的顺序，建立可重复的真实依赖集成测试与质量门禁。'
 tags: ['python', 'pytest', 'integration-testing', 'fastapi', 'testcontainers', 'postgresql', 'redis']
-nextPost: 'python/python-backend-capstone'
+nextPost: 'python/fastapi-observability-deployment'
 ---
 
-# Python 后端集成测试：用真实 PostgreSQL、Redis 与 Testcontainers 构建可信测试
+# FastAPI 后端集成测试分步实战：PostgreSQL、Redis 与 Testcontainers
 
 单元测试可以证明一个函数在隔离环境中按预期工作，却不能回答这些更接近生产的问题：SQLAlchemy 生成的 SQL 能否被 PostgreSQL 接受？Alembic 能否把一张空数据库迁移到当前版本？Redis 的 TTL、原子命令与数据编码是否符合预期？FastAPI 的依赖注入、鉴权和响应序列化串起来后是否仍然正确？
 
@@ -26,6 +26,82 @@ nextPost: 'python/python-backend-capstone'
 :::important 本文对“真实集成测试”的定义
 只有代码确实通过真实驱动、真实协议连接真实 PostgreSQL 或 Redis 进程，才把它称为这些资源的集成测试。用 `Mock` 替换 repository、用 `fakeredis` 替换 Redis、或通过 FastAPI dependency override 把外部资源换成内存实现，依然有价值，但它们属于单元测试或组件测试，不证明真实外部系统的行为。
 :::
+
+<ProgressIndicator
+  current="python/python-backend-integration-testing"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic 校验" },
+    { slug: "python/fastapi-crud-error-handling", title: "CRUD 与错误" },
+    { slug: "python/fastapi-project-structure-dependency", title: "分层与依赖" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+## 开始前确认
+
+- **前置文章**：已完成 SQLAlchemy/Alembic、认证授权、Redis/后台任务三篇；熟悉 pytest fixture、参数化和 monkeypatch。
+- **起始项目状态**：FastAPI 文章 API 已能连接 PostgreSQL 与 Redis，包含迁移、JWT 角色入口、缓存和任务入队；单元测试已通过，但尚未证明真实协议、事务和故障行为。
+- **依赖与服务**：Python 3.12+、pytest 8.x、FastAPI/Pydantic v2、SQLAlchemy 2.x、Psycopg 3、redis-py 5.x、Alembic、Testcontainers 4.x，以及可用的 Docker Engine。
+
+### Windows 命令与外部服务边界
+
+先在 PowerShell 运行 `docker info`，再运行 `pytest --collect-only`；Docker Desktop/Engine、镜像仓库和 Testcontainers 拉起的 PostgreSQL/Redis 都属于外部边界。首次拉镜像可能需要网络，离线环境应提前缓存固定 tag。测试只能连接 Testcontainers 或明确可丢弃的测试库，严禁复用开发/生产连接串；暂停/重启容器的故障用例必须串行、带 marker，并在 `finally` 恢复资源。CI 示例运行在 Linux，PowerShell 本地可逐条执行等价命令，不要直接复制 Bash 的 `&&` 到旧版 Windows PowerShell。
+
+## 本文总路线（按执行顺序）
+
+<Steps>
+
+### 步骤 1：固定测试环境与分层边界
+阅读“一、二”，安装测试依赖并确认 Docker。**完成信号**：`docker info` 成功、测试可收集，团队能区分 unit/component/integration/E2E，且不会用 SQLite 冒充 PostgreSQL。
+
+### 步骤 2：让生产应用依赖可替换
+按“三”保留真实 driver 和应用工厂，只在边界注入连接。**完成信号**：生产 `get_session/get_redis` 正常，测试 override 不会把 repository 或 Redis 换成假实现。
+
+### 步骤 3：从空容器执行 Alembic
+按“四”配置 migration URL 和基线 revision。**完成信号**：全新 PostgreSQL 容器可 `upgrade head`，revision、表和唯一约束检查全部通过。
+
+### 步骤 4：启动 PostgreSQL 与 Redis 容器 fixtures
+按“五”建立 session-scoped 容器和 Engine。**完成信号**：容器各启动一次、结束时可靠停止，连接 URL 明确转为 `postgresql+psycopg`。
+
+### 步骤 5：建立事务、Session、Redis 与 Client fixtures
+继续完成 function-scoped connection/savepoint、请求 Session、Redis 清理和 dependency override。**完成信号**：应用内 `commit()` 后测试仍可回滚，override teardown 清空，Session 不跨线程共享。
+
+### 步骤 6：验证迁移后的基础 API
+按“六”测试创建、读取和 Pydantic 校验。**完成信号**：201/200/422 与响应体符合契约，每个用例结束后数据库恢复初始状态。
+
+### 步骤 7：验证认证、权限与资源归属
+按“七”分别断言 401、403、owner 来源和跨租户边界。**完成信号**：测试从真实 JWT 入口进入，不绕过 principal；客户端伪造 owner/role 无效。
+
+### 步骤 8：验证真实 Redis 缓存和任务
+按“八”覆盖 miss、hit、TTL、失效、消息编码和队列名。**完成信号**：测试从真实 Redis 读回值与任务，不只断言 mock 被调用。
+
+### 步骤 9：验证 HTTP/OpenAPI 契约
+按“九”解析响应模型并检查安全声明。**完成信号**：字段、状态码、content-type 和 OpenAPI security 发生漂移时测试会失败。
+
+### 步骤 10：用独立 Session 制造并发幂等竞争
+按“十”让每个线程拥有独立事务。**完成信号**：两个竞争请求只产生一条记录并返回同一 ID，已提交测试数据在 finally 中清理。
+
+### 步骤 11：注入 Redis、数据库和 Worker 故障
+按“十一”设置有限超时、暂停/恢复容器和真实连接。**完成信号**：错误分类、恢复和重投递可断言，测试不靠随机 kill 或无界 sleep。
+
+### 步骤 12：把测试分层接入 CI
+按“十二”依次运行 Ruff、mypy、普通集成测试和串行 fault 测试。**完成信号**：CI 有超时、固定版本和失败日志，本地与 CI 使用同一 Testcontainers 启动方式。
+
+### 步骤 13：隔离并行 worker 和共享状态
+完成 xdist 的 database/schema/keyspace 策略。**完成信号**：并行运行不使用全局 `FLUSHALL`，迁移、Redis 和并发清理不会互相污染。
+
+### 步骤 14：用风险清单而非覆盖率数字收尾
+按“十三至十五”排查常见失败并逐项验收。**完成信号**：覆盖率门禁、迁移、权限、Redis、并发、故障和 CI 均有独立证据。
+
+</Steps>
 
 ---
 
@@ -1379,6 +1455,24 @@ pytest -m "not fault" --cov=app --cov-branch --cov-report=term-missing
 Mock、fakeredis 和内存 override 仍然重要，它们负责快速、精确的低层测试；只是不要把它们提供的信心误写成“真实集成”。把单元、组件、集成和端到端测试放回各自擅长的位置，测试套件才能既快，又真正拦住生产事故。
 
 类型边界与 mypy 实践可参考 [Python 类型系统](/posts/python/python-type-system)。
+
+## 动手练习
+
+1. 在一台全新 Windows 开发机或干净目录中，只按 README 安装依赖、检查 Docker 并运行非故障测试，记录首次反馈时间。
+2. 增加“同一幂等键并发提交”与“Redis 暂停后恢复”两条测试，确保独立 Session、超时和 finally 清理正确。
+3. 故意改坏一个响应字段、一条迁移和一个权限条件，证明契约、migration 与授权测试分别能阻止回归。
+
+## 验收清单
+
+- [ ] 执行顺序确实是环境 → 容器 → 迁移 → fixtures → API → 权限 → Redis → 故障 → CI，没有在迁移前偷用 `create_all()`。
+- [ ] PostgreSQL/Redis 测试使用真实驱动和协议；mock/fakeredis 测试被准确标记为单元或组件测试。
+- [ ] 普通测试、并发测试和故障测试各有隔离/清理策略，任何 Session 都不跨线程共享。
+- [ ] CI 固定版本、设置超时，先运行静态检查与普通测试，再串行运行 fault marker。
+- [ ] 每个关键风险都有可失败的断言，而不是只依赖覆盖率数字。
+
+## 下一步
+
+继续阅读 [FastAPI 可观测性与部署](/posts/python/fastapi-observability-deployment)，把已经可信的测试闭环接到日志、指标、追踪、健康检查、不可变制品和发布回滚；完成后再进入团队知识库综合实战。
 
 ### 参考资料
 

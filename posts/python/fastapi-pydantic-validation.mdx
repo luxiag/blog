@@ -1,0 +1,371 @@
+---
+title: 'FastAPI Pydantic v2 数据校验：从空格陷阱到输入输出模型分离'
+date: '2026-08-18'
+excerpt: '承接文章管理 API，用 Pydantic v2 的 BaseModel、Field、field_validator 与 ConfigDict 完成中文业务校验、trim、纯空格拦截和输入输出模型分离。'
+tags: ['python', 'fastapi', 'pydantic-v2', 'validation', 'backend']
+nextPost: 'python/fastapi-crud-error-handling'
+---
+
+# FastAPI Pydantic v2 数据校验：从空格陷阱到输入输出模型分离
+
+上一篇的[路径、查询与请求参数](/posts/python/fastapi-routing-parameters)已经把“文章管理 API”的路由搭起来了，但接口只会接收数据还不够：标题能否只有空格？客户端能否提交服务器字段？内部备注会不会被返回？本篇只解决 HTTP 数据契约，不提前实现完整 CRUD。
+
+<ProgressIndicator
+  current="python/fastapi-pydantic-validation"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic 校验" },
+    { slug: "python/fastapi-crud-error-handling", title: "CRUD 与错误" },
+    { slug: "python/fastapi-project-structure-dependency", title: "分层与依赖" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+## 1. 本篇目标与前置
+
+完成后你将得到一个可运行的 `POST /articles`：输入模型负责接收与清洗，输出模型只暴露允许公开的字段；标题、正文和标签会 trim，仅含空格的标题或正文会得到中文校验提示。
+
+前置条件：
+
+- Python 3.12+；
+- 已理解 `POST`、请求体和状态码；
+- 使用 FastAPI 与 Pydantic v2；
+- 终端当前位于上一篇创建的 `fastapi-article-api` 项目根目录。
+
+确认版本：
+
+```bash
+python --version
+python -c "import fastapi, pydantic; print(fastapi.__version__, pydantic.__version__)"
+```
+
+若尚未安装依赖：
+
+```bash
+python -m venv .venv
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+python -m pip install "fastapi>=0.115,<1" "pydantic>=2.8,<3" "uvicorn[standard]>=0.30,<1"
+```
+
+:::important 版本边界
+本文只使用 Pydantic v2 API：`model_config`、`ConfigDict`、`field_validator` 和 `model_dump()`。不要改回 v1 的 `class Config`、`@validator` 或 `.dict()`。
+:::
+
+## 2. 起始目录与起始代码
+
+开始前目录应为：
+
+```text
+fastapi-article-api/
+└── main.py
+```
+
+为避免上一篇文件不在本地时无法继续，先确认根目录 `main.py` 是下面这份可运行起点：
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI(title="文章管理 API")
+
+
+@app.get("/articles/{article_id}")
+def get_article(article_id: int, preview: bool = False) -> dict[str, int | bool]:
+    return {"article_id": article_id, "preview": preview}
+```
+
+启动并确认旧接口仍可访问：
+
+```bash
+python -m uvicorn main:app --reload
+```
+
+打开 `http://127.0.0.1:8000/docs`，执行 `GET /articles/{article_id}`，填写 `article_id=1`。预期响应：
+
+```json
+{
+  "article_id": 1,
+  "preview": false
+}
+```
+## 3. 第一步：定义输入模型并处理 trim
+
+**本步修改文件：根目录 `main.py`。** 先用下面的完整代码替换该文件：
+
+```python
+from datetime import UTC, datetime
+from typing import Literal
+
+from fastapi import FastAPI, status
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+app = FastAPI(title="文章管理 API", version="1.0.0")
+
+
+class ArticleCreate(BaseModel):
+    # 客户端多传 id、created_at 等字段时直接报错，而不是悄悄忽略。
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=100, description="文章标题")
+    body: str = Field(min_length=1, max_length=10_000, description="文章正文")
+    tags: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("title", "body", mode="before")
+    @classmethod
+    def trim_required_text(cls, value: object, info) -> object:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            chinese_name = "文章标题" if info.field_name == "title" else "文章正文"
+            raise ValueError(f"{chinese_name}不能为空或只包含空格")
+        return cleaned
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, value: list[str]) -> list[str]:
+        cleaned_tags: list[str] = []
+        for raw_tag in value:
+            tag = raw_tag.strip()
+            if not tag:
+                raise ValueError("文章标签不能为空或只包含空格")
+            if len(tag) > 20:
+                raise ValueError("单个文章标签不能超过 20 个字符")
+            if tag not in cleaned_tags:
+                cleaned_tags.append(tag)
+        return cleaned_tags
+
+
+class ArticleRead(BaseModel):
+    # 以后返回 ORM 对象时也能从对象属性读取字段。
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    body: str
+    tags: list[str]
+    status: Literal["draft", "published"]
+    created_at: datetime
+
+
+@app.post(
+    "/articles",
+    response_model=ArticleRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_article(payload: ArticleCreate) -> ArticleRead:
+    # 目前不保存数据，只专注于演示输入清洗与输出契约。
+    return ArticleRead(
+        id=1,
+        title=payload.title,
+        body=payload.body,
+        tags=payload.tags,
+        status="draft",
+        created_at=datetime.now(UTC),
+    )
+
+
+@app.get("/articles/{article_id}")
+def get_article(article_id: int, preview: bool = False) -> dict[str, int | bool]:
+    return {"article_id": article_id, "preview": preview}
+```
+
+重启（`--reload` 正在运行时会自动重载；未运行则执行）：
+
+```bash
+python -m uvicorn main:app --reload
+```
+
+### 为什么 `Field(min_length=1)` 仍不够
+
+`"   "` 的原始长度是 3，所以单靠 `min_length=1` 会通过。`field_validator` 先执行 `strip()`，再检查清洗结果，才能同时实现：
+
+1. `"  FastAPI 入门  "` 保存为 `"FastAPI 入门"`；
+2. `"   "` 得到符合中文文章业务语境的提示；
+3. 正文首尾误输入的空白不会进入后续业务层。
+
+这里没有全局开启 `str_strip_whitespace=True`，因为不同字段未必共享规则。例如代码片段或 Markdown 正文有时需要保留边缘空白。**清洗是业务决策，不是见到字符串就一律处理。**
+
+`ConfigDict(extra="forbid")` 让输入契约保持严格。客户端若自行提交 `id` 或 `created_at`，会收到 422，而不是误以为这些服务器字段已经生效。
+
+## 4. 第二步：理解输入模型与输出模型为什么必须分开
+
+**本步修改文件：无。** 这一小步检查刚才的完整代码，不新增文件。
+
+`ArticleCreate` 是输入模型，只允许客户端决定 `title`、`body` 和 `tags`；`ArticleRead` 是输出模型，包含服务器生成的 `id`、`status` 和 `created_at`。分开后可以避免三类问题：
+
+- 客户端伪造 `id`、创建时间或发布状态；
+- 为了接收请求而把内部字段意外暴露给响应；
+- PATCH、创建和读取共用一个“全可空模型”，导致契约含糊。
+
+在中文业务里，“文章状态由审核流程决定”“创建时间以服务器为准”都是业务规则，而不只是类型技巧。模型名称建议体现方向：`ArticleCreate`、`ArticleUpdate`、`ArticleRead`，不要用一个含义模糊的 `ArticleModel` 包办所有场景。
+
+`response_model=ArticleRead` 还会按输出模型过滤响应。即使以后服务层对象包含 `internal_editor_note`、`deleted_at` 等内部字段，只要输出模型未声明，它们就不会进入正常响应。不过不要把这当成唯一安全措施；服务层也应只返回所需数据。
+
+## 5. 第三步：在 Swagger 逐项验证
+
+**本步修改文件：无。** 保持服务运行，打开 `http://127.0.0.1:8000/docs`。
+
+### 5.1 正常输入会被 trim
+
+展开 `POST /articles`，点击 **Try it out**，输入：
+
+```json
+{
+  "title": "  FastAPI 校验入门  ",
+  "body": "  用 Pydantic v2 建立可靠的数据边界。  ",
+  "tags": [" Python ", "FastAPI", "Python"]
+}
+```
+
+点击 **Execute**，预期状态码为 `201`，响应中的首尾空格已去除，重复标签已去重：
+
+```json
+{
+  "id": 1,
+  "title": "FastAPI 校验入门",
+  "body": "用 Pydantic v2 建立可靠的数据边界。",
+  "tags": ["Python", "FastAPI"],
+  "status": "draft",
+  "created_at": "2026-08-18T08:00:00.000000Z"
+}
+```
+
+`created_at` 以实际请求时间为准，不会与示例时间完全相同。
+
+等价命令：
+
+```bash
+curl -X POST http://127.0.0.1:8000/articles \
+  -H "Content-Type: application/json" \
+  -d '{"title":"  FastAPI 校验入门  ","body":"  正文  ","tags":[" Python "]}'
+```
+
+### 5.2 纯空格标题得到中文提示
+
+请求体：
+
+```json
+{
+  "title": "   ",
+  "body": "正文",
+  "tags": []
+}
+```
+
+预期状态码为 `422`，关键错误信息如下（Pydantic 会附带输入值和错误上下文）：
+
+```json
+{
+  "detail": [
+    {
+      "type": "value_error",
+      "loc": ["body", "title"],
+      "msg": "Value error, 文章标题不能为空或只包含空格",
+      "input": "   "
+    }
+  ]
+}
+```
+
+这说明 `Field(min_length=1)` 与业务校验各司其职：前者生成 OpenAPI 约束，后者处理 trim 后的语义。
+
+### 5.3 客户端不能提交服务器字段
+
+请求体：
+
+```json
+{
+  "title": "合法标题",
+  "body": "合法正文",
+  "tags": [],
+  "id": 999
+}
+```
+
+预期状态码为 `422`，错误位置是 `body.id`，消息包含 `Extra inputs are not permitted`。这是框架级契约错误，不是“文章不存在”之类业务错误，下一篇会区分二者。
+
+### 5.4 超过 5 个标签
+
+请求体传入 6 个标签，预期状态码为 `422`，错误位置是 `body.tags`。Swagger 的 Schema 中也会显示数组最多 5 项。
+
+## 6. 完成目录与最终检查
+
+完成目录与起始目录相同，只修改了根目录 `main.py`：
+
+```text
+fastapi-article-api/
+└── main.py  # Pydantic v2 输入/输出模型与 POST 路由
+```
+
+可执行最小语法检查：
+
+```bash
+python -m py_compile main.py
+```
+
+预期命令成功退出且没有输出。再访问：
+
+```bash
+curl http://127.0.0.1:8000/openapi.json
+```
+
+预期返回 OpenAPI JSON，并能搜索到 `ArticleCreate` 与 `ArticleRead`。
+
+## 7. 常见错误
+
+### 仍使用 Pydantic v1 写法
+
+错误：使用 `@validator`、`class Config`、`.dict()`。本文环境是 v2，应分别使用 `@field_validator`、`model_config = ConfigDict(...)`、`model_dump()`。
+
+### 只写 `min_length`，没有处理纯空格
+
+长度约束看的是原始字符数量。必须在业务确定需要 trim 的字段上先 `strip()`，再拒绝空字符串。
+
+### `strip()` 后忘记返回清洗值
+
+验证器若只检查却 `return value`，后续层仍会拿到带首尾空格的字符串。本例明确返回 `cleaned`。
+
+### 输入输出共用一个模型
+
+把 `id` 写成可选并不等于安全分离。客户端仍会在 OpenAPI 中看到不该提交的字段，团队也容易误用。创建、更新、读取应按方向建模。
+
+### 把所有中文错误都塞进路由
+
+字段自身的语义校验放在 Pydantic 模型；“slug 已存在”“文章不存在”依赖当前系统状态，属于业务层，下一篇用 `BusinessError` 处理。
+
+## 8. 练习
+
+1. 给 `ArticleCreate` 增加 `summary`，要求 trim 后 10～200 个字符，并给出中文纯空格提示。
+2. 标签比较改为不区分英文大小写去重，但保留第一次出现时的展示形式。例如 `Python` 与 `python` 只保留 `Python`。
+3. 新建 `ArticleUpdate`，所有字段可省略；思考“省略字段”和“显式传 `null`”为何不同。
+4. 尝试给请求体多传 `status: "published"`，确认 `extra="forbid"` 会拒绝。
+
+## 9. 验收清单
+
+- [ ] `python -m py_compile main.py` 成功。
+- [ ] Swagger 明确显示创建模型与读取模型。
+- [ ] 合法标题、正文和标签会 trim。
+- [ ] 纯空格标题、正文或标签返回 422 和中文业务提示。
+- [ ] 超过长度或标签数量限制会返回 422。
+- [ ] 客户端提交 `id`、`status` 等额外字段会被拒绝。
+- [ ] 201 响应只含 `ArticleRead` 声明的字段。
+- [ ] 能解释字段校验错误与业务冲突错误的区别。
+
+## 10. 官方文档与下一步
+
+- [FastAPI 请求体](https://fastapi.tiangolo.com/tutorial/body/)
+- [FastAPI 响应模型](https://fastapi.tiangolo.com/tutorial/response-model/)
+- [Pydantic Models](https://docs.pydantic.dev/latest/concepts/models/)
+- [Pydantic Fields](https://docs.pydantic.dev/latest/concepts/fields/)
+- [Pydantic Validators](https://docs.pydantic.dev/latest/concepts/validators/)
+- [Pydantic ConfigDict](https://docs.pydantic.dev/latest/api/config/)
+
+下一篇进入[FastAPI 内存 CRUD 与统一错误处理](/posts/python/fastapi-crud-error-handling)：把当前模型接入仓储，完成创建、分页列表、详情、部分更新、删除和 404/409。

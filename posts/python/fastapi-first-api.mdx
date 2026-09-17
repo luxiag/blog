@@ -1,0 +1,305 @@
+---
+title: 'FastAPI 首个 API：只用 main.py 跑通请求'
+date: '2026-05-02'
+excerpt: '在 Windows 与 Python 3.12+ 环境中，只创建一个最小 main.py，理解 FastAPI 应用、路由、Uvicorn 和自动文档。'
+tags: ['python', 'fastapi', 'backend', 'windows', 'beginner']
+nextPost: 'python/fastapi-routing-parameters'
+---
+
+# FastAPI 首个 API：只用 main.py 跑通请求
+
+<ProgressIndicator
+  current="python/fastapi-first-api"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic" },
+    { slug: "python/fastapi-crud-error-handling", title: "内存 CRUD" },
+    { slug: "python/fastapi-project-structure-dependency", title: "项目分层" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+上一篇完成了 Windows 环境准备。这一篇只做一件事：创建**唯一的业务文件 `main.py`**，让浏览器或命令行能访问文章管理 API 的欢迎接口。我们不会提前加入健康检查、参数、Pydantic 模型、数据库或目录分层。
+
+## 前置条件
+
+- 已完成[从零学习路线](/posts/python/fastapi-from-zero-roadmap)的环境步骤；
+- Windows 10/11；
+- Python 3.12+；
+- 当前目录是 `fastapi-article-api`；
+- `.venv` 已创建，且当前终端已激活它。
+
+本文安装：
+
+```text
+fastapi>=0.119,<1
+uvicorn[standard]>=0.34,<1
+```
+
+这两个范围用于约束兼容区间，**不表示固定最新版**。本篇还没有创建依赖文件或锁文件；以后引入项目依赖管理时，精确版本以锁文件为准。FastAPI 0.x 在本系列中按 Pydantic v2 使用；Pydantic 模型细节留到专门一篇。
+
+技术行为参考 FastAPI 官方 [First Steps](https://fastapi.tiangolo.com/tutorial/first-steps/) 与 Uvicorn 官方 [Settings](https://www.uvicorn.org/settings/)。前者适用于最小开发示例，后者说明启动参数；`--reload` 只适合本地开发，不是生产部署建议。
+
+## 开始时的文件树
+
+<FileTree tree={[
+  { name: "fastapi-article-api", type: "folder", children: [
+    { name: ".venv", type: "folder", comment: "本机虚拟环境，不提交", children: [] },
+  ]},
+]} />
+
+如果目录里已经有其他业务文件，请新建一个干净练习目录，避免本文命令覆盖你的项目。
+
+## 先理解最小请求链路
+
+当你访问 `http://127.0.0.1:8000/` 时：
+
+1. Uvicorn 在本机 `8000` 端口收到 HTTP 请求；
+2. 它找到 `main.py` 中名为 `app` 的 FastAPI 对象；
+3. FastAPI 根据 `GET /` 找到 Python 函数；
+4. 函数返回字典；
+5. FastAPI 把字典序列化为 JSON 响应。
+
+`GET` 是读取资源常用的 HTTP 方法，`/` 是根路径。这里返回的是教学欢迎信息，不代表以后所有接口都应放在根路径。
+
+## 步骤 1：安装 FastAPI 与 Uvicorn
+
+**本步目标**：把 Web 框架和 ASGI 开发服务器安装到当前虚拟环境。
+
+**涉及文件**：不创建或修改业务文件；依赖安装在 `.venv` 中。
+
+**完整可复制命令（PowerShell）**：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m pip install "fastapi>=0.119,<1" "uvicorn[standard]>=0.34,<1"
+python -m pip show fastapi uvicorn
+```
+
+**完整可复制命令（CMD）**：
+
+```bat
+.venv\Scripts\activate.bat
+python -m pip install "fastapi>=0.119,<1" "uvicorn[standard]>=0.34,<1"
+python -m pip show fastapi uvicorn
+```
+
+**运行命令与预期结果**：安装命令应以 `Successfully installed ...` 或“已满足要求”结束；`pip show` 会输出实际安装版本和 `.venv` 内的安装位置。精确版本可以不同，只要满足范围。
+
+**Windows PowerShell 与 CMD 注意**：始终写 `python -m pip`，可减少 `pip` 指向另一个 Python 的风险。PowerShell 与 CMD 的激活脚本不同；如果 PowerShell 拒绝脚本，可对当前进程临时设置执行策略，或直接运行 `.\.venv\Scripts\python.exe -m pip ...`。
+
+## 步骤 2：创建唯一的 main.py
+
+**本步目标**：定义 FastAPI 应用对象和文章管理 API 的第一个根路由。
+
+**涉及文件**：新建 `main.py`，本篇不创建其他业务文件。
+
+在 `fastapi-article-api\main.py` 中粘贴以下**完整可复制代码**：
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {"message": "欢迎使用文章管理 API"}
+```
+
+逐行理解：
+
+- `FastAPI` 是应用类；`app` 是运行中的应用对象。
+- `@app.get("/")` 把下一行函数注册为 `GET /` 的处理函数。
+- `dict[str, str]` 是返回值类型注解，表示键和值都是字符串。
+- 返回 Python 字典后，FastAPI 会生成 JSON 响应。
+
+**完整可复制创建命令（PowerShell，可选）**：如果你不使用编辑器，可以运行：
+
+```powershell
+@'
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {"message": "欢迎使用文章管理 API"}
+'@ | Set-Content -Encoding utf8 main.py
+```
+
+**CMD 注意**：CMD 不支持 PowerShell 的 here-string。请用编辑器创建 `main.py`；不要把上面的 `@'`、`'@` 复制到 CMD。两种终端都可用下面命令检查语法：
+
+```bat
+python -m py_compile main.py
+```
+
+**运行命令与预期结果**：`py_compile` 成功时通常没有输出。它只检查 Python 能否编译文件，不会启动 API。
+
+**Windows PowerShell 与 CMD 注意**：Windows 记事本保存时选择 UTF-8。确认文件名是 `main.py`，而不是隐藏扩展名后的 `main.py.txt`；可运行 `Get-ChildItem`（PowerShell）或 `dir`（CMD）检查。
+
+## 步骤 3：启动开发服务器
+
+**本步目标**：让 Uvicorn 导入 `main:app` 并监听本机端口。
+
+**涉及文件**：仍然只有 `main.py`，代码保持如下完整版本：
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {"message": "欢迎使用文章管理 API"}
+```
+
+**完整可复制命令（PowerShell 与 CMD 相同）**：
+
+```bat
+python -m uvicorn main:app --reload
+```
+
+`main:app` 的冒号两边分别表示：
+
+- `main`：导入当前目录的 `main.py` 模块；
+- `app`：在该模块中寻找名为 `app` 的对象。
+
+**预期结果**：终端会显示服务器运行在 `http://127.0.0.1:8000` 附近的信息。不同 Uvicorn 版本的日志文字可能不同，不要依赖一字不差的输出。
+
+**Windows PowerShell 与 CMD 注意**：启动命令会持续占用当前终端，这是正常现象。按 `Ctrl+C` 停止服务器。`--reload` 会监视文件变化并重启开发进程；它只用于本地开发。
+
+## 步骤 4：验证接口与自动文档
+
+**本步目标**：分别验证 JSON 响应、交互式文档和 OpenAPI 描述。
+
+**涉及文件**：不改文件；`main.py` 的完整代码仍是：
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {"message": "欢迎使用文章管理 API"}
+```
+
+保持服务器终端运行，再打开第二个终端。
+
+**PowerShell 请求命令**：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/
+```
+
+**CMD 请求命令**：
+
+```bat
+curl.exe http://127.0.0.1:8000/
+```
+
+也可以在浏览器打开：
+
+- `http://127.0.0.1:8000/`：根接口；
+- `http://127.0.0.1:8000/docs`：Swagger UI；
+- `http://127.0.0.1:8000/redoc`：ReDoc；
+- `http://127.0.0.1:8000/openapi.json`：OpenAPI 描述。
+
+**预期结果**：根接口返回：
+
+```json
+{"message":"欢迎使用文章管理 API"}
+```
+
+在 `/docs` 中应看到一个 `GET /` 操作，可以点击 **Try it out** 再执行。
+
+**Windows PowerShell 与 CMD 注意**：Windows PowerShell 5.1 中 `curl` 可能是 `Invoke-WebRequest` 的别名，因此需要原生 curl 时明确写 `curl.exe`。`Invoke-RestMethod` 会把 JSON 自动转换成 PowerShell 对象，显示格式可能与原始 JSON 不同，但字段值应一致。
+
+:::warning 自动文档的适用边界
+`/docs` 和 `/redoc` 非常适合本地开发与接口协作，但是否在生产公网开放必须根据安全策略决定。自动生成文档也不能替代业务语义、权限规则和错误处理说明。
+:::
+
+## 结束时的文件树
+
+<FileTree tree={[
+  { name: "fastapi-article-api", type: "folder", children: [
+    { name: ".venv", type: "folder", comment: "本机虚拟环境，不提交", children: [] },
+    { name: "main.py", type: "file", comment: "本篇唯一业务文件：最小 FastAPI 应用" },
+  ]},
+]} />
+
+运行后 Python 可能自动生成 `__pycache__/`。它是可删除的缓存，不是本篇手工创建的业务文件，也不应提交。
+
+## 常见错误
+
+### 1. `No module named uvicorn` 或 `No module named fastapi`
+
+通常是虚拟环境未激活，或安装和运行使用了不同解释器。执行：
+
+```powershell
+python -c "import sys; print(sys.executable)"
+python -m pip show fastapi uvicorn
+```
+
+两者都应指向当前 `.venv`。
+
+### 2. `Error loading ASGI app. Could not import module "main"`
+
+确认当前终端位于 `main.py` 所在目录：
+
+```powershell
+Get-Location
+Get-ChildItem main.py
+```
+
+CMD 对应命令是 `cd` 和 `dir main.py`。
+
+### 3. `Attribute "app" not found`
+
+启动命令写的是 `main:app`，所以文件中必须存在 `app = FastAPI()`。大小写也必须一致。
+
+### 4. 端口被占用
+
+开发时可临时换端口：
+
+```bat
+python -m uvicorn main:app --reload --port 8001
+```
+
+随后访问 `http://127.0.0.1:8001/`。这只是本地绕开冲突，仍应查明哪个进程占用了原端口。
+
+### 5. 浏览器返回 404
+
+检查是否访问了根路径 `/`，而不是尚未定义的 `/posts`。404 表示服务器已经收到请求，但没有匹配的路由。
+
+## 练习
+
+1. 把欢迎文字改成自己的项目名称，保存后观察 `--reload` 是否自动生效。
+2. 去掉 `--reload` 再启动，修改文件后比较行为。
+3. 在 `/docs` 中执行根接口，并在 `openapi.json` 中搜索 `read_root`。
+4. 故意把启动命令改为 `main:application`，观察错误后恢复为 `main:app`。
+
+练习仍然只允许修改 `main.py`，不要提前创建模型、路由目录或数据库文件。
+
+## 验收清单
+
+- [ ] 项目只有一个手工创建的业务文件 `main.py`。
+- [ ] `python -m py_compile main.py` 成功。
+- [ ] `python -m uvicorn main:app --reload` 能启动。
+- [ ] `GET /` 返回 `欢迎使用文章管理 API`。
+- [ ] `/docs` 能看到并执行 `GET /`。
+- [ ] 能解释 `main:app`、`GET`、`/` 和 JSON 响应。
+- [ ] 知道 `--reload` 与公开自动文档都有开发/生产边界。
+
+下一篇阅读 [FastAPI 路由与参数：扩展文章管理 API](/posts/python/fastapi-routing-parameters)。我们会继续只修改 `main.py`，加入健康检查、固定/动态路由，以及 path、query、header、request body 的最小引子。

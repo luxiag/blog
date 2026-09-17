@@ -1,0 +1,701 @@
+---
+title: 'FastAPI 项目分层与依赖注入：拆分文章管理 API'
+date: '2026-08-18'
+excerpt: '把单文件 CRUD 逐步拆成 schemas、repositories、services、dependencies 与 routers，使用 APIRouter、Depends 保持接口行为完全一致。'
+tags: ['python', 'fastapi', 'project-structure', 'dependency-injection', 'api-router']
+nextPost: 'python/fastapi-sqlalchemy-alembic'
+---
+
+# FastAPI 项目分层与依赖注入：拆分文章管理 API
+
+上一篇的[内存 CRUD 与统一错误处理](/posts/python/fastapi-crud-error-handling)已经可用，但模型、存储、业务规则、HTTP 路由全挤在项目根目录的 `main.py`。功能再增长时，任何修改都会牵动整份文件。本篇从 `fastapi-article-api/main.py` 继续，不增加新功能，只在本篇按步骤创建 `app/`、`app/routers/` 和各职责模块，通过分层和依赖注入改善结构，并逐步证明响应保持一致。
+
+<ProgressIndicator
+  current="python/fastapi-project-structure-dependency"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic 校验" },
+    { slug: "python/fastapi-crud-error-handling", title: "CRUD 与错误" },
+    { slug: "python/fastapi-project-structure-dependency", title: "分层与依赖" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+## 1. 本篇目标与前置
+
+前置：完成上一篇，能在 Swagger 中跑通五个 CRUD 接口；Python 3.12+，FastAPI/Pydantic v2 已安装。
+
+本篇使用六类职责：
+
+- `schemas.py`：HTTP 输入输出模型；
+- `repositories.py`：内存数据读写；
+- `services.py`：唯一性、404/409 等业务规则；
+- `dependencies.py`：对象装配，让路由不负责 `new`；
+- `routers/articles.py`：只处理 HTTP 参数与响应；
+- `main.py`：创建应用、注册路由与异常处理器。
+
+`APIRouter` 用来组织一组路由，`Depends` 声明“这个函数运行前需要什么对象”。依赖注入不是魔法全局变量：FastAPI 根据依赖函数构造参数，测试时还可以通过 `app.dependency_overrides` 替换实现。
+
+## 2. 起始目录与完成目录
+
+起始目录承接上一篇：
+
+```text
+fastapi-article-api/
+└── main.py  # 上一篇的完整单文件 CRUD
+```
+
+开始重构前可再次执行 `python -m py_compile main.py`，并用 `python -m uvicorn main:app --reload` 确认五个接口仍可访问。
+
+完成目录：
+
+```text
+fastapi-article-api/
+└── app/
+    ├── __init__.py
+    ├── main.py
+    ├── schemas.py
+    ├── repositories.py
+    ├── services.py
+    ├── dependencies.py
+    └── routers/
+        ├── __init__.py
+        └── articles.py
+```
+
+:::important 重构原则
+每一步结束时都应能启动。创建新模块期间，根目录 `main.py` 继续提供旧应用；最后创建 `app/main.py`、删除旧入口并切换为 `app.main:app`。为了避免循环导入，依赖方向固定为：`schemas ← repositories ← services ← dependencies ← routers ← main`。`app/main.py` 不被这些模块反向导入。
+:::
+
+## 3. 第一步：创建 `app/` 与路由包
+
+**本步修改文件：新建空的 `app/__init__.py` 与 `app/routers/__init__.py`。** 这是连续项目第一次出现 `app/`；上一篇及更早文章都只使用根目录 `main.py`。
+
+在 `fastapi-article-api` 项目根目录执行：
+
+```powershell
+New-Item -ItemType Directory -Force app\routers
+New-Item -ItemType File -Force app\__init__.py
+New-Item -ItemType File -Force app\routers\__init__.py
+```
+
+macOS/Linux 等价命令：
+
+```bash
+mkdir -p app/routers
+touch app/__init__.py app/routers/__init__.py
+```
+
+两个 `__init__.py` 的完整内容都为空，用于明确 `app` 与 `routers` 是 Python 包。此时根目录 `main.py` 尚未改动，仍可用 `python -m uvicorn main:app --reload` 启动旧 API。
+## 4. 第二步：创建 `app/schemas.py`
+
+**本步修改文件：新建 `app/schemas.py`。** 它只描述 HTTP 契约，不读取仓储，也不抛 404/409。
+
+```python
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+ArticleStatus = Literal["draft", "published"]
+
+
+class ArticleCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slug: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    title: str = Field(min_length=1, max_length=100)
+    body: str = Field(min_length=1, max_length=10_000)
+    tags: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("slug", "title", "body", mode="before")
+    @classmethod
+    def trim_required_text(cls, value: object, info) -> object:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            names = {"slug": "文章 slug", "title": "文章标题", "body": "文章正文"}
+            raise ValueError(f"{names[info.field_name]}不能为空或只包含空格")
+        return cleaned
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for raw_tag in value:
+            tag = raw_tag.strip()
+            if not tag:
+                raise ValueError("文章标签不能为空或只包含空格")
+            if len(tag) > 20:
+                raise ValueError("单个文章标签不能超过 20 个字符")
+            if tag not in result:
+                result.append(tag)
+        return result
+
+
+class ArticleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slug: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    title: str | None = Field(default=None, min_length=1, max_length=100)
+    body: str | None = Field(default=None, min_length=1, max_length=10_000)
+    tags: list[str] | None = Field(default=None, max_length=5)
+    status: ArticleStatus | None = None
+
+    @field_validator("slug", "title", "body", mode="before")
+    @classmethod
+    def trim_optional_text(cls, value: object, info) -> object:
+        if value is None:
+            raise ValueError(f"{info.field_name} 不能为 null；不修改时请省略该字段")
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError(f"{info.field_name} 不能为空或只包含空格")
+        return cleaned
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_optional_tags(cls, value: list[str] | None) -> list[str]:
+        if value is None:
+            raise ValueError("tags 不能为 null；清空标签请传空数组")
+        result: list[str] = []
+        for raw_tag in value:
+            tag = raw_tag.strip()
+            if not tag:
+                raise ValueError("文章标签不能为空或只包含空格")
+            if len(tag) > 20:
+                raise ValueError("单个文章标签不能超过 20 个字符")
+            if tag not in result:
+                result.append(tag)
+        return result
+
+    @field_validator("status")
+    @classmethod
+    def reject_null_status(cls, value: ArticleStatus | None) -> ArticleStatus:
+        if value is None:
+            raise ValueError("status 不能为 null；不修改时请省略该字段")
+        return value
+
+    @model_validator(mode="after")
+    def require_at_least_one_field(self):
+        if not self.model_fields_set:
+            raise ValueError("至少提供一个需要修改的字段")
+        return self
+
+
+class ArticleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    slug: str
+    title: str
+    body: str
+    tags: list[str]
+    status: ArticleStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArticlePage(BaseModel):
+    items: list[ArticleRead]
+    offset: int
+    limit: int
+    total: int
+```
+
+此时不要删除旧 `main.py` 中的模型；下一步还会有短暂重复，这是逐步搬迁，不影响旧应用运行。
+
+## 5. 第三步：创建 `app/repositories.py`
+
+**本步修改文件：新建 `app/repositories.py`。** Repository 只做数据操作，不知道 HTTP 状态码。
+
+```python
+from datetime import UTC, datetime
+
+from app.schemas import ArticleCreate, ArticleRead
+
+
+class InMemoryArticleRepository:
+    def __init__(self) -> None:
+        self._items: dict[int, ArticleRead] = {}
+        self._next_id = 1
+
+    def create(self, payload: ArticleCreate) -> ArticleRead:
+        now = datetime.now(UTC)
+        article = ArticleRead(
+            id=self._next_id,
+            slug=payload.slug,
+            title=payload.title,
+            body=payload.body,
+            tags=payload.tags,
+            status="draft",
+            created_at=now,
+            updated_at=now,
+        )
+        self._items[article.id] = article
+        self._next_id += 1
+        return article
+
+    def list(self, *, offset: int, limit: int) -> tuple[list[ArticleRead], int]:
+        ordered = sorted(self._items.values(), key=lambda item: item.id)
+        return ordered[offset : offset + limit], len(ordered)
+
+    def get(self, article_id: int) -> ArticleRead | None:
+        return self._items.get(article_id)
+
+    def get_by_slug(self, slug: str) -> ArticleRead | None:
+        return next((item for item in self._items.values() if item.slug == slug), None)
+
+    def update(self, article_id: int, changes: dict[str, object]) -> ArticleRead:
+        current = self._items[article_id]
+        updated = current.model_copy(
+            update={**changes, "updated_at": datetime.now(UTC)}
+        )
+        self._items[article_id] = updated
+        return updated
+
+    def delete(self, article_id: int) -> None:
+        del self._items[article_id]
+```
+
+仓储仍是内存实现，因此保留上一篇的限制：单进程、重启丢失、不可用于生产。分层的价值是下一篇可把它替换成数据库仓储，而路由契约无需重写。
+
+## 6. 第四步：创建 `app/services.py`
+
+**本步修改文件：新建 `app/services.py`。** Service 编排仓储并维护业务规则。
+
+```python
+from fastapi import status
+
+from app.repositories import InMemoryArticleRepository
+from app.schemas import ArticleCreate, ArticlePage, ArticleRead, ArticleUpdate
+
+
+class BusinessError(Exception):
+    def __init__(self, *, status_code: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+
+
+class ArticleService:
+    def __init__(self, repository: InMemoryArticleRepository) -> None:
+        self.repository = repository
+
+    def _require_article(self, article_id: int) -> ArticleRead:
+        article = self.repository.get(article_id)
+        if article is None:
+            raise BusinessError(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="ARTICLE_NOT_FOUND",
+                message="文章不存在",
+            )
+        return article
+
+    def create(self, payload: ArticleCreate) -> ArticleRead:
+        if self.repository.get_by_slug(payload.slug) is not None:
+            raise BusinessError(
+                status_code=status.HTTP_409_CONFLICT,
+                code="ARTICLE_SLUG_EXISTS",
+                message="文章 slug 已存在，请更换后重试",
+            )
+        return self.repository.create(payload)
+
+    def list(self, *, offset: int, limit: int) -> ArticlePage:
+        items, total = self.repository.list(offset=offset, limit=limit)
+        return ArticlePage(items=items, offset=offset, limit=limit, total=total)
+
+    def get(self, article_id: int) -> ArticleRead:
+        return self._require_article(article_id)
+
+    def update(self, article_id: int, payload: ArticleUpdate) -> ArticleRead:
+        current = self._require_article(article_id)
+        changes = payload.model_dump(exclude_unset=True)
+        new_slug = changes.get("slug")
+        if isinstance(new_slug, str):
+            owner = self.repository.get_by_slug(new_slug)
+            if owner is not None and owner.id != current.id:
+                raise BusinessError(
+                    status_code=status.HTTP_409_CONFLICT,
+                    code="ARTICLE_SLUG_EXISTS",
+                    message="文章 slug 已存在，请更换后重试",
+                )
+        return self.repository.update(article_id, changes)
+
+    def delete(self, article_id: int) -> None:
+        self._require_article(article_id)
+        self.repository.delete(article_id)
+```
+
+现在“slug 重复”和“文章不存在”不再散落在路由中。Repository 不返回 `JSONResponse`，Service 也不接收 `Request`；层与层之间只交换 Python 对象。
+## 7. 第五步：创建 `app/dependencies.py`
+
+**本步修改文件：新建 `app/dependencies.py`。** 它负责对象装配，不包含业务规则。
+
+```python
+from typing import Annotated
+
+from fastapi import Depends
+
+from app.repositories import InMemoryArticleRepository
+from app.services import ArticleService
+
+# 教学版单例让多个请求看到同一份内存数据。
+# 它仍只属于当前进程，重启丢失，不可用于生产。
+_repository = InMemoryArticleRepository()
+
+
+def get_article_repository() -> InMemoryArticleRepository:
+    return _repository
+
+
+RepositoryDep = Annotated[
+    InMemoryArticleRepository,
+    Depends(get_article_repository),
+]
+
+
+def get_article_service(repository: RepositoryDep) -> ArticleService:
+    return ArticleService(repository)
+```
+
+为什么不在每次请求里 `InMemoryArticleRepository()`？因为那会让每个请求拿到全新的空字典：刚 POST，下一次 GET 就找不到。这里的单例仅为保持上一篇行为；数据库阶段会改成“进程级 Engine + 请求级 Session/Repository”。
+
+`Depends` 会读取 `get_article_service` 的参数，先解析 `get_article_repository`，再构造 Service。路由只声明需要 `ArticleService`，不用知道仓储如何创建。
+
+## 8. 第六步：创建 `app/routers/articles.py`
+
+**本步修改文件：新建 `app/routers/articles.py`。** 路由层只负责 HTTP 协议转换。
+
+```python
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query, Response, status
+
+from app.dependencies import get_article_service
+from app.schemas import ArticleCreate, ArticlePage, ArticleRead, ArticleUpdate
+from app.services import ArticleService
+
+router = APIRouter(prefix="/articles", tags=["articles"])
+ServiceDep = Annotated[ArticleService, Depends(get_article_service)]
+
+
+@router.post(
+    "",
+    response_model=ArticleRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_article(payload: ArticleCreate, service: ServiceDep) -> ArticleRead:
+    return service.create(payload)
+
+
+@router.get("", response_model=ArticlePage)
+def list_articles(
+    service: ServiceDep,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> ArticlePage:
+    return service.list(offset=offset, limit=limit)
+
+
+@router.get("/{article_id}", response_model=ArticleRead)
+def get_article(article_id: int, service: ServiceDep) -> ArticleRead:
+    return service.get(article_id)
+
+
+@router.patch("/{article_id}", response_model=ArticleRead)
+def update_article(
+    article_id: int,
+    payload: ArticleUpdate,
+    service: ServiceDep,
+) -> ArticleRead:
+    return service.update(article_id, payload)
+
+
+@router.delete(
+    "/{article_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_article(article_id: int, service: ServiceDep) -> Response:
+    service.delete(article_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+```
+
+`APIRouter(prefix="/articles")` 把公共前缀集中管理；每个装饰器只写相对路径。`tags=["articles"]` 让 Swagger 把这些操作归为一组。
+
+## 9. 第七步：创建 `app/main.py` 并切换入口
+
+**本步修改文件：新建 `app/main.py`，随后删除根目录旧 `main.py`。** 把应用级装配写入下面的新文件；模型、仓储和路由已经迁入前面创建的模块，不要再复制回入口。
+
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from app.routers.articles import router as articles_router
+from app.services import BusinessError
+
+app = FastAPI(title="文章管理 API", version="1.0.0")
+app.include_router(articles_router)
+
+
+@app.exception_handler(BusinessError)
+async def handle_business_error(
+    _request: Request,
+    exc: BusinessError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": exc.code, "message": exc.message}},
+    )
+```
+
+确认 `app/main.py` 已保存后，删除项目根目录的旧入口：
+
+```powershell
+Remove-Item .\main.py
+```
+
+macOS/Linux 等价命令：
+
+```bash
+rm main.py
+```
+
+`app/main.py` 现在只做应用级装配。异常处理器属于应用入口，因为它把 Python 业务异常映射成 HTTP 响应；`BusinessError` 本身仍定义在 Service 层。至此启动入口才从 `main:app` 切换为 `app.main:app`。
+
+## 10. 所有文件的完整代码核对
+
+经过以上步骤，非空文件的完整内容已经分别给出：
+
+- `app/schemas.py`：第 4 节完整代码；
+- `app/repositories.py`：第 5 节完整代码；
+- `app/services.py`：第 6 节完整代码；
+- `app/dependencies.py`：第 7 节完整代码；
+- `app/routers/articles.py`：第 8 节完整代码；
+- `app/main.py`：第 9 节完整代码。
+
+以下两个文件的完整内容均为空：
+
+```text
+app/__init__.py
+app/routers/__init__.py
+```
+
+完成目录：
+
+```text
+fastapi-article-api/
+└── app/
+    ├── __init__.py
+    ├── main.py
+    ├── schemas.py
+    ├── repositories.py
+    ├── services.py
+    ├── dependencies.py
+    └── routers/
+        ├── __init__.py
+        └── articles.py
+```
+
+先执行静态语法检查：
+
+```bash
+python -m compileall app
+```
+
+预期成功退出。然后启动：
+
+```bash
+python -m uvicorn app.main:app --reload
+```
+
+预期终端包含：
+
+```text
+Uvicorn running on http://127.0.0.1:8000
+Application startup complete.
+```
+
+若出现 `ModuleNotFoundError: No module named 'app'`，请确认命令是在 `fastapi-article-api` 根目录执行，而不是在 `app/` 内执行。
+
+## 11. Swagger 回归验证：证明功能没有变化
+
+**本步修改文件：无。** 打开 `http://127.0.0.1:8000/docs`。仍应看到同样的五个接口。
+
+### 11.1 创建
+
+执行 `POST /articles`：
+
+```json
+{
+  "slug": "layered-fastapi",
+  "title": "  分层后的 FastAPI  ",
+  "body": "路由只负责 HTTP，Service 负责业务规则。",
+  "tags": [" FastAPI ", "架构"]
+}
+```
+
+预期 `201`：
+
+```json
+{
+  "id": 1,
+  "slug": "layered-fastapi",
+  "title": "分层后的 FastAPI",
+  "body": "路由只负责 HTTP，Service 负责业务规则。",
+  "tags": ["FastAPI", "架构"],
+  "status": "draft",
+  "created_at": "2026-08-18T08:00:00.000000Z",
+  "updated_at": "2026-08-18T08:00:00.000000Z"
+}
+```
+
+时间以实际响应为准。
+
+### 11.2 列表与分页
+
+执行 `GET /articles?offset=0&limit=20`，预期 `200`：
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "slug": "layered-fastapi",
+      "title": "分层后的 FastAPI",
+      "body": "路由只负责 HTTP，Service 负责业务规则。",
+      "tags": ["FastAPI", "架构"],
+      "status": "draft",
+      "created_at": "2026-08-18T08:00:00.000000Z",
+      "updated_at": "2026-08-18T08:00:00.000000Z"
+    }
+  ],
+  "offset": 0,
+  "limit": 20,
+  "total": 1
+}
+```
+
+### 11.3 详情、更新与删除
+
+执行 `GET /articles/1`，预期 `200`。执行：
+
+```json
+{
+  "title": "分层与依赖注入",
+  "status": "published"
+}
+```
+
+到 `PATCH /articles/1`，预期 `200` 且只改变这两个字段。执行 `DELETE /articles/1`，预期 `204` 且响应体为空。
+
+### 11.4 统一错误仍保持一致
+
+再次获取 `GET /articles/1`，预期 `404`：
+
+```json
+{
+  "error": {
+    "code": "ARTICLE_NOT_FOUND",
+    "message": "文章不存在"
+  }
+}
+```
+
+创建两次相同 slug，第二次预期 `409`：
+
+```json
+{
+  "error": {
+    "code": "ARTICLE_SLUG_EXISTS",
+    "message": "文章 slug 已存在，请更换后重试"
+  }
+}
+```
+
+这证明重构只改变代码组织，没有改变 HTTP 契约。
+
+## 12. 依赖覆盖的意义
+
+**本步修改文件：无。** 本篇按要求不创建测试文件，但你需要理解依赖注入带来的测试入口：
+
+```python
+# 仅作说明，不要在本篇创建此测试文件。
+from app.dependencies import get_article_repository
+from app.main import app
+from app.repositories import InMemoryArticleRepository
+
+fresh_repository = InMemoryArticleRepository()
+app.dependency_overrides[get_article_repository] = lambda: fresh_repository
+```
+
+测试可为每个用例注入全新仓储，避免共享状态；结束后调用 `app.dependency_overrides.clear()`。未来数据库版也可替换为测试 Session，而无需修改路由函数。
+
+## 13. 常见错误
+
+### `main.py` 与 Router 同时保留相同路由
+
+会造成重复 OpenAPI 操作或行为取决于注册顺序。最终 `main.py` 必须只 `include_router`，旧路由全部删除。
+
+### 在每个请求中创建新内存仓储
+
+POST 与 GET 会得到不同实例，表现为“创建成功但立即查不到”。教学版仓储由 `dependencies.py` 的进程级对象持有。
+
+### Router 直接访问仓储
+
+这样 404/409 规则又回到 HTTP 层，换数据库时会重写所有路由。路由应调用 Service。
+
+### Repository 抛 `HTTPException`
+
+Repository 可能被命令行任务、后台任务复用，不应依赖 HTTP。它只返回对象或 `None`，业务层决定语义。
+
+### 产生循环导入
+
+常见错误是 `services.py` 导入 `main.app`，同时 `main.py` 又导入 Service。遵守单向依赖，不从下层反向导入入口。
+
+### 误以为分层让内存数据可用于生产
+
+分层改善可替换性，不改变存储性质。当前数据仍是单进程、重启丢失、无事务；生产必须使用数据库仓储。
+
+## 14. 练习
+
+1. 给 `ArticleService` 增加 `publish(article_id)`，规则是空正文不能发布，路由为 `POST /articles/{id}/publish`。
+2. 新建一个 `get_fresh_repository` 依赖用于手工实验，观察每请求新实例为何无法保存状态，然后恢复原实现。
+3. 为 Repository 定义 `Protocol`，让 Service 依赖抽象协议而不是具体内存类。
+4. 给应用添加 `/health` Router，思考它是否需要 ArticleService。
+5. 画出创建请求从 Router 到 Service、Repository 再返回 Schema 的方向图。
+
+## 15. 验收清单
+
+- [ ] 完成目录与文中树一致。
+- [ ] `python -m compileall app` 成功。
+- [ ] `app/main.py` 只负责应用装配和异常映射。
+- [ ] `schemas.py` 不导入 Repository、Service 或 FastAPI 路由对象。
+- [ ] `repositories.py` 不抛 `HTTPException`，也不知道 HTTP 状态码。
+- [ ] 404/409 业务规则集中在 `ArticleService`。
+- [ ] `APIRouter` 使用 `/articles` 前缀，五个接口均出现在 Swagger。
+- [ ] `Depends` 能把同一内存仓储装配给 Service。
+- [ ] 创建、分页、详情、PATCH、204 删除行为与上一篇一致。
+- [ ] 404/409 响应结构与上一篇一致。
+- [ ] 能解释如何通过 `dependency_overrides` 替换仓储。
+- [ ] 能说明当前内存实现仍不可用于生产。
+
+## 16. 官方文档与下一步
+
+- [FastAPI Bigger Applications / APIRouter](https://fastapi.tiangolo.com/tutorial/bigger-applications/)
+- [FastAPI Dependencies](https://fastapi.tiangolo.com/tutorial/dependencies/)
+- [FastAPI Testing Dependencies with Overrides](https://fastapi.tiangolo.com/advanced/testing-dependencies/)
+- [FastAPI Handling Errors](https://fastapi.tiangolo.com/tutorial/handling-errors/)
+- [Pydantic Models](https://docs.pydantic.dev/latest/concepts/models/)
+
+下一篇进入[FastAPI、SQLAlchemy 与 Alembic](/posts/python/fastapi-sqlalchemy-alembic)：保持 Router 和 Service 的职责边界，把不可持久化的内存仓储替换为真正的数据层、事务与迁移。

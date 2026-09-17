@@ -1,0 +1,1348 @@
+---
+title: 'FastAPI 生产可观测性与部署：从错误边界到安全回滚'
+date: '2026-08-18'
+excerpt: '承接真实 PostgreSQL/Redis 集成测试，把同步 FastAPI 服务推进到生产：配置与 secrets、稳定错误契约、Request ID、JSON 日志、健康检查、非 root 镜像、Compose、Uvicorn 容量、可信代理、优雅停止、冒烟验证与兼容迁移。'
+tags: ['python', 'fastapi', 'observability', 'deployment', 'uvicorn', 'docker', 'sqlalchemy']
+nextPost: 'python/python-backend-capstone'
+---
+
+# FastAPI 生产可观测性与部署：从错误边界到安全回滚
+
+上一篇[后端集成测试](/posts/python/python-backend-integration-testing)已经证明应用能通过真实 PostgreSQL、Redis 与 Alembic 的协作测试。本篇继续使用 **Python 3.12+、FastAPI/Pydantic v2、同步 SQLAlchemy 2.x 与 Psycopg 3**，目标不再是“测试通过”，而是让同一制品能安全启动、接流量、被观察、停止和回滚。完成后再进入[团队知识库 API 综合实战](/posts/python/python-backend-capstone)。
+
+:::important 本文的生产边界
+示例中的数据库路由保持普通 `def`，一个请求使用一个同步 `Session`；不要把 `Session` 跨请求或跨线程共享。Compose 用于在单机复现发布拓扑，不等于高可用生产平台。TLS、secret 存储、备份、镜像签名与调度器策略仍应由部署平台负责。
+:::
+
+<ProgressIndicator
+  current="python/fastapi-observability-deployment"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic 校验" },
+    { slug: "python/fastapi-crud-error-handling", title: "CRUD 与错误" },
+    { slug: "python/fastapi-project-structure-dependency", title: "分层与依赖" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+## 先建立发布心智模型
+
+生产发布不是把 `uvicorn` 放进容器就结束，而是一条可验证的状态机：
+
+```mermaid
+flowchart LR
+  C[冻结配置与依赖] --> M[一次性迁移]
+  M --> S[启动 API 进程]
+  S --> L[liveness 成功]
+  L --> R[readiness 成功]
+  R --> T[代理开始转发]
+  T --> O[日志与指标观察]
+  O --> G{验收通过?}
+  G -- 是 --> K[继续放量]
+  G -- 否 --> B[停止放量并回滚应用]
+```
+
+
+下面每一步都说明修改位置、核心代码、命令、预期结果、排查方式和验收条件。示例目录沿用前文：
+
+```text
+backend-integration-demo/
+├── app/
+│   ├── config.py
+│   ├── db.py
+│   ├── errors.py
+│   ├── health.py
+│   ├── logging.py
+│   ├── middleware.py
+│   └── main.py
+├── alembic/versions/
+├── ops/nginx/default.conf
+├── scripts/smoke.sh
+├── .dockerignore
+├── .env.example
+├── compose.yaml
+├── Dockerfile
+├── pyproject.toml
+└── uv.lock
+```
+
+## 步骤 1：把生产配置与 secrets 变成启动前置条件
+
+### 改哪些文件
+
+修改 `pyproject.toml`，新增或更新 `app/config.py` 与 `.env.example`。`.env` 只供本地使用，必须在 `.gitignore` 与 `.dockerignore` 中排除；生产 secret 由平台注入环境变量，或挂载为 `/run/secrets/<字段名>` 文件。
+
+```toml title="pyproject.toml（相关部分）"
+[project]
+name = "backend-integration-demo"
+version = "0.2.0"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "alembic>=1.13,<2",
+  "fastapi>=0.115,<1",
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.5,<3",
+  "psycopg[binary]>=3.2,<4",
+  "redis>=5,<7",
+  "sqlalchemy>=2.0,<3",
+  "uvicorn[standard]>=0.30,<1",
+]
+```
+
+版本范围描述源码兼容边界，`uv.lock` 才是构建输入；CI 与镜像构建都要使用 `--frozen`，不得在生产现场重新解析依赖。
+
+```python title="app/config.py"
+from functools import lru_cache
+from typing import Literal, Self
+
+from pydantic import Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",                 # 仅本地开发
+        secrets_dir="/run/secrets",      # 生产挂载文件
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    environment: Literal["development", "staging", "production"] = "development"
+    service_name: str = "knowledge-api"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
+    database_url: SecretStr
+    redis_url: SecretStr
+    jwt_secret: SecretStr
+
+    db_pool_size: int = Field(default=5, ge=1, le=50)
+    db_max_overflow: int = Field(default=5, ge=0, le=50)
+    db_pool_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    db_pool_recycle_seconds: int = Field(default=1800, ge=60)
+    redis_required_for_readiness: bool = False
+
+    @model_validator(mode="after")
+    def reject_unsafe_production_values(self) -> Self:
+        if self.environment == "production":
+            secret = self.jwt_secret.get_secret_value()
+            if len(secret) < 32 or secret == "change-me":
+                raise ValueError("production JWT_SECRET must contain at least 32 characters")
+            if "localhost" in self.database_url.get_secret_value():
+                raise ValueError("production DATABASE_URL must not point to localhost")
+        return self
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+```
+
+```dotenv title=".env.example"
+ENVIRONMENT=development
+SERVICE_NAME=knowledge-api
+LOG_LEVEL=INFO
+DATABASE_URL=postgresql+psycopg://knowledge:local-only@db:5432/knowledge
+REDIS_URL=redis://redis:6379/0
+JWT_SECRET=change-me
+DB_POOL_SIZE=5
+DB_MAX_OVERFLOW=5
+DB_POOL_TIMEOUT_SECONDS=5
+DB_POOL_RECYCLE_SECONDS=1800
+REDIS_REQUIRED_FOR_READINESS=false
+```
+
+`SecretStr` 防止配置对象被意外 `repr` 时直接打印 secret，但它不是加密工具；代码仍可通过 `get_secret_value()` 使用明文。因此日志规则必须继续禁止记录完整 settings、数据库 URL、token 与请求头。
+
+### 命令与预期结果
+
+```bash
+cp .env.example .env
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+# 把输出仅写入本地 .env 的 JWT_SECRET；生产值写入 secret manager。
+uv lock
+uv sync --frozen
+uv run python -c "from app.config import get_settings; print(get_settings().environment)"
+```
+
+最后一条应只输出 `development`，不应打印任何连接串或密钥。生产平台使用文件 secret 时，文件名分别为 `database_url`、`redis_url`、`jwt_secret`，内容只放对应值；Pydantic Settings 会读取 `/run/secrets`。
+
+### 失败排查
+
+- `Field required`：环境变量名或 secret 文件名不匹配，检查大小写、挂载路径和文件权限。
+- `production ... must`：这是主动失败，不要降低校验；修复 secret 或连接目标。
+- `uv sync --frozen` 报 lock 过期：在开发机更新 `pyproject.toml` 后重新执行 `uv lock` 并提交 lock，不要在镜像里去掉 `--frozen`。
+
+**本步验收**：仓库只有 `.env.example`，没有真实 secret；缺少必填配置时进程启动失败；日志和命令输出均不出现连接串、密码或 JWT。
+
+## 步骤 2：显式配置同步 Engine、请求 Session 与连接池超时
+
+### 改哪些文件
+
+修改 `app/db.py`。连接池参数来自上一步配置；每个进程创建自己的 Engine 和池，每个请求独占自己的同步 `Session`。
+
+```python title="app/db.py"
+from collections.abc import Generator
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.config import get_settings
+
+settings = get_settings()
+engine = create_engine(
+    settings.database_url.get_secret_value(),
+    pool_pre_ping=True,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_timeout=settings.db_pool_timeout_seconds,
+    pool_recycle=settings.db_pool_recycle_seconds,
+    hide_parameters=True,  # 异常与 SQL 日志隐藏绑定参数，避免 token/正文进入日志。
+    echo=False,  # 生产禁止用 SQL echo 代替受控日志。
+)
+SessionFactory = sessionmaker(
+    bind=engine,
+    class_=Session,
+    expire_on_commit=False,
+)
+
+
+def get_session() -> Generator[Session, None, None]:
+    with SessionFactory() as session:
+        try:
+            yield session
+        except Exception:
+            # rollback 后连接才可安全归还池；异常继续交给统一处理器。
+            session.rollback()
+            raise
+```
+
+业务写入优先使用 `with session.begin():` 声明事务边界。不要在未知异常后继续复用失败事务，也不要在依赖层把异常吞掉。
+
+### 命令与预期结果
+
+```bash
+uv run python -c "from app.db import engine; print(engine.pool.status())"
+```
+
+在数据库可达前，这条命令通常只构造 Engine，不立即连接；输出池状态且不含密码。真正连接由 readiness 或业务请求触发。
+
+### 失败排查
+
+- 首次请求 `QueuePool limit ... reached`：先找慢查询、未关闭 Session 或事务泄漏，再评估容量；不要只放大池。
+- `connection refused`：核对 `DATABASE_URL` 的容器主机名应为 `db`，从宿主机直连时才通常是 `localhost`。
+- 闲置后连接失效：保留 `pool_pre_ping=True`，并让 `pool_recycle` 小于已知网络中间层的闲置连接上限。
+
+**本步验收**：并发请求不共享 Session；异常路径会 rollback；SQL echo 关闭；池等待有有限超时，不会无限挂起。
+
+
+## 步骤 3：统一业务异常与稳定错误结构
+
+### 改哪些文件
+
+新增 `app/errors.py`；在具体 service 中只转换**能够识别的**约束错误，其他异常继续上抛。客户端始终收到同一 envelope：`code` 供程序判断，`message` 给人阅读，`request_id` 用于关联服务端日志。
+
+```python title="app/errors.py"
+import logging
+from typing import Any
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.middleware import get_request_id
+
+logger = logging.getLogger("app.errors")
+
+
+class ErrorBody(BaseModel):
+    code: str
+    message: str
+    request_id: str
+
+
+class ErrorEnvelope(BaseModel):
+    error: ErrorBody
+
+
+class AppError(Exception):
+    def __init__(self, code: str, message: str, status_code: int = 400) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+
+def error_response(code: str, message: str, status_code: int) -> JSONResponse:
+    payload = ErrorEnvelope(
+        error=ErrorBody(
+            code=code,
+            message=message,
+            request_id=get_request_id(),
+        )
+    )
+    return JSONResponse(status_code=status_code, content=payload.model_dump())
+
+
+def install_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(AppError)
+    def handle_app_error(_: Request, exc: AppError) -> JSONResponse:
+        return error_response(exc.code, exc.message, exc.status_code)
+
+    @app.exception_handler(RequestValidationError)
+    def handle_validation(_: Request, __: RequestValidationError) -> JSONResponse:
+        # 不把 Pydantic 内部字段路径或默认英文错误直接暴露给客户端。
+        return error_response("VALIDATION_ERROR", "请求参数不符合要求", 422)
+
+    @app.exception_handler(StarletteHTTPException)
+    def handle_http(_: Request, exc: StarletteHTTPException) -> JSONResponse:
+        messages = {
+            401: "请先完成身份认证",
+            403: "没有执行该操作的权限",
+            404: "请求的资源不存在",
+            405: "请求方法不受支持",
+        }
+        return error_response(
+            "HTTP_ERROR",
+            messages.get(exc.status_code, "请求无法完成"),
+            exc.status_code,
+        )
+
+    @app.exception_handler(Exception)
+    def handle_unknown(request: Request, exc: Exception) -> JSONResponse:
+        # logger.exception 只写服务端 JSON 日志；响应绝不拼接 str(exc)。
+        logger.exception(
+            "unhandled_exception",
+            extra={
+                "method": request.method,
+                "route": getattr(request.scope.get("route"), "path", "unmatched"),
+                "error_type": type(exc).__name__,
+            },
+        )
+        return error_response("INTERNAL_ERROR", "服务器内部错误", 500)
+```
+
+已知唯一约束必须在安全事务边界之外转换，示例中的 `constraint_name` 是服务端判断依据，不进入响应：
+
+```python title="app/services/posts.py（核心写入）"
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.errors import AppError
+from app.models import Post
+from app.schemas import PostCreate
+
+
+def create_post(session: Session, data: PostCreate, owner_id: str) -> Post:
+    try:
+        with session.begin():
+            post = Post(**data.model_dump(), owner_id=owner_id)
+            session.add(post)
+            session.flush()  # 在事务内尽早触发数据库约束。
+        return post
+    except IntegrityError as exc:
+        # 离开 session.begin() 后事务已经回滚，才可安全转换异常。
+        diagnostic = getattr(exc.orig, "diag", None)
+        constraint = getattr(diagnostic, "constraint_name", None)
+        if constraint == "uq_posts_idempotency_key":
+            raise AppError(
+                code="IDEMPOTENCY_CONFLICT",
+                message="该请求已被处理，请勿重复提交",
+                status_code=409,
+            ) from None
+        # 未识别的约束可能意味着程序或迁移错误，交给统一未知异常处理器。
+        raise
+```
+
+写入前的业务判重用于改善提示，数据库唯一约束仍是并发正确性的最终防线。不要写 `except IntegrityError: raise AppError(...)` 把外键、非空、长度或未知约束全部伪装成“重复”。
+
+### 命令与预期结果
+
+应用完成步骤 5 的装配后执行：
+
+```bash
+curl -sS -H 'X-Request-ID: tutorial-req-0001' \
+  http://localhost:8000/not-found
+```
+
+预期为 `404`，结构稳定如下，且响应头也有同一个 `X-Request-ID`：
+
+```json
+{
+  "error": {
+    "code": "HTTP_ERROR",
+    "message": "请求的资源不存在",
+    "request_id": "tutorial-req-0001"
+  }
+}
+```
+
+构造未知异常时，客户端只能看到 `INTERNAL_ERROR`；数据库错误原文、SQL、表名、约束名和 Python 堆栈只允许出现在受访问控制的服务端日志中。
+
+### 失败排查
+
+- 响应仍是 `{"detail": ...}`：异常处理器没有安装，或应用导入的不是装配后的 `app`。
+- `PendingRollbackError`：在事务失败后又查询；确保先退出 `session.begin()` 或显式 rollback，再做异常转换。
+- 客户端出现 SQL/堆栈：搜索所有 `detail=str(exc)`、`repr(exc)` 与宽泛 `except Exception`，统一删除响应拼接。
+
+**本步验收**：业务、校验、HTTP 与未知异常都返回同一结构；已知冲突有稳定业务码；未知异常只在服务端保留完整堆栈，客户端不含任何数据库实现细节。
+
+## 步骤 4：加入 Request ID 与 JSON 结构化日志
+
+### 改哪些文件
+
+新增 `app/logging.py` 和 `app/middleware.py`。日志只允许固定字段；访问日志不记录 header、cookie、请求体、查询串、token、连接串或实际资源 ID。路由使用模板 `/posts/{post_id}`，避免高基数和隐私泄漏。
+
+```python title="app/logging.py"
+import json
+import logging
+import logging.config
+from datetime import UTC, datetime
+from typing import Any
+
+from app.config import Settings
+
+_ALLOWED_FIELDS = (
+    "service",
+    "environment",
+    "request_id",
+    "route",
+    "method",
+    "status_code",
+    "duration_ms",
+    "error_type",
+    "dependency",
+)
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        event: dict[str, Any] = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "event": record.getMessage(),
+        }
+        for field in _ALLOWED_FIELDS:
+            value = getattr(record, field, None)
+            if value is not None:
+                event[field] = value
+        if record.exc_info is not None:
+            # 堆栈仅进入服务端日志输出，不进入 HTTP 响应。
+            event["exception"] = self.formatException(record.exc_info)
+        return json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+
+
+def configure_logging(settings: Settings) -> None:
+    logging.config.dictConfig(
+        {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {"json": {"()": "app.logging.JsonFormatter"}},
+            "handlers": {
+                "stdout": {
+                    "class": "logging.StreamHandler",
+                    "formatter": "json",
+                    "stream": "ext://sys.stdout",
+                }
+            },
+            "root": {"handlers": ["stdout"], "level": settings.log_level},
+            "loggers": {
+                "uvicorn.access": {"handlers": [], "propagate": False},
+                "uvicorn.error": {
+                    "handlers": ["stdout"],
+                    "level": settings.log_level,
+                    "propagate": False,
+                },
+            },
+        }
+    )
+```
+
+```python title="app/middleware.py"
+import logging
+import re
+import time
+import uuid
+from contextvars import ContextVar
+
+from fastapi import FastAPI, Request, Response
+
+logger = logging.getLogger("app.http")
+_request_id: ContextVar[str] = ContextVar("request_id", default="unavailable")
+_VALID_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{8,128}$")
+
+
+def get_request_id() -> str:
+    return _request_id.get()
+
+
+def install_request_context(app: FastAPI, service: str, environment: str) -> None:
+    @app.middleware("http")
+    async def request_context(request: Request, call_next) -> Response:
+        incoming = request.headers.get("X-Request-ID", "")
+        request_id = incoming if _VALID_REQUEST_ID.fullmatch(incoming) else uuid.uuid4().hex
+        token = _request_id.set(request_id)
+        started = time.perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            response.headers["X-Request-ID"] = request_id
+            return response
+        finally:
+            route = getattr(request.scope.get("route"), "path", "unmatched")
+            logger.info(
+                "request.completed",
+                extra={
+                    "service": service,
+                    "environment": environment,
+                    "request_id": request_id,
+                    "route": route,
+                    "method": request.method,
+                    "status_code": status_code,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                },
+            )
+            _request_id.reset(token)
+```
+
+日志白名单是一道结构性防线，但仍要求调用方不把 secret 拼进 `event` 文本。尤其禁止记录 `Authorization`、`Proxy-Authorization`、`Cookie`、`Set-Cookie`、API key、密码重置链接、预签名 URL、请求/响应正文和完整 URL 查询串。确需审计用户时记录内部稳定 ID，而不是 token。
+
+### 命令与预期结果
+
+```bash
+curl -i \
+  -H 'X-Request-ID: tutorial-req-0002' \
+  -H 'Authorization: Bearer must-not-appear' \
+  http://localhost:8000/health/live
+```
+
+响应头应含 `X-Request-ID: tutorial-req-0002`。标准输出应是单行 JSON，含 `request_id`、`route`、`status_code` 与 `duration_ms`，但不能出现 `must-not-appear`、`Authorization` 或其他 header。
+
+### 失败排查
+
+- 一次请求出现两条访问日志：启动 Uvicorn 时加 `--no-access-log`，只保留应用结构化访问日志。
+- 日志里的 route 是实际 UUID：不要记录 `request.url.path`；在请求结束后从 `request.scope["route"].path` 读取模板。
+- 非法 Request ID 造成换行或日志污染：不要原样接受任意输入；保留长度和字符白名单，不合法时生成 UUID。
+
+**本步验收**：每个响应都有合法 Request ID；每个请求产生可解析的单行 JSON；用假 token 搜索全部日志无结果；同一未知异常的响应 ID 能定位服务端堆栈。
+
+
+## 步骤 5：区分 liveness、readiness，并装配应用生命周期
+
+### 改哪些文件
+
+新增 `app/health.py`，修改 `app/main.py`。liveness 只证明进程事件循环还能响应，不能查询数据库；readiness 判断实例当前是否应该接收业务流量。这里 PostgreSQL 是硬依赖，Redis 默认是可降级缓存，只有配置为硬依赖时才阻止 ready。
+
+```python title="app/health.py"
+import logging
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+from redis import Redis
+from redis.exceptions import RedisError
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.config import Settings
+from app.db import engine
+from app.errors import AppError
+
+logger = logging.getLogger("app.health")
+
+
+class HealthStatus(BaseModel):
+    status: str
+
+
+def build_health_router(redis_client: Redis, settings: Settings) -> APIRouter:
+    router = APIRouter(prefix="/health", tags=["health"])
+
+    @router.get("/live", response_model=HealthStatus)
+    def live() -> HealthStatus:
+        # 不访问外部依赖，避免数据库故障导致平台重启健康进程。
+        return HealthStatus(status="ok")
+
+    @router.get("/ready", response_model=HealthStatus)
+    def ready() -> HealthStatus:
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            logger.exception("readiness.failed", extra={"dependency": "postgresql"})
+            raise AppError(
+                "DEPENDENCY_UNAVAILABLE",
+                "服务暂时未就绪",
+                status_code=503,
+            ) from None
+
+        try:
+            redis_client.ping()
+        except RedisError:
+            if settings.redis_required_for_readiness:
+                logger.exception("readiness.failed", extra={"dependency": "redis"})
+                raise AppError(
+                    "DEPENDENCY_UNAVAILABLE",
+                    "服务暂时未就绪",
+                    status_code=503,
+                ) from None
+            logger.warning("readiness.degraded", extra={"dependency": "redis"})
+
+        return HealthStatus(status="ready")
+
+    return router
+```
+
+```python title="app/main.py"
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from redis import Redis
+
+from app.config import get_settings
+from app.db import engine
+from app.errors import install_exception_handlers
+from app.health import build_health_router
+from app.logging import configure_logging
+from app.middleware import install_request_context
+
+settings = get_settings()
+configure_logging(settings)
+redis_client = Redis.from_url(
+    settings.redis_url.get_secret_value(),
+    decode_responses=True,
+    socket_connect_timeout=1.0,
+    socket_timeout=1.0,
+)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # 不在 startup 自动迁移；迁移由独立的一次性任务完成。
+    try:
+        yield
+    finally:
+        # Uvicorn 收到 SIGTERM 后等待在途请求，再进入这里释放资源。
+        redis_client.close()
+        engine.dispose()
+
+
+def create_app() -> FastAPI:
+    production = settings.environment == "production"
+    app = FastAPI(
+        title="Knowledge API",
+        version="0.2.0",
+        lifespan=lifespan,
+        docs_url=None if production else "/docs",
+        redoc_url=None if production else "/redoc",
+        openapi_url=None if production else "/openapi.json",
+    )
+    install_request_context(app, settings.service_name, settings.environment)
+    install_exception_handlers(app)
+    app.include_router(build_health_router(redis_client, settings))
+    # 继续 include 现有业务 router；不要把业务代码复制进装配文件。
+    return app
+
+
+app = create_app()
+```
+
+liveness 失败才表示进程需要重启；readiness 失败只应摘除流量。若 Redis 承担登录会话、限流等不可降级职责，把 `REDIS_REQUIRED_FOR_READINESS=true`；若它只是 cache-aside，返回 ready 并单独告警更合理。
+
+### 命令与预期结果
+
+```bash
+uv run uvicorn app.main:app \
+  --host 0.0.0.0 --port 8000 \
+  --workers 1 --no-access-log \
+  --timeout-graceful-shutdown 30
+
+curl -i http://localhost:8000/health/live
+curl -i http://localhost:8000/health/ready
+```
+
+依赖正常时两者均为 `200`。停止 PostgreSQL 后，`live` 仍为 `200`，`ready` 应为 `503`，响应只包含通用 `DEPENDENCY_UNAVAILABLE`，具体依赖与堆栈只在服务端日志。
+
+### 失败排查
+
+- PostgreSQL 故障导致容器被不断重启：平台把 readiness 错当 liveness；分别配置两个探针。
+- readiness 延迟过长：检查连接池等待上限和驱动网络超时；探针频率不应造成依赖压力。
+- Redis 缓存故障让全部流量被摘除：重新确认它是否真是硬依赖，并调整 `REDIS_REQUIRED_FOR_READINESS`。
+
+**本步验收**：liveness 不访问外部系统；readiness 能阻止数据库故障实例接流量；健康响应不泄露主机名、账号、异常原文或拓扑细节；停止时释放 Redis 与 Engine。
+
+## 步骤 6：构建锁依赖、非 root、无 secret 的镜像
+
+### 改哪些文件
+
+新增 `Dockerfile` 与 `.dockerignore`，提交 `uv.lock`。构建阶段安装冻结依赖，运行阶段只复制虚拟环境和应用；最终用户固定为无特权 UID 10001。
+
+```dockerfile title="Dockerfile"
+# syntax=docker/dockerfile:1.7
+FROM ghcr.io/astral-sh/uv:0.5.31 AS uv-bin
+
+FROM python:3.12-slim-bookworm AS builder
+COPY --from=uv-bin /uv /usr/local/bin/uv
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+WORKDIR /app
+
+# 先复制依赖清单，充分利用构建缓存。
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+COPY . .
+RUN uv sync --frozen --no-dev
+
+FROM python:3.12-slim-bookworm AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH"
+
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+WORKDIR /app
+COPY --from=builder --chown=10001:10001 /app /app
+
+USER 10001:10001
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log", "--timeout-graceful-shutdown", "30"]
+```
+
+```dockerignore title=".dockerignore"
+.git
+.github
+.venv
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.env
+.env.*
+!.env.example
+secrets
+*.pem
+*.key
+*.log
+tests
+```
+
+这里为可读性使用明确版本标签。生产流水线还应把 Python 基础镜像和 uv 工具镜像固定到审核过的 digest，执行漏洞扫描、生成 SBOM，并由自动更新流程提出升级；不要永远停在教程版本。
+
+### 命令与预期结果
+
+```bash
+uv lock --check
+docker build --pull -t knowledge-api:0.2.0 .
+docker run --rm --entrypoint id knowledge-api:0.2.0
+docker history --no-trunc knowledge-api:0.2.0
+```
+
+`id` 应显示 UID/GID 10001。`uv lock --check` 应证明 lock 与项目元数据一致。镜像历史和层中不应出现 `.env`、token、私钥或数据库 URL。
+
+### 失败排查
+
+- `uv sync --frozen` 失败：lock 与 `pyproject.toml` 不一致，应在开发阶段更新 lock，不要临时取消冻结。
+- 非 root 用户写文件失败：应用日志写 stdout，临时文件写平台提供的 `/tmp`；不要给整个 `/app` 开放 777。
+- secret 出现在镜像层：仅删除最终文件无效，因为旧层仍存在；修正 `.dockerignore` 后从干净上下文重建并轮换已泄露 secret。
+
+**本步验收**：同一 commit 可重复使用 lock 构建；最终容器不是 root；镜像无需写应用目录；构建上下文和镜像层都没有真实 secret。
+
+
+## 步骤 7：用 Compose 编排 API、PostgreSQL、Redis 与独立 migrate
+
+### 改哪些文件
+
+新增 `compose.yaml`，本地 `.env` 在步骤 1 的示例基础上再加入 `POSTGRES_PASSWORD`。迁移是一次性服务：成功退出后 API 才启动；API 进程本身绝不在 startup 竞争执行 DDL。
+
+```yaml title="compose.yaml"
+name: knowledge-stack
+
+services:
+  db:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: knowledge
+      POSTGRES_USER: knowledge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in local .env}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowledge -d knowledge"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [backend]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2.5-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - redis_data:/data
+    networks: [backend]
+    restart: unless-stopped
+
+  migrate:
+    image: knowledge-api:local
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend]
+    restart: "no"
+
+  api:
+    image: knowledge-api:local
+    build: .
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "2"
+      - --no-access-log
+      - --timeout-graceful-shutdown
+      - "30"
+    env_file: .env
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    stop_signal: SIGTERM
+    stop_grace_period: 45s
+    networks: [backend]
+    restart: unless-stopped
+
+networks:
+  backend:
+    internal: true
+
+volumes:
+  postgres_data:
+  redis_data:
+```
+
+本 Compose 是本地/单机演练配置，`.env` 中的密码不能提交。生产应由平台把 secret 直接注入进程，或挂载 `/run/secrets/database_url`、`redis_url`、`jwt_secret`；数据库优先使用托管凭证与轮换能力。`docker compose config` 会展开变量，输出也按 secret 对待。
+
+### 命令与预期结果
+
+```bash
+# 确保 DATABASE_URL 中的密码与 POSTGRES_PASSWORD 一致。
+docker compose config --quiet
+docker compose up --build -d db redis migrate
+docker compose wait migrate
+docker compose up -d api
+docker compose ps -a
+curl -fsS http://localhost:8000/health/ready
+```
+
+`migrate` 应为 `Exited (0)`，`db`、`redis`、`api` 应为 healthy/running，最后输出 `{"status":"ready"}`。`migrate` 独立退出是成功状态，不应配置自动重启。
+
+### 失败排查
+
+- migrate 退出非 0：先看 `docker compose logs migrate`，修复迁移或配置；禁止绕过它强行启动 API。
+- API 连接 `localhost` 失败：容器内依赖地址应为服务名 `db`、`redis`，不是宿主机回环地址。
+- API 因只读文件系统失败：找出写盘代码，将临时数据改到 `/tmp` 或外部存储；日志仍写 stdout。
+- 修改初始密码后旧 volume 仍使用旧密码：PostgreSQL 初始化变量只在空数据目录生效；本地可明确确认无数据后删除 volume，生产绝不能这样处理。
+
+**本步验收**：空环境按顺序完成依赖健康、一次迁移和 API ready；迁移失败时 API 不接流量；API、数据库、Redis 不向公网暴露；删除 API 容器不会删除持久卷。
+
+## 步骤 8：按进程理解 Uvicorn worker 与连接池容量
+
+### 改哪些文件
+
+本步复核 `compose.yaml` 的 `--workers 2` 和 `app/config.py` 的池参数，不新增文件。Uvicorn 的 worker 是**独立进程**：每个进程各自导入应用、创建 Engine、连接池和 Redis client，内存与连接上限不会在 worker 间共享。
+
+当前演练值为：
+
+| 参数 | 每个 worker | 两个 worker 的含义 |
+| --- | ---: | --- |
+| `pool_size` | 5 | 最多保留 10 个常驻池连接 |
+| `max_overflow` | 5 | 突发时最多再创建 10 个临时连接 |
+| `pool_timeout` | 5 秒 | 池耗尽后请求有限等待，随后失败 |
+
+因此，**仅用于容量审查的理论瞬时上界**是每个 API 副本 `2 × (5 + 5) = 20` 个数据库 checkout。若部署 3 个相同副本，上界随副本增加；还要为 migrate、后台 worker、运维会话、监控和故障切换保留连接。这个算术不是万能公式，也不代表应把 PostgreSQL `max_connections` 用满。
+
+同步 `def` 路由可能由一个 worker 内的多个线程并发执行，线程数可以大于池连接数；这时请求在池上等待。合理值必须结合以下数据压测后决定：CPU/内存限额、请求并发、事务时长、慢查询比例、数据库连接预算、池等待时间和 p95/p99 延迟。CPU 密集任务应移出 API，请求中也不要持有连接等待外部 HTTP。
+
+### 命令与预期结果
+
+```bash
+docker compose top api
+
+docker compose exec db psql -U knowledge -d knowledge -c \
+  "SELECT state, count(*) FROM pg_stat_activity WHERE datname='knowledge' GROUP BY state;"
+
+seq 1 50 | xargs -n1 -P10 -I{} \
+  curl -fsS http://localhost:8000/health/ready >/dev/null
+```
+
+`docker compose top` 应显示 Uvicorn 父进程及两个 worker。短请求结束后数据库连接数通常回落到池保留量附近，不要求精确等于理论上界；理论上界用于拒绝明显超预算的配置。
+
+### 失败排查
+
+- 增加 worker 后数据库连接翻倍：这是每进程独立池的预期行为；先缩小每进程池或副本数，再查实际负载。
+- CPU 已满但数据库很空：增加 worker 未必有效，先分析 CPU 热点并把重任务移到 worker 队列。
+- 大量 `QueuePool timeout`：检查事务是否跨网络调用、Session 是否关闭、SQL 是否变慢；连接池增大只能在数据库仍有容量时作为后续选择。
+- 容器频繁 OOM：每个 worker 都复制应用内存，减少 worker 或扩大内存前先测量，而不是照抄“CPU 核数乘某个常数”。
+
+**本步验收**：容量文档明确 worker/副本/后台任务各自的池；总连接预算低于数据库可分配上限并留有余量；压测期间无持续池超时、OOM 或不可解释的延迟尖峰。
+
+## 步骤 9：只信任反向代理写入的 forwarded headers
+
+### 改哪些文件
+
+新增 `ops/nginx/default.conf`，并在生产启动参数中加入 `--proxy-headers` 与精确的 `--forwarded-allow-ips`。下面假设 Nginx 在内部地址 `10.20.0.10`，API 端口只能被该代理和运维探针访问。
+
+```nginx title="ops/nginx/default.conf"
+upstream knowledge_api {
+    server api:8000;
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl;
+    server_name api.example.com;
+
+    ssl_certificate     /etc/nginx/tls/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/privkey.pem;
+    client_max_body_size 2m;
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_pass http://knowledge_api;
+
+        # 边缘代理覆盖客户端同名头，不能让客户端伪造来源与协议。
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For   $remote_addr;
+        proxy_set_header X-Request-ID      $request_id;
+        proxy_set_header Connection        "";
+
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
+
+        # 非幂等业务请求不由代理盲目切换上游重试。
+        proxy_next_upstream off;
+    }
+}
+```
+
+生产启动命令：
+
+```bash
+uvicorn app.main:app \
+  --host 0.0.0.0 --port 8000 \
+  --workers 2 --no-access-log \
+  --proxy-headers \
+  --forwarded-allow-ips=10.20.0.10 \
+  --timeout-graceful-shutdown 30
+```
+
+只有来自可信代理地址的 `X-Forwarded-For`、`X-Forwarded-Proto` 才能影响客户端地址和 URL scheme。不要为了“修复 HTTPS 重定向”直接设置 `--forwarded-allow-ips='*'`；只有网络层已经保证 API 完全不可能被客户端直连时，才可在书面威胁模型下考虑它。若代理剥离 `/api` 前缀，还要按 [FastAPI 代理文档](https://fastapi.tiangolo.com/advanced/behind-a-proxy/) 配置 `root_path`，不要用伪造 header 猜路径。
+
+### 命令与预期结果
+
+```bash
+nginx -t -c /etc/nginx/nginx.conf
+curl -i https://api.example.com/health/live
+
+# 仅在隔离测试网执行：直接访问 API 并伪造 proto，不应被信任。
+curl -i -H 'X-Forwarded-Proto: https' http://127.0.0.1:8000/health/live
+```
+
+代理路径返回 `200`，Request ID 由 Nginx 生成并贯穿应用日志。来自非信任来源的 forwarded header 应被 Uvicorn 忽略。生产防火墙或 NetworkPolicy 还必须阻止公网直连 `8000`。
+
+### 失败排查
+
+- HTTPS 外部请求被重定向到 HTTP：确认代理覆盖 `X-Forwarded-Proto`，且 Uvicorn 信任的是代理实际源 IP。
+- 客户端 IP 可伪造：检查是否使用了 `*`、代理是否追加而非覆盖不可信 XFF、API 是否仍能公网直连。
+- OpenAPI 路径重复或缺前缀：核对代理是否剥离路径以及 FastAPI `root_path`，不要同时在两层重复加前缀。
+- POST 在上游切换时重复：保持代理不自动重试非幂等请求，业务层继续使用幂等键。
+
+**本步验收**：TLS 在可信边缘终止；API 端口不可公网直连；客户端不能伪造 scheme/IP；Request ID 被代理覆盖并传入应用；非幂等请求没有透明重试。
+
+
+## 步骤 10：让 SIGTERM 走完优雅停止，而不是切断事务
+
+### 改哪些文件
+
+复核 `app/main.py` 的 lifespan 与 `compose.yaml` 的停止参数。核心约束是**外层宽限时间大于 Uvicorn 内层等待时间**：Uvicorn 最多等待 30 秒，Compose 给 45 秒后才强制终止。
+
+```python title="app/main.py（完整生命周期核心）"
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from redis import Redis
+
+from app.db import engine
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # 进程资源在模块装配阶段已创建；startup 不执行迁移或长回填。
+    try:
+        yield
+    finally:
+        # 只有 Uvicorn 停止接收新请求并等待在途请求后，才进入清理。
+        redis_client.close()  # redis_client: Redis，在应用装配处创建
+        engine.dispose()      # 关闭当前进程池中的空闲数据库连接
+```
+
+```yaml title="compose.yaml（API 停止配置）"
+services:
+  api:
+    stop_signal: SIGTERM
+    stop_grace_period: 45s
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "2"
+      - --no-access-log
+      - --timeout-graceful-shutdown
+      - "30"
+```
+
+生产调度器还应先把实例从 readiness/负载均衡中摘除，再发送 SIGTERM，并保证 termination grace period 大于 30 秒。业务事务必须短于这个预算；必须可靠完成的长任务交给具备确认、重试与幂等能力的独立 worker，不能依赖 API 进程内任务侥幸跑完。
+
+### 命令与预期结果
+
+```bash
+docker compose stop -t 45 api
+docker compose logs --tail=100 api
+
+docker compose exec db psql -U knowledge -d knowledge -c \
+  "SELECT state, count(*) FROM pg_stat_activity WHERE datname='knowledge' GROUP BY state;"
+```
+
+日志应依次出现停止接流量、等待应用关闭和 shutdown 完成，而不是立即收到强制 kill。停止后 API 的池连接应释放，不应留下由该实例造成的 `idle in transaction`。
+
+### 失败排查
+
+- 每次都在 30 秒处强制取消：找出长请求、流式响应或未完成后台任务，缩短事务并把长任务移出 API。
+- 日志没有 lifespan shutdown：确认发送的是 SIGTERM，容器 PID 1 是 Uvicorn 而不是吞信号的 shell 包装脚本。
+- 停止期间仍有新请求：负载均衡没有先摘除 readiness，或传播延迟未纳入宽限期。
+- rollback 变多：检查事务是否包住外部网络调用，以及客户端断开后的取消处理。
+
+**本步验收**：SIGTERM 后不再接收新流量，在途短请求能完成；30 秒内清理资源；45 秒外层预算不会先于 Uvicorn；无长期 `idle in transaction`，可靠任务不寄存在 API 内存。
+
+## 步骤 11：部署后执行可重复的 smoke test
+
+### 改哪些文件
+
+新增 `scripts/smoke.sh`。冒烟测试从部署环境外部访问真实代理，只验证关键契约，不创建破坏性数据。脚本检查 live、ready、统一 404 与响应 Request ID；若提供只读种子文章，再检查一次鉴权读取。
+
+```bash title="scripts/smoke.sh"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+: "${BASE_URL:?set BASE_URL, for example https://api.example.com}"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+
+request() {
+  local name="$1"
+  local path="$2"
+  local expected="$3"
+  shift 3
+
+  local status
+  status="$(curl -sS \
+    --connect-timeout 3 \
+    --max-time 10 \
+    -D "$workdir/$name.headers" \
+    -o "$workdir/$name.body" \
+    -w '%{http_code}' \
+    "$@" \
+    "$BASE_URL$path")"
+
+  if [[ "$status" != "$expected" ]]; then
+    echo "FAIL $name: expected $expected, got $status" >&2
+    cat "$workdir/$name.body" >&2
+    exit 1
+  fi
+  echo "PASS $name ($status)"
+}
+
+request live "/health/live" 200
+python - "$workdir/live.body" <<'PY'
+import json, pathlib, sys
+assert json.loads(pathlib.Path(sys.argv[1]).read_text())["status"] == "ok"
+PY
+
+request ready "/health/ready" 200
+python - "$workdir/ready.body" <<'PY'
+import json, pathlib, sys
+assert json.loads(pathlib.Path(sys.argv[1]).read_text())["status"] == "ready"
+PY
+
+request missing "/smoke-resource-that-does-not-exist" 404
+response_request_id="$(awk '
+  tolower($1) == "x-request-id:" {gsub("\r", "", $2); print $2}
+' "$workdir/missing.headers" | tail -n1)"
+[[ -n "$response_request_id" ]]
+python - "$workdir/missing.body" "$response_request_id" <<'PY'
+import json, pathlib, sys
+body = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert body["error"]["code"] == "HTTP_ERROR"
+assert body["error"]["request_id"] == sys.argv[2]
+assert "traceback" not in str(body).lower()
+assert "select " not in str(body).lower()
+PY
+
+if [[ -n "${SMOKE_TOKEN:-}" && -n "${SMOKE_POST_ID:-}" ]]; then
+  request seeded_post "/posts/$SMOKE_POST_ID" 200 \
+    -H "Authorization: Bearer $SMOKE_TOKEN"
+fi
+
+echo "SMOKE PASS"
+```
+
+smoke token 应来自短期、最小权限的专用身份，不能写进脚本、镜像、CI 日志或命令回显。生产检查优先读已知种子，不要每次创建不可清理的业务记录。
+
+### 命令与预期结果
+
+```bash
+chmod +x scripts/smoke.sh
+BASE_URL=https://api.example.com ./scripts/smoke.sh
+
+# 有只读种子时可附加：
+SMOKE_TOKEN='short-lived-token' \
+SMOKE_POST_ID='known-readable-id' \
+BASE_URL=https://api.example.com \
+  ./scripts/smoke.sh
+```
+
+预期依次打印 `PASS live`、`PASS ready`、`PASS missing`，最后打印 `SMOKE PASS`。失败应立即停止放量；不要在 smoke 失败时继续下一环境。
+
+### 失败排查
+
+- `502/504`：检查代理 upstream、API readiness、连接超时和最近发布，不要只重复 curl。
+- live 成功、ready 失败：查看同一时间的结构化日志与依赖状态，优先检查迁移 head 和数据库连接预算。
+- 404 body 是 `detail`：发布制品未包含统一异常处理器，或请求到了旧实例。
+- Request ID 缺失/不一致：检查代理是否覆盖并转发，应用是否回写响应头，以及是否混入另一层错误页。
+
+**本步验收**：smoke 从真实入口通过 TLS/代理命中目标制品；live、ready、错误 envelope 与 Request ID 全部通过；token 不出现在日志；任一失败都会停止推进并保留诊断证据。
+
+## 步骤 12：用 expand → migrate → contract 做兼容迁移与应用回滚
+
+### 改哪些文件
+
+示例为 `posts` 新增摘要：先新增可空列，再部署兼容代码与分批回填，最后才收紧约束。新增 `alembic/versions/20260818_02_add_post_summary.py`、`app/backfill_post_summaries.py`，并更新 `app/models.py`/`app/schemas.py`。不要在第一次加列时立即 `NOT NULL` 并全表回填。
+
+```python title="alembic/versions/20260818_02_add_post_summary.py"
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+
+revision: str = "20260818_02"
+down_revision: str | None = "20260818_01"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    # Expand：只做向后兼容的可空加列，旧应用可以继续运行。
+    op.add_column("posts", sa.Column("summary", sa.String(200), nullable=True))
+
+
+def downgrade() -> None:
+    # 仅供尚未写入真实数据的隔离环境；生产应用回滚不自动执行它。
+    op.drop_column("posts", "summary")
+```
+
+```python title="app/models.py 与 app/schemas.py（新增核心）"
+# ORM Post 内新增：
+summary: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+# Pydantic v2 输出模型 PostOut 内新增；新增字段先保持可选：
+summary: str | None = None
+```
+
+新版本写入 `summary`，读取旧行时提供兼容回退：
+
+```python title="app/services/post_summary.py"
+from app.models import Post
+
+
+def summary_for(post: Post) -> str:
+    if post.summary:
+        return post.summary
+    # 回填完成前兼容旧行；切换到强约束后才能删除此分支。
+    compact = " ".join(post.body.split())
+    return compact[:200]
+```
+
+回填独立于 Alembic DDL，可暂停、可重跑，每批使用短事务：
+
+```python title="app/backfill_post_summaries.py"
+import time
+
+from sqlalchemy import text
+
+from app.db import engine
+
+BATCH_SIZE = 500
+STATEMENT = text(
+    """
+    WITH batch AS (
+        SELECT id
+        FROM posts
+        WHERE summary IS NULL
+        ORDER BY id
+        FOR UPDATE SKIP LOCKED
+        LIMIT :batch_size
+    )
+    UPDATE posts AS p
+    SET summary = left(regexp_replace(p.body, '\\s+', ' ', 'g'), 200)
+    FROM batch
+    WHERE p.id = batch.id
+    RETURNING p.id
+    """
+)
+
+
+def main() -> None:
+    while True:
+        with engine.begin() as connection:
+            updated = connection.execute(
+                STATEMENT,
+                {"batch_size": BATCH_SIZE},
+            ).fetchall()
+        print(f"backfilled={len(updated)}", flush=True)
+        if len(updated) < BATCH_SIZE:
+            break
+        time.sleep(0.1)  # 给在线流量留出资源；按观测结果调整。
+
+
+if __name__ == "__main__":
+    main()
+```
+
+发布顺序必须是：
+
+1. **Expand**：执行可空加列，确认旧镜像仍能读写。
+2. **Deploy**：发布能读新旧两种行、开始写新列的新应用。
+3. **Migrate data**：限速分批回填，观察锁、延迟、复制延迟和连接池。
+4. **Verify**：确认 `summary IS NULL` 为 0，业务结果与指标正常。
+5. **Contract**：等所有旧应用退出且回滚窗口关闭后，在后续发布中加 `NOT NULL`，再删除兼容读取；删除旧列也必须另开发布。
+
+### 命令与预期结果
+
+```bash
+# 先备份并在类生产数据量环境演练锁时间。
+docker compose run --rm migrate
+
+# 新旧应用都应能在 expand 后通过 smoke，再部署新镜像。
+docker compose run --rm api python -m app.backfill_post_summaries
+
+docker compose exec db psql -U knowledge -d knowledge -c \
+  "SELECT count(*) AS remaining FROM posts WHERE summary IS NULL;"
+
+# 发生应用问题时：重新部署上一镜像 digest，保留兼容的新列。
+# 不要把应用回滚写成 alembic downgrade。
+```
+
+回填应逐批输出数量，最终 `remaining` 为 0。新版本异常时，上一镜像因为会忽略可空新列而能立即恢复；这比在事故中执行破坏性 downgrade 安全。
+
+### 失败排查
+
+- 加列长时间锁表：在类生产数据与相同 PostgreSQL 版本上测量，设置变更窗口和锁超时；不要边锁边等待无限期。
+- 回填拖慢在线请求：减小批次、增加间隔、暂停任务，并检查索引和复制延迟。
+- 旧应用遇到新 schema 失败：expand 不是向后兼容变更，立即停止发布并重新设计两阶段迁移。
+- 想通过 downgrade 快速恢复：先区分应用故障与数据故障；应用故障部署上一镜像，数据库保留 additive schema。
+- contract 后无法回滚：说明旧版本退出与回滚窗口没有被证明；contract 应推迟，而不是强行补救。
+
+**本步验收**：旧镜像可运行在 expand 后 schema；回填可重入、可暂停、短事务；新镜像 smoke 通过且空值归零；应用回滚不依赖数据库 downgrade；破坏性 contract 在独立发布和明确回滚窗口之后执行。
+
+
+## 最终验收：从配置到回滚逐项签字
+
+上线前不要用“容器在跑”代替验收。至少完成以下 12 项：
+
+- [ ] `uv lock --check` 通过，镜像构建使用 `--frozen`，制品以 digest 晋级；
+- [ ] production 缺少 secret 或使用弱 secret 时启动失败，日志中没有连接串/token；
+- [ ] 业务、校验、HTTP 与未知异常均返回稳定 `error` envelope；
+- [ ] 未知异常响应不含数据库原文、SQL、约束名或堆栈，Request ID 可定位服务端日志；
+- [ ] JSON 日志只含白名单字段，假 `Authorization`、cookie 与请求正文无法被检索到；
+- [ ] liveness 不依赖 PostgreSQL/Redis，readiness 按硬依赖策略返回 `200/503`；
+- [ ] 最终镜像以 UID 10001 运行，应用目录只读，镜像层不含 `.env`/私钥；
+- [ ] migrate 成功退出后 API 才启动，迁移失败会阻止接流量；
+- [ ] worker × 每进程池 × 副本的连接上界已评审，压测无持续池等待或 OOM；
+- [ ] API 只信任明确代理地址，公网不能绕过代理直连，非幂等请求无透明重试；
+- [ ] SIGTERM 能在外层宽限期内完成在途请求、rollback/commit 和资源释放；
+- [ ] 部署后 smoke、expand 兼容验证、上一镜像回滚与分批回填演练全部通过。
+
+可执行的发布门禁可以收束为：
+
+```bash
+uv lock --check
+docker compose config --quiet
+docker compose build
+docker compose up -d db redis migrate
+docker compose wait migrate
+docker compose up -d api
+BASE_URL=http://localhost:8000 ./scripts/smoke.sh
+docker compose stop -t 45 api
+```
+
+本地门禁通过只证明这套 Compose 拓扑可工作；生产仍要在真实代理、secret 注入、网络策略、数据库容量和调度器停止语义下再跑一次 smoke 与回滚演练。
+
+## 官方资料与适用边界
+
+以下资料用于核对框架行为，本文均按“同步 SQLAlchemy 2.x + Psycopg 3”的主线重新组织和概括，没有把官方示例当作万能生产配置：
+
+- [FastAPI：处理错误](https://fastapi.tiangolo.com/tutorial/handling-errors/)说明可注册应用级异常处理器；本文在此基础上固定业务错误 envelope，并额外规定未知异常不得回显底层细节。
+- [FastAPI：Middleware](https://fastapi.tiangolo.com/tutorial/middleware/)说明请求前后处理与响应头写入方式；本文将它用于 Request ID、规范化 route 和耗时日志，不采集敏感 header/body。
+- [FastAPI：Lifespan Events](https://fastapi.tiangolo.com/advanced/events/)说明应用启动前与关闭后的资源生命周期；本文把迁移移出 startup，只在 shutdown 释放当前进程资源。
+- [FastAPI：部署概念](https://fastapi.tiangolo.com/deployment/concepts/)与[多 Worker](https://fastapi.tiangolo.com/deployment/server-workers/)区分进程、内存、重启和复制；本文进一步把每进程 SQLAlchemy 池纳入总连接预算，但拒绝给出脱离负载的 worker 万能公式。
+- [FastAPI：位于代理之后](https://fastapi.tiangolo.com/advanced/behind-a-proxy/)解释 forwarded headers 与路径前缀；本文把“只信任代理源地址、网络层禁止直连”作为启用这些头的前提。
+- [Uvicorn Settings](https://www.uvicorn.org/settings/)列出 worker、代理信任与 graceful shutdown 等运行参数；[Uvicorn Deployment](https://www.uvicorn.org/deployment/)补充进程管理和反向代理边界。具体数值仍需由本服务压测、终止预算和故障演练决定。
+- [SQLAlchemy：Connection Pooling](https://docs.sqlalchemy.org/en/20/core/pooling.html)说明 QueuePool、overflow、timeout、pre-ping 与每进程使用边界；[Engine Disposal](https://docs.sqlalchemy.org/en/20/core/connections.html#engine-disposal)说明显式释放连接池资源。本文据此让每个 worker 自有 Engine，并在 lifespan shutdown 调用 `dispose()`。
+
+到这里，你已经把上一章“真实依赖下测试可信”推进为“真实运行环境中发布可控”。下一篇[团队知识库 API 综合实战](/posts/python/python-backend-capstone)会把认证、权限、缓存、任务、集成测试与本篇生产闭环合并为一个可验收项目。
