@@ -1,12 +1,12 @@
 ---
-title: 'Python 后端综合实战：团队知识库 API'
+title: 'Python 后端毕业项目分步实战：8 个纵切里程碑完成团队知识库 API'
 date: '2026-08-18'
-excerpt: '以团队知识库 API 为毕业项目，贯通 FastAPI、SQLAlchemy、Alembic、认证授权、Redis、后台任务、对象存储、集成测试、Docker Compose、CI/CD、可观测性、迁移发布与故障恢复。'
+excerpt: '承接 FastAPI 全系列，不按技术层堆功能，而按 8 个可演示纵切里程碑完成团队知识库 API：基线、文章、权限、缓存任务、附件搜索、测试交付、观测发布与恢复演练。'
 tags: ['python', 'fastapi', 'backend', 'capstone', 'api', 'production']
 nextPost: 'linux/linux-production-roadmap'
 ---
 
-# Python 后端综合实战：团队知识库 API
+# Python 后端毕业项目分步实战：8 个纵切里程碑完成团队知识库 API
 
 前面的专题分别解决语言、持久化、认证、缓存、任务和测试问题；本篇不再复制它们的完整实现，而是给出一个可以启动、可以测试、可以逐步演进的**团队知识库 API**。你会把它接到自己已有的前端项目，不在这里学习前端框架。
 
@@ -19,6 +19,66 @@ nextPost: 'linux/linux-production-roadmap'
 :::warning 先明确“骨架完整”的含义
 下文骨架提供一条可执行纵切：进程启动、数据库会话、JWT 校验、文章创建/读取、权限检查、缓存失效、健康检查与测试。搜索索引、对象存储直传、可靠任务队列等以清晰端口和阶段任务接入，避免为了“代码很多”把专题实现再抄一遍。
 :::
+
+<ProgressIndicator
+  current="python/python-backend-capstone"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic 校验" },
+    { slug: "python/fastapi-crud-error-handling", title: "CRUD 与错误" },
+    { slug: "python/fastapi-project-structure-dependency", title: "分层与依赖" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+## 开始前确认
+
+- **前置文章**：数据库迁移、认证授权、Redis/后台任务、集成测试和可观测部署篇均已完成；每篇的验收清单至少保留一份测试或演练证据。
+- **起始项目状态**：不要从空目录复制整篇最终代码。以已经分层的文章 API 为起点，新建 `knowledge-api`，每次只交付一条从 HTTP 到数据/副作用再到测试的纵切。
+- **依赖与服务**：Python 3.12、FastAPI、Pydantic v2、同步 SQLAlchemy 2.x + Psycopg 3、Alembic、PostgreSQL 16、同步 Redis；后续里程碑再接 Worker、S3 兼容对象存储、Nginx、CI 和观测平台。
+
+### Windows 命令与外部服务边界
+
+本地命令以 PowerShell + Docker Compose 为主；复制 `.env.example` 时使用 `Copy-Item .env.example .env`，不要把 Bash 的 `cp` 当作唯一 Windows 命令。PostgreSQL、Redis、MinIO、Worker、Nginx、镜像仓库和观测平台都是独立外部边界：Compose 只用于本地编排，不代表生产高可用。`docker compose down -v`、恢复覆盖、破坏性迁移等会删除或改写数据，只能在确认目标为可丢弃环境后执行。
+
+## 8 个纵切里程碑总路线
+
+<Steps>
+
+### 里程碑 1：范围、契约与项目基线
+完成“1-4、11.1-11.2”，固定需求、非目标、仓库、配置和 API 契约。**完成信号**：新成员按 README 启动健康检查，OpenAPI 已列出文章主路径和统一错误形状。
+
+### 里程碑 2：文章数据纵切
+完成“5、11.3、11.6”以及工作区/文章迁移，实现创建与读取。**完成信号**：空库可迁移到 head，文章从 HTTP 写入 PostgreSQL 并读回，约束和版本列可验证。
+
+### 里程碑 3：身份、权限与审计纵切
+完成“6、11.4-11.5、11.7”，接入身份、服务端角色查询和租户过滤。**完成信号**：owner/editor/viewer 的入口、方法与 SQL 查询均受控；401/403/404 和跨租户反例测试通过。
+
+### 里程碑 4：缓存、发布与可靠任务纵切
+完成“7-8”，只缓存已发布表示，并在发布事务中写 Outbox。**完成信号**：Redis 断开时授权读取受控回源；Worker 重启后追平事件，同一事件重放不产生重复副作用。
+
+### 里程碑 5：附件与搜索纵切
+完成“9”，加入私有对象存储直传、扫描状态和发布后索引。**完成信号**：越权 URL、超限或伪造类型被拒绝，搜索结果再次受工作区和发布状态过滤，数据库与对象清单可对账。
+
+### 里程碑 6：真实测试与本地交付纵切
+完成“10、12-13”，用真实 PostgreSQL/Redis 测试并打包 Compose。**完成信号**：迁移、权限、缓存、幂等、故障测试通过，一条本地冒烟路径能从登录走到文章发布。
+
+### 里程碑 7：CI、可观测与安全发布纵切
+完成“14-16”，构建不可变镜像、质量门禁、日志/指标/trace 和 expand-migrate-contract 发布。**完成信号**：同一镜像 digest 晋级，SLO 告警能定位 runbook，坏版本自动停止并可回滚。
+
+### 里程碑 8：恢复与故障演练纵切
+完成“17-18、20”，执行隔离恢复和依赖故障演练。**完成信号**：达到约定 RPO/RTO，Redis、数据库、Worker、对象存储、迁移和坏版本均有恢复证据与复盘。
+
+</Steps>
+
+实现时始终保持“一个里程碑可独立演示、测试和回滚”。不要先把所有模型写完再补 API，也不要先搭满基础设施再寻找业务入口。
 
 ## 1. 需求：先写可验收的系统行为
 
@@ -1079,43 +1139,55 @@ docker compose exec -T db pg_restore -U knowledge -d knowledge_restore --clean -
 
 `docker compose down -v` 会删除本地卷，只能在确认无需保留开发数据时执行；不要把破坏性命令写进默认演练脚本。
 
-## 19. 分阶段任务：每一步都可演示
+## 19. 分阶段任务：按纵切里程碑 1-8 实施
 
-### 里程碑 0：项目基线
+### 里程碑 1：范围、契约与项目基线
 
 - 建仓、`pyproject.toml`、锁文件、配置、健康检查和 Compose。
-- CI 能从空库 migration 到 head 并运行测试。
-- **验收**：新成员只按 README 在 15 分钟内启动，不需要口头补充。
+- 写清需求、非目标、API 契约、统一错误和架构事实源。
+- **验收**：新成员只按 README 在 15 分钟内启动，不需要口头补充；CI 能从空库 migration 到 head 并运行基础测试。
 
-### 里程碑 1：文章纵切
+### 里程碑 2：文章数据纵切
 
 - 工作区、成员、文章模型；创建、读取、更新、发布、归档。
-- Pydantic 契约、统一错误、乐观版本号。
+- Pydantic 契约、统一错误、乐观版本号和 Alembic 迁移。
 - **验收**：OpenAPI 契约测试通过，并发更新稳定产生一个成功和一个 `409`。
 
-### 里程碑 2：认证、授权与审计
+### 里程碑 3：认证、授权与审计纵切
 
 - 登录/刷新/撤销、密码哈希、密钥轮换设计。
 - 完成权限矩阵与跨租户测试；敏感操作追加审计。
-- **验收**：矩阵每格有测试，日志扫描不含敏感值。
+- **验收**：矩阵每格有测试，入口显示/禁用与服务端方法拦截一致，资源查询带工作区边界，日志扫描不含敏感值。
 
-### 里程碑 3：缓存与可靠任务
+### 里程碑 4：缓存与可靠任务纵切
 
 - 已发布文章 cache-aside、提交后失效、Redis 降级。
 - outbox worker、幂等处理、重试、失败事件查询与重放。
 - **验收**：Redis/worker 故障演练达到预期，恢复后无丢失和重复副作用。
 
-### 里程碑 4：附件与搜索
+### 里程碑 5：附件与搜索纵切
 
 - 私有桶、预签名上传、元数据确认、扫描状态机、过期对象清理。
 - 发布事件驱动搜索索引；搜索结果再次受工作区/发布状态约束。
 - **验收**：越权 URL 无法生成，超限/伪造类型被拒，数据库与对象清单可对账。
 
-### 里程碑 5：生产交付
+### 里程碑 6：真实测试与本地交付纵切
 
-- 不可变镜像、Nginx、渐进发布、仪表盘、SLO/告警与 runbook。
-- 兼容 migration、备份恢复和坏版本回滚演练。
-- **验收**：另一位成员按 runbook 完成恢复和回滚，证据进入复盘。
+- 按风险完成单元、PostgreSQL/Redis 集成、契约和关键 E2E；并发用例使用独立 Session。
+- 固化 Docker Compose 启动、开发 seed、migration 和最小冒烟路径。
+- **验收**：干净环境能重复运行登录 → 创建草稿 → 读取/发布的主路径，故障测试不会污染后续用例。
+
+### 里程碑 7：CI、可观测与安全发布纵切
+
+- 冻结依赖，构建不可变镜像；接入 Nginx、渐进发布、结构化日志、指标、trace、SLO/告警和 runbook。
+- 使用 expand → migrate → contract 处理兼容迁移，同一镜像 digest 依次晋级。
+- **验收**：坏版本会触发门禁停止，仪表盘可定位问题，上一 digest 可按 runbook 回滚。
+
+### 里程碑 8：恢复与故障演练纵切
+
+- 演练 PostgreSQL/对象存储备份恢复，记录实际 RPO/RTO。
+- 演练 Redis、数据库、Worker、对象存储、坏 migration 和坏版本故障，形成复盘。
+- **验收**：另一位成员按 runbook 完成隔离恢复、降级和回滚，关键业务校验与证据进入复盘。
 
 ## 20. 最终验收清单
 
@@ -1151,4 +1223,24 @@ docker compose exec -T db pg_restore -U knowledge -d knowledge_restore --clean -
 - [ ] Redis、数据库、worker、对象存储、migration 和坏版本演练均有记录。
 - [ ] 值班人员能根据 runbook 诊断、降级、回滚并形成复盘改进项。
 
-完成这些清单，才意味着你交付的不是一个“能返回 JSON 的 Demo”，而是一套能够被前端稳定消费、被团队持续变更、并在依赖失败后恢复的后端服务。下一步进入 [Linux 生产工程路线图](/posts/linux/linux-production-roadmap)，把本项目的部署、观测、安全和恢复证据提升到真实生产标准。
+完成这些清单，才意味着你交付的不是一个“能返回 JSON 的 Demo”，而是一套能够被前端稳定消费、被团队持续变更、并在依赖失败后恢复的后端服务。
+
+## 动手练习
+
+1. 建一个只含里程碑 1-8 的看板，每张卡都写“用户可演示路径、自动测试、失败回退和证据”，禁止按 controller/model/Redis 等技术层拆成长期横向任务。
+2. 每完成一个里程碑就录制一次最短演示，并由另一位成员在干净环境复现；未复现前不进入下一里程碑。
+3. 在里程碑 8 隔离恢复数据库并重放同一 outbox 事件，核对文章、附件 checksum、搜索结果、审计和幂等副作用。
+
+## 验收清单
+
+以上“20. 最终验收清单”是项目总门禁；此外再确认：
+
+- [ ] 看板、提交记录和演示证据都按纵切里程碑 1-8 组织，没有先搭完整技术层再补业务。
+- [ ] 每个里程碑都有一个前端/API 可见结果、自动测试、失败反馈和回滚/恢复说明。
+- [ ] 权限同时覆盖入口体验、服务端方法拦截、工作区资源查询以及 401/403/404 反馈。
+- [ ] 所有外部服务都标明本地替代、生产边界、超时、凭据、故障和恢复责任。
+- [ ] 最终恢复与故障演练由非实现者按 runbook 完成，并记录实际 RPO/RTO。
+
+## 下一步
+
+进入 [Linux 生产工程路线图](/posts/linux/linux-production-roadmap)，把本项目的部署、观测、安全和恢复证据提升到真实生产标准；`nextPost` 仍保持指向该路线。

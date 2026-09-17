@@ -1,0 +1,578 @@
+---
+title: 'FastAPI 内存 CRUD 与统一错误处理：文章管理 API 完整闭环'
+date: '2026-08-18'
+excerpt: '承接 Pydantic v2 校验，用内存仓储实现文章 POST、列表、详情、PATCH、DELETE、分页、204、404/409 与统一 BusinessError 响应。'
+tags: ['python', 'fastapi', 'crud', 'error-handling', 'pydantic-v2']
+nextPost: 'python/fastapi-project-structure-dependency'
+---
+
+# FastAPI 内存 CRUD 与统一错误处理：文章管理 API 完整闭环
+
+上一篇的[Pydantic v2 数据校验](/posts/python/fastapi-pydantic-validation)已经把输入清洗和输出边界处理好。本篇继续同一个“文章管理 API”，把它扩展为可实际操作的内存版 CRUD，并让业务失败始终返回稳定结构。
+
+<ProgressIndicator
+  current="python/fastapi-crud-error-handling"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic 校验" },
+    { slug: "python/fastapi-crud-error-handling", title: "CRUD 与错误" },
+    { slug: "python/fastapi-project-structure-dependency", title: "分层与依赖" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+## 1. 本篇目标与前置
+
+你将实现以下接口：
+
+| 方法 | 路径 | 成功状态 | 用途 |
+| --- | --- | ---: | --- |
+| POST | `/articles` | 201 | 创建文章 |
+| GET | `/articles?offset=0&limit=20` | 200 | 分页列表 |
+| GET | `/articles/{article_id}` | 200 | 获取单篇 |
+| PATCH | `/articles/{article_id}` | 200 | 部分更新 |
+| DELETE | `/articles/{article_id}` | 204 | 删除文章 |
+
+业务规则：文章 `slug` 唯一；找不到文章返回 404；重复 slug 返回 409；业务错误统一为 `{"error":{"code":"...","message":"..."}}`。
+
+前置：完成上一篇，Python 3.12+，FastAPI/Pydantic v2 已安装，终端位于 `fastapi-article-api` 根目录。
+
+:::warning 内存仓储的边界
+本文的数据只存在当前 Python 进程的内存中：服务重启即丢失，多 worker 各有一份互不一致的数据，也没有事务、持久化与并发唯一约束。它只适合学习和原型，**不可用于生产环境**。下一阶段会先分层，再接入数据库。
+:::
+
+## 2. 起始目录与完成目录
+
+起始目录仍然只有一个应用文件：
+
+```text
+fastapi-article-api/
+└── main.py
+```
+
+本篇继续只修改根目录 `main.py`，完成目录不变：
+
+```text
+fastapi-article-api/
+└── main.py  # 模型、仓储、业务错误和路由暂时放在一起
+```
+
+先停掉上一篇的 Uvicorn（终端按 `Ctrl+C`），然后进入下一步。
+
+## 3. 第一步：替换根目录 `main.py`，实现完整 CRUD
+
+**本步修改文件：根目录 `main.py`。** 请完整替换，不要与上一篇代码拼接，以免出现重复路由或重复模型。
+```python
+from datetime import UTC, datetime
+from typing import Literal
+
+from fastapi import FastAPI, Query, Request, Response, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+app = FastAPI(title="文章管理 API", version="1.0.0")
+
+ArticleStatus = Literal["draft", "published"]
+
+
+class ArticleCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slug: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    title: str = Field(min_length=1, max_length=100)
+    body: str = Field(min_length=1, max_length=10_000)
+    tags: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("slug", "title", "body", mode="before")
+    @classmethod
+    def trim_required_text(cls, value: object, info) -> object:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            names = {"slug": "文章 slug", "title": "文章标题", "body": "文章正文"}
+            raise ValueError(f"{names[info.field_name]}不能为空或只包含空格")
+        return cleaned
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for raw_tag in value:
+            tag = raw_tag.strip()
+            if not tag:
+                raise ValueError("文章标签不能为空或只包含空格")
+            if len(tag) > 20:
+                raise ValueError("单个文章标签不能超过 20 个字符")
+            if tag not in result:
+                result.append(tag)
+        return result
+
+
+class ArticleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slug: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    title: str | None = Field(default=None, min_length=1, max_length=100)
+    body: str | None = Field(default=None, min_length=1, max_length=10_000)
+    tags: list[str] | None = Field(default=None, max_length=5)
+    status: ArticleStatus | None = None
+
+    @field_validator("slug", "title", "body", mode="before")
+    @classmethod
+    def trim_optional_text(cls, value: object, info) -> object:
+        if value is None:
+            raise ValueError(f"{info.field_name} 不能为 null；不修改时请省略该字段")
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError(f"{info.field_name} 不能为空或只包含空格")
+        return cleaned
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_optional_tags(cls, value: list[str] | None) -> list[str]:
+        if value is None:
+            raise ValueError("tags 不能为 null；清空标签请传空数组")
+        result: list[str] = []
+        for raw_tag in value:
+            tag = raw_tag.strip()
+            if not tag:
+                raise ValueError("文章标签不能为空或只包含空格")
+            if len(tag) > 20:
+                raise ValueError("单个文章标签不能超过 20 个字符")
+            if tag not in result:
+                result.append(tag)
+        return result
+
+    @field_validator("status")
+    @classmethod
+    def reject_null_status(cls, value: ArticleStatus | None) -> ArticleStatus:
+        if value is None:
+            raise ValueError("status 不能为 null；不修改时请省略该字段")
+        return value
+
+    @model_validator(mode="after")
+    def require_at_least_one_field(self):
+        if not self.model_fields_set:
+            raise ValueError("至少提供一个需要修改的字段")
+        return self
+
+
+class ArticleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    slug: str
+    title: str
+    body: str
+    tags: list[str]
+    status: ArticleStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArticlePage(BaseModel):
+    items: list[ArticleRead]
+    offset: int
+    limit: int
+    total: int
+
+
+class BusinessError(Exception):
+    def __init__(self, *, status_code: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+
+
+@app.exception_handler(BusinessError)
+async def handle_business_error(_request: Request, exc: BusinessError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": exc.code, "message": exc.message}},
+    )
+
+
+class InMemoryArticleRepository:
+    def __init__(self) -> None:
+        self._items: dict[int, ArticleRead] = {}
+        self._next_id = 1
+
+    def create(self, payload: ArticleCreate) -> ArticleRead:
+        now = datetime.now(UTC)
+        article = ArticleRead(
+            id=self._next_id,
+            slug=payload.slug,
+            title=payload.title,
+            body=payload.body,
+            tags=payload.tags,
+            status="draft",
+            created_at=now,
+            updated_at=now,
+        )
+        self._items[article.id] = article
+        self._next_id += 1
+        return article
+
+    def list(self, *, offset: int, limit: int) -> tuple[list[ArticleRead], int]:
+        ordered = sorted(self._items.values(), key=lambda item: item.id)
+        return ordered[offset : offset + limit], len(ordered)
+
+    def get(self, article_id: int) -> ArticleRead | None:
+        return self._items.get(article_id)
+
+    def get_by_slug(self, slug: str) -> ArticleRead | None:
+        return next((item for item in self._items.values() if item.slug == slug), None)
+
+    def update(self, article_id: int, changes: dict[str, object]) -> ArticleRead:
+        current = self._items[article_id]
+        updated = current.model_copy(
+            update={**changes, "updated_at": datetime.now(UTC)}
+        )
+        self._items[article_id] = updated
+        return updated
+
+    def delete(self, article_id: int) -> None:
+        del self._items[article_id]
+
+
+repository = InMemoryArticleRepository()
+
+
+def require_article(article_id: int) -> ArticleRead:
+    article = repository.get(article_id)
+    if article is None:
+        raise BusinessError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="ARTICLE_NOT_FOUND",
+            message="文章不存在",
+        )
+    return article
+
+
+@app.post(
+    "/articles",
+    response_model=ArticleRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_article(payload: ArticleCreate) -> ArticleRead:
+    if repository.get_by_slug(payload.slug) is not None:
+        raise BusinessError(
+            status_code=status.HTTP_409_CONFLICT,
+            code="ARTICLE_SLUG_EXISTS",
+            message="文章 slug 已存在，请更换后重试",
+        )
+    return repository.create(payload)
+
+
+@app.get("/articles", response_model=ArticlePage)
+def list_articles(
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> ArticlePage:
+    items, total = repository.list(offset=offset, limit=limit)
+    return ArticlePage(items=items, offset=offset, limit=limit, total=total)
+
+
+@app.get("/articles/{article_id}", response_model=ArticleRead)
+def get_article(article_id: int) -> ArticleRead:
+    return require_article(article_id)
+
+
+@app.patch("/articles/{article_id}", response_model=ArticleRead)
+def update_article(article_id: int, payload: ArticleUpdate) -> ArticleRead:
+    current = require_article(article_id)
+    changes = payload.model_dump(exclude_unset=True)
+
+    new_slug = changes.get("slug")
+    if isinstance(new_slug, str):
+        owner = repository.get_by_slug(new_slug)
+        if owner is not None and owner.id != current.id:
+            raise BusinessError(
+                status_code=status.HTTP_409_CONFLICT,
+                code="ARTICLE_SLUG_EXISTS",
+                message="文章 slug 已存在，请更换后重试",
+            )
+
+    return repository.update(article_id, changes)
+
+
+@app.delete(
+    "/articles/{article_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_article(article_id: int) -> Response:
+    require_article(article_id)
+    repository.delete(article_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+```
+
+这份代码可直接运行。`model_dump(exclude_unset=True)` 是 PATCH 的关键：字段省略表示“不修改”，而不是用默认 `None` 覆盖旧值。`model_fields_set` 用于拒绝空对象 `{}`。
+
+:::note 409 为什么不是 422
+slug 格式错误只看当前请求本身，属于 422 校验错误；slug 是否重复取决于仓储中的现有数据，属于业务状态冲突，因此返回 409。404、409 都经同一个 `BusinessError` 处理器形成稳定错误体。
+:::
+## 4. 第二步：启动并确认 OpenAPI
+
+**本步修改文件：无。** 启动应用：
+
+```bash
+python -m uvicorn main:app --reload
+```
+
+预期终端包含：
+
+```text
+Uvicorn running on http://127.0.0.1:8000
+Application startup complete.
+```
+
+打开 `http://127.0.0.1:8000/docs`。应看到五个 `/articles` 操作，以及 `ArticleCreate`、`ArticleUpdate`、`ArticleRead`、`ArticlePage` 四个 Schema。
+
+也可先执行语法检查：
+
+```bash
+python -m py_compile main.py
+```
+
+## 5. 第三步：按顺序完成 Swagger 验证
+
+**本步修改文件：无。** 内存数据与进程绑定，请在同一次服务运行期间按以下顺序操作。
+
+### 5.1 POST 创建第一篇文章
+
+在 Swagger 执行 `POST /articles`：
+
+```json
+{
+  "slug": "fastapi-validation",
+  "title": "  FastAPI 校验  ",
+  "body": "  第一篇正文  ",
+  "tags": [" Python ", "FastAPI"]
+}
+```
+
+预期状态码 `201`：
+
+```json
+{
+  "id": 1,
+  "slug": "fastapi-validation",
+  "title": "FastAPI 校验",
+  "body": "第一篇正文",
+  "tags": ["Python", "FastAPI"],
+  "status": "draft",
+  "created_at": "2026-08-18T08:00:00.000000Z",
+  "updated_at": "2026-08-18T08:00:00.000000Z"
+}
+```
+
+时间以实际响应为准。等价命令：
+
+```bash
+curl -X POST http://127.0.0.1:8000/articles \
+  -H "Content-Type: application/json" \
+  -d '{"slug":"fastapi-validation","title":"FastAPI 校验","body":"第一篇正文","tags":["Python"]}'
+```
+
+### 5.2 POST 重复 slug 得到统一 409
+
+再次提交相同 `slug`，标题可以不同。预期状态码 `409`：
+
+```json
+{
+  "error": {
+    "code": "ARTICLE_SLUG_EXISTS",
+    "message": "文章 slug 已存在，请更换后重试"
+  }
+}
+```
+
+业务错误没有暴露字典结构、堆栈或底层异常。真实数据库版本仍需唯一约束兜底并映射并发冲突；本篇内存检查只是教学实现。
+
+### 5.3 再创建两篇并验证分页
+
+依次创建：
+
+```json
+{
+  "slug": "fastapi-crud",
+  "title": "FastAPI CRUD",
+  "body": "第二篇正文",
+  "tags": []
+}
+```
+
+```json
+{
+  "slug": "fastapi-layering",
+  "title": "FastAPI 分层",
+  "body": "第三篇正文",
+  "tags": []
+}
+```
+
+执行 `GET /articles?offset=1&limit=1`，预期状态码 `200`：
+
+```json
+{
+  "items": [
+    {
+      "id": 2,
+      "slug": "fastapi-crud",
+      "title": "FastAPI CRUD",
+      "body": "第二篇正文",
+      "tags": [],
+      "status": "draft",
+      "created_at": "2026-08-18T08:01:00.000000Z",
+      "updated_at": "2026-08-18T08:01:00.000000Z"
+    }
+  ],
+  "offset": 1,
+  "limit": 1,
+  "total": 3
+}
+```
+
+`total` 是未分页前的总数，前端可以据此计算页数。当前按自增 `id` 升序，顺序稳定。`limit=0`、`limit=101` 或 `offset=-1` 会由 FastAPI 返回 422。
+
+### 5.4 GET one 与 404
+
+执行 `GET /articles/1`，预期返回第一篇文章。再执行 `GET /articles/999`，预期状态码 `404`：
+
+```json
+{
+  "error": {
+    "code": "ARTICLE_NOT_FOUND",
+    "message": "文章不存在"
+  }
+}
+```
+
+### 5.5 PATCH 只更新提交的字段
+
+执行 `PATCH /articles/1`：
+
+```json
+{
+  "title": "  FastAPI 数据校验详解  ",
+  "status": "published"
+}
+```
+
+预期状态码 `200`。`title` 变为 `FastAPI 数据校验详解`，`status` 变为 `published`；未提交的 `slug`、`body` 和 `tags` 保持原值，`updated_at` 更新。
+
+提交空对象 `{}`，预期 `422` 且消息包含“至少提供一个需要修改的字段”。提交 `{"title": null}` 也返回 422，因为“显式清空”与“不修改”不是同一件事。
+
+若把文章 1 的 slug 改成文章 2 的 `fastapi-crud`，预期统一 `409 ARTICLE_SLUG_EXISTS`。
+
+### 5.6 DELETE 返回真正的 204
+
+执行 `DELETE /articles/1`，预期状态码 `204`，**响应体为空**。命令验证：
+
+```bash
+curl -i -X DELETE http://127.0.0.1:8000/articles/1
+```
+
+关键响应头：
+
+```text
+HTTP/1.1 204 No Content
+```
+
+再次删除同一 ID，预期 `404 ARTICLE_NOT_FOUND`。不要给 204 返回 `{ "ok": true }`；204 的语义就是没有响应体。
+
+## 6. 数据流与错误边界
+
+一次创建请求的路径是：
+
+```text
+JSON 请求
+  → ArticleCreate（格式、trim、长度）
+  → 路由检查 slug 业务冲突
+  → InMemoryArticleRepository.create
+  → ArticleRead 过滤响应
+```
+
+一次失败请求分两类：
+
+- 请求自身不合法：FastAPI/Pydantic 返回 422，例如 `limit=0`、slug 格式错误、标题纯空格；
+- 当前业务状态不允许：抛 `BusinessError`，统一映射到 404/409。
+
+未知编程错误不应被宽泛 `except Exception` 伪装成业务错误。开发环境让它暴露并修复；生产环境由统一日志记录完整堆栈，对客户端只返回通用 500，且不能泄露内部实现。
+
+## 7. 完成目录
+
+```text
+fastapi-article-api/
+└── main.py  # 完整内存 CRUD、分页与 BusinessError
+```
+
+本篇没有创建 `app/` 包、数据库、测试文件或其他项目文件；下一篇才开始项目分层。
+
+## 8. 常见错误
+
+### 用列表下标当资源 ID
+
+删除一项后列表下标会移动，`/articles/2` 可能指向不同资源。示例使用字典按稳定 ID 存储，并用独立 `_next_id` 生成新 ID。
+
+### PATCH 使用 `model_dump()` 而未排除未提交字段
+
+这会把未提交字段的默认 `None` 写回旧对象。必须使用 `model_dump(exclude_unset=True)`。
+
+### 对空 PATCH 静默返回成功
+
+`{}` 没有表达任何修改，通常意味着调用方错误。本例用 `model_validator` 明确返回 422。
+
+### 204 仍返回 JSON
+
+`204 No Content` 不能携带响应体。本例显式返回 `Response(status_code=204)`。
+
+### 每个路由自己拼错误 JSON
+
+这样很快会出现 `detail`、`message`、`error_msg` 多种格式。统一抛 `BusinessError`，由异常处理器形成稳定响应。
+
+### 把内存仓储当成“暂时可上线”
+
+多进程数据不一致、重启丢失、并发写入无保护。它不是小规模生产方案。生产至少需要持久化数据库、数据库约束、事务、备份与监控。
+
+## 9. 练习
+
+1. 给列表增加 `status` 查询参数，只允许 `draft` 或 `published`，并保证 `total` 是筛选后的总数。
+2. 增加 `GET /articles/by-slug/{slug}`，找不到时仍复用 `ARTICLE_NOT_FOUND`。
+3. 为删除增加规则：已发布文章不能直接删除，返回 409 `ARTICLE_ALREADY_PUBLISHED`。
+4. 修改列表排序为 `id` 倒序，创建 3 篇文章后验证第一页顺序。
+5. 思考两个并发 POST 同时提交相同 slug 时，为什么“先查再写”在数据库版本中仍不够。
+
+## 10. 验收清单
+
+- [ ] `python -m py_compile main.py` 成功。
+- [ ] Swagger 显示 POST、GET list、GET one、PATCH、DELETE。
+- [ ] 创建返回 201，服务器生成 ID、状态与时间。
+- [ ] 分页参数有边界，响应含 `items/offset/limit/total`。
+- [ ] 单篇不存在返回统一 404。
+- [ ] 创建或更新为重复 slug 返回统一 409。
+- [ ] PATCH 只更新提交字段，并拒绝空对象与显式 null。
+- [ ] DELETE 成功返回无响应体的 204，再删返回 404。
+- [ ] 能解释内存数据为何单进程、重启丢失且不可用于生产。
+
+## 11. 官方文档与下一步
+
+- [FastAPI 路径操作配置](https://fastapi.tiangolo.com/tutorial/path-operation-configuration/)
+- [FastAPI 查询参数校验](https://fastapi.tiangolo.com/tutorial/query-params-str-validations/)
+- [FastAPI 处理错误](https://fastapi.tiangolo.com/tutorial/handling-errors/)
+- [FastAPI 响应状态码](https://fastapi.tiangolo.com/tutorial/response-status-code/)
+- [Pydantic Validators](https://docs.pydantic.dev/latest/concepts/validators/)
+- [Pydantic 模型序列化](https://docs.pydantic.dev/latest/concepts/serialization/)
+
+下一篇进入[FastAPI 项目分层与依赖注入](/posts/python/fastapi-project-structure-dependency)：保持这五个接口行为不变，把单文件拆成可维护、可替换的模块。

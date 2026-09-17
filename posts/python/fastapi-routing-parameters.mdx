@@ -1,0 +1,529 @@
+---
+title: 'FastAPI 路由与参数：Path、Query、Header 与请求体'
+date: '2026-05-03'
+excerpt: '在最小 main.py 上逐步加入健康检查、固定与动态路由，并用文章管理 API 认识路径、查询、请求头和 JSON 请求体。'
+tags: ['python', 'fastapi', 'backend', 'routing', 'windows']
+nextPost: 'python/fastapi-pydantic-validation'
+---
+
+# FastAPI 路由与参数：Path、Query、Header 与请求体
+
+<ProgressIndicator
+  current="python/fastapi-routing-parameters"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic" },
+    { slug: "python/fastapi-crud-error-handling", title: "内存 CRUD" },
+    { slug: "python/fastapi-project-structure-dependency", title: "项目分层" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+上一篇的文章管理 API 只有 `GET /`。本篇仍然只修改 `main.py`，但会让它能回答更多问题：服务是否存活、哪一篇是最新文章、如何按 ID 获取文章、如何读取筛选条件、客户端名称和一份 JSON 草稿。
+
+这篇只建立四类输入的**最小心智模型**：
+
+- **Path**：资源身份，是 URL 路径的一部分；
+- **Query**：筛选、分页等可选条件，位于 `?` 之后；
+- **Header**：请求元信息；
+- **Request body**：通常承载创建或修改资源的数据。
+
+下一篇才会系统使用 Pydantic v2 定义字段、约束、嵌套模型、输入输出模型与错误边界。本篇的请求体故意只用 `dict`，不要把它当成最终业务设计。
+
+## 前置条件
+
+- 已完成[首个 FastAPI API](/posts/python/fastapi-first-api)；
+- Windows 10/11、Python 3.12+；
+- 虚拟环境中已安装 `fastapi>=0.119,<1` 和 `uvicorn[standard]>=0.34,<1`；
+- 当前终端位于 `fastapi-article-api`，并已激活 `.venv`。
+
+依赖范围不是“固定最新版”。本篇不重新安装依赖；项目以后加入锁文件后，精确版本由锁文件决定。代码按 FastAPI 0.x 的 Pydantic v2 运行方式编写。
+
+官方依据与适用边界：
+
+- [Path Parameters](https://fastapi.tiangolo.com/tutorial/path-params/)：适用于路径参数声明、类型转换和路由顺序；
+- [Query Parameters](https://fastapi.tiangolo.com/tutorial/query-params/)：适用于非路径简单参数的查询参数推断；
+- [Header Parameters](https://fastapi.tiangolo.com/tutorial/header-params/)：适用于读取 HTTP 请求头；本文用显式别名，暂不讨论重复请求头；
+- [Request Body](https://fastapi.tiangolo.com/tutorial/body/)：官方重点展示 Pydantic 模型；本文只用字典预览请求体，生产业务不应因此跳过结构化模型；
+- [Metadata and Docs URLs](https://fastapi.tiangolo.com/tutorial/metadata/)：可核对自动文档配置，但本文保持默认文档地址。
+
+## 开始时的文件树
+
+<FileTree tree={[
+  { name: "fastapi-article-api", type: "folder", children: [
+    { name: ".venv", type: "folder", comment: "本机虚拟环境，不提交", children: [] },
+    { name: "main.py", type: "file", comment: "当前只有 GET /" },
+  ]},
+]} />
+
+开始时的 `main.py` 应为：
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {"message": "欢迎使用文章管理 API"}
+```
+
+## 步骤 1：增加健康检查固定路由
+
+**本步目标**：增加 `GET /health`，理解“HTTP 方法 + 路径”共同确定一个路由。
+
+**涉及文件**：修改 `main.py`，不创建其他文件。
+
+用下面的**完整可复制代码**覆盖 `main.py`：
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {"message": "欢迎使用文章管理 API"}
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+```
+
+**运行命令（PowerShell 与 CMD 相同）**：
+
+```bat
+python -m uvicorn main:app --reload
+```
+
+保持服务器运行，在第二个终端验证。
+
+**PowerShell**：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+**CMD**：
+
+```bat
+curl.exe http://127.0.0.1:8000/health
+```
+
+**预期结果**：HTTP 200，并返回：
+
+```json
+{"status":"ok"}
+```
+
+**Windows PowerShell 与 CMD 注意**：PowerShell 的 `Invoke-RestMethod` 会把 JSON 转为对象，可能显示成表格；CMD 的 `curl.exe` 输出原始 JSON。健康检查现在只证明 Web 进程能响应，尚未检查数据库、缓存等依赖，因此不能代表完整生产就绪状态。
+
+## 步骤 2：增加固定路由与动态 Path 参数
+
+**本步目标**：用 `/posts/latest` 表示固定资源，用 `/posts/{post_id}` 表示按文章 ID 查询，并观察类型转换和校验。
+
+**涉及文件**：继续完整覆盖 `main.py`。
+
+```python
+from typing import Annotated
+
+from fastapi import FastAPI, Path
+
+app = FastAPI()
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {"message": "欢迎使用文章管理 API"}
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/posts/latest")
+def get_latest_post() -> dict[str, int | str]:
+    return {"id": 3, "title": "学习 FastAPI 路由"}
+
+
+@app.get("/posts/{post_id}")
+def get_post(
+    post_id: Annotated[int, Path(gt=0, description="文章 ID，必须大于 0")],
+) -> dict[str, int | str]:
+    return {"id": post_id, "title": f"文章 {post_id}"}
+```
+
+`{post_id}` 是动态路径段。类型注解 `int` 要求 FastAPI 把路径文本转换为整数；`Path(gt=0)` 再要求它大于 0。`Annotated` 把 Python 类型和 FastAPI 参数元数据放在一起。
+
+:::warning 固定路由必须写在动态路由前
+路由按声明顺序匹配。如果先声明 `/posts/{post_id}`，请求 `/posts/latest` 可能先落入动态路由，再因为 `latest` 不能转成整数而返回 422。把 `/posts/latest` 放在前面，含义才明确。
+:::
+
+服务器使用 `--reload` 时保存文件即可自动重载。
+
+**PowerShell**：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/posts/latest
+Invoke-RestMethod http://127.0.0.1:8000/posts/12
+```
+
+**CMD**：
+
+```bat
+curl.exe http://127.0.0.1:8000/posts/latest
+curl.exe http://127.0.0.1:8000/posts/12
+```
+
+**预期结果**：固定路由返回 ID 3；动态路由返回传入的 ID 12。访问 `/posts/abc` 或 `/posts/0` 会返回 HTTP 422 校验错误。
+
+**Windows PowerShell 与 CMD 注意**：在 PowerShell 中，想查看失败响应的状态和原始正文可使用 `curl.exe`；`Invoke-RestMethod` 遇到 4xx 会抛出错误，显示方式又因 PowerShell 版本不同而不同。
+
+本例只回显 ID，没有查询真实数据；真正的“文章不存在”应在 CRUD 阶段明确返回 404，不能把所有正整数都假装成已存在文章。
+
+## 步骤 3：用 Query 参数筛选文章列表
+
+**本步目标**：增加 `GET /posts?keyword=fastapi&limit=5`，区分路径参数和查询参数。
+
+**涉及文件**：继续完整覆盖 `main.py`。
+
+```python
+from typing import Annotated
+
+from fastapi import FastAPI, Path, Query
+
+app = FastAPI()
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {"message": "欢迎使用文章管理 API"}
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/posts/latest")
+def get_latest_post() -> dict[str, int | str]:
+    return {"id": 3, "title": "学习 FastAPI 路由"}
+
+
+@app.get("/posts")
+def list_posts(
+    keyword: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+) -> dict[str, str | int | list[object] | None]:
+    return {
+        "keyword": keyword,
+        "limit": limit,
+        "items": [],
+    }
+
+
+@app.get("/posts/{post_id}")
+def get_post(
+    post_id: Annotated[int, Path(gt=0, description="文章 ID，必须大于 0")],
+) -> dict[str, int | str]:
+    return {"id": post_id, "title": f"文章 {post_id}"}
+```
+
+`keyword` 和 `limit` 没有出现在路径模板里，也不是请求体模型，因此它们是查询参数。`keyword` 默认 `None`，表示可选；`limit` 默认 10，并限制在 1 到 100。
+
+**PowerShell**：
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/posts?keyword=fastapi&limit=5"
+Invoke-RestMethod "http://127.0.0.1:8000/posts"
+```
+
+**CMD**：
+
+```bat
+curl.exe "http://127.0.0.1:8000/posts?keyword=fastapi&limit=5"
+curl.exe "http://127.0.0.1:8000/posts"
+```
+
+**预期结果**：第一次响应中的 `keyword` 是 `fastapi`、`limit` 是数字 `5`；第二次使用 `keyword: null` 和默认 `limit: 10`。`items` 仍为空，因为本篇不实现存储。
+
+访问 `?limit=0`、`?limit=101` 或 `?limit=abc` 应返回 422。
+
+**Windows PowerShell 与 CMD 注意**：URL 含 `&` 时务必加双引号。未加引号时，PowerShell 和 CMD 都可能把 `&` 当成命令分隔符。真实关键词还应进行 URL 编码；浏览器或常见 HTTP 客户端通常会帮助编码，但不要手工拼接不可信输入。
+
+## 步骤 4：读取 Header 元信息
+
+**本步目标**：增加 `GET /request-info`，从 `X-Client-Name` 请求头读取客户端名称。
+
+**涉及文件**：继续完整覆盖 `main.py`。
+
+```python
+from typing import Annotated
+
+from fastapi import FastAPI, Header, Path, Query
+
+app = FastAPI()
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {"message": "欢迎使用文章管理 API"}
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/posts/latest")
+def get_latest_post() -> dict[str, int | str]:
+    return {"id": 3, "title": "学习 FastAPI 路由"}
+
+
+@app.get("/posts")
+def list_posts(
+    keyword: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+) -> dict[str, str | int | list[object] | None]:
+    return {
+        "keyword": keyword,
+        "limit": limit,
+        "items": [],
+    }
+
+
+@app.get("/posts/{post_id}")
+def get_post(
+    post_id: Annotated[int, Path(gt=0, description="文章 ID，必须大于 0")],
+) -> dict[str, int | str]:
+    return {"id": post_id, "title": f"文章 {post_id}"}
+
+
+@app.get("/request-info")
+def get_request_info(
+    x_client_name: Annotated[
+        str | None,
+        Header(alias="X-Client-Name"),
+    ] = None,
+) -> dict[str, str | None]:
+    return {"client_name": x_client_name}
+```
+
+这里显式使用 `alias="X-Client-Name"`，让 Python 参数名与 HTTP 头名称的映射一目了然。Header 适合元信息，不适合承载整篇文章内容。
+
+**PowerShell**：
+
+```powershell
+Invoke-RestMethod `
+  -Uri http://127.0.0.1:8000/request-info `
+  -Headers @{"X-Client-Name" = "windows-powershell"}
+```
+
+**CMD**：
+
+```bat
+curl.exe -H "X-Client-Name: windows-cmd" http://127.0.0.1:8000/request-info
+```
+
+**预期结果**：PowerShell 请求返回 `client_name` 为 `windows-powershell`；CMD 请求返回 `windows-cmd`。不传该请求头时返回 `null`。
+
+**Windows PowerShell 与 CMD 注意**：PowerShell 用反引号续行，反引号后不能有空格；CMD 的续行符是 `^`。为避免复制错误，CMD 示例保持单行。请求头名称不区分大小写，但项目文档应保持统一拼写。
+
+:::important 安全边界
+请求头是客户端输入，不能因为它叫 `X-Client-Name`、`X-User-Id` 或 `X-Role` 就自动信任。身份认证与权限判断必须使用可验证的凭证和服务端规则，本系列会在认证授权篇处理。
+:::
+
+## 步骤 5：用字典接收 Request Body 最小引子
+
+**本步目标**：增加 `POST /posts/preview`，观察 JSON 请求体如何进入 Python；暂不创建文章，也不保存数据。
+
+**涉及文件**：最后一次完整覆盖 `main.py`。
+
+```python
+from typing import Annotated
+
+from fastapi import Body, FastAPI, Header, Path, Query
+
+app = FastAPI()
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {"message": "欢迎使用文章管理 API"}
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/posts/latest")
+def get_latest_post() -> dict[str, int | str]:
+    return {"id": 3, "title": "学习 FastAPI 路由"}
+
+
+@app.get("/posts")
+def list_posts(
+    keyword: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+) -> dict[str, str | int | list[object] | None]:
+    return {
+        "keyword": keyword,
+        "limit": limit,
+        "items": [],
+    }
+
+
+@app.get("/posts/{post_id}")
+def get_post(
+    post_id: Annotated[int, Path(gt=0, description="文章 ID，必须大于 0")],
+) -> dict[str, int | str]:
+    return {"id": post_id, "title": f"文章 {post_id}"}
+
+
+@app.get("/request-info")
+def get_request_info(
+    x_client_name: Annotated[
+        str | None,
+        Header(alias="X-Client-Name"),
+    ] = None,
+) -> dict[str, str | None]:
+    return {"client_name": x_client_name}
+
+
+@app.post("/posts/preview")
+def preview_post(
+    payload: Annotated[dict[str, object], Body()],
+) -> dict[str, dict[str, object]]:
+    return {"received": payload}
+```
+
+`Body()` 明确说明 `payload` 来自请求体，`dict[str, object]` 要求 JSON 顶层是对象。它只能表达“字符串键的对象”，不能清楚表达 `title` 是否必填、长度多少、`content` 是什么类型，也没有独立响应模型；这些正是下一篇使用 Pydantic v2 要解决的问题。
+
+**PowerShell**：
+
+```powershell
+$body = @{
+  title = "我的第一篇文章"
+  content = "这是用于预览的正文"
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:8000/posts/preview `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+**CMD**：
+
+```bat
+curl.exe -X POST http://127.0.0.1:8000/posts/preview -H "Content-Type: application/json" -d "{\"title\":\"我的第一篇文章\",\"content\":\"这是用于预览的正文\"}"
+```
+
+**预期结果**：HTTP 200，并在 `received` 中原样看到标题和正文：
+
+```json
+{
+  "received": {
+    "title": "我的第一篇文章",
+    "content": "这是用于预览的正文"
+  }
+}
+```
+
+这只是“预览回显”，不是创建操作：没有生成 ID、没有返回 201，也没有保存数据。
+
+**Windows PowerShell 与 CMD 注意**：PowerShell 推荐用对象配合 `ConvertTo-Json`，减少手工转义；CMD 双引号内的 JSON 必须把内部 `"` 转义。两种终端都必须发送 `Content-Type: application/json`。如果中文显示乱码，优先使用 `/docs` 测试，并确认终端与文件使用 UTF-8。
+
+## 用 /docs 一次看懂参数位置
+
+打开 `http://127.0.0.1:8000/docs`，观察：
+
+- `/posts/{post_id}` 把 `post_id` 放在 **path**；
+- `/posts` 把 `keyword` 与 `limit` 放在 **query**；
+- `/request-info` 把 `X-Client-Name` 放在 **header**；
+- `/posts/preview` 显示 JSON **request body**。
+
+自动文档来自 OpenAPI 与类型信息，可以帮助调试，但它不会替你决定业务规则。例如“标题不能为空”“文章不存在返回 404”“只有作者能修改”等规则仍要显式设计。
+
+## 结束时的文件树
+
+<FileTree tree={[
+  { name: "fastapi-article-api", type: "folder", children: [
+    { name: ".venv", type: "folder", comment: "本机虚拟环境，不提交", children: [] },
+    { name: "main.py", type: "file", comment: "包含健康检查、路由和四类参数引子" },
+  ]},
+]} />
+
+本篇仍未创建模型文件、数据库文件或路由目录。运行过程中出现的 `__pycache__/` 是 Python 缓存，不属于业务源码。
+
+## 常见错误
+
+### 1. `/posts/latest` 返回 422
+
+检查固定路由是否声明在 `/posts/{post_id}` 之前。路由顺序错误时，`latest` 会被尝试转换成整数。
+
+### 2. `limit=abc` 或 `post_id=0` 返回 422
+
+这是预期校验结果，不是服务器崩溃。`limit` 必须是 1 到 100 的整数，`post_id` 必须是大于 0 的整数。客户端应修正输入。
+
+### 3. URL 中 `&limit=5` 后半段没有生效
+
+在 PowerShell 或 CMD 中给完整 URL 加双引号：
+
+```bat
+curl.exe "http://127.0.0.1:8000/posts?keyword=fastapi&limit=5"
+```
+
+### 4. POST 返回 422
+
+确认请求体是合法 JSON 对象，并发送 `Content-Type: application/json`。下面这些都不符合当前接口：空正文、顶层数组、少引号或多逗号的非法 JSON。
+
+### 5. POST 返回 405 Method Not Allowed
+
+确认使用 `POST /posts/preview`，而不是直接在浏览器地址栏发起默认的 GET 请求。可在 `/docs` 中点击 **Try it out** 测试。
+
+### 6. 修改文件后接口没变化
+
+查看服务器终端是否仍在运行、是否启用了 `--reload`，以及你修改的是否是当前目录中的 `main.py`。必要时按 `Ctrl+C` 停止后重新启动。
+
+### 7. 把 Header 当成可信身份
+
+任何客户端都能伪造普通自定义请求头。此处只练习读取元信息；不要据此实现管理员权限。
+
+## 练习
+
+1. 新增固定路由 `GET /posts/featured`，并确保它写在动态路由前。
+2. 给文章列表增加可选查询参数 `published: bool | None = None`，用 `/docs` 观察布尔值如何解析。
+3. 把 `limit` 的上限改为 50，验证 50 成功、51 返回 422。
+4. 不传 `X-Client-Name`，确认响应为 `null`；再传入自己的客户端名。
+5. 向预览接口发送缺少 `title` 的对象，观察它目前仍会成功。解释为什么下一篇需要 Pydantic 模型。
+
+练习仍只修改 `main.py`。不要提前加入内存列表或数据库，因为“参数从哪里来”和“数据存到哪里”是两个不同问题。
+
+## 验收清单
+
+- [ ] `python -m py_compile main.py` 无输出并成功结束。
+- [ ] `GET /health` 返回 `{"status":"ok"}`，并能说明它只表示进程存活。
+- [ ] `/posts/latest` 能命中固定路由。
+- [ ] `/posts/12` 能把 `12` 转为整数路径参数。
+- [ ] 非法 path/query 输入返回 422。
+- [ ] `GET /posts?keyword=fastapi&limit=5` 正确读取查询参数。
+- [ ] `GET /request-info` 能读取 `X-Client-Name`，且知道它不可信任。
+- [ ] `POST /posts/preview` 能读取 JSON 对象，但不会保存文章。
+- [ ] `/docs` 能明确显示 path、query、header 与 request body 的位置。
+- [ ] 文件树中仍只有一个业务文件 `main.py`。
+
+下一篇阅读 [FastAPI 与 Pydantic v2：定义文章输入输出模型](/posts/python/fastapi-pydantic-validation)。我们将把宽泛的 `dict` 替换为结构化模型，并明确必填字段、默认值、长度约束和响应边界。

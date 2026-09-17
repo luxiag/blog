@@ -1,0 +1,238 @@
+---
+title: 'FastAPI 从零学习路线：用文章管理 API 串起后端能力'
+date: '2026-05-01'
+excerpt: '面向 Windows 与 Python 零基础学习者，从首个接口出发，循序完成路由、Pydantic v2、CRUD、数据库、认证、测试与部署。'
+tags: ['python', 'fastapi', 'backend', 'roadmap', 'windows']
+nextPost: 'python/fastapi-first-api'
+---
+
+# FastAPI 从零学习路线：用文章管理 API 串起后端能力
+
+<ProgressIndicator
+  current="python/fastapi-from-zero-roadmap"
+  items={[
+    { slug: "python/fastapi-from-zero-roadmap", title: "路线" },
+    { slug: "python/fastapi-first-api", title: "首个 API" },
+    { slug: "python/fastapi-routing-parameters", title: "路由参数" },
+    { slug: "python/fastapi-pydantic-validation", title: "Pydantic" },
+    { slug: "python/fastapi-crud-error-handling", title: "内存 CRUD" },
+    { slug: "python/fastapi-project-structure-dependency", title: "项目分层" },
+    { slug: "python/fastapi-sqlalchemy-alembic", title: "数据库迁移" },
+    { slug: "python/fastapi-authentication-authorization", title: "认证授权" },
+    { slug: "python/fastapi-redis-background-tasks", title: "缓存任务" },
+    { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
+    { slug: "python/python-backend-capstone", title: "综合实战" },
+  ]}
+/>
+
+这是一条给**中文零基础学习者**准备的 FastAPI 路线。我们不从庞大的“完整项目模板”开始，而是持续扩展同一个“文章管理 API”：先让一个接口跑起来，再逐步加入参数校验、文章增删改查、数据库、登录权限、缓存、测试和部署。
+
+:::info 版本边界
+本系列使用 **Python 3.12+、FastAPI 0.x（Pydantic v2）**。安装示例使用 `fastapi>=0.119,<1` 与 `uvicorn[standard]>=0.34,<1`，这是兼容范围，不代表某个固定“最新版”。如果项目后来加入锁文件，实际安装的精确版本由锁文件决定。FastAPI 1.0 之后若有破坏性变化，请以届时官方迁移说明为准。
+:::
+
+FastAPI 官方文档的 [Tutorial - User Guide](https://fastapi.tiangolo.com/tutorial/) 是本系列的主要技术依据；它适合核对框架行为，但官方示例面向通用读者，本系列额外补充 Windows 命令、文件树和文章管理业务上下文。
+
+## 前置条件
+
+开始前只需要：
+
+- Windows 10/11；
+- Python 3.12 或更高版本；
+- 能使用 PowerShell 或 CMD；
+- 一个文本编辑器；
+- 不要求提前掌握 Web 框架、数据库或异步编程。
+
+如果还没安装 Python，请从 [Python 官方 Windows 下载页](https://www.python.org/downloads/windows/) 获取安装器。安装时勾选 **Add python.exe to PATH**。本文只覆盖 CPython 的常规 Windows 安装；Microsoft Store、Conda、WSL 的命令和路径可能不同。
+
+## 开始时的文件树
+
+路线篇不创建应用文件。先准备一个空工作目录即可：
+
+<FileTree tree={[
+  { name: "fastapi-article-api", type: "folder", comment: "空目录；下一篇开始写代码", children: [] },
+]} />
+
+## 先建立三个心智模型
+
+1. **API 是约定**：客户端发送 HTTP 方法、路径、参数和请求体；服务端返回状态码与数据。
+2. **FastAPI 是应用框架**：它把 Python 类型注解转换为参数读取、校验和 OpenAPI 文档。
+3. **Uvicorn 是服务器**：它负责监听端口，并通过 ASGI 调用 FastAPI 应用。开发时两者通常一起出现，但不是同一个组件。
+
+官方的 [First Steps](https://fastapi.tiangolo.com/tutorial/first-steps/) 展示了最小应用与自动文档；该页面适用于开发入门，不等于生产部署指南。生产启动方式、进程数、反向代理和 HTTPS 会在“部署观测”篇处理。
+
+## 步骤 1：确认 Python 命令可用
+
+**本步目标**：确认系统能启动 Python 3.12+，避免后面把环境问题误认为 FastAPI 问题。
+
+**涉及文件**：无。本步只读取环境信息。
+
+**完整可复制命令（PowerShell）**：
+
+```powershell
+py --version
+py -3.12 -c "import sys; print(sys.executable); print(sys.version_info >= (3, 12))"
+```
+
+**完整可复制命令（CMD）**：
+
+```bat
+py --version
+py -3.12 -c "import sys; print(sys.executable); print(sys.version_info >= (3, 12))"
+```
+
+**运行命令与预期结果**：第二条命令最后应输出 `True`。版本号可能因你的 Python 补丁版本而不同，不需要与示例完全一致。
+
+**Windows PowerShell 与 CMD 注意**：这两条命令在两种终端中相同。`py` 是 Windows Python Launcher；如果系统没有 `py`，可试 `python --version`，但要确认它实际指向 Python 3.12+。
+
+## 步骤 2：创建学习目录与虚拟环境
+
+**本步目标**：把本系列的依赖隔离在项目目录中，不污染系统 Python。
+
+**涉及文件**：`.venv/` 由 Python 自动创建；它是本机环境，不应提交到 Git。本步仍不创建业务代码。
+
+**完整可复制命令（PowerShell）**：
+
+```powershell
+mkdir fastapi-article-api
+Set-Location fastapi-article-api
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python --version
+```
+
+**完整可复制命令（CMD）**：
+
+```bat
+mkdir fastapi-article-api
+cd fastapi-article-api
+py -3.12 -m venv .venv
+.venv\Scripts\activate.bat
+python --version
+```
+
+**运行命令与预期结果**：激活后，提示符通常出现 `(.venv)`；`python --version` 应显示 3.12 或更高版本。
+
+**Windows PowerShell 与 CMD 注意**：PowerShell 使用 `Activate.ps1`，CMD 使用 `activate.bat`，不要混用。如果 PowerShell 因执行策略拒绝脚本，可仅对当前进程执行：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+`-Scope Process` 只影响当前 PowerShell 窗口，关闭后失效。也可以完全不激活，后续把 `python` 换成 `.\.venv\Scripts\python.exe`。
+
+## 步骤 3：看懂 12 篇递进路线
+
+**本步目标**：知道每一阶段解决什么问题，以及哪些能力故意留到后面。
+
+**涉及文件**：无。本步只运行一个 Python 小程序输出学习清单，不写入磁盘。
+
+**完整可复制 Python 代码**：
+
+```python
+stages = [
+    "1. 路线：准备环境并建立整体地图",
+    "2. 首个 API：只写最小 main.py",
+    "3. 路由参数：认识 path、query、header、body",
+    "4. Pydantic：用 v2 模型表达输入与输出",
+    "5. 内存 CRUD：完成文章增删改查闭环",
+    "6. 项目分层：拆分路由、模型与服务",
+    "7. 数据库迁移：持久化并管理结构演进",
+    "8. 认证授权：识别用户并限制操作权限",
+    "9. 缓存任务：处理热点读取和后台工作",
+    "10. 集成测试：自动验证接口协作",
+    "11. 部署观测：安全启动、记录与诊断",
+    "12. 综合实战：交付可演示的文章管理 API",
+]
+
+for stage in stages:
+    print(stage)
+```
+
+**运行命令（无需创建文件）**：
+
+PowerShell 与 CMD 都可以执行：
+
+```bat
+python -c "stages=['路线','首个 API','路由参数','Pydantic','内存 CRUD','项目分层','数据库迁移','认证授权','缓存任务','集成测试','部署观测','综合实战']; print('\n'.join(f'{i}. {name}' for i, name in enumerate(stages, 1)))"
+```
+
+**预期结果**：终端按 1 到 12 输出完整路线。
+
+**Windows PowerShell 与 CMD 注意**：`python -c` 适合短代码；上面的多行 Python 代码是完整逻辑说明，但零基础读者不必现在创建 `.py` 文件。PowerShell 和 CMD 对复杂引号的规则不同，因此命令特意只使用简单字符串。
+
+## 每一阶段交付什么
+
+| 阶段 | 文章管理 API 的增量 | 暂不处理的边界 |
+|---|---|---|
+| 首个 API | `GET /` 返回欢迎信息 | 参数、数据库、分层 |
+| 路由参数 | 健康检查、固定/动态路由、四类输入引子 | Pydantic 深入校验 |
+| Pydantic | 明确请求与响应数据结构 | 持久化 |
+| 内存 CRUD | 文章创建、查询、更新、删除 | 多进程共享、数据落盘 |
+| 项目分层 | 拆分职责，控制文件复杂度 | 数据库迁移 |
+| 数据库迁移 | 使用数据库保存文章并演进表结构 | 完整权限模型 |
+| 认证授权 | 登录、身份与资源权限 | 企业级 SSO 等扩展 |
+| 缓存任务 | 缓存热点数据、执行适合的后台任务 | 大型消息平台运维 |
+| 集成测试 | 验证接口、数据库和权限协作 | 全量性能测试 |
+| 部署观测 | 部署边界、日志、指标和健康检查 | 某一家云厂商专属配置 |
+| 综合实战 | 串联前述能力并完成验收 | 无边界的“万能模板” |
+
+:::warning 不要提前堆功能
+零基础最常见的问题不是“代码太少”，而是一次引入数据库、JWT、Docker 和异步任务后无法判断错误来自哪里。本系列每篇只增加一个可验证增量。教学示例的边界会明确写出，不应未经评估直接用于生产。
+:::
+
+## 结束时的文件树
+
+完成路线篇后，业务目录仍然是空的；`.venv` 只代表本机隔离环境：
+
+<FileTree tree={[
+  { name: "fastapi-article-api", type: "folder", children: [
+    { name: ".venv", type: "folder", comment: "本机虚拟环境，不提交", children: [] },
+  ]},
+]} />
+
+下一篇会在根目录只增加一个 `main.py`。
+
+## 常见错误
+
+### 1. `py` 不是内部或外部命令
+
+重新安装 Python 并启用 Python Launcher，或用 `python` 代替 `py`。先运行 `python --version`，不要盲目继续。
+
+### 2. 虚拟环境激活后版本仍不对
+
+执行下面命令确认解释器路径：
+
+```powershell
+python -c "import sys; print(sys.executable)"
+```
+
+路径应指向当前项目的 `.venv\Scripts\python.exe`。
+
+### 3. 把 `.venv` 当成项目源码
+
+`.venv` 可以删除并重建，不应手工编辑。真正的业务代码从下一篇的 `main.py` 开始。
+
+### 4. 误以为版本范围就是精确版本
+
+`fastapi>=0.119,<1` 允许安装多个兼容版本。没有锁文件时，不同时间安装可能得到不同精确版本；加入锁文件后，以锁文件记录为准，而不是宣称“永远使用最新版”。
+
+## 练习
+
+1. 在 PowerShell 中创建并激活虚拟环境，再关闭窗口，观察激活状态是否消失。
+2. 在 CMD 中重新激活同一个虚拟环境。
+3. 用 `python -c` 输出解释器路径和版本元组。
+4. 用自己的话解释 FastAPI 与 Uvicorn 的区别。
+
+## 验收清单
+
+- [ ] Windows 上可运行 Python 3.12+。
+- [ ] `fastapi-article-api` 目录已创建。
+- [ ] `.venv` 已创建，并能在 PowerShell 或 CMD 中激活。
+- [ ] 能说明 API、FastAPI、Uvicorn 各自负责什么。
+- [ ] 知道依赖范围不是固定最新版，精确版本应由锁文件决定。
+- [ ] 当前没有提前创建业务文件。
+
+验收通过后，继续阅读 [FastAPI 首个 API：只用 main.py 跑通请求](/posts/python/fastapi-first-api)。下一篇只完成最小可运行闭环，不提前加入路由参数或数据模型。

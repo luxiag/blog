@@ -1,12 +1,12 @@
 ---
-title: 'Python学习路线路线'
+title: 'Python 全栈学习路线'
 date: '2026-08-18'
 excerpt: '面向已有前端工程经验的开发者，用阶段目标、专题阅读、动手练习与可验证验收，把 Python、FastAPI、SQL、数据库、Redis、测试和 Linux 生产工程串成一条不重复教学的后端进阶路线。'
 tags: ['python', 'backend', 'fastapi', 'roadmap', 'fullstack']
 nextPost: 'python/python-complete-guide'
 ---
 
-# Python学习路线路线
+# Python 全栈学习路线
 
 你已经会拆组件、管理状态、调用 HTTP API，也理解 TypeScript、包管理、测试与 CI；缺的不是另一轮入门，而是把这些工程经验迁移到后端：**让数据在并发、失败、权限边界和持续发布中仍然正确**。
 
@@ -27,11 +27,12 @@ nextPost: 'python/python-complete-guide'
     { slug: "python/python-type-system", title: "类型系统" },
     { slug: "python/python-testing", title: "pytest 测试" },
     { slug: "python/python-asyncio", title: "asyncio" },
-    { slug: "python/fastapi-complete-guide", title: "FastAPI 基础" },
+    { slug: "python/fastapi-from-zero-roadmap", title: "FastAPI 零基础路线" },
     { slug: "python/fastapi-sqlalchemy-alembic", title: "持久化与迁移" },
     { slug: "python/fastapi-authentication-authorization", title: "认证与授权" },
     { slug: "python/fastapi-redis-background-tasks", title: "缓存与任务" },
     { slug: "python/python-backend-integration-testing", title: "集成测试" },
+    { slug: "python/fastapi-observability-deployment", title: "部署观测" },
     { slug: "python/python-backend-capstone", title: "综合实战" },
   ]}
 />
@@ -163,7 +164,7 @@ def publish(article: Article, repo: ArticleRepository) -> Article:
 
 **前置**：阶段 1；会从浏览器 Network 面板观察请求响应。
 
-完成 [FastAPI 系统教程](/posts/python/fastapi-complete-guide)，把重点放在 Pydantic v2 输入输出模型、依赖注入、异常映射、生命周期与测试客户端。前端经验能帮助你设计消费体验，但**不要让页面组件结构决定数据库表结构**。
+零基础学习者应先进入 [FastAPI 零基础学习路线](/posts/python/fastapi-from-zero-roadmap)，按路线顺序逐步完成前五篇课程，不要跳过前置练习；完成后再用 [FastAPI 综合复习与工程索引](/posts/python/fastapi-complete-guide) 串联 Pydantic v2 输入输出模型、依赖注入、异常映射、生命周期与测试客户端，并从索引继续进入后续进阶专题。前端经验能帮助你设计消费体验，但**不要让页面组件结构决定数据库表结构**。
 
 **练习**：为内存仓储增加 `POST /articles`、`GET /articles/{id}`、`POST /articles/{id}/publish`。定义统一错误体：
 
@@ -258,13 +259,13 @@ def publish(article: Article, repo: ArticleRepository) -> Article:
 - 单元测试快且隔离，集成测试验证真实边界，端到端测试只覆盖关键旅程。
 - 测试能证明未提交数据不触发外部副作用，缓存不会泄漏草稿或跨工作区数据。
 
-## 9. 阶段 6：Nginx 与 Linux 生产闭环
+## 9. 阶段 6：FastAPI 部署观测与 Linux 生产闭环
 
 **目标**：从“本机能跑”升级为可安全发布、观测、回滚和恢复。
 
-**前置**：阶段 5；应用已经有健康检查、结构化日志和迁移命令。
+**前置**：阶段 5；应用已经通过真实依赖的集成测试，并具备迁移命令。
 
-先通过 [Nginx 完全指南](/posts/nginx/nginx-complete-guide) 理解反向代理、TLS、超时、请求体限制和真实客户端地址，再沿 [Linux 生产工程路线图](/posts/linux/linux-production-roadmap) 完成主机基础、可靠 CI/CD、可观测性、数据库运维、备份恢复、安全与事件响应。
+先完成 [FastAPI 生产可观测性与部署](/posts/python/fastapi-observability-deployment)，为应用加入稳定错误契约、Request ID、结构化日志、liveness/readiness、不可变镜像、迁移编排、优雅停止、冒烟验证与回滚步骤。确认 FastAPI 服务本身形成可验证的部署闭环后，再通过 [Nginx 完全指南](/posts/nginx/nginx-complete-guide) 理解反向代理、TLS、超时、请求体限制和真实客户端地址，并沿 [Linux 生产工程路线图](/posts/linux/linux-production-roadmap) 补齐主机基础、可靠 CI/CD、数据库运维、备份恢复、安全与事件响应；需要进一步建设平台级 SLI/SLO 时，再进入 [可观测性工程：Metrics、Logs、Traces 与 SLI/SLO 告警](/posts/linux/observability-sli-slo-alerting)。
 
 不要把 Nginx 当成应用正确性的补丁：代理重试非幂等请求可能重复写入；增大超时可能只是把资源耗尽推迟；健康检查通过也不代表服务能完成用户请求。
 

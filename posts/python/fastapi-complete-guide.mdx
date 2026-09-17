@@ -1,16 +1,20 @@
 ---
-title: 'FastAPI 系统教程：REST API 工程化基础'
+title: 'FastAPI 综合复习与工程索引：REST API 核心实践'
 date: '2026-04-21'
-excerpt: '面向 FastAPI 工程化入门，系统讲解路由与参数、Pydantic v2 数据校验、依赖注入、同步 SQLAlchemy 2.x、JWT 最小示例、中间件与测试，并用博客 API 串联基础实践。'
+excerpt: '面向已完成前五篇 FastAPI 零基础课程的读者，综合复习路由、Pydantic v2、依赖注入、同步 SQLAlchemy 2.x、JWT、中间件与测试，并作为后续工程专题索引。'
 tags: ['python', 'fastapi', 'backend', 'rest-api']
 nextPost: 'python/fastapi-sqlalchemy-alembic'
 ---
 
-# FastAPI 系统教程：REST API 工程化基础
+# FastAPI 综合复习与工程索引：REST API 核心实践
+
+:::important 学习顺序
+本文不是零基础课程的起点。请先从 [FastAPI 零基础学习路线](/posts/python/fastapi-from-zero-roadmap) 出发，按顺序完成前五篇课程，再回到本文进行综合复习，并按文末索引进入数据库迁移、认证授权等工程专题。
+:::
 
 FastAPI 是 Python 生态中成熟的现代 Web 框架。它把 Python 的类型注解系统用到极致：路由参数自动校验、请求体自动解析、响应自动序列化、API 文档自动生成——这些在其他框架里需要大量样板代码才能做到的事，FastAPI 让你几乎不需要额外写任何配置。
 
-本文定位是 **REST API 工程化基础**，示例适用于 **Python 3.12+、FastAPI（Pydantic v2）与 SQLAlchemy 2.x**。你会完成一个包含基础鉴权、同步数据库访问和测试的教学项目；生产环境仍需继续补齐数据库迁移、完整认证授权、可观测性、容量规划与发布治理。
+本文定位是**完成前五篇零基础课程后的综合复习与工程索引**，示例适用于 **Python 3.12+、FastAPI（Pydantic v2）与 SQLAlchemy 2.x**。你会用一个包含基础鉴权、同步数据库访问和测试的教学项目串联核心知识；生产环境仍需继续补齐数据库迁移、完整认证授权、可观测性、容量规划与发布治理。
 
 ---
 
