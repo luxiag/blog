@@ -1,82 +1,132 @@
 "use client";
 
-import React from 'react';
+import React, { useEffect } from 'react';
 
 interface StepsProps {
   children: React.ReactNode;
 }
 
-function getHeadingInfo(child: React.ReactNode): { level: number; text: string } | null {
-  if (!React.isValidElement(child)) return null;
-
-  const type = child.type;
-  const typeStr = typeof type === 'string' ? type : (type as any).displayName || (type as any).name || '';
-
-  const match = typeStr.match(/^h([2-6])$/i);
-  if (!match) return null;
-
-  let text = '';
-  const extract = (node: React.ReactNode): void => {
-    if (typeof node === 'string') text += node;
-    else if (typeof node === 'number') text += String(node);
-    else if (Array.isArray(node)) node.forEach(extract);
-    else if (React.isValidElement(node) && (node.props as Record<string, unknown>)?.children) extract((node.props as Record<string, unknown>).children as React.ReactNode);
-  };
-  extract((child.props as any)?.children);
-
-  return { level: parseInt(match[1]), text };
-}
+type HeadingElement = React.ReactElement<{
+  children?: React.ReactNode;
+  className?: string;
+}>;
 
 interface StepBlock {
-  index: number;
-  heading: React.ReactElement;
-  headingInfo: { level: number; text: string };
+  heading: HeadingElement;
   content: React.ReactNode[];
 }
 
-export default function Steps({ children }: StepsProps) {
-  const childArray = React.Children.toArray(children);
+function flattenTransparentChildren(children: React.ReactNode): React.ReactNode[] {
+  const result: React.ReactNode[] = [];
 
+  React.Children.forEach(children, (child) => {
+    if (child === null || child === undefined || typeof child === 'boolean') return;
+
+    if (React.isValidElement(child) && child.type === React.Fragment) {
+      const fragmentProps = child.props as { children?: React.ReactNode };
+      result.push(...flattenTransparentChildren(fragmentProps.children));
+    } else {
+      result.push(child);
+    }
+  });
+
+  return result;
+}
+
+function getHeadingLevel(child: React.ReactNode): number | null {
+  if (!React.isValidElement(child)) return null;
+  if (typeof child.type === 'string') {
+    const match = child.type.match(/^h([2-6])$/i);
+    return match ? Number(match[1]) : null;
+  }
+
+  const component = child.type as {
+    displayName?: string;
+    name?: string;
+    mdxHeadingLevel?: number;
+  };
+  if (component.mdxHeadingLevel) return component.mdxHeadingLevel;
+
+  const match = (component.displayName || component.name || '').match(/^h([2-6])$/i);
+  return match ? Number(match[1]) : null;
+}
+
+function hasVisibleContent(nodes: React.ReactNode[]): boolean {
+  return nodes.some((node) => typeof node !== 'string' || node.trim() !== '');
+}
+
+export default function Steps({ children }: StepsProps) {
+  const childArray = flattenTransparentChildren(children);
+  const firstHeading = childArray
+    .map((child) => ({ child, level: getHeadingLevel(child) }))
+    .find(({ level }) => level !== null);
+  const stepLevel = firstHeading?.level ?? null;
+  const introduction: React.ReactNode[] = [];
   const steps: StepBlock[] = [];
   let currentStep: StepBlock | null = null;
 
-  childArray.forEach((child, i) => {
-    const headingInfo = getHeadingInfo(child);
-    if (headingInfo) {
+  for (const child of childArray) {
+    const headingLevel = getHeadingLevel(child);
+    if (stepLevel !== null && headingLevel === stepLevel) {
       currentStep = {
-        index: steps.length + 1,
-        heading: child as React.ReactElement,
-        headingInfo,
+        heading: child as HeadingElement,
         content: [],
       };
       steps.push(currentStep);
     } else if (currentStep) {
       currentStep.content.push(child);
+    } else {
+      introduction.push(child);
     }
-  });
+  }
+
+  const hasIntroduction = hasVisibleContent(introduction);
+  const emptyStepCount = steps.filter((step) => !hasVisibleContent(step.content)).length;
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'production') return;
+    if (childArray.length > 0 && stepLevel === null) {
+      console.warn('Steps 未找到步骤标题，将原样显示内容。请使用直接同级的 Markdown 标题。');
+    }
+    if (hasIntroduction) {
+      console.warn('Steps 的第一个步骤标题前存在内容，该内容将作为步骤说明显示。');
+    }
+    if (emptyStepCount > 0) {
+      console.warn(`Steps 包含 ${emptyStepCount} 个没有正文内容的步骤。`);
+    }
+  }, [childArray.length, emptyStepCount, hasIntroduction, stepLevel]);
+
+  if (childArray.length === 0) return null;
+  if (stepLevel === null) {
+    return <div className="steps-fallback my-8">{childArray}</div>;
+  }
 
   return (
-    <div className="my-8 space-y-4">
-      {steps.map((step) => (
-        <div
-          key={step.index}
-          className="relative rounded-xl border border-neutral-200/80 dark:border-neutral-700/60 overflow-hidden bg-white dark:bg-neutral-900/50"
-        >
-          <div className="flex items-center gap-3 px-4 py-3 bg-neutral-50/80 dark:bg-neutral-800/40 border-b border-neutral-200/60 dark:border-neutral-700/40">
-            <span className="shrink-0 w-7 h-7 rounded-full bg-blue-700 text-white flex items-center justify-center text-[0.6875rem] font-mono font-bold">
-              {step.index}
-            </span>
-            <span className="text-[0.9375rem] font-semibold text-neutral-800 dark:text-neutral-200 font-sans">
-              {(step.heading.props as Record<string, unknown>).children as React.ReactNode}
-            </span>
-          </div>
-          {step.content.length > 0 && (
-            <div className="px-5 py-4 [&_pre]:my-0 font-sans text-neutral-800 dark:text-neutral-300 steps-content">
-              {step.content}
-            </div>
-          )}
-        </div>
-      ))}
+    <div className="steps-timeline-wrap my-8">
+      {hasIntroduction && <div className="steps-intro">{introduction}</div>}
+      <ol className="steps-timeline" role="list">
+        {steps.map((step, index) => {
+          const originalClassName = step.heading.props.className;
+          const heading = React.cloneElement(step.heading, {
+            className: [originalClassName, 'steps-heading'].filter(Boolean).join(' '),
+          });
+
+          return (
+            <li className="steps-item" key={step.heading.key ?? index}>
+              <span className="steps-marker" aria-hidden="true">
+                {index + 1}
+              </span>
+              <div className="steps-main">
+                <span className="sr-only">步骤 {index + 1}，共 {steps.length} 步。</span>
+                {heading}
+                {hasVisibleContent(step.content) && (
+                  <div className="steps-body">{step.content}</div>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }

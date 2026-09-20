@@ -320,12 +320,120 @@ html {
   border: 0 !important;
 }
 
-.steps-content pre {
-  border: 1px solid var(--color-gray-200) !important;
-  border-radius: 6px !important;
-  background: var(--hljs-bg) !important;
-  margin: 0 !important;
-  padding: 1rem !important;
+.prose .steps-timeline-wrap {
+  margin: 2rem 0;
+  min-width: 0;
+}
+
+.prose .steps-intro {
+  min-width: 0;
+  margin-bottom: 1.5rem;
+}
+
+.prose ol.steps-timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prose .steps-timeline > .steps-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.875rem minmax(0, 1fr);
+  column-gap: 0.875rem;
+  margin: 0;
+  padding: 0 0 2rem;
+}
+
+.prose .steps-timeline > .steps-item:last-child {
+  padding-bottom: 0;
+}
+
+.prose .steps-timeline > .steps-item:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  top: 2rem;
+  bottom: 0.25rem;
+  left: 0.90625rem;
+  width: 1px;
+  background: var(--color-gray-300);
+}
+
+.steps-marker {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 1.875rem;
+  height: 1.875rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: var(--color-blue-700);
+  color: white;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.prose .steps-main,
+.prose .steps-body {
+  min-width: 0;
+}
+
+.prose :is(h2, h3, h4, h5, h6).steps-heading {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--color-gray-1000);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.5;
+  scroll-margin-top: 4.5rem;
+}
+
+.prose .steps-body {
+  margin-top: 0.625rem;
+  color: var(--color-gray-900);
+}
+
+.prose .steps-body > :first-child {
+  margin-top: 0 !important;
+}
+
+.prose .steps-body > :last-child {
+  margin-bottom: 0 !important;
+}
+
+@media (max-width: 639px) {
+  .prose .steps-timeline > .steps-item {
+    grid-template-columns: 1.625rem minmax(0, 1fr);
+    column-gap: 0.625rem;
+    padding-bottom: 1.5rem;
+  }
+
+  .prose .steps-timeline > .steps-item:not(:last-child)::before {
+    top: 1.75rem;
+    left: 0.78125rem;
+  }
+
+  .steps-marker {
+    width: 1.625rem;
+    height: 1.625rem;
+    font-size: 0.625rem;
+  }
+}
+
+@media (forced-colors: active) {
+  .steps-marker {
+    border: 1px solid currentColor;
+  }
+
+  .prose .steps-timeline > .steps-item:not(:last-child)::before {
+    background: currentColor;
+  }
 }
 
 h1, h2, h3, h4, h5, h6 {
