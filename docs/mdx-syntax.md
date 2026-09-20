@@ -178,7 +178,7 @@ return `/blog/posts/${category}/images/${imageName}`;
 </CodeTabs>
 ```
 
-每个 Tab 内容用 `---` 分隔，`items` 数组定义 Tab 标签名。每个 Tab 内的代码块使用标准 Markdown 代码语法。
+每个 Tab 内容用独占一行的 `---` 分隔，`items` 数组定义 Tab 标签名。`CodeTabs` 会将 MDX 生成的 `<hr>` 分隔节点转换为内容组，因此 `items` 数量必须与内容组数量一致；不一致时开发环境会输出中文警告，并禁用缺少内容的标签。每个内容组可包含一个或多个 Markdown 块。
 
 ### 9. 代码行注解（CodeAnnotation）
 

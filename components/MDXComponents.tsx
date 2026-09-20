@@ -404,9 +404,6 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     li: ({ children, ...props }: React.ComponentPropsWithoutRef<'li'>) => (
       <li {...props}>{children}</li>
     ),
-    hr: () => (
-      <hr />
-    ),
     strong: ({ children, ...props }: React.ComponentPropsWithoutRef<'strong'>) => (
       <strong {...props}>{children}</strong>
     ),
