@@ -121,6 +121,57 @@ function endsWithClose(node: any): boolean {
   return typeof textNode.value === 'string' && textNode.value.trimEnd().endsWith('\n:::');
 }
 
+function splitOpeningLine(children: any[]): {
+  openingChildren: any[];
+  contentChildren: any[];
+  hasLineBreak: boolean;
+} {
+  const openingChildren: any[] = [];
+  const contentChildren: any[] = [];
+  let hasLineBreak = false;
+
+  for (const child of children) {
+    if (hasLineBreak) {
+      contentChildren.push({ ...child });
+      continue;
+    }
+
+    if (child.type === 'text' && typeof child.value === 'string') {
+      const newlineIndex = child.value.indexOf('\n');
+      if (newlineIndex !== -1) {
+        const openingValue = child.value.slice(0, newlineIndex);
+        const contentValue = child.value.slice(newlineIndex + 1);
+        if (openingValue) openingChildren.push({ ...child, value: openingValue });
+        if (contentValue) contentChildren.push({ ...child, value: contentValue });
+        hasLineBreak = true;
+        continue;
+      }
+    }
+
+    openingChildren.push({ ...child });
+  }
+
+  return { openingChildren, contentChildren, hasLineBreak };
+}
+
+function extractTitleChildren(openingChildren: any[]): any[] {
+  const titleChildren = openingChildren.map((child) => ({ ...child }));
+  const firstText = titleChildren.find((child) => child.type === 'text' && typeof child.value === 'string');
+
+  if (firstText) {
+    firstText.value = firstText.value.replace(/^:::\s*\w+(?:[ \t]+)?/, '');
+  }
+
+  const lastText = [...titleChildren]
+    .reverse()
+    .find((child) => child.type === 'text' && typeof child.value === 'string');
+  if (lastText) {
+    lastText.value = lastText.value.replace(/\r$/, '');
+  }
+
+  return titleChildren.filter((child) => !(child.type === 'text' && child.value === ''));
+}
+
 function plugin(config: AdmonitionConfig = {}) {
   const keywords = config.keywords || defaultKeywords;
   const format = config.format ?? 'mdx';
@@ -128,50 +179,45 @@ function plugin(config: AdmonitionConfig = {}) {
   return (tree: any) => {
     visit(tree, (node: any, index: number | undefined, parent: any) => {
       if (node.type !== 'paragraph' || index === undefined || !parent) return;
+      if (!Array.isArray(node.children) || node.children.length === 0) return;
 
-      const text = node.children?.[0]?.value;
-      if (typeof text !== 'string') return;
-      if (!text.startsWith(':::')) return;
+      const firstChildValue = node.children[0]?.value;
+      if (typeof firstChildValue !== 'string' || !firstChildValue.startsWith(':::')) return;
 
-      // When there is no blank line between the opening marker and the closing :::,
-      // remark-parse merges them into ONE paragraph (e.g. ":::note\n:::").
-      // Match only the first line so we never capture ":::" as the title.
-      const newlinePos = text.indexOf('\n');
-      const firstLine  = newlinePos === -1 ? text : text.slice(0, newlinePos);
-
+      // Inline Markdown in a custom title splits the opening line into multiple
+      // mdast children. Split at the first real line break, then match against the
+      // combined text while retaining the original title nodes for rendering.
+      const { openingChildren, contentChildren: openerContentChildren, hasLineBreak } =
+        splitOpeningLine(node.children);
+      const firstLine = extractFullText({ children: openingChildren });
       const match = firstLine.match(/^:::\s*(\w+)(?:\s+(.+))?\r?$/);
       if (!match) return;
 
       const [, type, title] = match;
       const admonitionType = type.toLowerCase() as AdmonitionType;
-
       if (!keywords.includes(admonitionType)) return;
 
       const displayTitle = title || admonitionTitles[admonitionType] || type;
-      const styleClass    = admonitionStyles[admonitionType]     || admonitionStyles.info;
-      const titleColor    = admonitionTitleColors[admonitionType] || 'text-gray-700';
+      const parsedTitleChildren = title ? extractTitleChildren(openingChildren) : [];
+      const titleChildren = parsedTitleChildren.length > 0
+        ? parsedTitleChildren
+        : [{ type: 'text', value: displayTitle }];
+      const styleClass = admonitionStyles[admonitionType] || admonitionStyles.info;
+      const titleColor = admonitionTitleColors[admonitionType] || 'text-gray-700';
 
-      // ── Detect inline-close ──────────────────────────────────────────────────
-      // The closing ::: may be in the same paragraph node when there is no blank
-      // line between markers. remark-parse may split paragraph children when
-      // inline formatting (bold, code, etc.) is present, so:
-      //   • children[0].value  → starts with ":::type\n…"
-      //   • children[last].value → ends with "…\n:::"
-      const restOfText = newlinePos === -1 ? '' : text.slice(newlinePos + 1);
-      const lastChild = node.children?.[node.children.length - 1];
+      // The closing marker can be merged into the opening paragraph when no blank
+      // lines separate the marker, title and body.
+      const openerRest = extractFullText({ children: openerContentChildren });
+      const lastChild = openerContentChildren[openerContentChildren.length - 1];
       const lastChildValue = typeof lastChild?.value === 'string' ? lastChild.value : '';
-      const isInlineClose = (newlinePos !== -1 && restOfText.trim() === ':::') ||
-                            lastChildValue.trimEnd().endsWith('\n:::');
+      const isInlineClose = (hasLineBreak && openerRest.trim() === ':::') ||
+        lastChildValue.trimEnd().endsWith('\n:::');
 
-      // ── Find closing marker ──────────────────────────────────────────────────
       const siblings = parent.children;
       let endIndex: number;
-      // When the close is embedded in a sibling (e.g. a list whose last item ends
-      // with \n:::), we need to strip the trailing marker from that sibling.
       let closingEmbedded = false;
 
       if (isInlineClose) {
-        // The closing ::: is inside this paragraph; no sibling node to consume.
         endIndex = index;
       } else {
         endIndex = index + 1;
@@ -180,27 +226,18 @@ function plugin(config: AdmonitionConfig = {}) {
         while (endIndex < siblings.length && depth > 0) {
           const sibling = siblings[endIndex];
           const siblingText = extractFullText(sibling);
+          const trimmedText = siblingText.trim();
 
-          if (typeof siblingText === 'string') {
-            const trimmedText = siblingText.trim();
-
-            if (trimmedText === ':::') {
-              // A standalone closing paragraph — the usual case
-              depth--;
-            } else if (trimmedText.startsWith(':::')) {
-              // Could be a nested opening marker
-              const siblingMatch = trimmedText.match(/^:::\s*(\w+)/);
-              if (siblingMatch && keywords.includes(siblingMatch[1].toLowerCase() as AdmonitionType)) {
-                depth++;
-              }
-            } else if (trimmedText.endsWith('\n:::') || endsWithClose(sibling)) {
-              // The closing ::: is embedded at the end of a block element (e.g. a list).
-              // Treat it as a closing marker for the current depth.
-              depth--;
-              if (depth === 0) {
-                closingEmbedded = true;
-              }
+          if (trimmedText === ':::') {
+            depth--;
+          } else if (trimmedText.startsWith(':::')) {
+            const siblingMatch = trimmedText.match(/^:::\s*(\w+)/);
+            if (siblingMatch && keywords.includes(siblingMatch[1].toLowerCase() as AdmonitionType)) {
+              depth++;
             }
+          } else if (trimmedText.endsWith('\n:::') || endsWithClose(sibling)) {
+            depth--;
+            if (depth === 0) closingEmbedded = true;
           }
 
           if (depth === 0) break;
@@ -208,77 +245,40 @@ function plugin(config: AdmonitionConfig = {}) {
         }
       }
 
-      // ── Extract content nodes ────────────────────────────────────────────────
       let contentNodes: any[];
 
-      if (isInlineClose && node.children) {
-        // The entire admonition is in a single paragraph node.
-        // Strip :::type\n from the first child and \n::: from the last child,
-        // then wrap remaining children in a paragraph for correct rendering.
-        const innerChildren = node.children.map((child: any, i: number) => {
-          const cloned = { ...child };
-          if (i === 0 && typeof cloned.value === 'string') {
-            // Strip the ":::type\n" prefix from the first text child
-            const nlIdx = cloned.value.indexOf('\n');
-            cloned.value = nlIdx === -1 ? '' : cloned.value.slice(nlIdx + 1);
-          }
-          if (i === node.children.length - 1 && typeof cloned.value === 'string') {
-            // Strip the trailing "\n:::" from the last text child
-            const trailMatch = cloned.value.match(/^([\s\S]*)\n:::[\s]*$/);
-            if (trailMatch) {
-              cloned.value = trailMatch[1];
-            }
-          }
-          return cloned;
-        }).filter((child: any) => !(child.type === 'text' && child.value === ''));
-
-        contentNodes = innerChildren.length > 0
-          ? [{ type: 'paragraph', children: innerChildren }]
-          : [];
+      if (isInlineClose) {
+        if (openerRest.trim() === ':::') {
+          contentNodes = [];
+        } else {
+          const paragraph = {
+            type: 'paragraph',
+            children: openerContentChildren.map((child) => ({ ...child })),
+          };
+          stripTrailingClose(paragraph);
+          contentNodes = paragraph.children.length > 0 ? [paragraph] : [];
+        }
       } else {
-        // Content is in sibling nodes between opening and closing markers.
-        // The opening paragraph needs its :::type\n prefix removed from first child.
-        // When the closing ::: is embedded inside a sibling (e.g. a list whose
-        // last item lazily absorbed the ::: line), that sibling at `endIndex` IS
-        // content and must be included in the slice; otherwise it is a standalone
-        // closing marker and should be excluded.
         const sliceEnd = closingEmbedded ? endIndex + 1 : endIndex;
         const rawContent = siblings.slice(index + 1, sliceEnd);
 
-        // If the closing ::: was embedded in the last sibling (e.g. a list),
-        // strip it from that sibling so it doesn't appear in the rendered output.
         if (closingEmbedded && rawContent.length > 0) {
-          const lastSibling = rawContent[rawContent.length - 1];
-          stripTrailingClose(lastSibling);
+          stripTrailingClose(rawContent[rawContent.length - 1]);
         }
 
-        // Strip the :::type\n opener text from the opening paragraph's first child.
-        // The opening paragraph node is `node` itself; its first child starts with
-        // ":::type\n...rest". We need to keep "...rest" as a separate paragraph.
-        const openerRest = newlinePos === -1 ? '' : text.slice(newlinePos + 1);
-        if (openerRest.trim()) {
-          // There's content on the same line(s) as the opening marker
-          const openerChildren = node.children.map((child: any, i: number) => {
-            const cloned = { ...child };
-            if (i === 0 && typeof cloned.value === 'string') {
-              const nlIdx = cloned.value.indexOf('\n');
-              cloned.value = nlIdx === -1 ? '' : cloned.value.slice(nlIdx + 1);
-            }
-            return cloned;
-          }).filter((child: any) => !(child.type === 'text' && child.value === ''));
-
-          contentNodes = openerChildren.length > 0
-            ? [{ type: 'paragraph', children: openerChildren }, ...rawContent]
-            : rawContent;
-        } else {
-          contentNodes = rawContent;
-        }
+        const hasOpenerContent = openerContentChildren.some((child) =>
+          child.type !== 'text' || child.value.trim() !== '',
+        );
+        contentNodes = hasOpenerContent
+          ? [{ type: 'paragraph', children: openerContentChildren }, ...rawContent]
+          : rawContent;
       }
 
-      // ── Build replacement nodes ──────────────────────────────────────────────
       let replacementNodes: any[];
 
       if (admonitionType === 'details') {
+        // Details titles are stored in data attributes because CSS renders their
+        // summary label; keep their existing plain-text title|hint contract.
         const titleParts = displayTitle.split('|');
         const detailsTitle = titleParts[0].trim();
         const detailsHint = titleParts.length > 1 ? titleParts.slice(1).join('|').trim() : '';
@@ -296,61 +296,48 @@ function plugin(config: AdmonitionConfig = {}) {
           if (detailsHint) {
             attrs.push({ type: 'mdxJsxAttribute', name: 'data-details-hint', value: detailsHint });
           }
-          const detailsNode = {
+          replacementNodes = [{
             type: 'mdxJsxFlowElement',
             name: 'details',
             attributes: attrs,
             children: [...contentNodes],
-          };
-          replacementNodes = [detailsNode];
+          }];
         }
       } else if (format === 'html') {
-        // ── react-markdown path ────────────────────────────────────────────────
-        const outerClass = `${styleClass} rounded-r p-4`;
-        const titleClass = `${titleColor}`;
+        const outerClass = `${styleClass} rounded p-4`;
         replacementNodes = [
-          {
-            type: 'html',
-            value: `<div class="${outerClass}"><div class="${titleClass}">${escapeHtml(displayTitle)}</div>`,
-          },
+          { type: 'html', value: `<div class="${outerClass}"><div class="${titleColor}">` },
+          ...titleChildren,
+          { type: 'html', value: '</div>' },
           ...contentNodes,
           { type: 'html', value: '</div>' },
         ];
       } else {
-        // ── @mdx-js/mdx compile path ───────────────────────────────────────────
-        const admonitionNode = {
+        replacementNodes = [{
           type: 'mdxJsxFlowElement',
           name: 'div',
-          attributes: [
-            {
-              type: 'mdxJsxAttribute',
-              name: 'className',
-              value: `${styleClass} rounded-r p-4`,
-            },
-          ],
+          attributes: [{
+            type: 'mdxJsxAttribute',
+            name: 'className',
+            value: `${styleClass} rounded p-4`,
+          }],
           children: [
             {
               type: 'mdxJsxFlowElement',
               name: 'div',
-              attributes: [
-                {
-                  type: 'mdxJsxAttribute',
-                  name: 'className',
-                  value: titleColor,
-                },
-              ],
-              children: [{ type: 'text', value: displayTitle }],
+              attributes: [{
+                type: 'mdxJsxAttribute',
+                name: 'className',
+                value: titleColor,
+              }],
+              children: titleChildren,
             },
             ...contentNodes,
           ],
-        };
-        replacementNodes = [admonitionNode];
+        }];
       }
 
       parent.children.splice(index, endIndex - index + 1, ...replacementNodes);
-
-      // Restart visitor from current index so the first replacement node
-      // (html or mdxJsxFlowElement) is skipped by the paragraph guard above.
       return index;
     });
   };
