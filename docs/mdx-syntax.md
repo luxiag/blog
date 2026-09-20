@@ -297,8 +297,8 @@ npm run dev
 
 `components/CodeBlock.tsx` 是所有代码块的统一容器，特性：
 
-- 使用 `lowlight`（基于 highlight.js）在客户端异步高亮，支持所有语言
-- 超过 **15 行**的代码块默认折叠，显示渐变蒙版，提供"展开全部 (N 行)"按钮
+- 使用 `lowlight`（基于 highlight.js）在客户端高亮已注册语言，未注册语言按纯文本显示
+- 高亮结果以 React 节点渲染，源码中的 `<h1>`、`<script>` 等 HTML 字符串只按代码文本展示，不会创建真实 DOM
 - 语言别名映射（`redis` → `bash`，`cs` → `csharp`，`yml` → `yaml`）
 - `mermaid` 语言块走 `MermaidExcalidraw` 渲染路径
 

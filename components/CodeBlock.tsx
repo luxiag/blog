@@ -69,21 +69,39 @@ function resolveLanguage(className?: string) {
   return lowlight.registered(normalizedLanguage) ? normalizedLanguage : 'plaintext';
 }
 
-function nodeToHtml(node: any): string {
-  if (node.type === 'text') return node.value;
-  if (node.type === 'element') {
-    const cls = node.properties?.className?.join(' ') || '';
-    const children = node.children.map((child: any) => nodeToHtml(child)).join('');
-    return `<span class="${cls}">${children}</span>`;
-  }
-  return '';
+type HighlightNode = {
+  type: string;
+  value?: string;
+  tagName?: string;
+  properties?: {
+    className?: string | string[];
+  };
+  children?: HighlightNode[];
+};
+
+function renderHighlightedNode(node: HighlightNode, key: string): React.ReactNode {
+  if (node.type === 'text') return node.value || '';
+  if (node.type !== 'element') return null;
+
+  const rawClassName = node.properties?.className;
+  const className = Array.isArray(rawClassName) ? rawClassName.join(' ') : rawClassName;
+  const children = (node.children || []).map((child, index) =>
+    renderHighlightedNode(child, `${key}-${index}`),
+  );
+
+  return React.createElement(node.tagName || 'span', { key, className }, children);
 }
 
-function highlightCode(language: string, code: string): string {
+function highlightCode(language: string, code: string): React.ReactNode {
+  // Return source as a React text node on every non-highlighted path. React will
+  // escape HTML-like code instead of allowing it to become real DOM.
   if (language === 'mermaid' || language === 'plaintext' || !code) return code;
+
   try {
     const result = lowlight.highlight(language, code);
-    return result.children.map((node: any) => nodeToHtml(node)).join('');
+    return (result.children as HighlightNode[]).map((node, index) =>
+      renderHighlightedNode(node, String(index)),
+    );
   } catch {
     return code;
   }
@@ -128,23 +146,17 @@ export default function CodeBlock({ className, codeContent }: {
                 查看预览
               </button>
               <pre className="p-5 overflow-x-auto m-0">
-                <code
-                  className={className}
-                  dangerouslySetInnerHTML={{ __html: highlightedCode || codeString }}
-                />
+                <code className={className}>{highlightedCode}</code>
               </pre>
             </div>
           )}
         </>
       ) : (
-          <div className="border border-gray-200 dark:border-gray-200 bg-background rounded-md overflow-y-auto max-h-[400px]">
-            <pre className="p-5 overflow-x-auto m-0">
-              <code
-                className={className}
-                dangerouslySetInnerHTML={{ __html: highlightedCode || codeString }}
-              />
-            </pre>
-          </div>
+        <div className="border border-gray-200 dark:border-gray-200 bg-background rounded-md overflow-y-auto max-h-[400px]">
+          <pre className="p-5 overflow-x-auto m-0">
+            <code className={className}>{highlightedCode}</code>
+          </pre>
+        </div>
       )}
     </div>
   );
