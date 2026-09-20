@@ -435,7 +435,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
       }
 
       // 内部链接：修正 /posts/category/slug → /posts/slug（slug 是路由的唯一标识）
-      let resolvedHref = href || '/';
+      const resolvedHref = href || '/';
 
       // 内部链接：使用 Next.js 的 Link 组件，自动处理 basePath
       return (
@@ -599,7 +599,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     DiffCompare,
     Glossary,
     ProgressIndicator,
-  }), [resolveImagePath, lightbox]);
+  }), [resolveImagePath, lightbox, handleImageClick, handleVideoClick, extractText]);
 
   if (isMdxCompiled && CompiledMDX) {
     const MDXComponent = CompiledMDX as React.ComponentType<{ components: Record<string, React.ComponentType> }>;
