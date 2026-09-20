@@ -2,14 +2,15 @@
 
 ```bash
 # 开发
-pnpm dev            # 先执行 scan-pdfs，再启动 next dev
-pnpm build          # 先执行 scan-pdfs + copy-images，再静态导出 (next build)
+pnpm dev            # 先生成实际使用的高亮语言并执行 scan-pdfs，再启动 next dev
+pnpm build          # 先生成高亮语言、执行 scan-pdfs + copy-images，再静态导出
 pnpm lint           # eslint --ext .ts,.tsx,.js,.jsx
 
 # 单独脚本
-pnpm copy:images    # 把 posts/*/images/ 下的图片复制到 public/posts/*/images/
-pnpm scan-pdfs      # 扫描 public/pdf/ 目录，生成 public/json/pdf-list.json
-pnpm generate-posts # tsx scripts/generate-posts-json.ts（生成 posts JSON 索引）
+pnpm generate:lowlight # 扫描 posts 的代码围栏，生成 lowlight 静态语言注册模块
+pnpm copy:images       # 把 posts/*/images/ 下的图片复制到 public/posts/*/images/
+pnpm scan-pdfs        # 扫描 public/pdf/ 目录，生成 public/json/pdf-list.json
+pnpm generate-posts   # tsx scripts/generate-posts-json.ts（生成 posts JSON 索引）
 ```
 
 没有测试框架，无 `test` 命令。
