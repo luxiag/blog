@@ -2,29 +2,10 @@
 
 import React, { useState, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { createLowlight } from 'lowlight';
-import javascript from 'highlight.js/lib/languages/javascript';
-import typescript from 'highlight.js/lib/languages/typescript';
-import python from 'highlight.js/lib/languages/python';
-import css from 'highlight.js/lib/languages/css';
-import scss from 'highlight.js/lib/languages/scss';
-import xml from 'highlight.js/lib/languages/xml';
-import json from 'highlight.js/lib/languages/json';
-import yaml from 'highlight.js/lib/languages/yaml';
-import bash from 'highlight.js/lib/languages/bash';
-import sql from 'highlight.js/lib/languages/sql';
-import java from 'highlight.js/lib/languages/java';
-import go from 'highlight.js/lib/languages/go';
-import rust from 'highlight.js/lib/languages/rust';
-import cpp from 'highlight.js/lib/languages/cpp';
-import csharp from 'highlight.js/lib/languages/csharp';
-import php from 'highlight.js/lib/languages/php';
-import ruby from 'highlight.js/lib/languages/ruby';
-import swift from 'highlight.js/lib/languages/swift';
-import kotlin from 'highlight.js/lib/languages/kotlin';
-import diff from 'highlight.js/lib/languages/diff';
-import markdown from 'highlight.js/lib/languages/markdown';
-import plaintext from 'highlight.js/lib/languages/plaintext';
+import {
+  generatedLanguageMap,
+  generatedLowlight as lowlight,
+} from '@/lib/generated/lowlight-languages';
 
 const MermaidExcalidraw = dynamic(
   () => import('./MermaidDiagram').then((mod) => mod.MermaidDiagram),
@@ -34,38 +15,12 @@ const MermaidExcalidraw = dynamic(
   }
 );
 
-const lowlight = createLowlight({
-  javascript, typescript, python, css, scss, xml, json, yaml,
-  bash, sql, java, go, rust, cpp, csharp, php, ruby, swift, kotlin,
-  diff, markdown, plaintext,
-  js: javascript, ts: typescript, py: python, rb: ruby, kt: kotlin,
-  'c++': cpp, 'c#': csharp, sh: bash, shell: bash, yml: yaml,
-});
-
-const LANGUAGE_ALIASES: Record<string, string> = {
-  redis: 'bash',
-  shell: 'bash',
-  sh: 'bash',
-  cs: 'csharp',
-  yml: 'yaml',
-  plain: 'plaintext',
-  text: 'plaintext',
-  mdx: 'javascript',
-  jsx: 'javascript',
-  tsx: 'typescript',
-  html: 'xml',
-  svg: 'xml',
-};
-
 function resolveLanguage(className?: string) {
-  const match = /language-(\w+)/.exec(className || '');
-  const rawLanguage = match ? match[1].toLowerCase() : 'plaintext';
+  const match = /\blanguage-([^\s]+)/.exec(className || '');
+  const rawLanguage = match ? match[1].trim().toLowerCase() : 'plaintext';
+  const normalizedLanguage = generatedLanguageMap[rawLanguage] || 'plaintext';
 
-  if (rawLanguage === 'mermaid') {
-    return 'mermaid';
-  }
-
-  const normalizedLanguage = LANGUAGE_ALIASES[rawLanguage] || rawLanguage;
+  if (normalizedLanguage === 'mermaid') return 'mermaid';
   return lowlight.registered(normalizedLanguage) ? normalizedLanguage : 'plaintext';
 }
 

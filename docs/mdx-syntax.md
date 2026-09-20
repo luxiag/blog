@@ -297,10 +297,12 @@ npm run dev
 
 `components/CodeBlock.tsx` 是所有代码块的统一容器，特性：
 
-- 使用 `lowlight`（基于 highlight.js）在客户端高亮已注册语言，未注册语言按纯文本显示
+- 构建前由 `scripts/generate-lowlight-languages.js` 扫描 `posts/**/*.md(x)` 的代码围栏，只静态注册文章实际使用且 highlight.js 支持的语言
+- 围栏标签会自动解析官方别名（如 `ps1` → `powershell`、`md` → `markdown`）；未支持的语言自动按纯文本显示，并在生成日志中列出来源
 - 高亮结果以 React 节点渲染，源码中的 `<h1>`、`<script>` 等 HTML 字符串只按代码文本展示，不会创建真实 DOM
-- 语言别名映射（`redis` → `bash`，`cs` → `csharp`，`yml` → `yaml`）
 - `mermaid` 语言块走 `MermaidExcalidraw` 渲染路径
+
+生成文件位于 `lib/generated/lowlight-languages.ts`，不要手动修改。运行 `pnpm dev`、`pnpm build` 或 `pnpm export` 时会自动重新生成；开发服务器运行期间新增语言后，需要重启开发服务器或执行一次 `pnpm generate:lowlight`。
 
 ```ts
 // components/CodeBlock.tsx
