@@ -381,35 +381,6 @@ function getSeriesPrefix(slug: string): string {
 function orderSeriesPosts(posts: SeriesPost[]): SeriesPost[] {
   if (posts.length <= 1) return posts;
 
-  const groups = new Map<string, SeriesPost[]>();
-  posts.forEach((p) => {
-    const prefix = getSeriesPrefix(p.slug);
-    if (!groups.has(prefix)) groups.set(prefix, []);
-    groups.get(prefix)!.push(p);
-  });
-
-  const chainOrdered = new Map<string, SeriesPost[]>();
-  groups.forEach((groupPosts, prefix) => {
-    chainOrdered.set(prefix, orderChain(groupPosts));
-  });
-
-  const sortedPrefixes = [...chainOrdered.keys()].sort((a, b) => {
-    const minDateA = chainOrdered.get(a)!.reduce((min, p) => p.date < min ? p.date : min, chainOrdered.get(a)![0].date);
-    const minDateB = chainOrdered.get(b)!.reduce((min, p) => p.date < min ? p.date : min, chainOrdered.get(b)![0].date);
-    return minDateA.localeCompare(minDateB);
-  });
-
-  const result: SeriesPost[] = [];
-  sortedPrefixes.forEach((prefix) => {
-    result.push(...chainOrdered.get(prefix)!);
-  });
-
-  return result;
-}
-
-function orderChain(posts: SeriesPost[]): SeriesPost[] {
-  if (posts.length <= 1) return posts;
-
   const bySlug = new Map<string, SeriesPost>();
   const byNext = new Map<string, string>();
   posts.forEach((p) => {
