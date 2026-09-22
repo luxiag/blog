@@ -7,127 +7,545 @@ tags: ['WebGL', 'Camera', 'Math', 'Optimization']
 
 # 掌镜者：深入理解 3D 摄像机系统
 
-在 3D 世界中，**摄像机 (Camera)** 其实是不存在的。
-我们并没有真的去移动"眼睛"，而是把整个世界往反方向移动了。
+在 3D 世界中，**摄像机其实是不存在的**。
 
-*   **View Matrix (视图矩阵)**：这就是摄像机的本质。如果摄像机向右移动 5 米，视图矩阵就是把所有物体向左移动 5 米。
+你写 `camera.position.set(0, 0, 5)`，看起来像是把摄像机放到了 Z=5 的位置。但 GPU 根本不知道什么是"摄像机"——它只是把所有顶点乘以一个 4×4 矩阵（View Matrix），然后画出来。
 
-今天，我们将解构摄像机背后的数学与逻辑。
+如果摄像机向右移动了 5 米，View Matrix 就把所有物体向左移动 5 米。**移动世界 = 移动眼睛**，两者在数学上完全等价。
 
-## 一、 两种经典的控制模式
+今天，我们从 View Matrix 的构造开始，自己手写一个 lookAt 矩阵，实现 FPS 和轨道相机，最后理解视锥体剔除。
 
-### 1. 轨道相机 (Orbit Controls)
-这是展示模型最常用的方式：相机绕着一个目标点旋转。
-想象摄像机被固定在一个**球体表面**上，它盯着球心。
+前置阅读：[图形学世界观](/posts/glsl/the-big-picture)——你需要理解坐标空间变换的链路
 
-**数学原理：球坐标系 (Spherical Coordinates)**
-我们不直接存相机的 `x, y, z`，而是存：
-*   **Radius (半径)**：离目标的距离。
-*   **Phi (极角)**：与 Y 轴的夹角 (俯仰)。
-*   **Theta (方位角)**：在 XZ 平面上的角度 (旋转)。
+## 一、View Matrix：用数学定义"我在哪，我看哪"
 
-每次渲染时，我们把球坐标转回直角坐标：
-```glsl
-x = radius * sin(phi) * cos(theta);
-y = radius * cos(phi);
-z = radius * sin(phi) * sin(theta);
+View Matrix 把世界从**世界空间**变换到**观察空间**——以相机为原点、相机看向的方向为 -Z 轴的坐标系。
+
+### 1. lookAt 矩阵的构造
+
+要定义一个相机，你只需要三个向量：
+
+| 向量 | 含义 | 例子 |
+|---|---|---|
+| `eye` | 相机在哪（眼睛位置） | (0, 2, 5) |
+| `target` | 相机看哪（注视点） | (0, 0, 0) |
+| `up` | 哪个方向是"上" | (0, 1, 0) |
+
+从这三个向量，我们可以构造出相机的**局部坐标系**：
+
+```javascript
+function lookAt(eye, target, up) {
+  // 第一步：计算相机的前方方向（从眼睛指向目标）
+  const forward = normalize(subtract(target, eye));
+
+  // 第二步：计算相机的右方向（前方向 × 上方向）
+  const right = normalize(cross(forward, up));
+
+  // 第三步：重新计算真正的上方向（右方向 × 前方向）
+  // 为什么不直接用传入的 up？
+  // 因为传入的 up 可能不与 forward 垂直，
+  // 叉乘保证三个轴两两正交
+  const trueUp = cross(right, forward);
+
+  // 第四步：组装 View Matrix
+  // View Matrix = 旋转部分 × 平移部分
+  // 旋转部分：把世界坐标系旋转到相机坐标系
+  // 平移部分：把世界原点平移到相机位置的反方向
+  const viewMatrix = [
+    right[0],     trueUp[0],     -forward[0],    0,
+    right[1],     trueUp[1],     -forward[1],    0,
+    right[2],     trueUp[2],     -forward[2],    0,
+    -dot(right, eye), -dot(trueUp, eye), dot(forward, eye), 1,
+  ];
+
+  return viewMatrix;
+}
 ```
 
-### 2. FPS 相机 (First Person Controls)
-这是游戏的标准配置：WASD 移动，鼠标控制视角。
-这里没有"目标点"，只有"前方"。
+**为什么 forward 取负号？**
 
-**核心逻辑**：
-*   **Pitch (俯仰)**：绕 X 轴旋转（点头）。
-*   **Yaw (偏航)**：绕 Y 轴旋转（摇头）。
-*   **Roll (翻滚)**：绕 Z 轴旋转（歪头，FPS 中很少用）。
+因为 OpenGL/WebGL 的约定是：相机看向 -Z 方向。我们算出的 `forward` 是从眼睛指向目标的（+Z），所以要在矩阵中取负，让观察空间的 -Z 轴对齐注视方向。
 
-## 二、 欧拉角 vs 四元数：旋转的噩梦
+**最后一行的三个 dot 是什么？**
 
-当你尝试写一个 FPS 相机时，你可能会遇到一个恐怖的问题：**万向节死锁 (Gimbal Lock)**。
+它们是平移分量。`-dot(right, eye)` 的意思是：把世界沿相机的右轴移动 `-dot(right,eye)` 的距离——等价于把相机放在了 `eye` 的位置。
 
-### 1. 欧拉角 (Euler Angles)
-这是最直观的旋转表示：`Rotation(x, y, z)`。
-意思是：先绕 X 转，再绕 Y 转，再绕 Z 转。
+### 2. Three.js 中的 lookAt
 
-**死锁问题**：
-当你向上看（绕 X 轴转 90 度）时，你的 Z 轴和 Y 轴重合了。这时候，无论你改变 Y 还是 Z，效果都是一样的（都在转同一个圈）。你失去了一个自由度！
+Three.js 的 Camera 内部就是调用这个逻辑：
 
-### 2. 四元数 (Quaternion)
-这是图形学的救星，也是数学的噩梦。它用 4 个数 `(x, y, z, w)` 来表示旋转。
-你不需要理解它的复数原理，只需要记住它的**好处**：
-*   **没有死锁**。
-*   **插值平滑**：想在两个角度之间平滑过渡（比如摄像机跟随），用 **Slerp (球面线性插值)**，效果比欧拉角完美得多。
+```javascript
+const camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
+camera.position.set(0, 2, 5);   // eye
+camera.lookAt(0, 0, 0);         // target
+// up 默认是 (0, 1, 0)
 
-**实战建议**：在 Three.js 中，尽量使用 `camera.quaternion` 进行旋转，而不是 `camera.rotation`。
+// 内部：自动计算 View Matrix
+// camera.updateMatrixWorld() 会在渲染前被调用
+```
 
-## 三、 视锥体剔除 (Frustum Culling)
+每次你调用 `lookAt()` 或修改 `position`，Three.js 都会重新计算 View Matrix。你在 Vertex Shader 中的 `modelViewMatrix = viewMatrix × modelMatrix`，其中 `viewMatrix` 就是这里算出来的。
 
-渲染管线中最快的优化，就是**不渲染**。
-如果一个物体在你的背后，或者在屏幕外面，为什么还要把它的几万个顶点送给 GPU 呢？
+## 二、轨道相机 (Orbit Camera)
 
-**视锥体 (Frustum)** 就是摄像机能看到的那个"平头金字塔"区域。
+轨道相机是最常见的展示模式：相机绕着一个目标点旋转，就像你绕着雕塑走动观察。
 
-### 原理
-1.  **提取平面**：视锥体由 6 个面组成（上、下、左、右、近、远）。
-2.  **点面测试**：对于场景里的每个物体，我们算一下它是不是在所有 6 个面的"内侧"。
-3.  **包围盒 (Bounding Box)**：为了算得快，我们不用物体的几万个顶点去算，而是给物体套一个简单的盒子（AABB 或 OBB），只要盒子在视锥体内，我们就认为物体可见。
+### 1. 数学原理：球坐标系
 
-*(注：下面的示例演示了视锥体剔除的概念。你可以移动方块，看它什么时候变红——变红代表"被剔除")*
+我们不直接存相机的 `x, y, z`，而是存球坐标的三个参数：
 
-<ShaderPreview title="Frustum Culling Logic" code={`
-varying vec2 vUv;
-uniform float uTime;
+| 参数 | 含义 | 典型值 |
+|---|---|---|
+| `radius` | 离目标的距离 | 5 |
+| `phi` (极角) | 与 Y 轴的夹角（俯仰） | 45° |
+| `theta` (方位角) | 在 XZ 平面上的角度（水平旋转） | 0° |
 
-// 简单的盒子 SDF
-float sdBox(vec2 p, vec2 b) {
-    vec2 d = abs(p)-b;
-    return length(max(d,0.0)) + min(max(d.x,d.y),0.0);
+每次渲染时，球坐标转直角坐标：
+
+```
+x = radius × sin(phi) × cos(theta)
+y = radius × cos(phi)
+z = radius × sin(phi) × sin(theta)
+```
+
+### 2. 实现一个完整的轨道相机
+
+```javascript
+class OrbitCamera {
+  constructor(target = [0, 0, 0], radius = 5, phi = Math.PI / 4, theta = 0) {
+    this.target = target;
+    this.radius = radius;
+    this.phi = phi;       // 俯仰角（0=正上方，PI=正下方）
+    this.theta = theta;   // 水平旋转角
+    this.minRadius = 1;
+    this.maxRadius = 20;
+  }
+
+  // 鼠标拖拽 → 旋转
+  onMouseMove(dx, dy) {
+    this.theta -= dx * 0.01;  // 水平移动 → 水平旋转
+    this.phi -= dy * 0.01;    // 垂直移动 → 俯仰
+
+    // 限制俯仰角，防止翻转
+    this.phi = Math.max(0.1, Math.min(Math.PI - 0.1, this.phi));
+  }
+
+  // 滚轮 → 缩放
+  onWheel(delta) {
+    this.radius += delta * 0.01;
+    this.radius = Math.max(this.minRadius, Math.min(this.maxRadius, this.radius));
+  }
+
+  // 计算相机的世界坐标
+  getPosition() {
+    return [
+      this.target[0] + this.radius * Math.sin(this.phi) * Math.cos(this.theta),
+      this.target[1] + this.radius * Math.cos(this.phi),
+      this.target[2] + this.radius * Math.sin(this.phi) * Math.sin(this.theta),
+    ];
+  }
+
+  // 应用到 Three.js 相机
+  apply(camera) {
+    const pos = this.getPosition();
+    camera.position.set(pos[0], pos[1], pos[2]);
+    camera.lookAt(this.target[0], this.target[1], this.target[2]);
+  }
 }
+```
+
+**为什么 phi 要限制在 [0.1, PI-0.1]？**
+
+当 phi = 0 或 PI 时，相机的 up 方向和 forward 方向平行，`cross(forward, up)` 的结果为零向量——lookAt 矩阵退化。这就是轨道相机的**极点问题**，和地球的经线在南北极汇聚是同一个数学现象。
+
+### 3. 在 Shader 中模拟轨道效果
+
+<ShaderPreview title="Orbit Camera Simulation" code={`
+uniform float uTime;
+varying vec2 vUv;
 
 void main() {
-    vec2 st = vUv * 2.0 - 1.0;
-    
-    // 1. 定义视锥体 (梯形区域)
-    // 简单模拟：x 随 y 变宽
-    float frustumWidth = 0.5 + (st.y + 1.0) * 0.5;
-    float inFrustum = step(abs(st.x), frustumWidth) * step(-0.8, st.y) * step(st.y, 0.8);
-    
-    // 2. 移动的物体 (代表包围盒)
-    vec2 pos = vec2(sin(uTime)*1.5, cos(uTime)*0.5);
-    float boxDist = sdBox(st - pos, vec2(0.1));
-    float isBox = 1.0 - step(0.0, boxDist);
-    
-    // 3. 剔除检测
-    // 实际上是在 CPU 做，这里用 Shader 模拟视觉效果
-    // 判断物体中心是否在视锥体内 (简化版)
-    float boxInFrustumWidth = 0.5 + (pos.y + 1.0) * 0.5;
-    bool isVisible = (abs(pos.x) < boxInFrustumWidth) && (pos.y > -0.8) && (pos.y < 0.8);
-    
-    vec3 color = vec3(0.1);
-    
-    // 绘制视锥体区域 (绿色背景)
-    color += vec3(0.0, 0.2, 0.0) * inFrustum;
-    
-    // 绘制物体
-    if (isBox > 0.5) {
-        // 如果可见就是白色，被剔除就是红色
-        color = isVisible ? vec3(1.0) : vec3(1.0, 0.0, 0.0);
-    }
-    
+    vec2 uv = vUv * 2.0 - 1.0;
+
+    // 模拟轨道相机：theta 随时间变化
+    float theta = uTime * 0.5;
+    float phi = 1.2;  // 固定俯仰角
+
+    // 球面上的相机位置
+    float camX = sin(phi) * cos(theta);
+    float camZ = sin(phi) * sin(theta);
+
+    // 模拟：根据相机位置改变场景的视角
+    // 简单地用相机方向来偏移 UV，模拟旋转效果
+    vec2 offset = vec2(camX, camZ) * 0.3;
+    vec2 uv2 = uv + offset;
+
+    // 画一些参考网格
+    float gridX = step(0.95, fract(uv2.x * 5.0));
+    float gridY = step(0.95, fract(uv2.y * 5.0));
+    float grid = max(gridX, gridY);
+
+    // 画一个圆（代表目标物体）
+    float dist = length(uv2);
+    float sphere = smoothstep(0.3, 0.28, dist);
+
+    vec3 color = vec3(0.05);
+    color += grid * vec3(0.2);
+    color += sphere * vec3(0.3, 0.6, 1.0);
+
+    // 简单的光照
+    float light = max(dot(normalize(vec3(uv2, sqrt(max(0.0, 0.09 - dist*dist)))), normalize(vec3(1.0, 1.0, 1.0))), 0.0);
+    color += sphere * light * 0.5;
+
     gl_FragColor = vec4(color, 1.0);
 }
 `} />
 
+## 三、FPS 相机 (First Person Camera)
+
+FPS 相机是游戏的标准配置：WASD 移动，鼠标控制视角。这里没有"目标点"——只有"前方"。
+
+### 1. 核心概念：方向向量
+
+FPS 相机存储的不是位置+目标，而是**位置+朝向**：
+
+| 向量 | 含义 | 如何更新 |
+|---|---|---|
+| `position` | 相机在哪 | WASD 键沿前进/右方向移动 |
+| `yaw` | 水平转头（偏航） | 鼠标左右移动 |
+| `pitch` | 上下点头（俯仰） | 鼠标上下移动 |
+
+从 yaw 和 pitch 可以算出前方向量：
+
+```javascript
+// 前方向量（相机看向的方向）
+const forward = [
+  Math.sin(yaw) * Math.cos(pitch),
+  Math.sin(pitch),
+  Math.cos(yaw) * Math.cos(pitch),
+];
+```
+
+### 2. 实现一个完整的 FPS 相机
+
+```javascript
+class FPSCamera {
+  constructor(position = [0, 2, 5]) {
+    this.position = position;
+    this.yaw = -Math.PI / 2;   // 初始朝 -Z 方向
+    this.pitch = 0;
+    this.speed = 0.1;
+    this.sensitivity = 0.002;
+    this.maxPitch = Math.PI / 2 - 0.01;  // 防止翻转
+  }
+
+  // 鼠标移动 → 旋转
+  onMouseMove(dx, dy) {
+    this.yaw += dx * this.sensitivity;
+    this.pitch -= dy * this.sensitivity;
+    this.pitch = Math.max(-this.maxPitch, Math.min(this.maxPitch, this.pitch));
+  }
+
+  // 获取前方和右方向量
+  getForward() {
+    return [
+      Math.sin(this.yaw) * Math.cos(this.pitch),
+      Math.sin(this.pitch),
+      Math.cos(this.yaw) * Math.cos(this.pitch),
+    ];
+  }
+
+  getRight() {
+    // 右方向 = 前方向 × 上方向（只在 XZ 平面）
+    return [
+      Math.cos(this.yaw),
+      0,
+      -Math.sin(this.yaw),
+    ];
+  }
+
+  // WASD 移动
+  moveForward() {
+    const f = this.getForward();
+    this.position[0] += f[0] * this.speed;
+    this.position[2] += f[2] * this.speed;  // 不改变 Y（不飞）
+  }
+
+  moveBackward() {
+    const f = this.getForward();
+    this.position[0] -= f[0] * this.speed;
+    this.position[2] -= f[2] * this.speed;
+  }
+
+  moveRight() {
+    const r = this.getRight();
+    this.position[0] += r[0] * this.speed;
+    this.position[2] += r[2] * this.speed;
+  }
+
+  moveLeft() {
+    const r = this.getRight();
+    this.position[0] -= r[0] * this.speed;
+    this.position[2] -= r[2] * this.speed;
+  }
+
+  // 应用到 Three.js 相机
+  apply(camera) {
+    camera.position.set(this.position[0], this.position[1], this.position[2]);
+
+    // lookAt 前方点
+    const f = this.getForward();
+    const target = [
+      this.position[0] + f[0],
+      this.position[1] + f[1],
+      this.position[2] + f[2],
+    ];
+    camera.lookAt(target[0], target[1], target[2]);
+  }
+}
+```
+
+**为什么 moveForward 不修改 Y 坐标？**
+
+这是 FPS 游戏的约定——玩家在地面上行走，不能飞。所以只在 XZ 平面上移动。如果是飞行模拟，就要加上 Y 分量。
+
+### 3. 鼠标锁定 (Pointer Lock)
+
+FPS 相机需要"捕获"鼠标，让它不会移出屏幕：
+
+```javascript
+const canvas = renderer.domElement;
+
+canvas.addEventListener('click', () => {
+  canvas.requestPointerLock();  // 点击画布后锁定鼠标
+});
+
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement === canvas) {
+    document.addEventListener('mousemove', onMouseMove);
+  } else {
+    document.removeEventListener('mousemove', onMouseMove);
+  }
+});
+
+function onMouseMove(e) {
+  camera.onMouseMove(e.movementX, e.movementY);
+}
+```
+
+`movementX/Y` 是相对于上一帧的鼠标偏移量——即使鼠标被锁定在屏幕中心，这个值仍然能正确反映鼠标的移动方向和距离。
+
+## 四、欧拉角 vs 四元数：旋转的噩梦
+
+当你用欧拉角写相机时，你可能会遇到一个恐怖的问题：**万向节死锁 (Gimbal Lock)**。
+
+### 1. 万向节死锁是什么？
+
+欧拉角是依次绕三个轴旋转的。问题在于：**当中间轴旋转 90° 时，第一轴和第三轴的旋转效果完全相同**，你失去了一个自由度。
+
+具体到 FPS 相机：当你抬头 90°（pitch = π/2）时，yaw 和 roll 变成了同一件事——都是绕垂直于屏幕的轴旋转。此时你无法"摇头"了。
+
+```
+正常情况：
+  Pitch（绕 X）→ Yaw（绕 Y）→ Roll（绕 Z）
+  三个独立方向，3 个自由度 ✓
+
+Pitch = 90° 时：
+  Y 轴和 Z 轴重合了！
+  Yaw 和 Roll 都是绕同一个轴转
+  只剩 2 个自由度 ✗
+```
+
+### 2. 四元数：图形学的救星
+
+四元数用 4 个数 `(x, y, z, w)` 表示旋转。你不需要理解它的复数原理，只需要知道它的两个核心优势：
+
+| 特性 | 欧拉角 | 四元数 |
+|---|---|---|
+| 死锁 | 有（pitch = ±90° 时） | 无 |
+| 插值 | 线性插值会走弯路 | Slerp 走最短弧 |
+| 组合旋转 | 矩阵乘法（9 个数） | 四元数乘法（4 个数） |
+| 直觉 | 人能看懂 (x°, y°, z°) | 人看不懂 |
+
+### 3. 实战：用四元数做平滑跟随
+
+最常见的场景：摄像机需要平滑地跟随目标旋转。用欧拉角做线性插值会抖动，用四元数的 Slerp 就很丝滑：
+
+```javascript
+// 目标朝向的四元数
+const targetQuat = new THREE.Quaternion();
+targetQuat.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+
+// 当前朝向
+const currentQuat = camera.quaternion.clone();
+
+// Slerp：球面线性插值
+// t = 0 → currentQuat，t = 1 → targetQuat
+// 0.05 是跟随速度，越小越平滑
+currentQuat.slerp(targetQuat, 0.05);
+
+camera.quaternion.copy(currentQuat);
+```
+
+:::tip Three.js 中的实战建议
+- 旋转相机：用 `camera.quaternion`，不用 `camera.rotation`
+- 设置欧拉角：先算 Euler，再用 `setFromEuler` 转成 Quaternion
+- 平滑跟随：用 `Quaternion.slerp()`
+- 避免直接修改 `camera.rotation` 的 x/y/z，它内部会转成四元数，频繁转换有精度问题
+:::
+
+## 五、视锥体剔除 (Frustum Culling)
+
+渲染管线中最快的优化，就是**不渲染**。
+
+如果一个物体在你背后，或者在屏幕外面，为什么要把它的几万个顶点送给 GPU？
+
+### 1. 视锥体：摄像机能看到的区域
+
+透视相机的视锥体是一个"平头金字塔"——近处窄、远处宽，由 6 个平面围成：
+
+```
+        远平面（大）
+       /        \
+      /          \
+     /   可见区域  \
+    /              \
+   /________________\
+        近平面（小）
+
+   左/右/上/下 四个侧面
+```
+
+Three.js 可以直接提取这 6 个平面：
+
+```javascript
+const frustum = new THREE.Frustum();
+frustum.setFromProjectionMatrix(
+  new THREE.Matrix4().multiplyMatrices(
+    camera.projectionMatrix,
+    camera.matrixWorldInverse
+  )
+);
+
+// 检测物体是否在视锥体内
+const box3 = new THREE.Box3().setFromObject(mesh);
+const isVisible = frustum.intersectsBox(box3);
+
+if (!isVisible) {
+  mesh.visible = false;  // 不发送给 GPU
+}
+```
+
+### 2. 为什么用包围盒而不是精确形状？
+
+检测一个有 10000 个顶点的模型是否在视锥体内，如果逐顶点检测，需要做 10000 次点-平面距离计算。但如果先用一个包围盒（6 面体）包裹它，只需要 8 个顶点（包围盒的角点）做 6 次检测就够了。
+
+**精度换速度**：包围盒可能比实际形状大，导致一些本该剔除的物体没被剔除（保守策略），但绝不会把可见的物体误剔除。
+
+### 3. 可视化视锥体剔除
+
+<ShaderPreview title="Frustum Culling Visualization" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+float sdBox(vec2 p, vec2 b) {
+    vec2 d = abs(p) - b;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+}
+
+void main() {
+    vec2 st = vUv * 2.0 - 1.0;
+
+    // 1. 视锥体：梯形区域（近窄远宽）
+    // y = -1 是近处，y = 1 是远处
+    float nearWidth = 0.3;
+    float farWidth = 1.0;
+    float width = mix(nearWidth, farWidth, (st.y + 1.0) * 0.5);
+    float inFrustum = step(abs(st.x), width) * step(-0.9, st.y) * step(st.y, 0.9);
+
+    // 2. 移动的物体（代表包围盒）
+    vec2 pos = vec2(sin(uTime) * 1.5, cos(uTime * 0.7) * 0.6);
+    float boxDist = sdBox(st - pos, vec2(0.12));
+    float isBox = 1.0 - step(0.0, boxDist);
+
+    // 3. 判断物体是否在视锥体内
+    float boxWidth = mix(nearWidth, farWidth, (pos.y + 1.0) * 0.5);
+    bool isVisible = (abs(pos.x) < boxWidth + 0.12)
+                  && (pos.y > -0.9 - 0.12)
+                  && (pos.y < 0.9 + 0.12);
+
+    vec3 color = vec3(0.05);
+
+    // 视锥体区域（绿色）
+    color += vec3(0.0, 0.15, 0.05) * inFrustum;
+
+    // 物体
+    if (isBox > 0.5) {
+        // 可见 = 白色，被剔除 = 红色
+        color = isVisible ? vec3(0.9) : vec3(1.0, 0.15, 0.1);
+    }
+
+    // 视锥体边框
+    float edge = step(width - 0.02, abs(st.x)) * step(abs(st.x), width + 0.02);
+    edge *= step(-0.9, st.y) * step(st.y, 0.9);
+    color += vec3(0.0, 0.5, 0.2) * edge;
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 六、Projection Matrix：透视 vs 正交
+
+最后补充一个关键概念。View Matrix 决定"从哪看"，Projection Matrix 决定"怎么看"。
+
+### 1. 透视投影 (Perspective)
+
+近大远小，人眼的自然方式。参数：
+
+| 参数 | 含义 | 典型值 |
+|---|---|---|
+| `fov` | 视野角度 (Field of View) | 75° |
+| `aspect` | 宽高比 | window.innerWidth / window.innerHeight |
+| `near` | 近裁剪面 | 0.1 |
+| `far` | 远裁剪面 | 1000 |
+
+```javascript
+const camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
+```
+
+near 和 far 之间的物体才会被渲染。near 不能设为 0（会导致深度缓冲精度问题），far 不能设得太大（远处物体会 Z-fighting）。
+
+### 2. 正交投影 (Orthographic)
+
+没有近大远小，所有物体大小不受距离影响。适合 2D 游戏、CAD、UI 渲染。
+
+```javascript
+const camera = new THREE.OrthographicCamera(
+  left,    // -width/2
+  right,   // width/2
+  top,     // height/2
+  bottom,  // -height/2
+  near,    // 0.1
+  far      // 1000
+);
+```
+
 ## 总结
 
-1.  **控制**：
-    *   **轨道相机** = 球坐标系转换。
-    *   **FPS 相机** = 俯仰 (Pitch) + 偏航 (Yaw)。
-2.  **旋转**：
-    *   **欧拉角**直观但有死锁。
-    *   **四元数**复杂但完美，是插值和避免死锁的最佳选择。
-3.  **优化**：
-    *   **视锥体剔除**是 3D 引擎的第一道防线，它利用简单的几何运算（包围盒 vs 6个平面）在 CPU 端剔除看不见的物体，大幅减轻 GPU 负担。
+| 概念 | 本质 | 对应代码 |
+|---|---|---|
+| View Matrix | 把世界变换到以相机为原点的坐标系 | `camera.matrixWorldInverse` |
+| lookAt | 从 eye/target/up 构造 View Matrix | `camera.lookAt(target)` |
+| 轨道相机 | 球坐标系 → 直角坐标 | theta/phi/radius → position |
+| FPS 相机 | yaw/pitch → 前方向量 | `getForward()` + WASD |
+| 四元数 | 无死锁旋转 + 平滑插值 | `Quaternion.slerp()` |
+| 视锥体剔除 | 6 平面 vs 包围盒检测 | `Frustum.intersectsBox()` |
+| Projection Matrix | 3D → 2D 投影（透视或正交） | `camera.projectionMatrix` |
 
-掌握了摄像机，你就掌握了世界的"视角"。
+**数据流**：你的鼠标/键盘输入 → 更新相机参数 → 重新计算 View Matrix → Vertex Shader 中的 `modelViewMatrix` 包含了这个矩阵 → 顶点位置变换到屏幕上。
+
+### 下一步
+
+- **[法线深入](/posts/glsl/understanding-normals)**——法线在 View 空间中的行为与光照的关系
+- **[阴影指南](/posts/glsl/shadows-guide)**——阴影依赖相机矩阵（Light Space Matrix）
+- **[后期处理](/posts/glsl/post-processing-magic)**——某些后期效果需要重新投影（Depth → World Position）

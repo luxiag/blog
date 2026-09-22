@@ -48,6 +48,7 @@ function generateHeadingId(text: string): string {
 const CodeRunner = dynamic(() => import('./CodeRunner'), { ssr: false });
 const InteractiveComponent = dynamic(() => import('./InteractiveComponent'), { ssr: false });
 const ShaderPreview = dynamic(() => import('./ShaderPreview'), { ssr: false });
+const ShaderSceneDemo = dynamic(() => import('./ShaderSceneDemo'), { ssr: false });
 const CodePenDemo = dynamic(() => import('./CodePenDemo'), { ssr: false });
 const SqlSimulator = dynamic(() => import('./SqlSimulator'), { ssr: false });
 const FunctionPlotter = dynamic(() => import('./FunctionPlotter'), { ssr: false });
@@ -588,6 +589,7 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
     CodeRunner,
     InteractiveComponent,
     ShaderPreview,
+    ShaderSceneDemo,
     CodePenDemo,
     codependemo: CodePenDemo,
     SqlSimulator,

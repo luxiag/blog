@@ -1,162 +1,492 @@
 ---
 title: '指哪打哪：射线 (Ray) 与相交检测完全指南'
 date: '2024-11-16'
-description: '点击鼠标选中模型、FPS 游戏的开枪判定、光线追踪渲染……这一切的背后都是同一个数学模型：射线。本文将带你从零构建射线，并推导它与球体、平面、AABB 盒子的相交算法。'
+description: '点击鼠标选中模型、FPS 游戏的开枪判定、光线追踪渲染……这一切的背后都是同一个数学模型：射线。本文将带你从零构建射线，并推导它与球体、平面、三角形、AABB 盒子的相交算法。'
 tags: ['Math', 'Ray', 'Collision', 'Physics']
 ---
 
 # 指哪打哪：射线 (Ray) 与相交检测完全指南
 
 在 3D 游戏和图形学中，**射线 (Ray)** 是探测世界的触角。
-*   玩家点击鼠标：从摄像机发射一条射线，看它戳到了谁。
-*   玩家开枪：从枪口发射一条射线，看它击中了谁。
-*   光线追踪：从眼睛发射无数条射线，看它们反弹到了哪里。
 
-本文将深入浅出地讲解射线的数学定义，以及它与各种几何体的"碰撞"检测。
+- 玩家点击鼠标：从摄像机发射一条射线，看它戳到了谁
+- 玩家开枪：从枪口发射一条射线，看它击中了谁
+- 光线追踪：从眼睛发射无数条射线，看它们反弹到了哪里
 
-## 一、 什么是射线？
+这些场景的本质都是同一个数学问题：**一条无限长的线和某个几何体有没有交点？**
 
-射线是一条**有起点、有方向**，但**没有终点**的线。
-它可以用一个简单的公式表示：
+前置阅读：
+- [图形学世界观](/posts/glsl/the-big-picture)——你需要理解渲染管线中"从相机发射射线"的概念
+- [摄像机系统](/posts/glsl/camera-systems)——射线方向从相机的 View Matrix 推导出来
 
-$$ P(t) = \vec{Origin} + t \cdot \vec{Direction} $$
+## 一、什么是射线？
 
-*   $\vec{Origin}$ (起点)：射线的发射位置（如摄像机位置）。
-*   $\vec{Direction}$ (方向)：**必须归一化**的单位向量。
-*   $t$ (距离)：一个标量。
-    *   $t=0$：在起点。
-    *   $t=10$：在沿方向 10 米处。
-    *   $t<0$：在背后（通常我们只关心 $t \ge 0$）。
+射线是一条**有起点、有方向，没有终点**的线：
 
-## 二、 射线 vs 球体 (Ray-Sphere Intersection)
+$$P(t) = \text{Origin} + t \cdot \text{Direction}$$
 
-这是最基础的相交测试。
-假设球心在 $C$，半径为 $r$。球面上任意点 $P$ 满足：$||P - C||^2 = r^2$。
-把射线公式代入球体公式，就变成了一个**一元二次方程**：
+| 符号 | 含义 | 约束 |
+|---|---|---|
+| `Origin` | 射线的起点 | 3D 点（如相机位置） |
+| `Direction` | 射线的方向 | **必须归一化**（长度 = 1） |
+| `t` | 沿方向的距离 | t ≥ 0 才有意义 |
 
-$$ t^2 + 2(\vec{D} \cdot (\vec{O} - \vec{C}))t + ||\vec{O} - \vec{C}||^2 - r^2 = 0 $$
+- t = 0：在起点
+- t = 10：在沿方向 10 米处
+- t < 0：在背后（通常丢弃）
 
-解这个方程（求 $t$）：
-*   **$\Delta < 0$**：无解。射线没打中球。
-*   **$\Delta = 0$**：一个解。射线擦边而过（切线）。
-*   **$\Delta > 0$**：两个解。射线穿过球体（一个入点，一个出点）。我们通常取**较小的那个正数解**（最近的交点）。
+所有求交算法的核心任务就是：**解出 t 的值**。如果 t 存在且 ≥ 0，就说明有交点。
 
-## 三、 射线 vs 平面 (Ray-Plane Intersection)
+### 在 Three.js 中创建射线
 
-平面由一个点 $P_0$ 和法线 $\vec{N}$ 定义。
-平面方程：$(P - P_0) \cdot \vec{N} = 0$。也就是：平面上任意点与 $P_0$ 的连线，都垂直于法线。
+```javascript
+import * as THREE from 'three';
 
-把射线代入，解出 $t$：
-$$ t = \frac{(P_0 - \vec{O}) \cdot \vec{N}}{\vec{D} \cdot \vec{N}} $$
+// 从鼠标位置生成射线
+function getRayFromMouse(event, camera, canvas) {
+  // 1. 把鼠标屏幕坐标转为 NDC（-1 到 1）
+  const rect = canvas.getBoundingClientRect();
+  const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-*   如果分母 $\vec{D} \cdot \vec{N} = 0$，说明射线与平面平行（无交点）。
-*   如果 $t < 0$，说明平面在射线背后。
+  // 2. 用 Three.js 的 Raycaster 自动生成射线
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
 
-## 四、 射线 vs 盒子 (Ray-AABB Intersection)
+  // 3. 射线信息
+  const origin = raycaster.ray.origin;     // 起点
+  const direction = raycaster.ray.direction; // 方向（已归一化）
 
-这是工程中最常用的。为了加速计算，我们通常给物体套一个**轴对齐包围盒 (AABB)**。如果射线连盒子都没打中，就不用去算复杂的网格三角形了。
+  return raycaster;
+}
+```
 
-**算法：Slab Method (切片法)**
-AABB 盒子其实是 3 组平行平面的交集（X轴一对，Y轴一对，Z轴一对）。
-1.  算出射线进入和离开 X 轴范围的时间 $[t_{minX}, t_{maxX}]$。
-2.  算出进入和离开 Y 轴范围的时间 $[t_{minY}, t_{maxY}]$。
-3.  ... Z 轴同理。
-4.  **求交集**：最终的进入时间是所有 $t_{min}$ 的最大值，离开时间是所有 $t_{max}$ 的最小值。
-5.  **判断**：如果 $t_{enter} \le t_{exit}$ 且 $t_{exit} \ge 0$，则相交。
+`setFromCamera` 内部做了什么？它把鼠标的 NDC 坐标通过 `camera.matrixWorldInverse` 的逆矩阵反投影回世界空间，得到射线方向。
 
-<ShaderPreview title="Ray Intersection Visualizer" code={`
+## 二、射线 vs 球体
+
+这是最经典的相交测试，也是光线追踪渲染器的基础。
+
+### 1. 推导过程
+
+球面上任意点 P 满足：$\|P - C\|^2 = r^2$（C 是球心，r 是半径）
+
+把射线公式 $P = O + tD$ 代入：
+
+$$\|O + tD - C\|^2 = r^2$$
+
+令 $\vec{L} = O - C$（起点到球心的向量），展开平方：
+
+$$(tD + L) \cdot (tD + L) = r^2$$
+
+$$t^2(D \cdot D) + 2t(D \cdot L) + (L \cdot L) - r^2 = 0$$
+
+因为 D 已归一化，$D \cdot D = 1$：
+
+$$t^2 + 2(D \cdot L)t + (L \cdot L - r^2) = 0$$
+
+这是一元二次方程 $at^2 + bt + c = 0$，其中：
+- $a = 1$
+- $b = 2(D \cdot L)$
+- $c = L \cdot L - r^2$
+
+判别式 $\Delta = b^2 - 4ac$：
+- $\Delta < 0$：无解，射线没打中球
+- $\Delta = 0$：一个解，射线擦边而过
+- $\Delta > 0$：两个解，射线穿过球体
+
+### 2. 代码实现
+
+```javascript
+function raySphereIntersect(origin, direction, center, radius) {
+  const L = [
+    origin[0] - center[0],
+    origin[1] - center[1],
+    origin[2] - center[2],
+  ];
+
+  const b = 2 * dot(direction, L);
+  const c = dot(L, L) - radius * radius;
+  const discriminant = b * b - 4 * c;
+
+  if (discriminant < 0) return -1; // 没打中
+
+  const sqrtD = Math.sqrt(discriminant);
+  const t1 = (-b - sqrtD) / 2; // 近交点
+  const t2 = (-b + sqrtD) / 2; // 远交点
+
+  // 取最近的正数解
+  if (t1 > 0) return t1;
+  if (t2 > 0) return t2; // 射线起点在球内部
+  return -1; // 两个解都在背后
+}
+```
+
+**GLSL 版本**（更简洁，利用了 a=1 的简化）：
+
+```glsl
+float raySphere(vec3 ro, vec3 rd, vec3 center, float radius) {
+    vec3 oc = ro - center;
+    float b = dot(oc, rd);       // 简化后的 b（原 b 的一半）
+    float c = dot(oc, oc) - radius * radius;
+    float h = b * b - c;         // 简化后的判别式（原 Δ / 4）
+
+    if (h < 0.0) return -1.0;    // 无解
+
+    return -b - sqrt(h);          // 近交点（t1）
+}
+```
+
+注意 GLSL 版本用的是**简化形式**：原方程两边除以 2 后，b 变成 `dot(oc, rd)`，判别式变成 `b² - c`，t 的解变成 `-b ± sqrt(h)`。数学上完全等价，但少算了一次乘法和除法。
+
+## 三、射线 vs 平面
+
+平面由一个点 $P_0$ 和法线 $\vec{N}$ 定义。平面方程：$(P - P_0) \cdot \vec{N} = 0$
+
+代入射线公式：
+
+$$(O + tD - P_0) \cdot \vec{N} = 0$$
+
+$$t = \frac{(P_0 - O) \cdot \vec{N}}{D \cdot \vec{N}}$$
+
+| 情况 | 含义 |
+|---|---|
+| $D \cdot N = 0$ | 射线与平面平行，无交点 |
+| $t < 0$ | 交点在射线背后 |
+| $t ≥ 0$ | 有效交点 |
+
+```javascript
+function rayPlaneIntersect(origin, direction, planePoint, planeNormal) {
+  const denom = dot(direction, planeNormal);
+
+  if (Math.abs(denom) < 1e-6) return -1; // 平行
+
+  const t = dot(subtract(planePoint, origin), planeNormal) / denom;
+  return t >= 0 ? t : -1;
+}
+```
+
+**特殊情况：Y = 0 的地面**
+
+```glsl
+float rayGround(vec3 ro, vec3 rd) {
+    // 平面 y=0，法线 (0,1,0)
+    // t = (0 - ro.y) / rd.y
+    if (abs(rd.y) < 0.001) return -1.0;
+    float t = -ro.y / rd.y;
+    return t > 0.0 ? t : -1.0;
+}
+```
+
+## 四、射线 vs 三角形：Möller–Trumbore 算法
+
+这是**工程中最重要**的相交算法。因为 3D 模型本质上就是一堆三角形，鼠标拾取、光线追踪都需要射线和三角形的求交。
+
+### 1. 重心坐标
+
+三角形内任意点可以用三个顶点的**重心坐标** $(u, v)$ 表示：
+
+$$P = (1-u-v)A + uB + vC$$
+
+其中：
+- u ≥ 0, v ≥ 0, u + v ≤ 1
+- (u, v) = (0, 0) → 点 A
+- (u, v) = (1, 0) → 点 B
+- (u, v) = (0, 1) → 点 C
+- 0 < u, v < 1 且 u+v < 1 → 三角形内部
+
+### 2. Möller–Trumbore 算法
+
+把射线公式和重心坐标公式联立：
+
+$$O + tD = (1-u-v)A + uB + vC$$
+
+整理得：
+
+$$O - A = -tD + u(B-A) + v(C-A)$$
+
+令 $\vec{E_1} = B - A$，$\vec{E_2} = C - A$，$\vec{S} = O - A$，写成矩阵形式：
+
+$$\begin{bmatrix} -D & E_1 & E_2 \end{bmatrix} \begin{bmatrix} t \\ u \\ v \end{bmatrix} = S$$
+
+用**克莱姆法则**解这个 3×3 线性方程组，就得到了 Möller–Trumbore 算法：
+
+```javascript
+function rayTriangleIntersect(origin, direction, vA, vB, vC) {
+  const EPSILON = 1e-7;
+
+  const edge1 = subtract(vB, vA); // E1 = B - A
+  const edge2 = subtract(vC, vA); // E2 = C - A
+
+  const h = cross(direction, edge2);  // D × E2
+  const a = dot(edge1, h);            // E1 · (D × E2) = 行列式
+
+  // 如果 a ≈ 0，射线与三角形平行
+  if (Math.abs(a) < EPSILON) return -1;
+
+  const f = 1.0 / a;
+  const s = subtract(origin, vA);     // S = O - A
+  const u = f * dot(s, h);            // u
+
+  // u 必须在 [0, 1] 范围内
+  if (u < 0.0 || u > 1.0) return -1;
+
+  const q = cross(s, edge1);          // S × E1
+  const v = f * dot(direction, q);    // v
+
+  // v 必须 ≥ 0，且 u + v ≤ 1
+  if (v < 0.0 || u + v > 1.0) return -1;
+
+  const t = f * dot(edge2, q);        // t
+
+  return t > EPSILON ? t : -1;
+}
+```
+
+**GLSL 版本**：
+
+```glsl
+float rayTriangle(vec3 ro, vec3 rd, vec3 vA, vec3 vB, vec3 vC) {
+    vec3 edge1 = vB - vA;
+    vec3 edge2 = vC - vA;
+    vec3 h = cross(rd, edge2);
+    float a = dot(edge1, h);
+
+    if (abs(a) < 1e-7) return -1.0;
+
+    float f = 1.0 / a;
+    vec3 s = ro - vA;
+    float u = f * dot(s, h);
+    if (u < 0.0 || u > 1.0) return -1.0;
+
+    vec3 q = cross(s, edge1);
+    float v = f * dot(rd, q);
+    if (v < 0.0 || u + v > 1.0) return -1.0;
+
+    float t = f * dot(edge2, q);
+    return t > 1e-7 ? t : -1.0;
+}
+```
+
+**为什么这个算法高效？**
+
+- 只需要 1 次叉乘预处理（`cross(rd, edge2)`）
+- 早期拒绝：先算 u，不满足就立即返回；再算 v，不满足也立即返回
+- 没有矩阵求逆，没有存储中间数组
+
+### 3. 在 Three.js 中使用
+
+Three.js 的 `Raycaster` 内部就是遍历网格的所有三角形，对每个三角形调用类似 Möller–Trumbore 的算法：
+
+```javascript
+const raycaster = new THREE.Raycaster();
+raycaster.setFromCamera(mouse, camera);
+
+const intersects = raycaster.intersectObjects(scene.children);
+if (intersects.length > 0) {
+  const hit = intersects[0];
+  console.log('击中了:', hit.object.name);
+  console.log('交点:', hit.point);
+  console.log('距离:', hit.distance);
+  console.log('面法线:', hit.face.normal);
+}
+```
+
+## 五、射线 vs AABB：Slab Method
+
+AABB（轴对齐包围盒）是物理引擎粗略检测的基础。如果射线连 AABB 都没打中，就不需要做精确的三角形求交了。
+
+### 1. 算法思路
+
+AABB 由两个对角点定义：$P_{min} = (x_1, y_1, z_1)$ 和 $P_{max} = (x_2, y_2, z_2)$。
+
+AABB 可以看作 3 组平行平面的交集（X 轴一对，Y 轴一对，Z 轴一对）。算法：
+
+1. 对每个轴，算射线进入和离开该轴范围的时间 $[t_{min}, t_{max}]$
+2. 最终的进入时间 = 所有 $t_{min}$ 的**最大值**
+3. 最终的离开时间 = 所有 $t_{max}$ 的**最小值**
+4. 如果 $t_{enter} \le t_{exit}$ 且 $t_{exit} \ge 0$，则相交
+
+### 2. 代码实现
+
+```javascript
+function rayAABB(origin, direction, boxMin, boxMax) {
+  let tMin = -Infinity;
+  let tMax = Infinity;
+
+  // 对 X 轴
+  if (Math.abs(direction[0]) > 1e-8) {
+    let t1 = (boxMin[0] - origin[0]) / direction[0]; // 进入 X 范围
+    let t2 = (boxMax[0] - origin[0]) / direction[0]; // 离开 X 范围
+    if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; } // 确保 t1 < t2
+    tMin = Math.max(tMin, t1);
+    tMax = Math.min(tMax, t2);
+  } else if (origin[0] < boxMin[0] || origin[0] > boxMax[0]) {
+    return -1; // 射线与 X 范围平行但在范围外
+  }
+
+  // 对 Y 轴（同理）
+  if (Math.abs(direction[1]) > 1e-8) {
+    let t1 = (boxMin[1] - origin[1]) / direction[1];
+    let t2 = (boxMax[1] - origin[1]) / direction[1];
+    if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+    tMin = Math.max(tMin, t1);
+    tMax = Math.min(tMax, t2);
+  } else if (origin[1] < boxMin[1] || origin[1] > boxMax[1]) {
+    return -1;
+  }
+
+  // 对 Z 轴（同理）
+  if (Math.abs(direction[2]) > 1e-8) {
+    let t1 = (boxMin[2] - origin[2]) / direction[2];
+    let t2 = (boxMax[2] - origin[2]) / direction[2];
+    if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+    tMin = Math.max(tMin, t1);
+    tMax = Math.min(tMax, t2);
+  } else if (origin[2] < boxMin[2] || origin[2] > boxMax[2]) {
+    return -1;
+  }
+
+  // 最终判断
+  if (tMin > tMax || tMax < 0) return -1;
+  return tMin >= 0 ? tMin : tMax; // 返回最近的正数 t
+}
+```
+
+### 3. GLSL 版本
+
+```glsl
+float rayAABB(vec3 ro, vec3 rd, vec3 boxMin, vec3 boxMax) {
+    vec3 invDir = 1.0 / rd; // 预计算倒数，避免除法
+
+    // 对每个轴计算进入/离开时间
+    vec3 t1 = (boxMin - ro) * invDir;
+    vec3 t2 = (boxMax - ro) * invDir;
+
+    // 确保每轴的 min < max
+    vec3 tMinVec = min(t1, t2);
+    vec3 tMaxVec = max(t1, t2);
+
+    // 取交集
+    float tN = max(max(tMinVec.x, tMinVec.y), tMinVec.z);
+    float tF = min(min(tMaxVec.x, tMaxVec.y), tMaxVec.z);
+
+    if (tN > tF || tF < 0.0) return -1.0;
+    return tN > 0.0 ? tN : tF;
+}
+```
+
+GLSL 版本更简洁——利用 `min/max` 的向量版本同时处理三个轴，避免了逐轴的 if-else。
+
+## 六、完整的射线追踪示例
+
+把球体、平面、阴影组合起来，就是一个最简的光线追踪渲染器：
+
+<ShaderPreview title="Mini Ray Tracer" code={`
 varying vec2 vUv;
 uniform float uTime;
 
-// 射线定义
-struct Ray { vec3 ro; vec3 rd; };
-
-// 1. 球体求交
-// 返回距离 t，如果没击中返回 -1.0
-float iSphere(Ray ray, vec3 spherePos, float r) {
-    vec3 oc = ray.ro - spherePos;
-    float b = dot(oc, ray.rd);
-    float c = dot(oc, oc) - r*r;
-    float h = b*b - c;
-    if (h < 0.0) return -1.0; // Delta < 0
-    return -b - sqrt(h); // 取最近的解
-}
-
-// 2. 平面求交 (y = planeY)
-float iPlane(Ray ray, float planeY) {
-    // ray.ro.y + t * ray.rd.y = planeY
-    float t = (planeY - ray.ro.y) / ray.rd.y;
-    if (t < 0.0) return -1.0;
-    return t;
+// 射线-球体求交（简化版）
+float iSphere(vec3 ro, vec3 rd, vec3 center, float r) {
+    vec3 oc = ro - center;
+    float b = dot(oc, rd);
+    float c = dot(oc, oc) - r * r;
+    float h = b * b - c;
+    if (h < 0.0) return -1.0;
+    return -b - sqrt(h);
 }
 
 void main() {
-    // 简单的光线追踪设置
     vec2 uv = vUv * 2.0 - 1.0;
-    vec3 ro = vec3(0.0, 1.0, 3.0); // 相机位置
-    vec3 rd = normalize(vec3(uv, -1.5)); // 射线方向
-    
+
+    // 相机设置
+    vec3 ro = vec3(0.0, 2.0, 5.0);
+    vec3 rd = normalize(vec3(uv, -1.5));
+
     vec3 col = vec3(0.0);
-    
-    // 场景物体
+
+    // 场景：一个移动的球 + 地面
     vec3 spherePos = vec3(sin(uTime), 1.0, 0.0);
-    float planeY = 0.0;
-    
-    // 求交测试
-    float tSphere = iSphere(Ray(ro, rd), spherePos, 1.0);
-    float tPlane = iPlane(Ray(ro, rd), planeY);
-    
-    // 简单的 Z-Buffer 逻辑：谁近画谁
-    float t = 10000.0;
-    float id = 0.0; // 0=空, 1=球, 2=地
-    
+
+    // 1. 球体求交
+    float tSphere = iSphere(ro, rd, spherePos, 1.0);
+
+    // 2. 地面求交 (y = 0)
+    float tGround = -1.0;
+    if (abs(rd.y) > 0.001) {
+        float t = -ro.y / rd.y;
+        if (t > 0.0) tGround = t;
+    }
+
+    // 3. 取最近的交点
+    float t = 1e5;
+    float id = 0.0; // 0=天空, 1=球, 2=地面
+
     if (tSphere > 0.0 && tSphere < t) { t = tSphere; id = 1.0; }
-    if (tPlane > 0.0 && tPlane < t) { t = tPlane; id = 2.0; }
-    
-    // 渲染
-    if (id == 1.0) { // 球
+    if (tGround > 0.0 && tGround < t) { t = tGround; id = 2.0; }
+
+    // 4. 着色
+    if (id == 1.0) {
+        // 球体：漫反射光照
         vec3 pos = ro + rd * t;
         vec3 nor = normalize(pos - spherePos);
-        vec3 light = normalize(vec3(1.0, 1.0, 1.0));
+        vec3 light = normalize(vec3(2.0, 4.0, 3.0));
         float diff = max(dot(nor, light), 0.0);
-        col = vec3(1.0, 0.2, 0.2) * (diff + 0.2);
-    } else if (id == 2.0) { // 地板
+        col = vec3(1.0, 0.3, 0.2) * (diff * 0.8 + 0.2);
+    } else if (id == 2.0) {
+        // 地面：棋盘格 + 硬阴影
         vec3 pos = ro + rd * t;
-        // 棋盘格
-        float check = mod(floor(pos.x) + floor(pos.z), 2.0);
-        col = vec3(0.5 + check * 0.5);
-        // 阴影 (Ray Casting Shadow)
-        // 从地板点向光源发射一条射线，看是否撞到球
-        vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
-        if (iSphere(Ray(pos + vec3(0.0,0.01,0.0), lightDir), spherePos, 1.0) > 0.0) {
-            col *= 0.5;
+        float checker = mod(floor(pos.x) + floor(pos.z), 2.0);
+        col = vec3(0.4 + checker * 0.3);
+
+        // 硬阴影：从地面点向光源发射射线
+        vec3 shadowOrigin = pos + vec3(0.0, 0.01, 0.0); // 偏移避免自交
+        vec3 lightDir = normalize(vec3(2.0, 4.0, 3.0));
+        float shadowT = iSphere(shadowOrigin, lightDir, spherePos, 1.0);
+        if (shadowT > 0.0) {
+            col *= 0.3; // 在阴影中
         }
-    } else { // 天空
-        col = mix(vec3(0.5, 0.7, 1.0), vec3(0.0), rd.y);
+    } else {
+        // 天空
+        col = mix(vec3(0.5, 0.7, 1.0), vec3(0.1, 0.1, 0.2), max(rd.y, 0.0));
     }
-    
+
     gl_FragColor = vec4(col, 1.0);
 }
 `} />
 
-## 五、 Raymarching：另一种思路
+注意阴影的实现：从地面上的点向光源方向发射一条新射线，如果这条射线打中了球体，说明地面点被球遮挡，处于阴影中。这是**硬阴影**——阴影边缘是锐利的。在 [阴影指南](/posts/glsl/shadows-guide) 中，我们会学习如何实现软阴影。
 
-对于形状极其复杂（如云朵、分形）或者没有解析公式的物体，解方程太难了。
-这时我们用 **Raymarching (光线步进)**。
+## 七、射线求交 vs 光线步进
 
-它不解方程，而是像盲人摸象一样，沿着射线一步步往前走。
-*   "前面还有多远？" (SDF 距离场)
-*   "还有 10 米。" -> 往前走 10 米。
-*   "还有 5 米。" -> 往前走 5 米。
-*   "距离 < 0.001 米。" -> **撞到了！**
+在 [光线步进](/posts/glsl/advanced-glsl-techniques) 中，我们用了另一种方法：不解析求解，而是一步步往前走。两种方法对比：
 
-这在 ShaderToy 和体积渲染中非常流行。
+| | 解析求交（本文） | 光线步进 (Ray Marching) |
+|---|---|---|
+| 方法 | 解方程，直接算出 t | 迭代步进，逼近 t |
+| 适用形状 | 球、平面、三角形、AABB | 任意 SDF（云、烟雾、分形） |
+| 精度 | 精确 | 近似（取决于步数和阈值） |
+| 性能 | 一次计算 | 多次迭代（更慢） |
+| 反射/折射 | 每次反射需重新求交 | 同样，但更灵活 |
+
+**实际选择**：
+- 鼠标拾取、碰撞检测：用解析求交（快且精确）
+- 光线追踪渲染：球/平面用解析求交，复杂形状用步进
+- 体积渲染（云、烟雾）：只能用步进
 
 ## 总结
 
-1.  **射线公式**：$O + tD$ 是所有计算的基石。
-2.  **球体相交**：解一元二次方程。简单、快速。
-3.  **AABB 相交**：切片法。用于物理引擎的粗略检测 (Broad Phase)。
-4.  **Raymarching**：步进迭代。用于复杂形状和体积渲染。
+| 算法 | 输入 | 复杂度 | 用途 |
+|---|---|---|---|
+| 射线-球体 | origin, dir, center, r | O(1) | 光线追踪基础形状 |
+| 射线-平面 | origin, dir, point, normal | O(1) | 地面、墙壁 |
+| Möller–Trumbore | origin, dir, A, B, C | O(1) | 鼠标拾取、网格求交 |
+| Slab Method | origin, dir, min, max | O(1) | 粗略碰撞检测、BVH |
 
-掌握了射线，你就掌握了与虚拟世界互动的最重要手段。
+所有算法的核心都是**解出 t**。t 存在且 ≥ 0，就有交点；t 的值就是交点到起点的距离。
+
+### 下一步
+
+- **[阴影指南](/posts/glsl/shadows-guide)**——阴影的本质就是从光源发射射线，检测遮挡
+- **[PBR 指南](/posts/glsl/pbr-guide)**——PBR 光照模型中，光线与微表面的交互
+- **[后期处理](/posts/glsl/post-processing-magic)**——屏幕空间射线（SSR）利用深度缓冲做反射

@@ -1,272 +1,384 @@
 ---
-title: '赋予数字生命：动画算法与数值计算'
+title: '赋予数字生命：GLSL 动画算法与数值计算'
 date: '2024-11-23'
-description: '动画不仅仅是改变位置，它是关于时间的艺术。本文将深入探讨 deltaTime 的核心作用，揭秘 Lerp 和 Easing 的数学原理，构建丝滑的物理弹簧系统，并学习如何用贝塞尔曲线绘制优雅的运动轨迹。'
-tags: ['Math', 'Animation', 'Physics', 'Interpolation']
+description: '动画不仅仅是改变位置，它是关于时间的艺术。本文将深入探讨 GLSL 中的时间驱动动画、波形函数、弹簧物理模拟，以及如何在 Shader 中实现丝滑的过渡和运动。'
+tags: ['Math', 'Animation', 'GLSL', 'Physics']
 ---
 
-# 赋予数字生命：动画算法与数值计算
+# 赋予数字生命：GLSL 动画算法与数值计算
 
-一个静止的方块是数据，一个会呼吸、会弹跳的方块就是生命。
-在游戏和交互开发中，动画的质量直接决定了"手感"。
-本文将带你深入动画背后的数值计算世界。
+一个静止的方块是数据，一个会呼吸、会弹跳的方块就是生命。动画的质量直接决定"手感"。
 
----
+本文聚焦**GLSL/Shader 中的动画技术**——与 JavaScript 动画不同，Shader 没有状态记忆，每帧都是从零开始计算。这迫使你用**数学函数**而非状态变量来驱动动画。
 
-## 一、 时间步长 (deltaTime)：帧率无关性
+前置阅读：
+- [GLSL 新手指南](/posts/glsl/getting-started-with-glsl)——你需要理解 uniform 和 `uTime`
+- [GLSL 语法速查](/posts/glsl/glsl-syntax-cheatsheet)——你需要熟悉 sin/cos/mix/smoothstep
 
-如果你的游戏在 60fps 下跑得很快，在 30fps 下跑得很慢，那就是灾难。
-解决这个问题的核心是 **deltaTime (dt)**：上一帧到这一帧经过的时间（秒）。
+## 一、Shader 动画的核心：uTime
 
-### 1. 错误写法
-```javascript
-// ❌ 错误：依赖帧率
-function update() {
-    // 假设这是 60fps
-    // 每帧移动 5px -> 300px/s
-    // 如果掉帧到 30fps -> 150px/s (变慢了！)
-    player.x += 5; 
+所有 Shader 动画的驱动力都是 `uniform float uTime`——从页面加载开始累计的秒数。
+
+**Shader 动画的本质**：用 `uTime` 作为函数的输入，函数的输出随时间变化 → 画面动起来。
+
+```glsl
+// 最简单的动画：颜色随时间变化
+void main() {
+    vec3 color = vec3(sin(uTime) * 0.5 + 0.5, 0.0, 0.0);
+    gl_FragColor = vec4(color, 1.0);
 }
 ```
 
-### 2. 正确写法
-```javascript
-// ✅ 正确：依赖时间
-function update(dt) {
-    // dt = deltaTime (秒)
-    // 无论 60fps (dt=0.016) 还是 30fps (dt=0.033)
-    // 结果都是 300 * dt
-    player.x += 300 * dt; 
-}
+### Shader 动画 vs JavaScript 动画
 
-// 游戏循环示例
-let lastTime = performance.now();
-function loop() {
-    const currentTime = performance.now();
-    const dt = (currentTime - lastTime) / 1000; // 毫秒转秒
-    lastTime = currentTime;
-    
-    update(dt);
-    requestAnimationFrame(loop);
-}
-```
+| 特性 | JavaScript | GLSL |
+|---|---|---|
+| 状态存储 | 变量 `let x = 0` | 无状态，用 `uTime` 重新计算 |
+| deltaTime | 需要 `requestAnimationFrame` | `uDelta` uniform |
+| 插值 | `lerp(a, b, t)` 每帧更新 | `mix(a, b, t)` 每像素计算 |
+| 物理模拟 | 累积式 `v += a * dt` | 解析解或近似函数 |
+| 随机 | `Math.random()` | 伪随机函数 |
 
-### 3. 陷阱：物理模拟的不稳定性
-对于简单的移动，可变 `dt` 没问题。但在复杂的物理积分（如弹簧、引力）中，`dt` 的波动会导致系统爆炸。
-**最佳实践**：使用 **Fixed Update**。即使渲染帧率波动，物理计算始终以固定的 `0.02s` 步长运行。
+**关键区别**：JavaScript 动画是"增量式"的（每帧基于上一帧），GLSL 动画是"绝对式"的（每帧从 uTime 重新算出当前值）。
 
-```javascript
-// 固定步长物理循环
-const FIXED_STEP = 1 / 60; // 0.016s
-let accumulator = 0;
+## 二、波形函数：动画的词汇
 
-function loop(dt) {
-    accumulator += dt;
-    // 如果这一帧卡了，累积了很多时间，就多跑几次物理
-    while (accumulator >= FIXED_STEP) {
-        physicsUpdate(FIXED_STEP);
-        accumulator -= FIXED_STEP;
-    }
-    render();
-}
-```
+### 1. 基础波形
 
----
-
-## 二、 插值技术：从 Lerp 到 Easing
-
-### 1. 线性插值 (Lerp)
-这是动画的原子操作。
-公式：$V = A + (B - A) \times t$
-
-```javascript
-// 基础 Lerp 函数
-function lerp(start, end, t) {
-    return start + (end - start) * t;
-}
-
-// 用法：在 1 秒内从 0 走到 100
-let t = 0;
-function update(dt) {
-    t += dt; // t 从 0 增加到 1
-    if (t > 1) t = 1;
-    
-    player.x = lerp(0, 100, t);
-}
-```
-
-*   **陷阱**：很多人喜欢用 `current = lerp(current, target, 0.1)` 来做平滑跟随。
-    *   这叫 **Damp** (阻尼)，不是标准的 Lerp。
-    *   缺点：永远到不了终点（无限逼近），且速度依赖帧率。
-    *   修正：使用 `dt` 相关的阻尼公式。
-
-```javascript
-// ✅ 正确的平滑阻尼 (帧率无关)
-// decay: 衰减系数 (比如 10.0，值越大越快)
-function damp(current, target, decay, dt) {
-    return lerp(current, target, 1.0 - Math.exp(-decay * dt));
-}
-```
-
-### 2. 缓动函数 (Easing)
-线性移动看起来很机械。为了让动画有"灵魂"，我们需要让 $t$ 非线性变化。
-比如 **EaseOutQuad** (快进慢出)：
-
-```javascript
-// t: 0~1 的进度
-function easeOutQuad(t) {
-    return 1 - (1 - t) * (1 - t);
-}
-
-// 使用缓动
-player.x = lerp(0, 100, easeOutQuad(t));
-```
-
----
-
-## 三、 弹簧系统 (Spring Physics)：交互的黄金标准
-
-Apple 的滑动效果为什么那么舒服？因为它不是简单的 Easing，而是基于物理的**弹簧系统**。
-
-### 1. 胡克定律 (Hooke's Law)
-$$ F = -k \cdot x - c \cdot v $$
-
-```javascript
-class Spring {
-    constructor() {
-        this.x = 0;      // 当前位置
-        this.v = 0;      // 当前速度
-        this.target = 0; // 目标位置
-        this.k = 100;    // 刚度 (Stiffness): 拉力，越大越硬
-        this.c = 10;     // 阻尼 (Damping): 阻力，越小越弹
-    }
-    
-    update(dt) {
-        const dx = this.x - this.target; // 位移
-        const force = -this.k * dx - this.c * this.v; // F = -kx - cv
-        
-        const a = force; // 假设质量 m=1, F=ma -> a=F
-        this.v += a * dt;
-        this.x += this.v * dt;
-    }
-}
-```
-
-### 2. 为什么用弹簧？
-*   **响应式**：如果你在动画播放中途打断它（比如用户突然按住滑块），Lerp/Easing 会出现跳变，而弹簧会自然地继承当前速度，无缝过渡。
-*   **自然感**：它模拟了真实世界的惯性。
-
-<ShaderPreview title="Animation Physics Lab" code={`
+<ShaderPreview title="Wave Functions" code={`
 varying vec2 vUv;
 uniform float uTime;
 
-// 1. 缓动函数
-float easeOutElastic(float x) {
-    float c4 = (2.0 * 3.14159) / 3.0;
-    return x == 0.0 ? 0.0 : x == 1.0 ? 1.0 : pow(2.0, -10.0 * x) * sin((x * 10.0 - 0.75) * c4) + 1.0;
-}
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
 
-float easeOutBounce(float x) {
-    float n1 = 7.5625;
-    float d1 = 2.75;
-    if (x < 1.0 / d1) {
-        return n1 * x * x;
-    } else if (x < 2.0 / d1) {
-        return n1 * (x -= 1.5 / d1) * x + 0.75;
-    } else if (x < 2.5 / d1) {
-        return n1 * (x -= 2.25 / d1) * x + 0.9375;
-    } else {
-        return n1 * (x -= 2.625 / d1) * x + 0.984375;
-    }
-}
+    // 不同波形
+    float sine = sin(uv.x * 3.0 + uTime) * 0.15;
+    float cosine = cos(uv.x * 3.0 + uTime * 1.5) * 0.15;
+    float triangle = (abs(fract(uv.x * 0.5 + uTime * 0.2) - 0.5) * 2.0 - 0.5) * 0.3;
+    float sawtooth = (fract(uv.x * 0.5 + uTime * 0.2) - 0.5) * 0.3;
 
-// 2. 弹簧模拟 (简化的显式积分)
-// 这是一个非常 hacky 的 Shader 模拟，因为 Shader 没有状态记忆
-// 我们用数学函数模拟一个欠阻尼震荡
-float spring(float t) {
-    // exp(-t) 是阻尼，cos 是震荡
-    return 1.0 - exp(-3.0 * t) * cos(15.0 * t);
+    // 画波形线
+    vec3 color = vec3(0.05);
+
+    // sin 波（红色）
+    float d1 = abs(uv.y - sine - 0.6);
+    color += vec3(1.0, 0.3, 0.2) * smoothstep(0.02, 0.0, d1);
+
+    // cos 波（绿色）
+    float d2 = abs(uv.y - cosine - 0.2);
+    color += vec3(0.3, 1.0, 0.2) * smoothstep(0.02, 0.0, d2);
+
+    // 三角波（蓝色）
+    float d3 = abs(uv.y - triangle + 0.2);
+    color += vec3(0.3, 0.5, 1.0) * smoothstep(0.02, 0.0, d3);
+
+    // 锯齿波（黄色）
+    float d4 = abs(uv.y - sawtooth + 0.6);
+    color += vec3(1.0, 0.8, 0.2) * smoothstep(0.02, 0.0, d4);
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+| 波形 | 公式 | 特征 |
+|---|---|---|
+| 正弦波 | `sin(x)` | 平滑、自然、无限循环 |
+| 余弦波 | `cos(x)` | 与 sin 相位差 90° |
+| 三角波 | `abs(fract(x) - 0.5) * 2.0` | 线性上升和下降 |
+| 锯齿波 | `fract(x)` | 线性上升，瞬间重置 |
+
+### 2. 用波形驱动动画
+
+```glsl
+// 水平移动
+float x = sin(uTime) * 2.0; // -2 到 2 来回
+
+// 脉冲效果
+float pulse = sin(uTime * 3.0) * 0.5 + 0.5; // 0 到 1 脉冲
+
+// 呼吸效果（慢脉冲）
+float breath = sin(uTime * 0.5) * 0.1 + 1.0; // 0.9 到 1.1 缩放
+
+// 闪烁
+float blink = step(0.5, sin(uTime * 5.0)); // 0 或 1 闪烁
+```
+
+## 三、缓动函数 (Easing Functions)
+
+线性运动看起来机械。缓动函数让 t 的变化不均匀——快进慢出、慢进快出等。
+
+### 1. 常用缓动
+
+<ShaderPreview title="Easing Functions" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+// 各种缓动函数
+float easeInQuad(float t) { return t * t; }
+float easeOutQuad(float t) { return 1.0 - (1.0 - t) * (1.0 - t); }
+float easeInOutCubic(float t) {
+    return t < 0.5 ? 4.0 * t * t * t : 1.0 - pow(-2.0 * t + 2.0, 3.0) / 2.0;
+}
+float easeOutElastic(float t) {
+    float c4 = 2.0 * 3.14159 / 3.0;
+    return t == 0.0 ? 0.0 : t == 1.0 ? 1.0 :
+        pow(2.0, -10.0 * t) * sin((t * 10.0 - 0.75) * c4) + 1.0;
 }
 
 void main() {
     vec2 uv = vUv * 2.0 - 1.0;
-    
-    // 时间循环 0~2秒
-    float t = fract(uTime * 0.5);
-    
-    // 计算三个球的位置
-    float x1 = -0.5 + easeOutElastic(t); // 弹性
-    float x2 = -0.5 + easeOutBounce(t);  // 弹跳
-    float x3 = -0.5 + spring(t * 2.0);   // 物理弹簧 (稍微快一点)
-    
-    vec3 col = vec3(0.0);
-    
-    // 绘制球体
-    // 1. 红色：Elastic
-    if(length(uv - vec2(x1, 0.6)) < 0.1) col = vec3(1.0, 0.2, 0.2);
-    
-    // 2. 绿色：Bounce
-    if(length(uv - vec2(x2, 0.0)) < 0.1) col = vec3(0.2, 1.0, 0.2);
-    
-    // 3. 蓝色：Spring Physics
-    if(length(uv - vec2(x3, -0.6)) < 0.1) col = vec3(0.2, 0.5, 1.0);
-    
-    // 绘制轨道线
-    if(abs(uv.y - 0.6) < 0.01) col += 0.1;
-    if(abs(uv.y - 0.0) < 0.01) col += 0.1;
-    if(abs(uv.y + 0.6) < 0.01) col += 0.1;
-    
-    gl_FragColor = vec4(col, 1.0);
+
+    // 时间循环 0~1
+    float t = fract(uTime * 0.3);
+
+    // 计算各缓动的位置
+    float x1 = easeOutQuad(t);
+    float x2 = easeInOutCubic(t);
+    float x3 = easeOutElastic(t);
+
+    vec3 color = vec3(0.05);
+
+    // 三个球
+    float d1 = length(uv - vec2(-0.7 + x1 * 1.4, 0.5));
+    color += vec3(1.0, 0.3, 0.2) * smoothstep(0.12, 0.1, d1);
+
+    float d2 = length(uv - vec2(-0.7 + x2 * 1.4, 0.0));
+    color += vec3(0.3, 0.8, 0.2) * smoothstep(0.12, 0.1, d2);
+
+    float d3 = length(uv - vec2(-0.7 + x3 * 1.4, -0.5));
+    color += vec3(0.3, 0.5, 1.0) * smoothstep(0.12, 0.1, d3);
+
+    // 轨道线
+    if (abs(uv.y - 0.5) < 0.005) color += 0.15;
+    if (abs(uv.y) < 0.005) color += 0.15;
+    if (abs(uv.y + 0.5) < 0.005) color += 0.15;
+
+    gl_FragColor = vec4(color, 1.0);
 }
 `} />
 
----
+| 缓动 | 效果 | 适用场景 |
+|---|---|---|
+| easeOutQuad | 快进慢出 | UI 出现、位移 |
+| easeInOutCubic | 两头慢中间快 | 长距离移动 |
+| easeOutElastic | 弹性过冲 | 弹窗、按钮反馈 |
+| easeOutBounce | 落地弹跳 | 游戏落地 |
 
-## 四、 曲线动画路径
+### 2. 在 Shader 中使用缓动
 
-物体不总是走直线。
+```glsl
+// 用 fract 创建循环的 0~1 进度
+float t = fract(uTime * 0.5); // 每 2 秒循环一次
 
-### 1. 贝塞尔曲线 (Bézier Curve)
-*   **二次贝塞尔**：需要 3 个点（起点、控制点、终点）。
-    $$ P = (1-t)^2 P_0 + 2(1-t)t P_1 + t^2 P_2 $$
-*   **三次贝塞尔**：需要 4 个点（起点、控制点1、控制点2、终点）。
+// 应用缓动
+float eased = easeOutQuad(t);
+
+// 用缓动值驱动动画
+vec3 color = mix(colorA, colorB, eased);
+float scale = mix(0.5, 1.5, eased);
+```
+
+## 四、弹簧物理：Shader 中的解析解
+
+JavaScript 中弹簧是增量式的（`v += F * dt`），但 Shader 没有状态。我们需要弹簧的**解析解**——一个直接算出 t 时刻位置的公式。
+
+### 1. 欠阻尼弹簧的解析解
+
+$$x(t) = A \cdot e^{-\gamma t} \cdot \cos(\omega t + \phi)$$
+
+其中：
+- $A$：初始振幅
+- $\gamma$：阻尼系数（越大衰减越快）
+- $\omega$：振荡频率
+- $\phi$：初始相位
+
+<ShaderPreview title="Spring Physics" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+
+    // 弹簧参数
+    float damping = 3.0;   // 阻尼
+    float frequency = 12.0; // 振荡频率
+
+    // 时间循环
+    float t = fract(uTime * 0.4) * 3.0;
+
+    // 欠阻尼弹簧解析解
+    // x(t) = 1 - exp(-γt) × cos(ωt)
+    float spring = 1.0 - exp(-damping * t) * cos(frequency * t);
+
+    // 弹簧位置
+    float x = -0.7 + spring * 1.4;
+
+    vec3 color = vec3(0.05);
+
+    // 弹簧球
+    float d = length(uv - vec2(x, 0.0));
+    color += vec3(0.2, 0.6, 1.0) * smoothstep(0.12, 0.1, d);
+
+    // 平衡位置标记
+    if (abs(uv.x - 0.7) < 0.003 && abs(uv.y) < 0.3) {
+        color = vec3(0.5, 0.5, 0.5);
+    }
+
+    // 起始位置标记
+    if (abs(uv.x + 0.7) < 0.003 && abs(uv.y) < 0.3) {
+        color = vec3(0.5, 0.5, 0.5);
+    }
+
+    // 轨迹线
+    if (abs(uv.y) < 0.003) color += 0.15;
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+**为什么用解析解？**
+
+- 不需要累积状态——给定任意 t，直接算出位置
+- 精确——没有数值积分的误差累积
+- Shader 天然适合——每帧独立计算
+
+### 2. 调整弹簧参数
+
+| 参数 | 效果 | 推荐值 |
+|---|---|---|
+| damping 高 (>5) | 快速衰减，少振荡 | 5~8（快速响应） |
+| damping 低 (<2) | 缓慢衰减，多振荡 | 2~3（有弹力感） |
+| frequency 高 | 振荡快 | 10~20 |
+| frequency 低 | 振荡慢 | 5~10 |
+
+## 五、循环动画的相位控制
+
+### 1. 用 fract 创建无缝循环
+
+```glsl
+float t = fract(uTime * speed); // 0~1 无缝循环
+```
+
+### 2. 用 mod 创建往复运动
+
+```glsl
+// 来回运动：0→1→0→1...
+float t = mod(uTime * speed, 2.0);
+t = t > 1.0 ? 2.0 - t : t; // 反弹
+```
+
+### 3. 不同相位的多元素动画
+
+<ShaderPreview title="Phase Offset Animation" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+    vec3 color = vec3(0.05);
+
+    // 多个圆，每个有不同的相位偏移
+    for (float i = 0.0; i < 5.0; i++) {
+        // 相位偏移：每个圆晚一点启动
+        float phase = i * 0.3;
+        float t = fract(uTime * 0.5 + phase);
+
+        // 弹簧效果
+        float damping = 4.0;
+        float frequency = 10.0;
+        float spring = 1.0 - exp(-damping * t) * cos(frequency * t);
+
+        // 位置
+        float x = -0.8 + i * 0.4;
+        float y = (spring - 0.5) * 0.6;
+
+        float d = length(uv - vec2(x, y));
+        vec3 c = vec3(
+            0.3 + i * 0.1,
+            0.5,
+            1.0 - i * 0.15
+        );
+        color += c * smoothstep(0.1, 0.08, d);
+    }
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+**相位偏移** `phase = i * 0.3` 让每个元素的动画延迟 0.3 秒启动，产生"波浪"般的连锁效果。这是 UI 动画中常用的手法——列表项依次出现。
+
+## 六、JavaScript 端的动画基础
+
+虽然本文聚焦 GLSL，但 JavaScript 动画是 WebGL 项目的基础。以下是关键概念：
+
+### deltaTime：帧率无关性
 
 ```javascript
-// 二次贝塞尔插值
-function quadraticBezier(p0, p1, p2, t) {
-    const t1 = 1 - t;
-    return t1 * t1 * p0 + 2 * t1 * t * p1 + t * t * p2;
+let lastTime = performance.now();
+function loop() {
+  const now = performance.now();
+  const dt = (now - lastTime) / 1000; // 毫秒转秒
+  lastTime = now;
+  update(dt);
+  requestAnimationFrame(loop);
 }
 ```
 
-### 2. Catmull-Rom 样条
-贝塞尔的问题是：曲线**不经过**控制点。
-如果你有一串路径点，想让物体依次穿过它们，用 **Catmull-Rom**。
-它能自动计算平滑的切线，保证曲线穿过所有路点。
+所有动画更新都应该乘以 `dt`，保证在不同帧率下速度一致。
+
+### Lerp 和 Damp
 
 ```javascript
-// Catmull-Rom 插值 (简化版)
-// p0, p1, p2, p3 是连续的四个点
-// t 是 p1 到 p2 之间的进度 (0~1)
-function catmullRom(p0, p1, p2, p3, t) {
-    const v0 = (p2 - p0) * 0.5;
-    const v1 = (p3 - p1) * 0.5;
-    const t2 = t * t;
-    const t3 = t * t * t;
-    
-    return (2 * p1 - 2 * p2 + v0 + v1) * t3 + 
-           (-3 * p1 + 3 * p2 - 2 * v0 - v1) * t2 + 
-           v0 * t + p1;
+function lerp(start, end, t) {
+  return start + (end - start) * t;
+}
+
+// 帧率无关的平滑阻尼
+function damp(current, target, decay, dt) {
+  return lerp(current, target, 1.0 - Math.exp(-decay * dt));
 }
 ```
 
-*   **应用**：摄像机漫游路径、赛车游戏 AI 路径。
+`damp` 比 `lerp(current, target, 0.1)` 更正确——后者依赖帧率，前者不依赖。
+
+### 弹簧系统
+
+```javascript
+class Spring {
+  constructor(stiffness = 100, damping = 10) {
+    this.x = 0;
+    this.v = 0;
+    this.target = 0;
+    this.k = stiffness;
+    this.c = damping;
+  }
+
+  update(dt) {
+    const force = -this.k * (this.x - this.target) - this.c * this.v;
+    this.v += force * dt;
+    this.x += this.v * dt;
+  }
+}
+```
+
+弹簧比 Easing 更适合交互——它天然支持中途打断，不会跳变。
 
 ## 总结
 
-1.  **基础**：用 `dt` 保证动画在任何帧率下一致。
-2.  **手感**：用 **Lerp** 做平滑，用 **Easing** 做表现。
-3.  **高级交互**：用 **弹簧系统** 处理用户输入，因为它能记忆速度。
-4.  **路径**：用 **贝塞尔** 做设计，用 **Catmull-Rom** 做穿梭。
+| 概念 | GLSL 实现 | JavaScript 实现 |
+|---|---|---|
+| 时间驱动 | `uTime` uniform | `requestAnimationFrame` + `dt` |
+| 波形动画 | `sin(uTime)` | `Math.sin(time)` |
+| 缓动 | `easeOutQuad(fract(uTime))` | `easeOutQuad(t)` |
+| 弹簧 | 解析解 `1 - exp(-γt)cos(ωt)` | 增量式 `v += F * dt` |
+| 循环 | `fract(uTime * speed)` | `t % duration` |
+| 相位偏移 | `fract(uTime + phase)` | 延迟启动 |
 
-掌握了这些，你的数字世界就不再是生硬的代码，而是流动的艺术。
+**核心认知**：GLSL 动画是数学驱动的——你写的不是"每帧做什么"，而是"在时刻 t，值应该是多少"。
+
+### 下一步
+
+- **[进阶三部曲](/posts/glsl/advanced-glsl-techniques)**——顶点位移和后期处理是动画的直接应用
+- **[GPGPU 粒子](/posts/glsl/gpgpu-particles)**——大规模动画需要 GPU 计算
+- **[后期处理](/posts/glsl/post-processing-magic)**——运动模糊等后期效果增强动画感

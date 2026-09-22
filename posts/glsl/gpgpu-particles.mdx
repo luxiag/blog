@@ -1,151 +1,508 @@
 ---
 title: 'GPGPU 粒子系统：用显卡控制百万大军'
 date: '2024-11-21'
-description: 'CPU 算不动 100 万个粒子？GPGPU 技术来拯救你。本文将揭秘如何利用纹理来存储粒子的位置与速度，通过 FBO Ping-Pong 技术实现纯 GPU 端的物理模拟，创造出令人惊叹的流体与魔法效果。'
+description: 'CPU 算不动 100 万个粒子？GPGPU 技术来拯救你。本文将揭秘如何利用纹理来存储粒子的位置与速度，通过 FBO Ping-Pong 技术实现纯 GPU 端的物理模拟，并用 Three.js 的 GPUComputationRenderer 完整实现。'
 tags: ['WebGL', 'GPGPU', 'Particles', 'Simulation']
 ---
 
 # GPGPU 粒子系统：用显卡控制百万大军
 
-在 CPU 上遍历 10,000 个粒子并更新它们的位置，JavaScript 可能就已经开始喘粗气了。
-但在 GPU 上，更新 1,000,000 个粒子，可能只需要几毫秒。
+在 CPU 上遍历 10,000 个粒子并更新位置，JavaScript 就开始喘粗气了。但在 GPU 上，更新 1,000,000 个粒子只需要几毫秒。
 
-这就是 **GPGPU (General-Purpose computing on Graphics Processing Units)** 的魔力。我们不画图，我们用显卡来**算数**。
+**GPGPU (General-Purpose computing on Graphics Processing Units)**——不画图，用显卡来算数。
 
-今天，我们将学习如何把 GPU 变成一台超级并行的物理计算器。
+前置阅读：
+- [几何工坊](/posts/glsl/geometry-deep-dive)——你需要理解 BufferGeometry 和 attribute 的数据流
+- [后期魔法](/posts/glsl/post-processing-magic)——GPGPU 的 RenderTarget/Ping-Pong 与后期处理共享基础设施
 
-## 一、 核心思想：纹理即数据
+## 一、核心思想：纹理即数据
 
-GPU 最擅长处理什么？纹理 (Texture)。
-纹理本质上是一个二维数组 `vec4 data[width][height]`。通常它存的是 `r, g, b, a` 颜色。
-但我们可以存任何东西！
+GPU 最擅长处理纹理。纹理本质上是二维数组 `vec4 data[width][height]`。通常存 RGBA 颜色，但我们可以存**任何东西**：
 
-*   **位置纹理 (Position Texture)**：
-    *   `r` -> `x` 坐标
-    *   `g` -> `y` 坐标
-    *   `b` -> `z` 坐标
-    *   `a` -> 粒子的生命值 / 质量
-*   **速度纹理 (Velocity Texture)**：
-    *   `r` -> `vx` 速度
-    *   `g` -> `vy` 速度
-    *   `b` -> `vz` 速度
+**位置纹理 (Position Texture)**：
 
-如果我们有一张 1024x1024 的纹理，我们就拥有了 **100 万个数据槽**。
+| 通道 | 存储内容 | 示例值 |
+|---|---|---|
+| R | x 坐标 | -3.2 |
+| G | y 坐标 | 1.5 |
+| B | z 坐标 | 0.8 |
+| A | 生命值 | 0.7 |
 
-## 二、 模拟循环：Ping-Pong 技术
+**速度纹理 (Velocity Texture)**：
 
-在 Shader 中，我们不能既读取纹理又写入同一张纹理（读写冲突）。
-所以我们需要**两张**纹理，轮流倒手。这叫 **Ping-Pong**。
+| 通道 | 存储内容 | 示例值 |
+|---|---|---|
+| R | vx 速度 | 0.02 |
+| G | vy 速度 | -0.01 |
+| B | vz 速度 | 0.03 |
+| A | 未使用/质量 | 1.0 |
 
-### 步骤
-1.  **Frame 1**:
-    *   读取 `Texture_A` (旧位置)。
-    *   计算新位置：`New_Pos = Old_Pos + Velocity * dt`。
-    *   写入 `Texture_B`。
-2.  **Frame 2**:
-    *   读取 `Texture_B` (刚才算出的位置)。
-    *   计算新位置。
-    *   写入 `Texture_A`。
+一张 1024×1024 的纹理 = **1,048,576 个数据槽** = 100 万个粒子。
 
-如此循环往复。
+## 二、Ping-Pong：读写冲突的解决方案
 
-## 三、 渲染：从数据到屏幕
+GPU 有一个限制：**同一个 Shader 不能同时读取和写入同一张纹理**。如果位置更新 Shader 读取位置纹理的同时又往里面写新位置，数据会混乱。
+
+解决方案：**两张纹理轮流倒手**。
+
+```
+Frame 1: 读取 Texture_A → 计算 → 写入 Texture_B
+Frame 2: 读取 Texture_B → 计算 → 写入 Texture_A
+Frame 3: 读取 Texture_A → 计算 → 写入 Texture_B
+...
+```
+
+这就是 **FBO Ping-Pong**——两个 RenderTarget 交替作为输入和输出。
+
+### 手动实现 Ping-Pong
+
+```javascript
+import * as THREE from 'three';
+
+const SIZE = 256; // 256×256 = 65,536 个粒子
+
+// 创建两个 RenderTarget（A 和 B）
+let rtA = createRenderTarget();
+let rtB = createRenderTarget();
+
+function createRenderTarget() {
+  return new THREE.WebGLRenderTarget(SIZE, SIZE, {
+    wrapS: THREE.ClampToEdgeWrapping,
+    wrapT: THREE.ClampToEdgeWrapping,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    format: THREE.RGBAFormat,
+    type: THREE.FloatType, // 关键：用浮点纹理存储坐标值
+  });
+}
+
+// Simulation Shader：读取旧位置，计算新位置
+const simulationMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    uPositions: { value: null },   // 旧位置纹理
+    uVelocities: { value: null },  // 速度纹理
+    uTime: { value: 0 },
+    uDelta: { value: 0.016 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D uPositions;
+    uniform sampler2D uVelocities;
+    uniform float uTime;
+    uniform float uDelta;
+    varying vec2 vUv;
+
+    void main() {
+      // 1. 读取旧位置和速度
+      vec4 pos = texture2D(uPositions, vUv);
+      vec4 vel = texture2D(uVelocities, vUv);
+
+      // 2. 更新位置：newPos = oldPos + velocity * deltaTime
+      pos.xyz += vel.xyz * uDelta;
+
+      // 3. 边界检测：超出范围则重置
+      if (length(pos.xyz) > 10.0) {
+        pos.xyz = vec3(
+          (vUv.x - 0.5) * 2.0,
+          (vUv.y - 0.5) * 2.0,
+          0.0
+        );
+      }
+
+      // 4. 写入新位置
+      gl_FragColor = pos;
+    }
+  `,
+});
+
+// 每帧 Ping-Pong
+function simulate() {
+  // 读取 A，写入 B
+  simulationMaterial.uniforms.uPositions.value = rtA.texture;
+  renderer.setRenderTarget(rtB);
+  renderQuad(simulationMaterial);
+
+  // 交换 A 和 B
+  [rtA, rtB] = [rtB, rtA];
+
+  // 现在最新的位置在 rtA 中
+  renderer.setRenderTarget(null);
+}
+```
+
+**`FloatType` 是什么？**
+
+普通纹理用 `UnsignedByteType`（0~255 整数），只能存颜色。浮点纹理用 `FloatType`（32 位浮点数），可以存 -3.2、1.5e7 这样的精确数值。这是 GPGPU 的基础——没有浮点纹理，就无法存储坐标。
+
+## 三、Three.js 的 GPUComputationRenderer
+
+手动实现 Ping-Pong 很繁琐。Three.js 提供了 `GPUComputationRenderer`，自动处理所有细节：
+
+```javascript
+import { GPUComputationRenderer } from 'three/examples/jsm/misc/GPUComputationRenderer';
+
+const SIZE = 256; // 256×256 = 65,536 个粒子
+const computeRenderer = new GPUComputationRenderer(SIZE, SIZE, renderer);
+
+// 1. 创建数据纹理
+const positionTexture = computeRenderer.createTexture();
+const velocityTexture = computeRenderer.createTexture();
+
+// 2. 初始化数据
+const posData = positionTexture.image.data;
+const velData = velocityTexture.image.data;
+for (let i = 0; i < SIZE * SIZE; i++) {
+  // 随机初始位置
+  posData[i * 4]     = (Math.random() - 0.5) * 10; // x
+  posData[i * 4 + 1] = (Math.random() - 0.5) * 10; // y
+  posData[i * 4 + 2] = (Math.random() - 0.5) * 10; // z
+  posData[i * 4 + 3] = Math.random();               // 生命值
+
+  // 随机初始速度
+  velData[i * 4]     = (Math.random() - 0.5) * 0.1; // vx
+  velData[i * 4 + 1] = (Math.random() - 0.5) * 0.1; // vy
+  velData[i * 4 + 2] = (Math.random() - 0.5) * 0.1; // vz
+  velData[i * 4 + 3] = 0;
+}
+
+// 3. 注册变量（名字对应 Shader 中的 texture 名）
+const posVar = computeRenderer.addVariable(
+  'uPositionTexture',    // Shader 中的 sampler2D 名字
+  positionFragmentShader, // Fragment Shader 源码
+  positionTexture
+);
+const velVar = computeRenderer.addVariable(
+  'uVelocityTexture',
+  velocityFragmentShader,
+  velocityTexture
+);
+
+// 4. 设置变量间的依赖关系
+computeRenderer.setVariableDependencies(posVar, [posVar, velVar]);
+computeRenderer.setVariableDependencies(velVar, [posVar, velVar]);
+
+// 5. 添加自定义 uniform
+posVar.material.uniforms.uTime = { value: 0 };
+posVar.material.uniforms.uMouse = { value: new THREE.Vector3() };
+
+// 6. 初始化
+computeRenderer.init();
+
+// 7. 每帧更新
+function animate() {
+  posVar.material.uniforms.uTime.value = performance.now() * 0.001;
+  computeRenderer.compute(); // 执行所有 Simulation Shader
+
+  // 获取最新位置纹理，传给渲染 Shader
+  const currentPositions = computeRenderer.getCurrentRenderTarget(posVar).texture;
+  particleMaterial.uniforms.uPositionTexture.value = currentPositions;
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+```
+
+### 位置更新 Shader
+
+```glsl
+// positionFragmentShader
+uniform float uTime;
+uniform vec3 uMouse;
+
+void main() {
+  // vUv 是 GPUComputationRenderer 自动注入的
+  // 它表示当前粒子在纹理中的位置 (0~1)
+
+  // 读取当前位置和速度
+  vec4 pos = texture2D(uPositionTexture, vUv);
+  vec4 vel = texture2D(uVelocityTexture, vUv);
+
+  // 1. 应用速度
+  pos.xyz += vel.xyz * 0.016; // deltaTime
+
+  // 2. 鼠标吸引力
+  vec3 toMouse = uMouse - pos.xyz;
+  float mouseDist = length(toMouse);
+  if (mouseDist < 3.0) {
+    vel.xyz += normalize(toMouse) * 0.01 / (mouseDist + 0.1);
+  }
+
+  // 3. 边界重置
+  if (length(pos.xyz) > 15.0 || pos.w <= 0.0) {
+    pos = vec4(
+      (vUv.x - 0.5) * 10.0,
+      (vUv.y - 0.5) * 10.0,
+      0.0,
+      1.0
+    );
+  }
+
+  gl_FragColor = pos;
+}
+```
+
+### 速度更新 Shader
+
+```glsl
+// velocityFragmentShader
+uniform float uTime;
+
+void main() {
+  vec4 pos = texture2D(uPositionTexture, vUv);
+  vec4 vel = texture2D(uVelocityTexture, vUv);
+
+  // 1. 阻尼（模拟空气阻力）
+  vel.xyz *= 0.98;
+
+  // 2. Curl Noise 力场（产生流体般的涡旋运动）
+  vec3 curlForce = curlNoise(pos.xyz * 0.5 + uTime * 0.1);
+  vel.xyz += curlForce * 0.005;
+
+  // 3. 重力
+  vel.y -= 0.0005;
+
+  gl_FragColor = vel;
+}
+
+// 简化的 Curl Noise
+vec3 curlNoise(vec3 p) {
+  float e = 0.1;
+  vec3 dx = vec3(
+    noise(p + vec3(e,0,0)) - noise(p - vec3(e,0,0)),
+    noise(p + vec3(0,e,0)) - noise(p - vec3(0,e,0)),
+    noise(p + vec3(0,0,e)) - noise(p - vec3(0,0,e))
+  ) / (2.0 * e);
+  // Curl = 旋度 = ∇ × gradient
+  return vec3(
+    dx.z - dx.y,
+    dx.x - dx.z,
+    dx.y - dx.x
+  );
+}
+```
+
+## 四、从数据到屏幕：渲染粒子
 
 模拟完了，数据都在纹理里。怎么画出来？
-我们创建一个包含 100 万个顶点的 Geometry。每个顶点只需要一个属性：**索引 (Index)**。
 
-在 Vertex Shader 中：
-1.  根据索引计算出采样坐标 `uv`。
-2.  用 `texture2D(uPositionTexture, uv)` 读取粒子的真实位置。
-3.  把顶点移动到那个位置。
+### 原理
 
-## 四、 实战：GPGPU 粒子模拟
+创建一个包含 N 个顶点的 BufferGeometry。每个顶点存储自己的**纹理索引**。Vertex Shader 根据索引去位置纹理中查找真实坐标，然后把顶点移到那里。
 
-下面的示例用 Shader 模拟了 GPGPU 的**位置更新逻辑**。
-左边是"数据视图"（实际存储在纹理里的颜色），右边是"渲染视图"（粒子在空间中的样子）。
+```javascript
+const PARTICLE_COUNT = SIZE * SIZE; // 65,536
+const geometry = new THREE.BufferGeometry();
 
-*(注：由于 ShaderPreview 限制，我们无法真正进行跨帧 Ping-Pong，这里用 uTime 模拟单向流动)*
+// 每个粒子的纹理索引
+const indices = new Float32Array(PARTICLE_COUNT * 3);
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+  const x = (i % SIZE) / SIZE;      // 纹理 U 坐标
+  const y = Math.floor(i / SIZE) / SIZE; // 纹理 V 坐标
+  indices[i * 3]     = x;
+  indices[i * 3 + 1] = y;
+  indices[i * 3 + 2] = 0;
+}
+geometry.setAttribute('position', new THREE.BufferAttribute(indices, 3));
 
-<ShaderPreview title="GPGPU Logic Simulation" code={`
+const particleMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    uPositionTexture: { value: null },
+    uColor: { value: new THREE.Color(0.3, 0.6, 1.0) },
+  },
+  vertexShader: `
+    attribute vec3 position; // 纹理索引（不是世界坐标！）
+    uniform sampler2D uPositionTexture;
+
+    varying float vAlpha;
+
+    void main() {
+      // position.x = U, position.y = V
+      vec2 uv = position.xy;
+
+      // 从位置纹理读取真实世界坐标
+      vec4 posData = texture2D(uPositionTexture, uv);
+      vec3 worldPos = posData.xyz;
+      float life = posData.w; // 生命值
+
+      // 用世界坐标做 MVP 变换
+      vec4 mvPos = modelViewMatrix * vec4(worldPos, 1.0);
+      gl_Position = projectionMatrix * mvPos;
+
+      // 点大小（近大远小）
+      gl_PointSize = 3.0 * (300.0 / -mvPos.z);
+
+      // 生命值控制透明度
+      vAlpha = life;
+    }
+  `,
+  fragmentShader: `
+    varying float vAlpha;
+    uniform vec3 uColor;
+
+    void main() {
+      // 圆形点（裁掉方形边角）
+      float dist = length(gl_PointCoord - vec2(0.5));
+      if (dist > 0.5) discard;
+
+      float alpha = smoothstep(0.5, 0.3, dist) * vAlpha;
+      gl_FragColor = vec4(uColor, alpha);
+    }
+  `,
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+});
+
+const particles = new THREE.Points(geometry, particleMaterial);
+scene.add(particles);
+```
+
+**关键理解**：BufferGeometry 的 `position` attribute 这里存的**不是世界坐标，而是纹理索引 (U, V)**。Vertex Shader 用这个索引去采样位置纹理，得到真正的世界坐标。
+
+## 五、Curl Noise：流体般的运动
+
+如果用随机数移动粒子，它们会像苍蝇乱飞。要模拟烟雾、流体的丝滑流动感，需要 **Curl Noise**。
+
+### 原理
+
+Curl Noise 对噪声场求**旋度 (Curl)**。数学上，旋度场的散度为零，这意味着粒子流**不会压缩也不会膨胀**——就像不可压缩的流体。
+
+```glsl
+// Curl = ∇ × F（向量场的旋度）
+vec3 curlNoise(vec3 p) {
+  float e = 0.1;
+
+  // 采样噪声场的梯度
+  float n1, n2;
+  // ∂Fz/∂y - ∂Fy/∂z
+  n1 = noise(p + vec3(0, e, 0));
+  n2 = noise(p - vec3(0, e, 0));
+  float dFz_dy = (n1 - n2) / (2.0 * e);
+
+  n1 = noise(p + vec3(0, 0, e));
+  n2 = noise(p - vec3(0, 0, e));
+  float dFy_dz = (n1 - n2) / (2.0 * e);
+
+  // ∂Fx/∂z - ∂Fz/∂x
+  n1 = noise(p + vec3(0, 0, e));
+  n2 = noise(p - vec3(0, 0, e));
+  float dFx_dz = (n1 - n2) / (2.0 * e);
+
+  n1 = noise(p + vec3(e, 0, 0));
+  n2 = noise(p - vec3(e, 0, 0));
+  float dFz_dx = (n1 - n2) / (2.0 * e);
+
+  // ∂Fy/∂x - ∂Fx/∂y
+  n1 = noise(p + vec3(e, 0, 0));
+  n2 = noise(p - vec3(e, 0, 0));
+  float dFy_dx = (n1 - n2) / (2.0 * e);
+
+  n1 = noise(p + vec3(0, e, 0));
+  n2 = noise(p - vec3(0, e, 0));
+  float dFx_dy = (n1 - n2) / (2.0 * e);
+
+  return vec3(
+    dFz_dy - dFy_dz,
+    dFx_dz - dFz_dx,
+    dFy_dx - dFx_dy
+  );
+}
+```
+
+<ShaderPreview title="Curl Noise Flow" code={`
 varying vec2 vUv;
 uniform float uTime;
 
-// 模拟 curl noise (旋度噪声) - 让粒子产生流体般的涡旋
-vec3 curlNoise(vec3 p) {
-    // 简化的伪代码，用 sin/cos 模拟涡旋
-    return vec3(
-        sin(p.y * 10.0 + uTime),
-        cos(p.z * 10.0 + uTime),
-        sin(p.x * 10.0)
-    ) * 0.1;
+// 简化的噪声函数
+float noise(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// 2D Curl Noise（用噪声梯度的旋度）
+vec2 curlNoise2D(vec2 p) {
+    float e = 0.01;
+    // 对噪声场求偏导
+    float dn_dy = (noise(p + vec2(0, e)) - noise(p - vec2(0, e))) / (2.0 * e);
+    float dn_dx = (noise(p + vec2(e, 0)) - noise(p - vec2(e, 0))) / (2.0 * e);
+    // 2D curl = (dn/dy, -dn/dx)
+    return vec2(dn_dy, -dn_dx) * 3.0;
 }
 
 void main() {
-    // --- 1. 模拟 Simulation Shader (计算新位置) ---
-    // 假设 vUv 就是粒子在纹理中的索引 ID
-    
-    // 初始状态：根据 ID 排列成网格
-    vec3 initialPos = vec3(vUv.x, vUv.y, 0.0) * 2.0 - 1.0;
-    
-    // 施加力场 (模拟速度纹理的作用)
-    vec3 velocity = curlNoise(initialPos);
-    
-    // 更新位置 (Pos += Vel * Time)
-    vec3 currentPos = initialPos + velocity * sin(uTime) * 0.5;
-    
-    // 将位置编码为颜色 (r,g,b = x,y,z)
-    // 为了可视化，我们将坐标 (-1~1) 映射到颜色 (0~1)
-    vec3 dataColor = currentPos * 0.5 + 0.5;
-    
-    // --- 2. 可视化输出 ---
-    
-    // 左半屏：显示"数据纹理" (Data Texture)
-    if (vUv.x < 0.5) {
-        gl_FragColor = vec4(dataColor, 1.0);
-    } 
-    // 右半屏：模拟粒子的空间分布 (Render)
-    else {
-        // 这是一个 trick：我们在 Fragment Shader 里画点
-        // 实际上 GPGPU 是在 Vertex Shader 里移动点
-        
-        vec2 renderUV = (vUv - vec2(0.75, 0.5)) * 4.0; // 局部坐标
-        
-        float dist = 1.0;
-        // 采样几个点来代表粒子
-        for(float i=0.0; i<10.0; i++) {
-            // 模拟读取纹理中的位置
-            vec2 lookupUV = vec2(i/10.0, i/10.0);
-            vec3 pos = (vec3(lookupUV, 0.0) * 2.0 - 1.0) + curlNoise(vec3(lookupUV, 0.0)) * sin(uTime) * 0.5;
-            
-            // 画点
-            float d = length(renderUV - pos.xy);
-            dist = min(dist, d);
-        }
-        
-        float particle = 1.0 - smoothstep(0.05, 0.06, dist);
-        gl_FragColor = vec4(vec3(particle), 1.0);
-    }
-    
-    // 分割线
-    if (abs(vUv.x - 0.5) < 0.002) gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+    vec2 uv = vUv * 2.0 - 1.0;
+
+    // 用 Curl Noise 生成流场
+    vec2 flowDir = curlNoise2D(uv * 3.0 + uTime * 0.3);
+    flowDir = normalize(flowDir + vec2(0.001));
+
+    // 沿流场方向画短线段
+    vec2 p1 = uv;
+    vec2 p2 = uv + flowDir * 0.05;
+
+    // 点到线段的距离
+    vec2 pa = uv - p1;
+    vec2 ba = p2 - p1;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    float d = length(pa - ba * h);
+
+    // 线段粗细
+    float line = smoothstep(0.02, 0.01, d);
+
+    // 颜色基于流场方向
+    float angle = atan(flowDir.y, flowDir.x);
+    vec3 color = vec3(
+        sin(angle) * 0.5 + 0.5,
+        0.3,
+        cos(angle) * 0.5 + 0.5
+    ) * line;
+
+    gl_FragColor = vec4(color, 1.0);
 }
 `} />
 
-## 五、 高级技巧：Curl Noise (旋度噪声)
+注意流线的方向是连续变化的——没有汇聚也没有发散，这就是"散度为零"的物理表现。粒子沿着这种场运动，看起来就像流体一样丝滑。
 
-如果你直接用随机数移动粒子，它们会像苍蝇一样乱飞。
-如果你想模拟**烟雾、流体**那种丝滑的流动感，你需要 **Curl Noise**。
+## 六、完整的数据流
 
-原理很简单：对 Perlin Noise 场求旋度 (Curl)。
-数学上保证了：**旋度场的散度为零**。这意味着粒子流**不会压缩也不会膨胀**，就像不可压缩的流体一样。
-
-这是制作 3A 级魔法特效的标配算法。
+```
+初始化
+├── 创建 Position Texture（随机位置）
+├── 创建 Velocity Texture（随机速度）
+│
+每帧循环
+├── Simulation Shader（Fragment Shader）
+│   ├── 读取旧 Position Texture → 计算新位置 → 写入新 Position Texture
+│   └── 读取旧 Velocity Texture → 计算新速度 → 写入新 Velocity Texture
+│   └── Ping-Pong 自动切换输入/输出纹理
+│
+├── Render Shader（Vertex + Fragment）
+│   ├── Vertex: 根据纹理索引采样 Position Texture → 移动顶点
+│   └── Fragment: 画点 + 颜色
+│
+└── renderer.render(scene, camera)
+```
 
 ## 总结
 
-GPGPU 开发有点像"把大象装进冰箱"：
-1.  **准备数据**：把粒子初始位置填入纹理。
-2.  **模拟**：写一个 Fragment Shader，读取旧位置，算出新位置。
-3.  **渲染**：写一个 Vertex Shader，读取新位置，把顶点移过去。
+| 概念 | 作用 | Three.js 中的实现 |
+|---|---|---|
+| 浮点纹理 | 存储精确的坐标/速度值 | `FloatType` RenderTarget |
+| Ping-Pong | 解决读写冲突 | GPUComputationRenderer 自动处理 |
+| 纹理索引 | 粒子 ID → 纹理坐标 | `(i % SIZE) / SIZE` |
+| Simulation Shader | 计算物理更新 | Fragment Shader 读写纹理 |
+| Render Shader | 从纹理读取位置画点 | Vertex Shader 采样纹理 |
+| Curl Noise | 不可压缩流场 | 噪声场的旋度 |
 
-虽然配置繁琐，但当你看到 100 万个光点在屏幕上随着你的鼠标起舞时，一切都是值得的。
+GPGPU 的本质就是：**用纹理存数据，用 Shader 做计算，用 RenderTarget 做存储**。当你看到 100 万个光点在屏幕上随鼠标起舞时，背后就是这个数据循环。
+
+### 下一步
+
+- **[几何工坊](/posts/glsl/geometry-deep-dive)**——粒子系统的 BufferGeometry 是基础
+- **[后期魔法](/posts/glsl/post-processing-magic)**——Bloom 让粒子发光更真实
+- **[程序化生成](/posts/glsl/procedural-generation)**——Curl Noise 是程序化力场的一种

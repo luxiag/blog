@@ -11,90 +11,292 @@ tags: ['Graphics', 'Theory', 'Basics', 'Pipeline']
 
 你会觉得："我学会了怎么写代码，但我不知道这行代码在整个系统中处于什么位置。"
 
-今天，我们跳出细节，站在上帝视角，看看计算机图形学的**全貌**。我们将回答三个终极问题：
-1.  **屏幕**到底是什么？
-2.  **GPU** 到底在忙什么？（渲染管线）
-3.  **我们**到底在算什么？（光与影）
+今天，我们跳出细节，站在上帝视角，看看计算机图形学的**全貌**。但和大多数"概论"文章不同，我们不会只列概念——**每个阶段都会对应到你写的代码**。
+
+前置阅读：[GLSL 新手指南](/posts/glsl/getting-started-with-glsl)（你需要已经知道 Vertex Shader 和 Fragment Shader 的基本关系）
 
 ## 一、 屏幕：光的欺骗
 
-图形学的第一课，是理解你的画布——屏幕。
-
 ### 1. 像素不是点，是小灯泡
+
 你以为屏幕是一张画纸，其实它是一块布满了微型红绿蓝 (RGB) 灯泡的阵列。
 当你想显示"黄色"时，你并不是真的涂了黄色颜料，而是同时点亮了**红色**和**绿色**的灯泡。你的眼睛被欺骗了，大脑混合出了黄色。
 
-这就是为什么我们在 Shader 里用 `vec4(r, g, b, a)`。我们在控制灯泡的亮度。
+这就是为什么我们在 Shader 里用 `vec4(r, g, b, a)`——我们不是在"调色"，而是在**控制灯泡的亮度**。
 
 ### 2. 帧率：视觉暂留
-屏幕不仅在欺骗你的颜色感官，还在欺骗你的时间感官。
-它每秒钟刷新 60 次 (60Hz)。因为刷新得太快，连续的静态画面在人脑中变成了动态。
 
-**这对我们意味着什么？**
-意味着你的 Shader 代码，必须在 **16.6 毫秒** (1000ms / 60) 内跑完所有像素的计算！如果跑慢了，画面就会卡顿（掉帧）。这也是为什么我们如此强调 GPU 的并行计算能力。
+屏幕每秒钟刷新 60 次 (60Hz)。因为刷新得太快，连续的静态画面在人脑中变成了动态。
 
-## 二、 渲染管线：从数据到图像的流水线
+**这对 Shader 意味着什么？**
 
-这是图形学最核心的概念。
-当你告诉电脑："给我画一个红色的立方体"。GPU 内部发生了一场精密的接力赛，这就是**渲染管线 (Rendering Pipeline)**。
+你的 Shader 代码，必须在 **16.6 毫秒** (1000ms / 60) 内跑完所有像素的计算。如果跑慢了，画面就会卡顿（掉帧）。这也是为什么 GPU 的并行能力如此重要——几百万个像素同时算，才能在 16ms 内跑完。
 
-我们可以把它简化为四个阶段：
+## 二、 渲染管线：从代码到像素的完整旅程
 
-### 阶段 1：顶点处理 (Vertex Processing) —— "点在哪里？"
-*   **输入**：一堆 3D 坐标（立方体的 8 个角）。
-*   **工作**：
-    1.  **模型变换**：把立方体摆到世界中正确的位置。
-    2.  **视图变换**：根据摄像机的角度，旋转整个世界。
-    3.  **投影变换**：把 3D 世界压扁成 2D 屏幕坐标（近大远小）。
-*   **输出**：屏幕上的 2D 点。
-*   **对应代码**：`Vertex Shader`。
+这是图形学最核心的概念。当你在 JavaScript 里写 `renderer.render(scene, camera)` 时，GPU 内部发生了一场精密的接力赛。
+
+**关键**：这个管线不是抽象的流程图，它的每个阶段都对应你写的具体代码。我们来一步步走完。
+
+### 阶段 0：JavaScript 准备数据
+
+在 GPU 开始工作之前，你需要用 JavaScript 准备好所有素材：
+
+```javascript
+// 1. 几何体：顶点坐标、UV、法线
+const geometry = new THREE.PlaneGeometry(2, 2, 128, 128);
+
+// 2. Shader 代码
+const vertexShader = `...`;
+const fragmentShader = `...`;
+
+// 3. Uniform 值（每帧更新）
+const uniforms = {
+  uTime: { value: 0 },
+  uWaveHeight: { value: 0.16 },
+};
+
+// 4. 把一切组装成材质和网格
+const material = new THREE.ShaderMaterial({
+  vertexShader,
+  fragmentShader,
+  uniforms,
+});
+const mesh = new THREE.Mesh(geometry, material);
+```
+
+这些数据会被上传到 GPU 的显存中，等待管线处理。
+
+### 阶段 1：Vertex Shader —— "顶点在哪里？"
+
+**对应代码**：你的 Vertex Shader
+
+**输入**（GPU 从显存中读取）：
+
+| 变量 | 类型 | 来源 | 作用 |
+|---|---|---|---|
+| `position` | attribute vec3 | JS 定义的几何体 | 顶点在模型中的 3D 坐标 |
+| `uv` | attribute vec2 | JS 定义的几何体 | 顶点的纹理坐标 |
+| `normal` | attribute vec3 | JS 定义的几何体 | 顶点的法线方向 |
+| `modelViewMatrix` | uniform mat4 | Three.js 自动计算 | 模型→相机空间的变换 |
+| `projectionMatrix` | uniform mat4 | Three.js 自动计算 | 3D→2D 投影变换 |
+
+**输出**：
+
+| 变量 | 作用 |
+|---|---|
+| `gl_Position` | 顶点在屏幕上的位置（必须设置） |
+| `varying` 变量 | 传递给 Fragment Shader 的数据 |
+
+**你写的代码长这样**：
+
+```glsl
+// Vertex Shader
+varying vec2 vUv;           // 传递给 Fragment
+varying float vElevation;    // 传递给 Fragment
+
+uniform float uTime;
+
+void main() {
+  vUv = uv;                              // 把 uv 传下去
+  vec3 pos = position;                   // 读取顶点坐标
+  pos.z += sin(pos.x * 4.0 + uTime) * 0.2;  // 修改顶点位置（波浪）
+  vElevation = pos.z;                    // 把高度传下去
+
+  // 核心行：计算顶点在屏幕上的最终位置
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+}
+```
+
+**最后一行是管线的核心**，它做了三件事：
+
+1. `modelViewMatrix * vec4(pos, 1.0)`：把顶点从模型空间变换到相机空间
+2. `projectionMatrix * ...`：把 3D 坐标投影到 2D 屏幕上
+3. 结果存入 `gl_Position`，GPU 用它来确定顶点在屏幕上画在哪里
 
 ### 阶段 2：光栅化 (Rasterization) —— "点变成了面"
-*   **输入**：屏幕上的 2D 点（比如三角形的三个角）。
-*   **工作**：找出这三个点围成的三角形覆盖了屏幕上的哪些**像素**。
-*   **输出**：一堆待处理的像素（片元）。
-*   **注意**：这一步是硬件自动完成的，你通常无法编程控制。
 
-### 阶段 3：片元处理 (Fragment Processing) —— "面是什么颜色？"
-*   **输入**：每一个待处理的像素。
-*   **工作**：这是最耗时的一步。你需要计算光照、纹理、阴影，最后决定这个像素到底是什么颜色。
-*   **输出**：RGBA 颜色。
-*   **对应代码**：`Fragment Shader`。
+**对应代码**：没有！这一步是 GPU 硬件自动完成的，你无法编程。
+
+Vertex Shader 输出了屏幕上的三个点（一个三角形的三个角）。光栅化就是**找出这个三角形覆盖了屏幕上的哪些像素**。
+
+同时，GPU 会对 varying 变量做**插值**：
+
+```
+顶点 A 的 vUv = (0, 0)
+顶点 B 的 vUv = (1, 0)
+顶点 C 的 vUv = (0, 1)
+
+→ 三角形中间某像素的 vUv = (0.33, 0.33)（自动插值）
+```
+
+这就是为什么 Fragment Shader 拿到的 `vUv` 是连续的、平滑的——GPU 在光栅化阶段帮你做了线性插值。
+
+### 阶段 3：Fragment Shader —— "像素是什么颜色？"
+
+**对应代码**：你的 Fragment Shader
+
+**输入**：
+
+| 变量 | 类型 | 来源 | 作用 |
+|---|---|---|---|
+| `vUv` 等 | varying | Vertex Shader 传来，经插值 | 像素的位置信息 |
+| `uTime` 等 | uniform | JS 传入，每帧更新 | 外部参数 |
+| `uImage` 等 | sampler2D | JS 传入 | 纹理图片 |
+
+**输出**：
+
+| 变量 | 作用 |
+|---|---|
+| `gl_FragColor` | 这个像素的 RGBA 颜色（必须设置） |
+
+**你写的代码长这样**：
+
+```glsl
+// Fragment Shader
+varying vec2 vUv;
+varying float vElevation;
+
+uniform vec3 uDeepColor;
+uniform vec3 uSurfaceColor;
+
+void main() {
+  // 根据高度混合颜色
+  float level = vElevation * 0.5 + 0.5;
+  vec3 color = mix(uDeepColor, uSurfaceColor, level);
+
+  gl_FragColor = vec4(color, 1.0);  // 这个像素的颜色
+}
+```
 
 ### 阶段 4：输出合并 (Output Merging) —— "谁挡住了谁？"
-*   **工作**：
-    1.  **深度测试 (Depth Test)**：如果这个像素比之前画在这个位置的像素更远，那就丢弃它（被挡住了）。
-    2.  **混合 (Blending)**：如果这个像素是半透明的，就和背景色混合。
 
----
+**对应代码**：通常不需要你写，GPU 自动处理。
+
+1. **深度测试 (Depth Test)**：如果这个像素比之前画在这个位置的像素更远，就丢弃它（被挡住了）。这解决了"谁在前面谁在后面"的问题。
+2. **混合 (Blending)**：如果这个像素是半透明的（alpha < 1.0），就和已有的背景色混合。这就是透明效果的工作原理。
+
+### 管线全景：从 JS 到屏幕
+
+```
+┌──────────────────────────────────────────────────────┐
+│  JavaScript                                          │
+│  geometry + material + uniforms → 上传到 GPU 显存    │
+└──────────────────────┬───────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│  Vertex Shader（你写的代码）                          │
+│  输入：position, uv, normal, matrices                │
+│  输出：gl_Position + varying 变量                     │
+│  每个顶点执行一次                                     │
+└──────────────────────┬───────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│  光栅化（GPU 硬件自动）                               │
+│  三角形 → 像素列表                                    │
+│  varying 变量自动插值                                 │
+└──────────────────────┬───────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│  Fragment Shader（你写的代码）                        │
+│  输入：varying（插值后）, uniform, sampler2D          │
+│  输出：gl_FragColor                                   │
+│  每个像素执行一次                                     │
+└──────────────────────┬───────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│  输出合并（GPU 硬件自动）                             │
+│  深度测试 + Alpha 混合                                │
+└──────────────────────┬───────────────────────────────┘
+                       │
+                       ▼
+                   屏幕像素
+```
+
+**你写的代码只占管线的两个阶段**（Vertex 和 Fragment），其他阶段由 GPU 硬件或框架（Three.js）处理。但理解完整的管线，你才能知道自己的代码在做什么、数据从哪来、输出到哪去。
 
 ## 三、 坐标系：我们在哪一层？
 
-初学者最容易晕的就是坐标系。因为在管线的不同阶段，我们处于不同的空间。
+初学者最容易晕的就是坐标系。因为在管线的不同阶段，我们处于不同的空间。每经过一次矩阵变换，就进入一个新空间。
 
-1.  **局部空间 (Local Space)**：模型自己的世界。原点是模型的中心。
-    *   *乘以 Model Matrix ->*
-2.  **世界空间 (World Space)**：所有模型都在同一个大世界里。原点是世界的中心。光照计算通常在这里进行。
-    *   *乘以 View Matrix ->*
-3.  **观察空间 (View Space)**：以摄像机为原点的世界。摄像机永远在 (0,0,0) 看向 Z 轴负方向。
-    *   *乘以 Projection Matrix ->*
-4.  **裁剪空间 (Clip Space)**：一个 x,y,z 都在 -1 到 1 之间的立方体盒子。超出盒子的东西会被剪掉。这是 Vertex Shader 的终点 (`gl_Position`)。
-    *   *视口变换 ->*
-5.  **屏幕空间 (Screen Space)**：最终的像素坐标 (x: 0~1920, y: 0~1080)。
+### 变换链路
+
+```
+局部空间          世界空间          观察空间          裁剪空间          屏幕空间
+(模型自己的      (所有模型在       (以相机为        (投影后的         (最终像素
+ 坐标系)          同一个世界)       原点)           2D坐标)           坐标)
+    │                │                │                │                │
+    │ × Model        │ × View         │ × Projection   │ 视口变换       │
+    │ Matrix         │ Matrix         │ Matrix         │                │
+    └───────────→    └───────────→    └───────────→    └───────────→    └──→ 屏幕输出
+```
+
+### 每个空间的含义
+
+**1. 局部空间 (Local Space)**：模型自己的世界
+
+一个立方体可能把自己的中心定义为 (0,0,0)，顶点在 ±1 的位置。这就像一个人说"我家门口是原点"——对别人来说毫无意义，但对他自己来说很方便。
+
+**2. 世界空间 (World Space)**：所有模型共享的大世界
+
+通过 **Model Matrix**，我们把每个模型从自己的局部空间放到世界中的正确位置。一个立方体在 (5, 0, 3)，另一个在 (-2, 1, 0)。光照计算通常在世界空间进行。
+
+**3. 观察空间 (View Space)**：以相机为原点
+
+通过 **View Matrix**，我们不是移动相机，而是**把整个世界往反方向移动**。变换后，相机永远在 (0,0,0)，看向 Z 轴负方向。
+
+**4. 裁剪空间 (Clip Space)**：3D 压成 2D
+
+通过 **Projection Matrix**，3D 世界被"压扁"成 2D。这是 Vertex Shader 的终点——`gl_Position` 的值就在裁剪空间中。x、y、z 都在 [-1, 1] 之间，超出范围的会被裁掉。这就是"近大远小"的数学实现。
+
+**5. 屏幕空间 (Screen Space)**：最终像素
+
+GPU 自动把裁剪空间映射到屏幕像素坐标 (0~1920, 0~1080)。
+
+### 对应到你写的代码
+
+在你的 Vertex Shader 中，那行核心代码：
+
+```glsl
+gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+```
+
+它做的正是从局部空间一路变换到裁剪空间：
+
+```
+vec4(pos, 1.0)                     ← 局部空间
+      │
+      │ × modelViewMatrix           ← 包含 Model + View，变换到观察空间
+      │
+      │ × projectionMatrix          ← 投影到裁剪空间
+      │
+      ▼
+gl_Position                         ← 裁剪空间
+```
+
+:::tip modelViewMatrix 是两个矩阵的乘积
+`modelViewMatrix = ViewMatrix × ModelMatrix`。Three.js 帮你把它们乘好了，所以你不需要分别乘两次。
+:::
 
 ## 四、 光照：图形学的灵魂
 
 如果没有光，我们看到的只是一团色块。图形学的很大一部分工作，就是在模拟光。
 
-### 1. 也是欺骗
-真实的物理光照（光线追踪）非常昂贵。为了在 16ms 内算完，我们发明了很多"作弊"算法。
+### 光照也是在 Fragment Shader 里算的
 
-### 2. 冯氏光照模型 (Phong Lighting)
-这是最经典的作弊方法，它把光拆成三部分：
+理解了管线之后，光照的位置就很清楚了：**在 Fragment Shader 阶段，每个像素根据法线和光线方向，算出自己该有多亮。**
 
-1.  **环境光 (Ambient)**：即使没有光直射，物体也不是全黑的（光会乱反射）。我们给它一个底色。
-2.  **漫反射 (Diffuse)**：光照在粗糙表面上。正对着光的地方最亮 (`dot(Normal, LightDir)`).
-3.  **镜面光 (Specular)**：光照在光滑表面上。反射光直接射进眼睛的地方，会有一个高光亮点。
+### 冯氏光照模型 (Phong Lighting)
+
+这是最经典的"作弊"方法，它把光拆成三部分：
+
+1. **环境光 (Ambient)**：即使没有光直射，物体也不是全黑的（光会乱反射）。我们给它一个底色。
+2. **漫反射 (Diffuse)**：光照在粗糙表面上。正对着光的地方最亮。数学公式：`dot(normal, lightDir)`。
+3. **镜面光 (Specular)**：光照在光滑表面上。反射光直接射进眼睛的地方有高光。
 
 <ShaderPreview title="Phong Lighting" code={`
 varying vec2 vUv;
@@ -107,29 +309,34 @@ void main() {
     if (r > 1.0) discard; // 圆外丢弃
     
     // 计算法线：球面法线就是从球心指出来的方向
+    // x² + y² + z² = 1 → z = sqrt(1 - x² - y²)
     float z = sqrt(1.0 - r*r);
     vec3 normal = vec3(p.x, p.y, z);
     
-    // 2. 光源位置 (旋转)
-    vec3 lightPos = vec3(sin(uTime)*2.0, 1.0, cos(uTime)*2.0);
-    vec3 lightDir = normalize(lightPos - vec3(0.0, 0.0, 0.0));
+    // 2. 光源方向（旋转）
+    vec3 lightDir = normalize(vec3(sin(uTime)*2.0, 1.0, cos(uTime)*2.0));
     
-    // 3. 视线方向 (假设相机在正前方)
+    // 3. 视线方向（假设相机在正前方）
     vec3 viewDir = vec3(0.0, 0.0, 1.0);
     
-    // --- 计算光照 ---
+    // --- 三层光照 ---
     
-    // Ambient: 环境光
+    // Ambient: 环境光（最低亮度，不让暗面全黑）
     vec3 ambient = vec3(0.1, 0.0, 0.0); // 暗红色底光
     
-    // Diffuse: 漫反射 (N dot L)
+    // Diffuse: 漫反射（核心！N·L）
+    // dot(normal, lightDir) = 法线和光线方向的夹角余弦
+    // 正对光 → 1.0 (最亮)
+    // 垂直于光 → 0.0 (最暗)
+    // 背对光 → 负数 → max() 截断为 0
     float diff = max(dot(normal, lightDir), 0.0);
     vec3 diffuse = diff * vec3(1.0, 0.0, 0.0); // 红色物体
     
-    // Specular: 镜面光 (Blinn-Phong)
+    // Specular: 镜面高光（Blinn-Phong 变体）
+    // halfVector = 光线方向 + 视线方向 的中间方向
     vec3 halfwayDir = normalize(lightDir + viewDir);
     float spec = pow(max(dot(normal, halfwayDir), 0.0), 32.0); // 32是反光度
-    vec3 specular = spec * vec3(1.0, 1.0, 1.0); // 白光
+    vec3 specular = spec * vec3(1.0, 1.0, 1.0); // 白色高光
     
     vec3 result = ambient + diffuse + specular;
     
@@ -137,12 +344,51 @@ void main() {
 }
 `} />
 
-## 总结
+### 漫反射的本质：dot(N, L)
 
-现在，你再看那些碎片化的知识点，应该能找到它们的位置了：
+漫反射是光照的核心公式，值得单独理解：
 
-*   **GLSL**：是控制管线中 *Vertex* 和 *Fragment* 两个可编程阶段的语言。
-*   **矩阵**：是连接 *局部空间* 到 *裁剪空间* 的桥梁。
-*   **向量**：是计算 *光照* 和 *坐标* 的基本单位。
+`dot(normal, lightDir)` 计算的是法线和光线方向的**余弦值**。
+
+- 法线正对光线 → 夹角 0° → cos(0°) = 1 → 最亮
+- 法线与光线成 45° → cos(45°) ≈ 0.71 → 中等亮度
+- 法线与光线成 90° → cos(90°) = 0 → 全黑
+- 法线背对光线 → 夹角 > 90° → 余弦为负 → `max(..., 0)` 截断为 0
+
+这就是为什么 `dot(N, L)` 能自然地产生明暗过渡——它精确地模拟了"面朝光的表面更亮"这个物理事实。
+
+## 五、 你的代码在管线的哪个位置？
+
+学完管线和坐标空间，你现在可以把之前学过的所有知识放到位了：
+
+| 你写的东西 | 在管线中的位置 | 做了什么 |
+|---|---|---|
+| `varying vec2 vUv;` | Vertex → Fragment 的桥梁 | 传递插值后的 UV |
+| `vUv = uv;` | Vertex Shader | 把顶点 UV 赋值给 varying |
+| `gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);` | Vertex Shader | 把顶点从局部空间变换到裁剪空间 |
+| `gl_FragColor = vec4(color, 1.0);` | Fragment Shader | 设置像素颜色 |
+| `uniform float uTime;` | 两个 Shader 都能用 | 从 JS 传入的外部参数 |
+| `dot(normal, lightDir)` | Fragment Shader | 计算光照强度 |
+| `texture2D(uImage, vUv)` | Fragment Shader | 从纹理中采样颜色 |
+| `discard;` | Fragment Shader | 丢弃像素（跳过输出合并） |
+
+## 六、 三个终极问题的答案
+
+回顾开头提出的三个问题：
+
+**1. 屏幕是什么？**
+一块 RGB 灯泡阵列。你的 Shader 就是在控制每个灯泡的亮度。
+
+**2. GPU 在忙什么？**
+跑渲染管线。你写 Vertex Shader 和 Fragment Shader，GPU 负责光栅化、插值、深度测试和混合。每帧 16ms 内，几百万个像素并行完成这条流水线。
+
+**3. 我们在算什么？**
+光照。通过 `dot(N, L)` 模拟光与表面的关系，通过矩阵变换把 3D 世界映射到 2D 屏幕，通过颜色公式让像素显示出正确的明暗和色彩。
+
+## 下一步
+
+- **[GLSL 语法速查](/posts/glsl/glsl-syntax-cheatsheet)** —— 系统学习 GLSL 内置函数
+- **[深入理解法线](/posts/glsl/understanding-normals)** —— 光照的核心依赖
+- **[PBR 指南](/posts/glsl/pbr-guide)** —— 比 Phong 更真实的物理光照
 
 图形学就是一场关于**欺骗**的艺术：利用数学和算法，在平面的屏幕上，让红绿蓝三个灯泡，骗过你的眼睛，让你相信那里有一个真实的世界。
