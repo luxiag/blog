@@ -1,86 +1,190 @@
 ---
 title: '纹理大师：GLSL 中的贴图艺术与未来之路'
 date: '2025-11-03'
-description: '纹理不仅仅是贴在模型上的图片。它是数据的载体，是特效的源泉。本文将系统讲解纹理采样的核心技术，展示如何扭曲、混合纹理，并为你规划一条从入门到精通的图形学学习路径。'
+description: '纹理不仅仅是贴在模型上的图片。它是数据的载体，是特效的源泉。本文将系统讲解纹理采样的核心技术（wrap/filter/format），展示如何扭曲、混合纹理，并以此总结图形学进阶路径。'
 tags: ['WebGL', 'GLSL', 'Texture', 'Roadmap']
 ---
 
 # 纹理大师：GLSL 中的贴图艺术与未来之路
 
-在 3D 渲染中，**纹理 (Texture)** 是让模型从"灰模"变得栩栩如生的关键。
-但对于 Shader 程序员来说，纹理不仅仅是一张 JPG 图片，它是一个**只读的二维数组**。你可以用它来存储颜色，也可以用它来存储高度、法线，甚至是任何数据。
+在 3D 渲染中，纹理让模型从"灰模"变得栩栩如生。但对 Shader 程序员来说，纹理不只是一张 JPG——它是一个**只读的二维数组**，可以存储颜色、高度、法线，甚至任意数据。
 
-本文将带你深入理解纹理的本质，并以此为终点，为你总结一条完整的图形学进阶路线。
+前置阅读：
+- [GLSL 新手指南](/posts/glsl/getting-started-with-glsl)——你需要理解 uniform 和 sampler2D
+- [法线深入](/posts/glsl/understanding-normals)——法线贴图是纹理的重要应用
 
-## 一、 纹理采样：把图片贴上去
+## 一、纹理采样：把图片贴上去
 
-在 GLSL 中，读取纹理颜色的过程叫**采样 (Sampling)**。
-我们需要两个东西：
-1.  `uniform sampler2D uTexture;`：纹理数据本身。
-2.  `varying vec2 vUv;`：告诉 GPU 去纹理的哪个位置取色（坐标 0.0 到 1.0）。
+GLSL 中读取纹理颜色叫**采样 (Sampling)**，需要两个东西：
 
-函数：`texture2D(uTexture, vUv)`。
+1. `uniform sampler2D uTexture;`：纹理数据
+2. `varying vec2 vUv;`：采样坐标 (0.0 到 1.0)
 
-*(注：由于 ShaderPreview 环境限制，我们用程序生成的图案来模拟一张"图片纹理")*
+核心函数：`texture2D(uTexture, vUv)` → 返回 `vec4` (RGBA)
 
 <ShaderPreview title="Texture Simulation" code={`
 varying vec2 vUv;
 
-// 模拟一张方格纹理图片
 vec3 getTexture(vec2 uv) {
     vec2 grid = step(0.5, fract(uv * 10.0));
-    // 棋盘格逻辑
     float check = mod(grid.x + grid.y, 2.0);
     return vec3(check);
 }
 
 void main() {
-    // 正常采样：直接用 UV 坐标
     vec3 color = getTexture(vUv);
-    
     gl_FragColor = vec4(color, 1.0);
 }
 `} />
 
-## 二、 纹理坐标变换：扭曲与特效
+## 二、纹理参数：Wrap、Filter、Format
 
-既然纹理采样依赖于 UV 坐标，那么如果我们**修改 UV 坐标**，会发生什么？
-答案是：**纹理会变形。**
+纹理不只是"一张图"。GPU 如何处理坐标超出 [0,1] 的情况？如何处理放大缩小时的像素？这些由三个参数控制。
 
-这是所有水波纹、热浪扭曲、马赛克特效的原理。
+### 1. Wrap Mode：坐标超出 [0,1] 怎么办？
+
+| 模式 | 效果 | 用途 |
+|---|---|---|
+| ClampToEdge | 超出部分用边缘颜色 | 避免边缘接缝 |
+| Repeat | 无限重复 | 瓷砖、网格 |
+| MirroredRepeat | 镜像重复 | 避免重复感太强 |
+
+<ShaderPreview title="Wrap Modes" code={`
+varying vec2 vUv;
+
+vec3 getTexture(vec2 uv) {
+    vec2 grid = step(0.5, fract(uv * 3.0));
+    float check = mod(grid.x + grid.y, 2.0);
+    return vec3(check * 0.8 + 0.1);
+}
+
+void main() {
+    // 左: Repeat (fract 无限重复)
+    // 中: MirroredRepeat (镜像)
+    // 右: Clamp (clamp 到 0~1)
+
+    float mode = vUv.x;
+
+    // 超出 [0,1] 的 UV 范围
+    vec2 uv = (vUv - 0.5) * 3.0;
+
+    vec3 color;
+    if (mode < 0.33) {
+        // Repeat: fract
+        color = getTexture(fract(uv));
+    } else if (mode < 0.66) {
+        // MirroredRepeat
+        vec2 mUV = mod(uv, 4.0);
+        mUV = mix(mUV, 2.0 - mUV, step(2.0, mUV));
+        // 简化的镜像：每两格镜像一次
+        vec2 f = fract(uv);
+        float quadrant = floor(mod(uv.x, 2.0));
+        if (quadrant > 0.5) f.x = 1.0 - f.x;
+        quadrant = floor(mod(uv.y, 2.0));
+        if (quadrant > 0.5) f.y = 1.0 - f.y;
+        color = getTexture(f);
+    } else {
+        // Clamp
+        color = getTexture(clamp(uv, 0.0, 1.0));
+    }
+
+    // 分割线
+    float div1 = smoothstep(0.005, 0.0, abs(vUv.x - 0.33));
+    float div2 = smoothstep(0.005, 0.0, abs(vUv.x - 0.66));
+    color = mix(color, vec3(1.0, 0.3, 0.0), div1 + div2);
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+在 Three.js 中设置：
+
+```javascript
+const texture = new THREE.TextureLoader().load('image.jpg');
+texture.wrapS = THREE.RepeatWrapping;       // 水平方向重复
+texture.wrapT = THREE.MirroredRepeatWrapping; // 垂直方向镜像重复
+texture.repeat.set(3, 3);                    // 重复 3×3 次
+```
+
+### 2. Filter Mode：放大缩小时怎么插值？
+
+| 模式 | 放大时 | 缩小时 | 性能 |
+|---|---|---|---|
+| Nearest | 最近邻（锯齿） | 最近邻 | 最快 |
+| Linear | 双线性插值（模糊） | 双线性 | 中等 |
+| Trilinear | 双线性 | 三线性（Mipmap） | 较慢 |
+
+**Mipmap**：GPU 自动生成一系列缩小版纹理（1/2, 1/4, 1/8...）。缩小时选择最接近的层级采样，避免走样（摩尔纹）。
+
+```javascript
+texture.minFilter = THREE.LinearMipMapLinearFilter; // 缩小时用三线性
+texture.magFilter = THREE.LinearFilter;              // 放大时用双线性
+texture.anisotropy = renderer.capabilities.getMaxAnisotropy(); // 各向异性过滤
+```
+
+**各向异性过滤 (Anisotropic Filtering)**：当纹理被倾斜观察时（比如地面），标准 Mipmap 会过度模糊。各向异性过滤沿多个方向采样，保持细节。对地面纹理效果提升极大。
+
+### 3. Texture Format：存什么类型的数据？
+
+| 格式 | 类型 | 精度 | 用途 |
+|---|---|---|---|
+| RGBA8 | UnsignedByte | 0~255 整数 | 颜色贴图 |
+| RGBA16F | HalfFloat | 16 位浮点 | HDR、位置数据 |
+| RGBA32F | Float | 32 位浮点 | GPGPU 数据 |
+| Depth | Float | 24/32 位 | 阴影映射、DOF |
+
+```javascript
+// 普通颜色纹理
+const colorTexture = new THREE.TextureLoader().load('color.jpg');
+// 内部格式: RGBA8
+
+// GPGPU 浮点纹理
+const dataTexture = new THREE.DataTexture(float32Array, width, height);
+dataTexture.format = THREE.RGBAFormat;
+dataTexture.type = THREE.FloatType; // 关键：浮点精度
+```
+
+:::tip 为什么法线贴图是蓝紫色的？
+法线贴图存的是切线空间法线。未扰动的法线是 (0, 0, 1)，映射到颜色就是 (128, 128, 255)——蓝紫色。偏红说明法线偏向 X+，偏绿说明偏向 Y+。
+:::
+
+## 三、纹理坐标变换：扭曲与特效
+
+修改 UV 坐标 = 纹理变形。这是水波纹、热浪、马赛克等效果的原理。
 
 ### 1. 马赛克 (Pixelation)
-原理：把连续的 UV 坐标变成离散的阶梯状。
+
+把连续的 UV 变成离散的阶梯：
+
+```glsl
+vec2 pixelUV = floor(vUv * pixels) / pixels;
+vec3 color = texture2D(uTexture, pixelUV).rgb;
+```
 
 <ShaderPreview title="Pixelation" code={`
 varying vec2 vUv;
 
 vec3 getTexture(vec2 uv) {
-    // 这里我们用一个彩色的图案代表图片
     return vec3(uv.x, uv.y, 0.5 + 0.5 * sin(uv.x * 10.0));
 }
 
 void main() {
-    float pixels = 20.0; // 把它分成 20x20 个格子
-    
-    // 核心算法：floor 取整后再除回去
+    float pixels = 20.0;
     vec2 pixelUV = floor(vUv * pixels) / pixels;
-    
     vec3 color = getTexture(pixelUV);
-    
     gl_FragColor = vec4(color, 1.0);
 }
 `} />
 
 ### 2. 水波扭曲 (Distortion)
-原理：用 `sin` 函数让 UV 坐标产生偏移。
+
+用 sin 让 UV 坐标偏移：
 
 <ShaderPreview title="Water Ripple" code={`
 uniform float uTime;
 varying vec2 vUv;
 
 vec3 getTexture(vec2 uv) {
-    // 生成同心圆图案
     float d = length(uv - 0.5);
     float circles = step(0.5, sin(d * 40.0));
     return vec3(circles);
@@ -88,46 +192,70 @@ vec3 getTexture(vec2 uv) {
 
 void main() {
     vec2 uv = vUv;
-    
-    // 核心：给 UV 加上波浪偏移
     uv.x += sin(uv.y * 10.0 + uTime) * 0.05;
     uv.y += cos(uv.x * 10.0 + uTime) * 0.05;
-    
     vec3 color = getTexture(uv);
-    
     gl_FragColor = vec4(color, 1.0);
 }
 `} />
 
-## 三、 程序化纹理 (Procedural Texture)
+### 3. 旋涡扭曲 (Vortex)
 
-除了加载图片，我们还可以完全用代码生成纹理。
-这种纹理无限分辨率，不占显存，而且可以动态变化。
+以某个点为中心，根据距离旋转 UV：
 
-最经典的就是 **FBM (分形噪声)** 纹理，它可以模拟云层、大理石、火焰。
+<ShaderPreview title="Vortex Distortion" code={`
+uniform float uTime;
+varying vec2 vUv;
+
+vec3 getTexture(vec2 uv) {
+    vec2 grid = step(0.5, fract(uv * 8.0));
+    float check = mod(grid.x + grid.y, 2.0);
+    return vec3(check * 0.8 + 0.1);
+}
+
+void main() {
+    vec2 uv = vUv - 0.5; // 移到中心
+
+    float dist = length(uv);
+    float angle = atan(uv.y, uv.x);
+
+    // 距离中心越近，旋转角度越大
+    angle += (1.0 - dist) * uTime * 2.0;
+
+    uv = vec2(cos(angle), sin(angle)) * dist + 0.5;
+
+    vec3 color = getTexture(uv);
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+## 四、程序化纹理：不需要图片
+
+除了加载图片，还可以用代码生成纹理——无限分辨率，不占显存，可以动态变化。
+
+### FBM (分形布朗运动)
+
+FBM 通过叠加不同频率的噪声生成云层、地形等自然纹理。在 [读懂 The Book of Shaders](/posts/glsl/book-of-shaders-summary) 中有详细的噪声推导，这里直接使用：
 
 <ShaderPreview title="Procedural Cloud" code={`
 uniform float uTime;
 varying vec2 vUv;
 
-// 随机函数
 float random(vec2 st) {
-    return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+    return fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-// 噪声函数
 float noise(vec2 st) {
     vec2 i = floor(st);
     vec2 f = fract(st);
+    vec2 u = f * f * (3.0 - 2.0 * f);
     float a = random(i);
     float b = random(i + vec2(1.0, 0.0));
     float c = random(i + vec2(0.0, 1.0));
     float d = random(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(a, b, u.x) + (c - a)* u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
 
-// FBM: 叠加多层噪声
 float fbm(vec2 st) {
     float value = 0.0;
     float amplitude = 0.5;
@@ -141,52 +269,56 @@ float fbm(vec2 st) {
 
 void main() {
     vec2 st = vUv * 3.0;
-    
-    // 让云层流动
     float n = fbm(st + vec2(uTime * 0.2, 0.0));
-    
-    // 混合颜色：深蓝天空 -> 白色云朵
     vec3 color = mix(vec3(0.0, 0.4, 0.8), vec3(1.0), n);
-    
     gl_FragColor = vec4(color, 1.0);
 }
 `} />
 
----
+FBM 的核心：每次迭代，频率翻倍 (`st *= 2.0`)，振幅减半 (`amplitude *= 0.5`)。这模拟了自然界的自相似性——大尺度有大的起伏，小尺度有小的细节。
 
-## 四、 你的图形学进阶之路 (Roadmap)
+## 五、多种纹理配合工作
 
-读完这系列文章，你已经跨过了图形学最高的门槛——**入门**。
-接下来的路该怎么走？这里有一份建议的学习路线图：
+在 PBR 工作流中，多种纹理同时使用：
 
-### 阶段 1：巩固基础 (Current Level)
-*   **掌握**: 向量、矩阵、GLSL 语法、基础光照。
-*   **练习**: 在 ShaderToy 上复刻简单的 2D 图案。
-*   **目标**: 能看懂别人的简单 Shader 代码。
+```javascript
+const material = new THREE.MeshStandardMaterial({
+  map: albedoTexture,           // RGB：基础颜色
+  normalMap: normalTexture,     // RGB：法线扰动
+  metalnessMap: metallicTexture, // R：金属度
+  roughnessMap: roughnessTexture, // R：粗糙度
+  aoMap: aoTexture,             // R：环境光遮蔽
+  emissiveMap: emissiveTexture, // RGB：自发光
+});
+```
 
-### 阶段 2：3D 渲染与 WebGL
-*   **工具**: Three.js / React Three Fiber。
-*   **内容**:
-    *   理解 Mesh, Material, Light, Camera 的关系。
-    *   学习加载模型 (glTF) 并编写自定义 Shader 材质。
-    *   学习**粒子系统 (Particles)**：用 GPU 控制成千上万个点。
-*   **目标**: 做出一个酷炫的 3D 网页 Demo。
+这些纹理在 Fragment Shader 中被依次采样，每个像素的最终颜色由所有纹理的值共同决定。
 
-### 阶段 3：高级图形学技术
-*   **内容**:
-    *   **PBR (Physically Based Rendering)**: 学习物理真实感渲染原理（Disney BSDF）。
-    *   **Post-Processing**: 深入学习 Bloom, DOF, SSAO 等后期特效。
-    *   **GPGPU**: 利用 GPU 进行非图形计算（如流体模拟、群聚行为）。
-*   **目标**: 实现电影级的实时渲染效果。
+## 六、图形学进阶之路
 
-### 阶段 4：底层原理 (Hardcore Mode)
-*   **工具**: 原生 WebGL 2.0 / WebGPU。
-*   **内容**: 手写渲染管线，管理 Buffer，理解图形 API 的底层架构。
-*   **目标**: 成为图形学工程师，编写自己的渲染引擎。
+学完本系列文章，你已经跨过了图形学最高的门槛——**入门**。接下来的方向：
 
-## 结语
+### 阶段 1：巩固基础 (当前位置)
+- 掌握向量、矩阵、GLSL 语法、基础光照
+- 练习：在 ShaderToy 上复刻简单的 2D 图案
 
-图形学是一个深不见底的兔子洞，但也是编程领域最能带来视觉反馈和成就感的领域。
-不要被数学吓倒，保持好奇心。每一次屏幕上的像素闪烁，都是你逻辑与创意的结晶。
+### 阶段 2：3D 渲染与 Three.js
+- 理解 Mesh/Material/Light/Camera 的关系
+- 学习加载 glTF 模型并编写自定义 Shader
+- 学习粒子系统
 
-祝你在 Shader 的世界里玩得开心！
+### 阶段 3：高级图形学
+- **PBR**：物理真实感渲染
+- **后期处理**：Bloom, DOF, SSAO
+- **GPGPU**：GPU 通用计算
+
+### 阶段 4：底层原理
+- 原生 WebGL 2.0 / WebGPU
+- 手写渲染管线
+- 编写自己的渲染引擎
+
+### 下一步
+
+- **[读懂 The Book of Shaders](/posts/glsl/book-of-shaders-summary)**——噪声和 FBM 的详细推导
+- **[程序化生成](/posts/glsl/procedural-generation)**——用噪声生成地形和植物
+- **[GPGPU 粒子](/posts/glsl/gpgpu-particles)**——纹理作为数据存储

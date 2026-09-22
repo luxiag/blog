@@ -11,131 +11,179 @@ tags: ['WebGL', 'GLSL', 'Advanced', 'Ray Marching']
 
 本文将带你通过三个循序渐进的阶段，探索 GLSL 更深层的魔法。我们将从修改模型的形状开始，到处理整个屏幕的像素，最后进入纯数学构建的 3D 世界。
 
+前置阅读：
+- [GLSL 新手指南](/posts/glsl/getting-started-with-glsl)——你需要已经理解 Vertex Shader 和 Fragment Shader 的配合
+- [读懂《The Book of Shaders》](/posts/glsl/book-of-shaders-summary)——你需要已经接触过噪声和 SDF
+
 ## 第一阶段：顶点位移 (Vertex Displacement)
 
-到目前为止，我们只在 Fragment Shader 里改变**颜色**。但如果我们想改变**形状**呢？
-这就需要用到 **Vertex Shader**（顶点着色器）。
+到目前为止，你可能只在 Fragment Shader 里改变**颜色**。但如果我们想改变**形状**呢？
 
-### 原理
-Vertex Shader 决定了模型上每个点（顶点）在屏幕上的位置。我们可以通过修改 `position` 变量，让静态的模型动起来。
+这就需要用到 Vertex Shader 的核心能力：**修改顶点位置**。
+
+### 原理：Vertex Shader 如何改变形状
+
+在 [新手指南](/posts/glsl/getting-started-with-glsl) 中，你学过这行代码：
+
+```glsl
+gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+```
+
+其中 `pos` 默认等于 `position`（顶点的原始坐标）。如果我们**先修改 pos 再传入**，模型就会变形。
+
+这就是顶点位移的本质：**在计算 gl_Position 之前，修改 pos 的值**。
 
 ### 1. 简单的波动
-让我们让一个平面像波浪一样起伏。原理很简单：**根据顶点的 X 坐标和时间，修改它的 Z 坐标（高度）。**
+
+让一个平面像波浪一样起伏——根据顶点的 X 坐标和时间，修改它的 Z 坐标（高度）。
 
 <ShaderPreview title="Sine Wave Vertex" vertexCode={`
-uniform float uTime;
-varying vec2 vUv;
+// Vertex Shader：控制顶点位置
+uniform float uTime;       // 从 JS 传入的时间
+varying vec2 vUv;           // 传递给 Fragment Shader 的 UV
 
 void main() {
+  // 第一步：把 uv 传给 Fragment Shader
   vUv = uv;
-  vec3 pos = position;
-  
-  // 核心魔法：Z 轴高度随 X 轴和时间变化
-  // sin 函数创造波动
-  pos.z += sin(pos.x * 5.0 + uTime) * 0.2;
-  
+
+  // 第二步：修改顶点位置
+  vec3 pos = position;                           // 读取原始顶点坐标
+  pos.z += sin(pos.x * 5.0 + uTime) * 0.2;      // Z 轴加上波浪偏移
+
+  // 第三步：计算顶点在屏幕上的位置
   gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 }
 `} code={`
-varying vec2 vUv;
+// Fragment Shader：控制像素颜色
+varying vec2 vUv;  // 从 Vertex Shader 传来的插值 UV
 
 void main() {
-  // 简单的颜色，方便观察起伏
+  // 用 UV 坐标生成颜色，方便观察起伏
   gl_FragColor = vec4(vUv.x, vUv.y + 0.5, 1.0, 1.0);
 }
 `} />
 
-### 2. 复杂的噪声地形
-正弦波太规则了。如果我们把上一篇学到的 **Perlin Noise** 用在顶点上，就能创造出像山脉或水面那样自然的起伏。
+注意这里用了 `vertexCode` 属性——我们**同时写了 Vertex Shader 和 Fragment Shader**。它们通过 `varying vec2 vUv` 传递数据。
 
-*(注：由于 WebGL 限制，这里演示简单的叠加波来模拟噪声)*
+### 2. 复杂的噪声地形
+
+正弦波太规则了。如果叠加多个不同频率、不同方向的波，就能创造出像山脉或水面那样自然的起伏。
 
 <ShaderPreview title="Water Surface" vertexCode={`
 uniform float uTime;
 varying vec2 vUv;
+varying float vElevation;  // 把高度传给 Fragment，用于颜色混合
 
 void main() {
   vUv = uv;
   vec3 pos = position;
-  
+
   // 叠加两个不同频率的波，模拟更自然的水面
   float wave1 = sin(pos.x * 4.0 + uTime) * 0.1;
   float wave2 = cos(pos.y * 3.0 + uTime * 0.8) * 0.1;
-  
+
   pos.z += wave1 + wave2;
-  
+  vElevation = wave1 + wave2;  // 传高度给 Fragment
+
   gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 }
 `} code={`
 varying vec2 vUv;
+varying float vElevation;  // 从 Vertex 传来的高度
 
 void main() {
-  // 根据 UV 加上一点高光效果
-  float strength = step(0.9, sin(vUv.x * 20.0) + sin(vUv.y * 20.0));
-  vec3 color = mix(vec3(0.0, 0.5, 1.0), vec3(1.0), strength * 0.5);
+  // 根据高度混合颜色
+  float level = vElevation * 5.0 + 0.5;  // 归一化到 0~1
+  vec3 deepColor = vec3(0.0, 0.3, 0.6);   // 深水蓝
+  vec3 surfaceColor = vec3(0.3, 0.8, 1.0); // 浅水青
+
+  vec3 color = mix(deepColor, surfaceColor, level);
+
+  // 浪尖加白色泡沫
+  float foam = smoothstep(0.7, 1.0, level);
+  color += foam * vec3(0.5);
+
   gl_FragColor = vec4(color, 1.0);
 }
 `} />
+
+**关键理解**：两个 Shader 的分工——
+- **Vertex Shader** 负责形状（修改 pos.z 产生波浪）
+- **Fragment Shader** 负责外观（根据 vElevation 混合颜色）
+- **varying** 是它们之间的桥梁
 
 ---
 
 ## 第二阶段：后期处理 (Post-processing)
 
-后期处理就像是给整个 3D 场景加了一层 Instagram 滤镜。
-我们不再关心具体的模型，而是把整个渲染好的画面当成一张**图片（纹理）**，然后在 Fragment Shader 里对这张图片进行像素级处理。
+后期处理是给整个 3D 场景加"滤镜"。
 
-### 1. 简单的反色
-最基础的后期处理。读取颜色，然后用 `1.0 - color`。
+### 原理：渲染到纹理
 
-*(注：由于 ShaderPreview 只能演示 Shader 本身，这里我们用一张生成的图案来模拟"原图")*
+正常的渲染流程是：画场景 → 直接显示到屏幕。后期处理多了一步：
+
+```
+画场景 → 渲染到纹理(RenderTarget) → 对纹理做 Shader 处理 → 显示到屏幕
+```
+
+在 Three.js 中，这需要 `EffectComposer` 和 `RenderPass` + `ShaderPass`。核心思想是：**先画到一张"虚拟屏幕"上，再用 Fragment Shader 处理这张图。**
+
+由于 ShaderPreview 组件无法模拟 RenderTarget，我们用生成图案来代替"原图"，重点展示 Shader 处理逻辑。
+
+### 1. 反色
+
+最基础的后期处理——读取颜色，用 `1.0 - color` 取反。
 
 <ShaderPreview title="Invert Colors" code={`
 varying vec2 vUv;
 
 void main() {
-  // 1. 模拟"原图"：一个红色的圆
+  // 模拟"原图"：一个红色的圆
   float dist = length(vUv - 0.5);
   vec3 originalColor = vec3(step(dist, 0.3), 0.0, 0.0); // 红色圆，黑色背景
-  
-  // 2. 后期处理：反色
+
+  // 后期处理：反色
   // 红色 (1,0,0) -> 青色 (0,1,1)
   // 黑色 (0,0,0) -> 白色 (1,1,1)
   vec3 postColor = 1.0 - originalColor;
-  
+
   gl_FragColor = vec4(postColor, 1.0);
 }
 `} />
 
 ### 2. 故障艺术 (Glitch Effect)
-通过对 UV 坐标进行随机偏移，可以模拟出信号故障的效果。
+
+通过对 UV 坐标进行随机偏移，模拟信号故障。
 
 <ShaderPreview title="Glitch Effect" code={`
 uniform float uTime;
 varying vec2 vUv;
 
-// 简单的随机函数
+// 伪随机函数
 float random(vec2 st) {
     return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
 }
 
 void main() {
     vec2 uv = vUv;
-    
+
     // 模拟原图：简单的网格
     vec3 color = vec3(step(0.9, fract(uv.x * 10.0)));
-    
+
     // Glitch 逻辑
     // 1. 随机产生"故障条"
-    float glitchTime = floor(uTime * 10.0); // 每秒变化10次
+    // floor(uTime * 10.0) 让时间每 0.1 秒跳一次，产生"闪烁"感
+    float glitchTime = floor(uTime * 10.0);
+    // 用 y 坐标分组，每组有 5% 的概率出故障
     float bar = step(0.95, random(vec2(floor(uv.y * 10.0), glitchTime)));
-    
+
     // 2. 在故障条区域偏移 X 坐标
     float offset = random(vec2(glitchTime)) * 0.1;
     if (bar > 0.5) {
         color = vec3(step(0.9, fract((uv.x + offset) * 10.0)));
         color.r += 0.5; // 故障处变红
     }
-    
+
     gl_FragColor = vec4(color, 1.0);
 }
 `} />
@@ -144,25 +192,34 @@ void main() {
 
 ## 第三阶段：光线步进 (Ray Marching)
 
-这是 GLSL 的终极奥义。
-在传统的 3D 渲染中，我们通过三角形网格来构建模型。但在 Ray Marching 中，我们**没有模型**。整个 3D 场景是用数学公式（SDF）定义的。
+这是 GLSL 的终极奥义——**不用任何 3D 模型，纯用数学公式渲染 3D 场景**。
 
-### 原理
-想象你的眼睛发射出一束光线。
-1.  光线向前走一步。
-2.  问："我现在离最近的物体有多远？"（SDF 函数）
-3.  如果距离极小（撞到了），就画颜色。
-4.  如果距离还很远，就继续向前走那个距离（步进）。
+### 原理：盲人摸象
+
+传统的 3D 渲染需要三角形网格。但 Ray Marching 不需要——整个 3D 场景用一个叫 **SDF（有向距离函数）** 的数学公式定义。
+
+SDF 告诉你：**空间中任意一点，离最近的物体表面有多远**。负值表示在物体内部，正值表示在外部，零表示在表面上。
+
+Ray Marching 的算法：
+
+```
+1. 从相机发射一条射线
+2. 问 SDF："当前点离最近的物体有多远？"
+3. 沿射线方向前进那个距离（安全的，绝不会穿过物体）
+4. 重复步骤 2-3，直到距离极小（碰到了）或太远（没碰到）
+```
+
+**为什么可以安全步进？** 因为 SDF 返回的是**到最近表面的最短距离**，所以沿任意方向走这个距离，保证不会穿过任何物体。这是 SDF 的数学保证，不是近似。
 
 ### 1. 绘制一个球体
+
 在 Ray Marching 中，球体不是由几千个三角形组成的，它只是一个公式：`length(point) - radius`。
 
 <ShaderPreview title="Ray Marching Sphere" code={`
 varying vec2 vUv;
 
-// 球体的 SDF (有向距离函数)
-// p: 当前光线到达的点
-// r: 球体半径
+// 球体的 SDF（有向距离函数）
+// 返回正值 = 在球外，负值 = 在球内，零 = 在球面上
 float sdfSphere(vec3 p, float r) {
     return length(p) - r;
 }
@@ -170,78 +227,83 @@ float sdfSphere(vec3 p, float r) {
 void main() {
     // 1. 归一化坐标 (-1 到 1)
     vec2 uv = vUv * 2.0 - 1.0;
-    
-    // 2. 定义相机和光线
-    vec3 cameraPos = vec3(0.0, 0.0, 3.0); // 相机在 Z=3
-    vec3 rayDir = normalize(vec3(uv, -1.0)); // 光线向 Z 负方向发射
-    
+
+    // 2. 定义相机和射线
+    vec3 cameraPos = vec3(0.0, 0.0, 3.0);   // 相机在 Z=3
+    vec3 rayDir = normalize(vec3(uv, -1.0)); // 射线向 Z 负方向发射
+
     // 3. 光线步进循环
     vec3 currentPos = cameraPos;
     float totalDist = 0.0;
-    float minHitDist = 0.001; // 撞击阈值
-    float maxDist = 100.0;    // 最远距离
-    
-    float hit = 0.0; // 是否击中
-    
+    float minHitDist = 0.001;  // 击中阈值
+    float maxDist = 100.0;     // 最远距离
+    float hit = 0.0;          // 是否击中
+
     for(int i = 0; i < 64; i++) {
         // 计算当前点到球体的距离
         float d = sdfSphere(currentPos, 1.0); // 半径为 1 的球
-        
+
         if (d < minHitDist) {
-            hit = 1.0;
+            hit = 1.0;  // 距离极小，认为击中
             break;
         }
-        
-        if (totalDist > maxDist) break;
-        
-        // 步进
+
+        if (totalDist > maxDist) break;  // 太远了，放弃
+
+        // 沿射线方向前进 d 的距离
         totalDist += d;
         currentPos += rayDir * d;
     }
-    
+
     // 4. 简单的光照
-    vec3 color = vec3(0.0);
+    vec3 color = vec3(0.0);  // 默认黑色（天空和未击中）
     if (hit > 0.5) {
-        // 简单的漫反射：根据法线计算亮度
         // 球体表面的法线就是归一化的位置向量
+        // 因为球心在原点，表面点的法线就是从原点指向该点的方向
         vec3 normal = normalize(currentPos);
         vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
         float diff = max(dot(normal, lightDir), 0.0);
-        
+
         color = vec3(1.0, 0.5, 0.2) * (diff * 0.8 + 0.2);
     }
-    
+
     gl_FragColor = vec4(color, 1.0);
 }
 `} />
 
 ### 2. 形状融合 (Smooth Min)
-Ray Marching 最酷的地方在于，因为形状是数学公式，所以它们可以像液体一样融合。
-我们只需要改变距离场的计算方式，使用 `smin`（平滑最小值）代替 `min`。
+
+Ray Marching 最酷的地方：**因为形状是数学公式，它们可以像液体一样融合**。
+
+普通 `min(d1, d2)` 会在两个物体的交界处产生硬边。而 `smin(d1, d2, k)` 用平滑函数替代 min，产生柔和的融合。
 
 <ShaderPreview title="Metaballs (Liquid)" code={`
 uniform float uTime;
 varying vec2 vUv;
 
-// 平滑最小值函数 (创造融合效果)
+// 平滑最小值函数：让两个形状柔和融合
+// k = 融合强度，越大融合区域越宽
 float smin(float a, float b, float k) {
+    // 核心思路：当 a 和 b 接近时，用平滑函数代替 min
     float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
     return mix(b, a, h) - k * h * (1.0 - h);
+    // mix(b, a, h) 是线性插值，- k*h*(1-h) 是凸起修正
+    // 整体效果：在两个物体交界处产生圆润的过渡
 }
 
 float sdfSphere(vec3 p, float r) {
     return length(p) - r;
 }
 
-// 场景定义：两个球的融合
+// 场景 SDF：两个球的融合
 float map(vec3 p) {
     // 球 1：上下移动
     vec3 sphere1Pos = vec3(0.0, sin(uTime) * 1.0, 0.0);
     float d1 = sdfSphere(p - sphere1Pos, 0.8);
-    
+
     // 球 2：静止在中心
     float d2 = sdfSphere(p, 0.6);
-    
+
     // 融合！k = 0.2 是融合强度
     return smin(d1, d2, 0.2);
 }
@@ -250,14 +312,14 @@ void main() {
     vec2 uv = vUv * 2.0 - 1.0;
     vec3 ro = vec3(0.0, 0.0, 3.0);
     vec3 rd = normalize(vec3(uv, -1.0));
-    
+
     float t = 0.0;
     float hit = 0.0;
-    
+
     for(int i = 0; i < 64; i++) {
         vec3 p = ro + rd * t;
         float d = map(p);
-        
+
         if(d < 0.001) {
             hit = 1.0;
             break;
@@ -265,26 +327,50 @@ void main() {
         t += d;
         if(t > 10.0) break;
     }
-    
+
     vec3 col = vec3(0.1); // 背景色
-    
+
     if(hit > 0.5) {
-        // 简单的深度着色
+        // 简单的深度着色：越远越暗
         col = vec3(0.0, 0.8, 1.0) * (1.0 - t * 0.15);
     }
-    
+
     gl_FragColor = vec4(col, 1.0);
 }
 `} />
 
+### Ray Marching 和 [光线追踪](/posts/glsl/ray-intersection)的区别
+
+你可能会困惑：Ray Marching 和光线追踪有什么不同？
+
+| | 光线追踪 (Ray Tracing) | 光线步进 (Ray Marching) |
+|---|---|---|
+| 求交方式 | 解析公式（直接算出交点） | 迭代步进（一步步逼近） |
+| 适用形状 | 解析几何（球、平面等） | 任意 SDF（云、烟雾、分形） |
+| 精度 | 精确 | 近似（取决于步数和阈值） |
+| 反射 | 直接算反射射线 | 同样可以反射 |
+
+Ray Marching 的优势在于**可以渲染任意复杂的形状**——只要你能写出 SDF 公式。代价是需要多次迭代，性能开销更大。
+
 ## 总结
 
-从**顶点位移**的动态模型，到**后期处理**的全屏特效，再到**光线步进**的数学建模。这三项技术构成了现代 Shader 编程的高阶领域。
+从**顶点位移**的动态模型，到**后期处理**的全屏特效，再到**光线步进**的数学建模——这三项技术代表了 GLSL 的三个维度：
 
-它们每一个深挖下去都是一个巨大的世界。希望这篇文章能成为你探索这些领域的地图。
+1. **顶点位移**：用 Vertex Shader 修改 `position`，改变形状
+2. **后期处理**：先渲染到纹理，再用 Fragment Shader 处理整张图
+3. **光线步进**：用 SDF + 迭代求交，纯数学渲染 3D
+
+它们每一个深挖下去都是一个巨大的世界。本文给你的是入口和核心原理——理解了原理，你就能读懂 ShaderToy 上那些惊艳的作品。
 
 ### 挑战
+
 试着修改最后一个示例：
-1.  把球体变成两个左右移动的球体。
-2.  改变融合的颜色。
-3.  尝试改变 `smin` 的 `k` 值，看看融合效果有什么变化。
+1. 把球体变成两个左右移动的球体。
+2. 改变融合的颜色——在 hit 分支中加光照计算。
+3. 尝试改变 `smin` 的 `k` 值，观察融合效果的变化。
+
+### 下一步
+
+- **[射线求交](/posts/glsl/ray-intersection)** —— 学习光线追踪的解析求交方法
+- **[法线深入](/posts/glsl/understanding-normals)** —— 学习如何在 Ray Marching 中计算法线
+- **[PBR 指南](/posts/glsl/pbr-guide)** —— 让光照从"能用"变成"真实"

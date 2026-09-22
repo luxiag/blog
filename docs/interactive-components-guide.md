@@ -115,6 +115,44 @@ void main() {
 
 **Props**：`code`（fragment shader 代码）、`vertexCode`（可选顶点着色器）、`title`、`editable`（默认 `true`，设为 `false` 只读展示）。内置 `uTime` uniform 动画。
 
+## ShaderSceneDemo — 通用 Shader 场景实验台
+
+面向学习文章的配置驱动场景组件。它与 `ShaderPreview` 相互独立，适合纹理滤镜、3D 材质、模型效果、粒子和数据可视化等需要额外资源或交互控件的案例。
+
+```mdx
+<ShaderSceneDemo
+  title="图片滤镜"
+  fragmentShader={`...`}
+  scene={{ kind: "fullscreen" }}
+  textures={[
+    { name: "uImage", src: "/posts/glsl/images/example.jpg", uploadable: true },
+  ]}
+  uniforms={[
+    {
+      name: "uStrength",
+      type: "float",
+      value: 1,
+      label: "滤镜强度",
+      control: "range",
+      min: 0,
+      max: 1,
+      step: 0.01,
+    },
+  ]}
+/>
+```
+
+**主要 Props**：
+
+- `fragmentShader`：必填的 Fragment Shader 源码。
+- `vertexShader`：可选的 Vertex Shader 源码；省略时根据场景使用默认源码。
+- `scene`：场景配置，`kind` 支持 `fullscreen`、`plane`、`sphere`、`box` 和 `particles`；平面可通过 `planeSize` 设置宽高、通过 `planeSegments` 分别设置横纵细分；还可设置 `segments`、`particleCount`、`rotation`、`scale`、`controls`、`autoRotate` 与统一两阶段精度的 `precision`。
+- `uniforms`：自定义 uniform。类型支持 `float`、`int`、`boolean`、`vec2`、`vec3`、`color`；控件支持 `range`、`select`、`color`、`toggle`。
+- `textures`：纹理配置，每项包含 uniform `name`、默认 `src`、可选 `label` 与 `uploadable`。
+- `height`、`editable`、`showCode`：控制预览高度、代码编辑和代码区显示。
+
+组件始终提供 `uTime`、`uDelta`、`uResolution` 和 `uPointer`。代码区包含 `Fragment Shader`、`Vertex Shader` 和 `Three.js 场景` 三个标签：前两个可编辑运行，第三个根据当前场景、纹理和 uniform 配置自动生成对应的 React Three Fiber/Three.js 挂载代码，并始终只读。可配置参数通过标题栏的“参数”按钮打开：桌面端显示为预览区右侧浮层，窄屏显示为预览区底部抽屉，内容过多时在面板内部滚动。多个实例的代码、纹理、上传文件、暂停状态和 uniform 相互隔离；离开视口或浏览器切到后台时会暂停逐帧渲染。
+
 ---
 
 ## 故障排除

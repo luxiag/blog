@@ -7,52 +7,131 @@ tags: ['WebGL', 'GLSL', 'Syntax', 'Cheatsheet']
 
 # GLSL 语法速查手册：变量、函数与魔法
 
-写 Shader 的时候，你是否经常忘记：
-*   "那个混合颜色的函数叫什么来着？"
-*   "我能不能把 `vec3` 直接赋值给 `vec4`？"
-*   "`varying` 和 `uniform` 到底有什么区别？"
+写 Shader 之前，你需要先换一个脑子。
 
-这篇文章就是你的 GLSL 随身字典。我们不求面面俱到，只求**最实用**。
+普通的编程是"指令式"的：你告诉电脑"先做这个，再做那个"。而 Shader 是"声明式"的：你写一个公式，GPU 把这个公式套用到屏幕上的每一个像素上，每个像素独立计算出自己的颜色。
 
-## 一、 基础数据类型
+这意味着：
+- **没有全局状态**：每个像素不知道旁边像素在算什么
+- **没有顺序**：所有像素同时计算，没有"先算谁后算谁"
+- **输出只有一个**：`gl_FragColor`，这个像素最终的颜色
 
-GLSL 是强类型语言，类型转换必须显式进行。
+理解了这个心智模型，后面的一切都会顺理成章。
 
-### 1. 标量 (Scalars)
-*   `float`: 浮点数。**注意**：GLSL 对类型非常严格，`1` 是 int，`1.0` 才是 float。绝大多数时候我们只用 float。
-*   `int`: 整数。用于循环计数。
-*   `bool`: `true` 或 `false`。
+## 一、 数据从哪来？—— 变量限定符
 
-### 2. 向量 (Vectors) —— 核心角色
-*   `vec2`: 2个 float (x, y)
-*   `vec3`: 3个 float (x, y, z) 或 (r, g, b)
-*   `vec4`: 4个 float (x, y, z, w) 或 (r, g, b, a)
+在写公式之前，先搞清楚输入是什么。Fragment Shader 的输入来自三个地方：
 
-**构造方式**：
+### uniform：所有像素共享的"全局变量"
+
 ```glsl
-vec3 color = vec3(1.0, 0.0, 0.5);
-vec4 colorAlpha = vec4(color, 1.0); // 使用 vec3 构造 vec4
-vec2 same = vec2(0.5); // 等同于 vec2(0.5, 0.5)
+uniform float uTime;       // 当前时间，从 JS 传入
+uniform vec2 uResolution;  // 画布尺寸
+uniform vec2 uMouse;       // 鼠标位置
 ```
 
-### 3. 矩阵 (Matrices)
-*   `mat2`: 2x2 矩阵 (2D 旋转)
-*   `mat3`: 3x3 矩阵
-*   `mat4`: 4x4 矩阵 (3D 变换)
+**"uniform"这个词的字面意思就是"统一的"**——画面中每一个像素拿到的值都一样。时间对所有像素来说是同一个时间，鼠标位置对所有像素来说是同一个位置。
 
-## 二、 魔法特性：Swizzling (分量重组)
+uniform 是让 Shader "动起来"的关键：你在 JS 里每帧更新 `uTime`，Shader 里用它驱动动画。
 
-这是 GLSL 最酷的特性。你可以通过 `.xyzw` 或 `.rgba` 随意组合向量的分量。
+### varying：从顶点传来的"插值数据"
+
+```glsl
+varying vec2 vUv;  // 纹理坐标
+```
+
+varying 的数据来自 Vertex Shader（顶点着色器），但最关键的是——**GPU 会自动在顶点之间插值**。
+
+想象一个三角形，三个顶点的 vUv 分别是 (0,0)、(1,0)、(0,1)。三角形内部的某个像素，它的 vUv 不是三个顶点中的任何一个，而是根据位置**平滑混合**出来的。这正是 `vUv` 能精确表示"我在画面中的哪个位置"的原因。
+
+**`vUv` 是你写 Fragment Shader 最重要的输入**，它告诉你当前像素在画面中的归一化位置：
+- 左下角是 (0.0, 0.0)
+- 右上角是 (1.0, 1.0)
+- 中心大约是 (0.5, 0.5)
+
+### attribute：每个顶点独有的数据（仅 Vertex Shader）
+
+Fragment Shader 不直接使用 attribute，它由 Vertex Shader 处理后通过 varying 传下来。你只需知道这条数据链路：
+
+```
+JS 传入 attribute → Vertex Shader 处理 → varying 插值 → Fragment Shader 使用
+```
+
+## 二、 基础数据类型：为什么向量是主角
+
+GLSL 是强类型语言，`1` 是 int，`1.0` 才是 float。绝大多数时候我们只用 float，因为 GPU 天生为浮点运算优化。
+
+### 标量：float、int、bool
+
+没什么特别的，注意写 `1.0` 而不是 `1` 就行。
+
+### 向量：vec2、vec3、vec4
+
+在普通语言里，向量只是"几个数字的容器"。但在 GLSL 里，**向量是一等公民**——GPU 的硬件指令直接操作向量，一个 `vec3` 加法就是一条指令。
+
+```glsl
+vec3 a = vec3(1.0, 2.0, 3.0);
+vec3 b = vec3(0.5, 0.5, 0.5);
+
+// 向量运算：三个分量同时计算
+vec3 c = a + b;       // (1.5, 2.5, 3.5)
+vec3 d = a * 2.0;     // (2.0, 4.0, 6.0)  标量会广播到每个分量
+vec3 e = a * b;       // (0.5, 1.0, 1.5)  逐分量相乘，不是点积！
+```
+
+**双重视角**：同一个 vec3，既可以是空间坐标 (x, y, z)，也可以是颜色 (r, g, b)。这不仅是约定，GLSL 允许你用 `.xyz` 或 `.rgba` 两种方式访问同一个向量的分量。
+
+构造向量的几种方式：
+
+```glsl
+vec3 color = vec3(1.0, 0.0, 0.5);       // 三个分量
+vec4 withAlpha = vec4(color, 1.0);       // vec3 + 补一个分量 → vec4
+vec2 same = vec2(0.5);                   // 一个值广播到两个分量 → (0.5, 0.5)
+vec3 fromVec2 = vec3(same, 0.0);         // vec2 + 补一个分量 → vec3
+```
+
+### 矩阵：mat2、mat3、mat4
+
+矩阵主要用于坐标变换（旋转、缩放、投影）。在 2D Shader 中最常用的是 `mat2` 做 2D 旋转：
+
+```glsl
+// 构造一个旋转矩阵（旋转 angle 弧度）
+float angle = 0.5;
+mat2 rot = mat2(cos(angle), sin(angle),
+               -sin(angle), cos(angle));
+
+// 把坐标 st 旋转
+vec2 rotated = rot * st;
+```
+
+:::note 矩阵的构造顺序
+GLSL 的 `mat2` 构造函数按**列优先**填充：`mat2(a, b, c, d)` 的布局是 `[a c; b d]`（第一列是 a,b，第二列是 c,d）。上面的旋转矩阵就是这么写的。
+:::
+
+## 三、 Swizzling：分量重组的魔法
+
+Swizzling 是 GLSL 最独特的特性。你可以用 `.xyzw` 或 `.rgba` 随意组合向量的分量，甚至乱序和重复：
 
 ```glsl
 vec4 color = vec4(1.0, 0.0, 0.0, 1.0); // 红色
 
-vec3 rgb = color.rgb; // 提取前三个分量
-vec2 xy = color.xy;   // 提取前两个
+vec3 rgb = color.rgb;   // 提取前三个分量 → (1.0, 0.0, 0.0)
+vec2 xy = color.xy;     // 提取前两个 → (1.0, 0.0)
+vec3 bgr = color.bgr;   // 乱序 → (0.0, 0.0, 1.0) 蓝色
+vec3 rrr = color.rrr;   // 重复 → (1.0, 1.0, 1.0) 白色
+```
 
-// 甚至可以乱序和重复！
-vec3 bgr = color.bgr; // 蓝色
-vec3 rrr = color.rrr; // 变成 (1.0, 1.0, 1.0)
+这不仅是语法糖。在实际编码中，Swizzling 让很多操作变得自然：
+
+```glsl
+// 交换红绿通道
+color = color.grba;
+
+// 从 vec4 提取 alpha
+float alpha = color.a;
+
+// 用 x 通道填充整个颜色（灰度化）
+vec3 gray = vec3(color.r);
 ```
 
 <ShaderPreview title="Swizzling Demo" code={`
@@ -70,45 +149,248 @@ void main() {
 }
 `} />
 
-## 三、 变量限定符 (Qualifiers)
+## 四、 坐标系操作：从"在哪里"到"距离多远"
 
-这三个关键字定义了变量的"来源"。
+Shader 的核心问题是：**给定一个像素的位置，算出一个颜色**。所以坐标变换是最基本的功力。
 
-1.  **`attribute`** (仅 Vertex Shader):
-    *   **来源**：从 JS 传给顶点的**每个点独有**的数据。
-    *   **例子**：`position` (位置), `uv` (纹理坐标), `normal` (法线)。
-2.  **`uniform`** (全局变量):
-    *   **来源**：从 JS 传给 Shader 的**所有点共享**的数据。
-    *   **例子**：`uTime` (时间), `uResolution` (屏幕尺寸), `uMouse` (鼠标位置)。
-3.  **`varying`** (传令兵):
-    *   **来源**：从 Vertex Shader 传给 Fragment Shader 的数据。
-    *   **特点**：会自动进行**插值**。如果在顶点 A 设为红色，顶点 B 设为绿色，那么 A 到 B 之间的像素会自动渐变成黄色。
+### 4.1 居中：让 (0,0) 到画面中心
 
-## 四、 必备内置函数 (Built-in Functions)
+`vUv` 的原点在左下角，但大多数效果需要以画面中心为原点：
 
-这些函数是 GPU 硬件优化的，比你自己写的数学公式快得多。
+```glsl
+vec2 st = vUv - 0.5; // 范围从 [-0.5, 0.5]
+```
 
-### 1. 数学运算
-*   `sin(x)`, `cos(x)`: 三角函数，制造波动。
-*   `pow(x, n)`: x 的 n 次方。
-*   `sqrt(x)`: 开根号。
-*   `abs(x)`: 绝对值。
-*   `mod(x, y)`: 取余数。`mod(x, 1.0)` 可以把无限增长的 x 变成 0-1 的循环。
+这一步虽然简单，却是几乎所有效果的起点。居中后，`st` 的正负就对应了左右和上下。
 
-### 2. 限制与比较
-*   `clamp(x, min, max)`: 把 x 限制在 min 和 max 之间。**非常常用**。
-*   `min(a, b)`: 取较小值。
-*   `max(a, b)`: 取较大值。
+### 4.2 归一化距离：length()
 
-### 3. 插值与平滑 (最重要的三个)
-*   **`mix(a, b, t)`**: 线性插值。`a * (1-t) + b * t`。
-*   **`step(edge, x)`**: 硬切。`x < edge ? 0.0 : 1.0`。
-*   **`smoothstep(edge0, edge1, x)`**: 平滑切。在两个边缘间生成 S 型曲线。
+```glsl
+float r = length(st); // 当前像素到中心的距离
+```
+
+`length()` 就是 `sqrt(x² + y²)`。有了距离，你就能判断"这个像素离中心多远"，从而画出圆形。
+
+<ShaderPreview title="Distance Circle" code={`
+varying vec2 vUv;
+
+void main() {
+    vec2 st = vUv - 0.5;
+    float r = length(st);
+    
+    // r < 0.3 的区域画白色圆
+    float circle = 1.0 - step(0.3, r);
+    
+    gl_FragColor = vec4(vec3(circle), 1.0);
+}
+`} />
+
+### 4.3 极坐标：atan()
+
+`length()` 给你距离 r，`atan()` 给你角度 θ。两个合在一起就是极坐标 (r, θ)：
+
+```glsl
+vec2 st = vUv - 0.5;
+float r = length(st);                // 距离
+float a = atan(st.y, st.x);         // 角度，范围 [-π, π]
+```
+
+`atan(y, x)` 是反正切函数，返回点 (x, y) 相对于正 x 轴的角度：
+- 正右方 → 0
+- 正上方 → π/2
+- 正左方 → π 或 -π
+- 正下方 → -π/2
+
+:::tip 为什么用 `atan(y, x)` 而不是 `atan(y/x)`？
+`atan(y/x)` 只能返回 [-π/2, π/2]，无法区分左半平面和右半平面。而 `atan(y, x)` 通过 x 的符号判断象限，覆盖完整的 [-π, π]。在 Shader 中**永远用双参数版本**。
+:::
+
+极坐标在"圆形"效果中极为自然——雷达扫描、表盘、旋转动画，在极坐标下都是简单的角度运算。
+
+### 4.4 重复与平铺：fract() 与 floor()
+
+`fract(x)` 取小数部分，`floor(x)` 取整数部分。它们是一对拆分工具：
+
+```glsl
+fract(2.7) = 0.7   // 小数部分
+floor(2.7) = 2.0   // 整数部分
+```
+
+在 Shader 中，它们最常见的用途是**把空间切成重复的格子**：
+
+```glsl
+vec2 st = vUv * 5.0;          // 放大 5 倍，空间被切成 5×5
+vec2 cell = floor(st);        // 每个格子的编号 (0,0) (1,0) (2,0) ...
+vec2 local = fract(st);       // 每个格子内部的局部坐标 [0, 1)
+```
+
+这个模式如此常见，值得记住：**`floor` 给你"在第几个格子"，`fract` 给你"在格子内的哪个位置"**。
+
+`fract` 还有一个重要用途：**把任何递增的值变成 0→1 的循环**。比如 `fract(uTime * 0.5)` 产生一个 0→1→0→1 的循环值，可以驱动循环动画。
+
+<ShaderPreview title="Fract Repeat" code={`
+varying vec2 vUv;
+
+void main() {
+    // 把空间切成 5x5 的格子
+    vec2 st = vUv * 5.0;
+    vec2 local = fract(st);
+    
+    // 每个格子内部画一个从中心渐变的圆
+    float r = length(local - 0.5);
+    float circle = 1.0 - step(0.3, r);
+    
+    gl_FragColor = vec4(vec3(circle), 1.0);
+}
+`} />
+
+## 五、 图形绘制三剑客：step、smoothstep、mix
+
+这三个函数构成了 Shader 中"从数学到图形"的核心桥梁。
+
+### 5.1 step()：硬边切换
+
+```glsl
+step(edge, x)  // 等价于：x < edge ? 0.0 : 1.0
+```
+
+`step` 画出的是**硬边**——要么 0 要么 1，没有过渡。它最适合做遮罩和裁剪：
+
+```glsl
+// 圆形遮罩：圆内为 1，圆外为 0
+float mask = 1.0 - step(0.5, r);
+```
+
+为什么是 `1.0 - step(...)`？因为 `step(0.5, r)` 在圆内（r < 0.5）返回 0，圆外返回 1，跟我们想要的正好相反，所以取反。
+
+### 5.2 smoothstep()：平滑过渡
+
+```glsl
+smoothstep(edge0, edge1, x)
+// x <= edge0 → 0.0
+// x >= edge1 → 1.0
+// 中间平滑过渡（S 型曲线）
+```
+
+`smoothstep` 是 `step` 的平滑版本。两个参数 `edge0` 和 `edge1` 定义过渡区间：
+
+- `smoothstep(0.4, 0.5, r)`：r 在 0.4 到 0.5 之间从 0 平滑过渡到 1 → 柔和的圆边
+- `smoothstep(0.8, 1.0, angle)`：angle 在 0.8 到 1.0 之间从 0 过渡到 1 → 渐变拖尾
+
+`edge0` 和 `edge1` 的间距越小，过渡越锐利；间距越大，过渡越柔和。当间距趋近于 0 时，`smoothstep` 退化为 `step`。
+
+<ShaderPreview title="step vs smoothstep" code={`
+varying vec2 vUv;
+
+void main() {
+    float x = vUv.x;
+    
+    // 上半部分：step（硬边）
+    float hard = step(0.5, x);
+    
+    // 下半部分：smoothstep（柔边）
+    float soft = smoothstep(0.3, 0.7, x);
+    
+    // 上半用 hard，下半用 soft
+    float y = vUv.y;
+    float result = mix(soft, hard, step(0.5, y));
+    
+    gl_FragColor = vec4(vec3(result), 1.0);
+}
+`} />
+
+### 5.3 mix()：线性插值
+
+```glsl
+mix(a, b, t)  // 等价于：a * (1.0 - t) + b * t
+```
+
+当 `t = 0` 时返回 `a`，`t = 1` 时返回 `b`，中间线性过渡。它有三个典型用法：
+
+**用法 1：颜色混合**
+
+```glsl
+vec3 color = mix(vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), 0.5);
+// 红 → 蓝 的 50% 混合 → 紫色
+```
+
+**用法 2：高度映射（地形着色）**
+
+```glsl
+// 高度 h 在 [0.45, 0.5] 之间，从水面色过渡到沙滩色
+vec3 col = mix(water, sand, (h - 0.45) / 0.05);
+```
+
+关键是 `(h - 0.45) / 0.05` 这个归一化技巧——把 [0.45, 0.5] 映射到 [0, 1]，正好给 `mix` 当 t 值用。
+
+**用法 3：天空渐变**
+
+```glsl
+vec3 sky = mix(vec3(0.5, 0.7, 1.0), vec3(0.1, 0.3, 0.6), rd.y * 0.5 + 0.5);
+```
+
+根据方向 y 分量在地平线色和天顶色之间插值。
+
+## 六、 内置数学函数速查
+
+以下是 GLSL 中最常用的内置函数。它们都在 GPU 硬件层面优化过，比你手写公式快。
+
+### 三角函数
+
+| 函数 | 说明 | 典型用途 |
+|---|---|---|
+| `sin(x)`, `cos(x)` | 三角函数 | 波动、旋转 |
+| `atan(y, x)` | 反正切，返回 [-π, π] | 极坐标角度 |
+| `radians(deg)` / `degrees(rad)` | 角度/弧度互转 | 很少用，GLSL 默认弧度制 |
+
+### 幂与根
+
+| 函数 | 说明 | 典型用途 |
+|---|---|---|
+| `pow(x, n)` | x 的 n 次方 | 增强对比度（如 `pow(fresnel, 3.0)`） |
+| `sqrt(x)` | 开根号 | 球面法线计算 |
+| `abs(x)` | 绝对值 | 对称图案 |
+
+### 取整与循环
+
+| 函数 | 说明 | 典型用途 |
+|---|---|---|
+| `floor(x)` | 向下取整 | 格子编号、棋盘格 |
+| `ceil(x)` | 向上取整 | 较少用 |
+| `fract(x)` | 取小数部分 | **极常用**——重复图案、循环动画、噪声基础 |
+| `mod(x, y)` | 取余数 | 棋盘格 `mod(floor(x)+floor(z), 2.0)` |
+
+### 限制与比较
+
+| 函数 | 说明 | 典型用途 |
+|---|---|---|
+| `clamp(x, min, max)` | 限制在 [min, max] | 防止颜色溢出 |
+| `min(a, b)` | 取较小值 | 两个距离取最近 |
+| `max(a, b)` | 取较大值 | 光照中 `max(dot, 0.0)` 防负值 |
+
+### 几何函数
+
+| 函数 | 说明 | 典型用途 |
+|---|---|---|
+| `length(v)` | 向量长度 | 到某点的距离 |
+| `distance(a, b)` | 两点距离 = `length(a-b)` | 距离场 |
+| `dot(a, b)` | 点积 | 方向相似度、光照、菲涅尔 |
+| `cross(a, b)` | 叉积 | 求法线 |
+| `normalize(v)` | 归一化 | 方向向量、法线 |
+| `reflect(I, N)` | 反射方向 | 光线追踪、镜面反射 |
+
+`dot()` 需要特别理解：两个单位向量的点积 = 它们夹角的余弦值。这意味着：
+- 同向 → 1.0
+- 垂直 → 0.0
+- 反向 → -1.0
+
+光照计算的本质就是 `dot(法线, 光方向)`——法线越朝向光源，表面越亮。
+
+`reflect(I, N)` 的公式是 `I - 2 * dot(I, N) * N`，其中 `I` 是入射方向（指向表面），`N` 是法线（指向外侧）。入射角等于反射角，这是物理定律。
 
 <ShaderPreview title="Function Visualizer" code={`
 varying vec2 vUv;
 
-// 绘制函数曲线的辅助函数
 float plot(vec2 st, float pct){
   return  smoothstep( pct-0.02, pct, st.y) -
           smoothstep( pct, pct+0.02, st.y);
@@ -133,25 +415,135 @@ void main() {
 }
 `} />
 
-### 4. 几何函数
-*   `length(v)`: 向量长度。
-*   `distance(a, b)`: 两点距离。等同于 `length(a - b)`。
-*   `dot(a, b)`: 点积 (方向一致性)。
-*   `cross(a, b)`: 叉积 (求法线)。
-*   `normalize(v)`: 归一化 (把长度变成 1，方向不变)。
+## 七、 控制流与组织代码
 
-### 5. 纹理查找
-*   `texture2D(sampler2D, vec2)`: 从纹理中获取颜色。
+### 7.1 for 循环
 
-## 五、 调试技巧
+GLSL 支持 `for`、`while`、`do-while`，但有一个硬限制：**循环次数必须在编译时可确定**（或者编译器能证明有上限）。实际开发中几乎只用固定次数的 `for`：
 
-GLSL 没有 `console.log`。那怎么调试？
-**把数据变成颜色！**
+```glsl
+// FBM 叠加：固定 5 次循环
+float v = 0.0;
+float a = 0.5;
+for (int i = 0; i < 5; i++) {
+    v += a * noise(st);
+    st = st * 2.0;
+    a *= 0.5;
+}
+```
 
-*   想知道 `x` 的值是多少？`gl_FragColor = vec4(vec3(x), 1.0);`
-    *   如果是黑色，说明 `x <= 0`。
-    *   如果是白色，说明 `x >= 1`。
-    *   如果是灰色，说明 `0 < x < 1`。
-*   想知道坐标在哪里？`gl_FragColor = vec4(vUv.x, vUv.y, 0.0, 1.0);`
+为什么要有这个限制？因为 GPU 是 SIMD 架构（单指令多数据），一个 warp 里的所有核心必须执行相同的指令。如果某个像素的循环多跑一次，其他像素就得等着，效率暴跌。
 
-记住：**所见即所得**。在 Shader 的世界里，颜色就是数据，数据就是颜色。
+### 7.2 if/else
+
+`if/else` 可以用，但要理解它的代价：GPU 会让两个分支都执行，然后丢弃不需要的那个结果。所以**两个分支都越简单越好**。
+
+简单的二选一没问题：
+
+```glsl
+if (r > 1.0) discard;
+```
+
+但应该避免在分支里放复杂计算。
+
+### 7.3 discard
+
+`discard` 直接丢弃当前像素，不写入任何颜色。它和 `step` 做遮罩的区别：
+
+- `discard`：像素完全不存在，透明区域真的透明
+- `step` 遮罩：像素仍然写入 `gl_FragColor`，只是颜色可能是黑色
+
+在做圆形裁剪时，如果需要透明（比如能量护盾的边缘），用 `discard`；如果只需要黑色遮罩（比如雷达的圆外区域），用 `step`。
+
+### 7.4 struct
+
+用 `struct` 把相关数据打包，让代码更清晰：
+
+```glsl
+struct Ray {
+    vec3 ro;  // 射线起点 (ray origin)
+    vec3 rd;  // 射线方向 (ray direction)
+};
+
+Ray r = Ray(vec3(0.0, 0.0, 3.0), normalize(vec3(0.0, 0.0, -1.0)));
+float z = r.ro.z; // 访问成员
+```
+
+### 7.5 #define
+
+`#define` 定义编译期常量，避免代码里出现魔法数字：
+
+```glsl
+#define PI 3.14159265359
+#define MAX_BOUNCES 3
+```
+
+和使用 `const float PI = 3.14...` 的区别：`#define` 是预处理替换，编译器不分配存储；`const` 变量在某些老 GPU 上可能有微妙差异。实践中两者都行，`#define` 更通用。
+
+## 八、 纹理查找
+
+```glsl
+uniform sampler2D uTexture;
+vec4 color = texture2D(uTexture, vUv);
+```
+
+`texture2D` 从纹理图片中采样颜色。`vUv` 是采样坐标，(0,0) 对应纹理左下角，(1,1) 对应右上角。超出 [0,1] 的行为由纹理的 wrap 模式决定。
+
+本文的示例都是纯数学生成，没有使用纹理。但当你需要图片素材（如地表贴图、天空盒）时，`texture2D` 是唯一的入口。
+
+## 九、 调试技巧
+
+GLSL 没有 `console.log`，没有断点，没有 print。你的调试工具只有一个：**把数据变成颜色**。
+
+### 方法：把你想知道的值映射到颜色
+
+```glsl
+// 想知道 r 的值？
+gl_FragColor = vec4(vec3(r), 1.0);
+// 黑色 → r ≈ 0
+// 灰色 → r ≈ 0.5
+// 白色 → r ≈ 1.0
+// 超白(过曝) → r > 1.0
+```
+
+```glsl
+// 想知道角度 a 的值？（范围 [-π, π]）
+// 先归一化到 [0, 1]：a / (2.0 * PI) + 0.5
+gl_FragColor = vec4(vec3(a / 6.283 + 0.5), 1.0);
+```
+
+```glsl
+// 想知道坐标在哪里？
+gl_FragColor = vec4(vUv.x, vUv.y, 0.0, 1.0);
+// 红 = x 分量，绿 = y 分量
+```
+
+```glsl
+// 想判断 bool 值？
+float isInside = step(r, 1.0); // 圆内=1, 圆外=0
+gl_FragColor = vec4(vec3(isInside), 1.0);
+// 白色 = true，黑色 = false
+```
+
+**记住：在 Shader 的世界里，颜色就是数据，数据就是颜色。**你看到的每一帧画面，都是一次大规模的数据可视化。
+
+## 十、 速查表
+
+把本文最核心的函数浓缩成一张表，方便编码时查阅：
+
+| 函数 | 效果 | 一句话记忆 |
+|---|---|---|
+| `fract(x)` | 取小数部分 | "循环到 [0,1)" |
+| `floor(x)` | 向下取整 | "在第几个格子" |
+| `step(e, x)` | 硬切换 0/1 | "过了线吗？" |
+| `smoothstep(a, b, x)` | 平滑过渡 | "柔版 step" |
+| `mix(a, b, t)` | 线性插值 | "a 和 b 之间" |
+| `length(v)` | 向量长度 | "到原点距离" |
+| `dot(a, b)` | 点积 | "方向多一致" |
+| `normalize(v)` | 归一化 | "只保留方向" |
+| `atan(y, x)` | 反正切 | "极坐标角度" |
+| `reflect(I, N)` | 反射 | "弹射方向" |
+| `mod(x, y)` | 取余 | "循环周期" |
+| `clamp(x, a, b)` | 限幅 | "不许越界" |
+
+掌握了这些工具，你就可以去[实战篇](/posts/glsl/glsl-battle)闯关了。

@@ -1,155 +1,424 @@
 ---
 title: 'PBR 指南：赋予虚拟世界真实的质感'
 date: '2024-11-20'
-description: '为什么现代游戏的画面如此逼真？答案就是 PBR (基于物理的渲染)。本文将带你深入了解微表面理论、能量守恒、菲涅尔效应，并详细拆解 Metallic-Roughness 工作流，教你如何用代码模拟真实的金属与塑料。'
+description: '为什么现代游戏的画面如此逼真？答案就是 PBR (基于物理的渲染)。本文将带你深入了解微表面理论、能量守恒、菲涅尔效应，并详细拆解 Cook-Torrance BRDF 的三个项 (F/D/G)，教你如何用代码模拟真实的金属与塑料。'
 tags: ['WebGL', 'GLSL', 'PBR', 'Lighting', 'Advanced']
 ---
 
 # PBR 指南：赋予虚拟世界真实的质感
 
-在早期的 3D 游戏中，为了让物体看起来像金属，美术师可能会把贴图画成蓝灰色。但如果换个角度、换个光照，它看起来就像一块蓝色的石头。
+在早期的 3D 游戏中，为了让物体看起来像金属，美术师会把贴图画成蓝灰色。但换个角度、换个光照，它看起来就像一块蓝色的石头。
 
-现在，我们有了 **PBR (Physically Based Rendering，基于物理的渲染)**。
-PBR 不是一种单一的技术，而是一套**基于真实物理规律**的渲染理念。它保证了无论光照环境如何变化，物体的材质看起来总是"正确"的。
+**PBR (Physically Based Rendering)** 改变了这一切。它不是一种单一技术，而是一套**基于物理规律**的渲染理念——无论光照环境如何变化，材质看起来总是"正确"的。
 
-本文将带你揭开 PBR 的物理面纱，并教你如何在 Shader 中实现它。
+前置阅读：
+- [法线深入](/posts/glsl/understanding-normals)——PBR 大量使用法线，你需要理解 dot(N, L)
+- [图形学世界观](/posts/glsl/the-big-picture)——你需要理解光照在 Fragment Shader 中的位置
 
-## 一、 微表面理论 (Microfacet Theory)
+## 一、为什么需要 PBR？
 
-这是 PBR 的核心假设。
-PBR 认为：**所有表面在微观层面上都是粗糙的。**
+传统 Phong 模型有三个致命问题：
 
-*   **光滑表面**（如镜子）：微表面排列整齐，光线向同一个方向反射（产生清晰的高光）。
-*   **粗糙表面**（如水泥）：微表面杂乱无章，光线向四面八方散射（产生模糊的漫反射）。
+| 问题 | Phong | PBR |
+|---|---|---|
+| 高光形状不真实 | 固定的圆形高光 | 粗糙度控制高光大小和形状 |
+| 金属和塑料没有区别 | 手动调颜色区分 | 金属度自动区分反射/漫反射比例 |
+| 换个环境就穿帮 | 反射是假的 | IBL 让反射来自真实环境 |
 
-我们在 Shader 中用 **粗糙度 (Roughness)** 来描述这种微观的不平整程度。
+PBR 的核心保证：**同一组参数，在任何光照环境下看起来都物理正确。**
 
-## 二、 能量守恒 (Energy Conservation)
+## 二、PBR 的三个物理基石
 
-光线打到物体上，不会凭空产生，也不会凭空消失（除了转化为热能）。
-**入射光 = 反射光 (Specular) + 折射光 (Diffuse)**
+### 1. 微表面理论 (Microfacet Theory)
 
-*   **金属**：几乎所有的光都被反射了，没有光进入内部（没有漫反射）。
-*   **非金属**：一部分光反射（产生高光），一部分光进入内部散射出来（产生颜色）。
+PBR 假设：**所有表面在微观层面上都是粗糙的。**
 
-这意味着：**一个物体不可能既有超强的漫反射，又有超强的镜面反射。** PBR 系统会自动平衡这两者，防止画面过曝。
+- **光滑表面**（镜子）：微表面排列整齐，光线向同一方向反射 → 清晰高光
+- **粗糙表面**（水泥）：微表面杂乱无章，光线向四面八方散射 → 模糊高光
 
-## 三、 菲涅尔效应 (Fresnel Effect)
+我们用 **粗糙度 (Roughness)** 参数描述这种微观不平整程度：0.0 = 镜面，1.0 = 完全粗糙。
 
-你观察过平静的湖面吗？
-*   当你**垂直**向下看时，你能看清湖底的石头（反射弱，折射强）。
-*   当你**平视**远处湖面时，水面像镜子一样反光（反射强）。
+### 2. 能量守恒 (Energy Conservation)
 
-这就是菲涅尔效应：**视线与表面夹角越小，反射越强。**
-所有物体（包括你的皮肤、桌子）都有菲涅尔效应，只是强弱不同。
+光线打到物体上，不会凭空产生或消失：
 
-## 四、 PBR 工作流：Metallic-Roughness
+$$\text{入射光} = \text{反射光 (Specular)} + \text{折射光 (Diffuse)}$$
 
-在工业界（如 Unity, Unreal, Three.js），最主流的 PBR 参数组合是 **金属度-粗糙度 (Metallic-Roughness)** 工作流。
+- **金属**：几乎所有的光都被反射，没有光进入内部 → 没有漫反射
+- **非金属**：一部分反射（高光），一部分进入内部散射出来 → 有漫反射
 
-我们需要两张核心贴图：
-1.  **Metallic (金属度)**：0.0 是非金属（塑料、木头），1.0 是金属（金、银）。通常非黑即白。
-2.  **Roughness (粗糙度)**：0.0 是镜面，1.0 是磨砂。
+**关键推论**：一个物体不可能同时有超强的漫反射和超强的镜面反射。PBR 系统自动平衡两者，防止过曝。
 
-### 实战：模拟材质
+### 3. 菲涅尔效应 (Fresnel Effect)
 
-下面的 Shader 模拟了一个 PBR 材质球。你可以调整参数观察光影变化。
+观察平静的湖面：
+- **垂直**向下看 → 能看清湖底的石头（反射弱，折射强）
+- **平视**远处湖面 → 水面像镜子一样反光（反射强）
 
-*(注：这是一个简化的 PBR 模型，仅用于演示核心概念)*
+**视线与表面夹角越小，反射越强。** 所有物体都有菲涅尔效应，包括你的皮肤和桌面——只是强弱不同。
 
-<ShaderPreview title="Simple PBR Sphere" code={`
+<ShaderPreview title="Fresnel Effect" code={`
+varying vec2 vUv;
+
+void main() {
+    vec2 p = vUv * 2.0 - 1.0;
+    float r = length(p);
+    if (r > 1.0) discard;
+
+    float z = sqrt(1.0 - r * r);
+    vec3 N = vec3(p.x, p.y, z);     // 法线
+    vec3 V = vec3(0.0, 0.0, 1.0);   // 视线
+
+    // 菲涅尔：掠射角反射更强
+    float NdotV = max(dot(N, V), 0.0);
+    // Schlick 近似：F0 + (1-F0) * (1 - N·V)^5
+    // F0 = 基础反射率，这里用 0.04（非金属典型值）
+    float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0);
+
+    vec3 diffuseColor = vec3(0.3, 0.5, 0.8);
+    vec3 specularColor = vec3(1.0);
+
+    // 混合：中心区域漫反射为主，边缘镜面反射为主
+    vec3 color = mix(diffuseColor, specularColor, fresnel);
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+球体的边缘（掠射角）更亮——这就是菲涅尔效应。
+
+## 三、Cook-Torrance BRDF：PBR 的数学核心
+
+PBR 的反射方程：
+
+$$L_o = \int_\Omega (k_d \cdot \frac{c}{\pi} + k_s \cdot \frac{DFG}{4(\omega_o \cdot n)(\omega_i \cdot n)}) \cdot L_i \cdot (n \cdot \omega_i) d\omega_i$$
+
+别被吓到。它就是"对每个方向来的光，算出反射了多少"。核心是中间的 **Cook-Torrance BRDF**，由三项组成：
+
+$$f_{specular} = \frac{D \cdot F \cdot G}{4(N \cdot V)(N \cdot L)}$$
+
+### 1. D：法线分布函数 (Normal Distribution Function)
+
+**"微表面中有多少个正好把光反射到你的眼睛里？"**
+
+D 决定了高光的**大小和形状**。粗糙度越高，微表面越乱，能"正好对准"的越少 → 高光更宽但更暗。粗糙度越低，高光越窄但越亮。
+
+最常用的 GGX/Trowbridge-Reitz 分布：
+
+$$D_{GGX} = \frac{\alpha^2}{\pi \cdot ((N \cdot H)^2 \cdot (\alpha^2 - 1) + 1)^2}$$
+
+其中 $\alpha = roughness^2$，H 是半程向量（光线方向和视线方向的中间方向）。
+
+```glsl
+float D_GGX(float NdotH, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH2 = NdotH * NdotH;
+
+    float denom = NdotH2 * (a2 - 1.0) + 1.0;
+    return a2 / (3.14159 * denom * denom);
+}
+```
+
+### 2. F：菲涅尔方程 (Fresnel Equation)
+
+**"这个角度下，反射了多少光？"**
+
+F 决定了**反射和折射的比例**。Schlick 近似是最常用的：
+
+$$F_{Schlick} = F_0 + (1 - F_0)(1 - (N \cdot V))^5$$
+
+其中 $F_0$ 是**基础反射率**——正对着看时的反射比例：
+- 非金属：F0 通常在 0.02~0.08（大多数取 0.04）
+- 金属：F0 就是金属本身的颜色（金的 F0 是金黄色）
+
+```glsl
+vec3 F_Schlick(float NdotV, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
+}
+```
+
+### 3. G：几何遮蔽函数 (Geometry Function)
+
+**"有多少微表面被其他微表面挡住了？"**
+
+这是之前缺失的关键项。当光线以掠射角射入粗糙表面时，一部分微表面会被相邻的微表面遮住，光线到不了；反射出去的光也可能被挡住。G 项量化了这种损失。
+
+Smith 方法把 G 拆成两部分：
+
+$$G = G_1(N, V) \cdot G_1(N, L)$$
+
+其中 $G_1$ 是 GGX 的遮蔽函数：
+
+$$G_1(v) = \frac{N \cdot v}{(N \cdot v)(1 - k) + k}$$
+
+其中 $k = \frac{(roughness+1)^2}{8}$（用于直接光照的 Schlick-GGX 近似）。
+
+```glsl
+float G1_GGX_Schlick(float NdotV, float roughness) {
+    float r = roughness + 1.0;
+    float k = (r * r) / 8.0;
+    return NdotV / (NdotV * (1.0 - k) + k);
+}
+
+float G_Smith(float NdotV, float NdotL, float roughness) {
+    return G1_GGX_Schlick(NdotV, roughness) *
+           G1_GGX_Schlick(NdotL, roughness);
+}
+```
+
+**为什么 G 重要？**
+
+没有 G 项，掠射角的反射会过于强烈（菲涅尔说掠射角反射强，但几何遮蔽说那些反射被挡住了）。G 项防止了掠射角的能量过度聚集，让高光的衰减更自然。
+
+## 四、完整的 PBR Shader
+
+把 F、D、G 三项组合起来：
+
+<ShaderPreview title="Complete PBR Sphere" code={`
 varying vec2 vUv;
 uniform float uTime;
 
-// PBR 参数 (尝试修改它们！)
-float uRoughness = 0.2; // 0.0 (光滑) ~ 1.0 (粗糙)
-float uMetallic = 1.0;  // 0.0 (塑料) ~ 1.0 (金属)
-vec3 uBaseColor = vec3(1.0, 0.8, 0.6); // 黄金色
+// PBR 参数
+float uRoughness = 0.25;
+float uMetallic = 0.0;
+vec3 uBaseColor = vec3(0.8, 0.2, 0.1); // 红色塑料
 
-// 简单的环境光模拟 (IBL 替代品)
-vec3 getEnvironment(vec3 dir, float rough) {
-    // 天空颜色渐变
-    vec3 sky = mix(vec3(0.1, 0.2, 0.4), vec3(0.6, 0.8, 1.0), dir.y * 0.5 + 0.5);
-    // 粗糙度越高，环境反射越模糊(暗淡)
-    return sky * (1.0 - rough * 0.8);
+// --- D: 法线分布函数 ---
+float D_GGX(float NdotH, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (3.14159 * denom * denom);
+}
+
+// --- G: 几何遮蔽函数 ---
+float G1_GGX(float NdotV, float roughness) {
+    float r = roughness + 1.0;
+    float k = (r * r) / 8.0;
+    return NdotV / (NdotV * (1.0 - k) + k);
+}
+float G_Smith(float NdotV, float NdotL, float roughness) {
+    return G1_GGX(NdotV, roughness) * G1_GGX(NdotL, roughness);
+}
+
+// --- F: 菲涅尔方程 ---
+vec3 F_Schlick(float NdotV, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(1.0 - max(NdotV, 0.0), 5.0);
 }
 
 void main() {
     vec2 p = vUv * 2.0 - 1.0;
     float r = length(p);
     if (r > 1.0) discard;
-    
-    float z = sqrt(1.0 - r*r);
-    vec3 N = vec3(p.x, p.y, z); // 法线
-    vec3 V = vec3(0.0, 0.0, 1.0); // 视线 (假设正对屏幕)
-    vec3 L = normalize(vec3(sin(uTime), 1.0, cos(uTime))); // 旋转光源
-    vec3 H = normalize(V + L); // 半程向量
-    
-    // --- 1. 计算 Diffuse & Specular 比例 ---
-    // 菲涅尔基础反射率 (F0)
-    // 非金属 F0 通常是 0.04，金属 F0 就是它本身的颜色
+
+    float z = sqrt(1.0 - r * r);
+    vec3 N = vec3(p.x, p.y, z);
+    vec3 V = vec3(0.0, 0.0, 1.0);
+    vec3 L = normalize(vec3(sin(uTime) * 2.0, 1.5, cos(uTime) * 2.0));
+    vec3 H = normalize(V + L);
+
+    // --- PBR 计算 ---
+
+    // 1. F0：基础反射率
+    // 非金属 F0 ≈ 0.04，金属 F0 = baseColor
     vec3 F0 = mix(vec3(0.04), uBaseColor, uMetallic);
-    
-    // 菲涅尔公式 (Schlick近似)
+
+    // 2. 计算各点积
+    float NdotL = max(dot(N, L), 0.0);
     float NdotV = max(dot(N, V), 0.0);
-    vec3 F = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
-    
-    // 能量守恒：反射多了，漫反射就少
+    float NdotH = max(dot(N, H), 0.0);
+
+    // 3. Cook-Torrance 三项
+    float D = D_GGX(NdotH, uRoughness);
+    vec3 F = F_Schlick(NdotV, F0);
+    float G = G_Smith(NdotV, NdotL, uRoughness);
+
+    // 4. 镜面反射 BRDF
+    vec3 specular = (D * F * G) /
+                    max(4.0 * NdotV * NdotL, 0.001);
+
+    // 5. 能量守恒：反射比例 kS，折射/漫反射比例 kD
     vec3 kS = F;
     vec3 kD = vec3(1.0) - kS;
     kD *= (1.0 - uMetallic); // 金属没有漫反射
-    
-    // --- 2. 计算光照 (Cook-Torrance BRDF 简化版) ---
-    
-    // 漫反射 (Lambert)
-    float NdotL = max(dot(N, L), 0.0);
-    vec3 diffuse = kD * uBaseColor * NdotL;
-    
-    // 镜面反射 (Specular)
-    float NdotH = max(dot(N, H), 0.0);
-    // NDF (法线分布函数 - 决定高光大小)
-    float alpha = uRoughness * uRoughness;
-    float alpha2 = alpha * alpha;
-    float denom = (NdotH * NdotH * (alpha2 - 1.0) + 1.0);
-    float D = alpha2 / (3.14159 * denom * denom);
-    
-    // 几何遮蔽 (G) 省略... 假设为 1
-    
-    vec3 specular = (D * F) / 4.0; // 简化的 BRDF
-    
-    // --- 3. 环境光照 (IBL) ---
-    // 模拟金属反射环境
-    vec3 reflectionDir = reflect(-V, N);
-    vec3 envColor = getEnvironment(reflectionDir, uRoughness);
-    vec3 ambient = envColor * (kD * uBaseColor + F); 
-    
-    // 最终合成
-    vec3 color = ambient * 0.3 + diffuse + specular * 2.0;
-    
-    // Tone mapping (简单的 Reinhard)
+
+    // 6. 漫反射 (Lambert)
+    vec3 diffuse = kD * uBaseColor / 3.14159;
+
+    // 7. 最终颜色
+    vec3 Lo = (diffuse + specular) * vec3(1.0) * NdotL; // 光源强度 = 1
+
+    // 8. 环境光（简化）
+    vec3 ambient = vec3(0.03) * uBaseColor + F * 0.05;
+
+    vec3 color = ambient + Lo;
+
+    // 9. Tone mapping (Reinhard)
     color = color / (color + vec3(1.0));
-    
+
+    // 10. Gamma 校正
+    color = pow(color, vec3(1.0 / 2.2));
+
     gl_FragColor = vec4(color, 1.0);
 }
 `} />
 
-## 五、 高级光照：IBL (Image Based Lighting)
+### 逐行理解关键步骤
 
-PBR 如果没有环境光，效果会大打折扣。
-现实中，物体不仅仅被灯泡照亮，它是被**周围环境**照亮的。
+**步骤 1**：F0 的计算利用了金属度的特性——非金属的 F0 很低（0.04），金属的 F0 就是它本身的颜色。
 
-**IBL** 技术就是把一张全景图（HDR 环境贴图）当作光源。
-*   对于漫反射：我们对环境图进行模糊处理（Irradiance Map）。
-*   对于镜面反射：我们根据粗糙度，读取环境图不同模糊程度的版本（Prefiltered Map）。
+**步骤 4**：镜面反射 = DFG / (4·NdotV·NdotL)。分母的 4·NdotV·NdotL 是 BRDF 的归一化因子，确保能量守恒。
 
-这就是为什么在 Three.js 中，只要加载一张 `envMap`，模型瞬间就变得真实起来。
+**步骤 5**：kD = 1 - kS 保证漫反射和镜面反射加起来不超过入射光。乘以 (1-metallic) 是因为金属没有漫反射。
+
+**步骤 9-10**：Tone mapping 把 HDR（高动态范围）映射到屏幕可显示的 [0,1]，Gamma 校正确保颜色在显示器上正确显示。
+
+## 五、PBR 贴图工作流
+
+在 Three.js 中，PBR 材质通常由 4 张贴图驱动：
+
+| 贴图 | 含义 | RGB 范围 |
+|---|---|---|
+| Albedo (Base Color) | 物体的基础颜色 | 0~1（不应该有光照信息！） |
+| Metallic | 金属度 | 0（非金属）或 1（金属） |
+| Roughness | 粗糙度 | 0（镜面）到 1（粗糙） |
+| Normal | 法线扰动 | 切线空间法线 |
+
+### 为什么 Albedo 不应该有光照？
+
+传统贴图可能把阴影和暗部画在颜色里。PBR 中，光照由 Shader 实时计算，贴图只提供"材质属性"。如果把阴影画在 Albedo 里，加上实时光照就会暗两次。
+
+### Three.js 中的 PBR 材质
+
+```javascript
+const material = new THREE.MeshStandardMaterial({
+  map: albedoTexture,           // 基础颜色
+  metalnessMap: metallicTexture, // 金属度
+  roughnessMap: roughnessTexture, // 粗糙度
+  normalMap: normalTexture,      // 法线贴图
+  metalness: 1.0,               // 贴图乘以这个值
+  roughness: 1.0,               // 贴图乘以这个值
+});
+```
+
+`MeshStandardMaterial` 就是 Three.js 的 PBR 实现。它在内部运行的就是 Cook-Torrance BRDF。
+
+### 在 ShaderSceneDemo 中体验 PBR 参数
+
+<ShaderSceneDemo
+  title="PBR 材质实验台"
+  fragmentShader={`
+    varying vec3 vNormal;
+    varying vec2 vUv;
+    varying vec3 vPosition;
+    uniform vec3 uLightDir;
+    uniform float uRoughness;
+    uniform float uMetallic;
+    uniform vec3 uBaseColor;
+
+    float D_GGX(float NdotH, float roughness) {
+      float a = roughness * roughness;
+      float a2 = a * a;
+      float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+      return a2 / (3.14159 * denom * denom);
+    }
+
+    float G1_GGX(float NdotV, float roughness) {
+      float r = roughness + 1.0;
+      float k = (r * r) / 8.0;
+      return NdotV / (NdotV * (1.0 - k) + k);
+    }
+    float G_Smith(float NdotV, float NdotL, float roughness) {
+      return G1_GGX(NdotV, roughness) * G1_GGX(NdotL, roughness);
+    }
+
+    vec3 F_Schlick(float NdotV, vec3 F0) {
+      return F0 + (1.0 - F0) * pow(1.0 - max(NdotV, 0.0), 5.0);
+    }
+
+    void main() {
+      vec3 N = normalize(vNormal);
+      vec3 V = normalize(-vPosition);
+      vec3 L = normalize(uLightDir);
+      vec3 H = normalize(V + L);
+
+      vec3 F0 = mix(vec3(0.04), uBaseColor, uMetallic);
+
+      float NdotL = max(dot(N, L), 0.0);
+      float NdotV = max(dot(N, V), 0.0);
+      float NdotH = max(dot(N, H), 0.0);
+
+      float D = D_GGX(NdotH, uRoughness);
+      vec3 F = F_Schlick(NdotV, F0);
+      float G = G_Smith(NdotV, NdotL, uRoughness);
+
+      vec3 specular = (D * F * G) / max(4.0 * NdotV * NdotL, 0.001);
+
+      vec3 kS = F;
+      vec3 kD = (vec3(1.0) - kS) * (1.0 - uMetallic);
+
+      vec3 diffuse = kD * uBaseColor / 3.14159;
+      vec3 Lo = (diffuse + specular) * vec3(1.5) * NdotL;
+
+      vec3 ambient = vec3(0.03) * uBaseColor + F * 0.04;
+      vec3 color = ambient + Lo;
+
+      color = color / (color + vec3(1.0));
+      color = pow(color, vec3(1.0 / 2.2));
+
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `}
+  scene={{ kind: "sphere", segments: 64 }}
+  uniforms={[
+    { name: "uRoughness", type: "float", value: 0.3, label: "粗糙度", control: "range", min: 0.01, max: 1, step: 0.01 },
+    { name: "uMetallic", type: "float", value: 0, label: "金属度", control: "range", min: 0, max: 1, step: 0.01 },
+    { name: "uBaseColor", type: "color", value: "#cc3322", label: "基础颜色" },
+    { name: "uLightDir", type: "vec3", value: [1, 1, 1], label: "光照方向", control: "range", min: -2, max: 2, step: 0.1 },
+  ]}
+/>
+
+**试试这些组合**：
+- 粗糙度 0.05 + 金属度 1.0 + 金色 → 亮闪闪的黄金
+- 粗糙度 0.5 + 金属度 0.0 + 红色 → 哑光红色塑料
+- 粗糙度 0.01 + 金属度 1.0 + 银色 → 镜面不锈钢
+
+## 六、IBL：基于图像的光照
+
+PBR 如果只有直接光照，物体暗面会全黑——现实中，暗面被**环境光**照亮。
+
+**IBL (Image Based Lighting)** 把一张 HDR 全景图当作光源：
+- **漫反射**：对环境图做球面卷积（模糊），得到 Irradiance Map
+- **镜面反射**：根据粗糙度，读取不同模糊程度的 Prefiltered Environment Map
+
+在 Three.js 中：
+
+```javascript
+const loader = new THREE.RGBELoader();
+loader.load('environment.hdr', (texture) => {
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  scene.environment = texture;   // IBL 光源
+  scene.background = texture;    // 背景天空
+});
+```
+
+只要设置了 `scene.environment`，`MeshStandardMaterial` 会自动使用 IBL 做环境光照和反射。
 
 ## 总结
 
-PBR 是一套庞大的理论体系，但核心只有几点：
-1.  **微表面**决定粗糙度。
-2.  **能量守恒**平衡漫反射与镜面反射。
-3.  **菲涅尔**让边缘反光更强。
-4.  **Metallic-Roughness** 是最通用的控制参数。
+| 概念 | 公式/实现 | 作用 |
+|---|---|---|
+| 微表面理论 | Roughness 参数 | 控制高光大小 |
+| 能量守恒 | kD = (1-kS)(1-metallic) | 防止漫反射+镜面反射过曝 |
+| 菲涅尔 | F = F0 + (1-F0)(1-N·V)^5 | 掠射角反射更强 |
+| D (NDF) | GGX/Trowbridge-Reitz | 高光形状 |
+| G (几何遮蔽) | Smith + Schlick-GGX | 掠射角遮蔽修正 |
+| F (菲涅尔) | Schlick 近似 | 反射/折射比例 |
+| IBL | HDR 环境贴图 | 真实环境光照 |
 
-掌握了 PBR，你就掌握了通往真实世界的钥匙。
+### 下一步
+
+- **[阴影指南](/posts/glsl/shadows-guide)**——PBR + 阴影 = 逼真画面的最后一块拼图
+- **[后期处理](/posts/glsl/post-processing-magic)**——Bloom 让 PBR 的高光溢出更真实
+- **[法线深入](/posts/glsl/understanding-normals)**——法线贴图在 PBR 中是最重要的纹理输入

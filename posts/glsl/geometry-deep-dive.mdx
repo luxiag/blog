@@ -1,169 +1,570 @@
 ---
-title: '几何工坊：深入理解 BufferGeometry 与程序化生成'
+title: 'BufferGeometry 进阶：拓扑、更新边界与程序化 Mesh'
 date: '2024-11-18'
-description: '告别内置的 Box 和 Sphere。本文将带你深入 WebGL 的底层，学习如何直接操作 BufferGeometry，利用索引绘制优化性能，并实现 LOD (多细节层次) 技术。这是通往高级图形开发的必经之路。'
-tags: ['WebGL', 'Three.js', 'Geometry', 'Optimization']
+description: '承接 Geometry、BufferGeometry 与 Mesh 基础课，深入 TypedArray、索引与接缝、法线、分组、局部更新、包围体和资源释放，并完成一个程序化动态 Mesh。'
+tags: ['Three.js', 'WebGL', 'BufferGeometry', 'Geometry']
 ---
 
-# 几何工坊：深入理解 BufferGeometry 与程序化生成
+# BufferGeometry 进阶：拓扑、更新边界与程序化 Mesh
 
-在 Three.js 等图形库中，我们习惯了直接 `new THREE.BoxGeometry()`。但如果你想制作动态的粒子流、生成复杂的地形，或者仅仅是为了极致的性能，你就必须学会**手搓几何体**。
+本文是 [Geometry、BufferGeometry 与 Mesh 详解](/posts/threejs/geometry-buffergeometry-mesh-explained) 的进阶课。默认你已经知道 `Geometry` 描述顶点数据，`Material` 描述着色方式，`Mesh` 把两者组合成可绘制对象。这里不再重复类关系，而是回答更接近工程的问题：
 
-本文将深入探讨几何体生成的三个核心支柱：
-1.  **BufferGeometry**：直接操作二进制数据。
-2.  **索引绘制 (Indexed Drawing)**：复用顶点的艺术。
-3.  **LOD (Level of Detail)**：动态调整模型精度的策略。
+- 一个 attribute 为什么必须同时描述数组类型、`itemSize` 和 `normalized`？
+- `setAttribute()` 是否立刻上传数据？
+- 索引为什么不能跨 UV 或法线接缝共享顶点？
+- `computeVertexNormals()` 到底计算了什么，又没有做什么？
+- 动态形变怎样避免累计误差，并只声明真正修改的范围？
+- CPU 上的顶点变了以后，包围体和 GPU 资源该怎样处理？
 
----
+本文示例以仓库当前使用的 Three.js r182 API 为准。
 
-## 模块一：BufferGeometry —— 数据之源
+## 一、BufferAttribute 是“数组 + 解释方式”
 
-### 1. 概念定义
-`BufferGeometry` 是 WebGL 几何数据的直接映射。它不存储"对象"，它只存储**类型化数组 (Typed Array)**。
-所有的顶点位置、颜色、法线、UV，都被打平成一串长长的数字，直接传给 GPU。
+### 1. TypedArray 决定存储格式
 
-### 2. 基本原理
-GPU 不认识 `Vector3` 对象。它只认识 `Float32Array`。
-*   **Position Buffer**: `[x1, y1, z1, x2, y2, z2, ...]`
-*   **Color Buffer**: `[r1, g1, b1, r2, g2, b2, ...]`
+GPU 顶点输入最终来自连续内存。`BufferAttribute` 不只可以包装 `Float32Array`；应根据数据范围和精度选择类型：
 
-### 3. 实战：手动构建一个四面体
-不要用 `new THREE.TetrahedronGeometry`。我们来自己算坐标。
+| 用途 | 常见 TypedArray | 说明 |
+|---|---|---|
+| `position`、`normal`、`uv` | `Float32Array` | 通用浮点数据，最少踩精度与兼容性问题 |
+| 0～255 的颜色、权重或标记 | `Uint8Array` | 配合 `normalized: true` 可让着色器读取 0～1 |
+| 有符号压缩方向 | `Int8Array` / `Int16Array` | 配合归一化可映射到约 -1～1 |
+| 小型网格索引 | `Uint16Array` | 可表示索引 0～65535 |
+| 顶点编号超过 65535 的索引 | `Uint32Array` | 占用更多字节，但可引用更大的顶点编号 |
 
-*(注：这是一个概念演示，ShaderPreview 会自动把这些 buffer 组装成模型)*
+例如，同样是顶点颜色，下面两种表示都成立：
 
-<ShaderPreview title="Custom BufferGeometry" code={`
-varying vec2 vUv;
-varying vec3 vColor;
+```javascript
+const floatColors = new THREE.Float32BufferAttribute([
+  1, 0.5, 0,
+  0, 0.5, 1,
+], 3);
 
-void main() {
-    // 简单的线框效果：边缘发光
-    float edge = step(0.98, vUv.x) + step(0.98, vUv.y) + step(vUv.x, 0.02) + step(vUv.y, 0.02);
-    vec3 color = mix(vColor, vec3(1.0), edge);
-    
-    gl_FragColor = vec4(color, 1.0);
+const packedColors = new THREE.Uint8BufferAttribute(
+  new Uint8Array([
+    255, 128, 0,
+    0, 128, 255,
+  ]),
+  3,
+  true,
+);
+```
+`packedColors` 的底层仍然是整数；`normalized: true` 表示这些整数作为顶点输入时要转换到归一化范围。无符号整数映射到 0～1，有符号整数映射到约 -1～1。浮点 attribute 通常不需要归一化。
+
+:::warning 索引不是普通顶点 attribute
+索引只保存顶点编号，应使用 `Uint16Array` 或 `Uint32Array`，不设置 `normalized`。它通过 `geometry.setIndex()` 关联，而不是通过 `setAttribute('index', ...)`。
+:::
+
+### 2. `itemSize`、`count` 与 `normalized`
+
+```javascript
+const positions = new Float32Array([
+  -1, 0, 0,
+   1, 0, 0,
+   0, 1, 0,
+]);
+
+const position = new THREE.BufferAttribute(positions, 3);
+
+console.log(position.itemSize); // 3：每个顶点读取 x、y、z
+console.log(position.count);    // 3：array.length / itemSize
+console.log(position.normalized); // false
+```
+
+三个字段分工不同：
+
+- `itemSize` 是每个元素包含的标量数。位置通常是 3，UV 通常是 2，单个权重可以是 1。
+- `count` 是可读取的元素数量，由数组长度和 `itemSize` 推导，不是字节数。
+- `normalized` 只改变整数数据被读取时的数值解释，不改变底层数组，也不减少元素数量。
+
+同一个 geometry 上按顶点读取的 attribute 通常必须有一致的 `count`。如果 `position.count` 是 100，而自定义 `aPhase.count` 只有 80，后 20 个顶点就没有合法的对应数据；这不是“自动补零”的可靠用法，而是数据布局错误。
+
+### 3. `setAttribute()` 只建立关联，不负责立即上传
+
+```javascript
+const geometry = new THREE.BufferGeometry();
+const position = new THREE.BufferAttribute(positions, 3);
+
+geometry.setAttribute('position', position);
+```
+
+这里发生的是：geometry 在自己的 attribute 表中记录了名称 `position` 和 `BufferAttribute` 对象。**调用 `setAttribute()` 本身不等于立即把数组上传到 GPU。** WebGLRenderer 在真正使用该 geometry 绘制时，才会创建或更新对应的 GPU buffer。第一次渲染会上传初始数据；之后只有 attribute 的版本发生变化时才会再次处理上传。
+
+因此下面的时序更准确：
+
+```text
+TypedArray
+  → BufferAttribute（描述 itemSize / normalized / usage）
+  → geometry.setAttribute（建立名称关联）
+  → renderer.render 中首次使用（创建并上传 GPU buffer）
+  → 修改数组并设置 needsUpdate（版本递增）
+  → 后续 render（更新 GPU buffer）
+```
+
+如果 attribute 会频繁更新，应在第一次渲染前声明用途：
+
+```javascript
+position.setUsage(THREE.DynamicDrawUsage);
+```
+
+`usage` 是给渲染后端的使用提示。一个 attribute 已经被首次使用后，不应再靠修改 `usage` 改变策略；需要改变时，创建新的 attribute 并重新关联更清晰。
+
+## 二、索引描述拓扑，而接缝决定能否共享
+
+### 1. indexed 与 non-indexed
+
+一个矩形由两个三角形组成。非索引写法要按三角形顺序放 6 份顶点数据：
+
+```javascript
+const nonIndexed = new THREE.BufferGeometry();
+nonIndexed.setAttribute('position', new THREE.Float32BufferAttribute([
+  0, 0, 0,  1, 0, 0,  0, 1, 0,
+  1, 0, 0,  1, 1, 0,  0, 1, 0,
+], 3));
+```
+
+索引写法只存 4 组顶点属性，再用 6 个编号组装两个三角形：
+
+```javascript
+const indexed = new THREE.BufferGeometry();
+indexed.setAttribute('position', new THREE.Float32BufferAttribute([
+  0, 0, 0,
+  1, 0, 0,
+  1, 1, 0,
+  0, 1, 0,
+], 3));
+indexed.setIndex(new THREE.Uint16BufferAttribute([
+  0, 1, 3,
+  1, 2, 3,
+], 1));
+```
+
+渲染时，非索引 geometry 按 attribute 中的顶点顺序绘制；索引 geometry 按 index 中的编号取顶点。索引常常减少重复数据并提高顶点复用，但收益取决于拓扑、所有 attribute 的大小、索引类型和顶点缓存命中，不能承诺一个固定百分比。
+
+### 2. 一个索引引用的是整组顶点属性
+
+“位置相同”不代表“可以共享同一个顶点编号”。编号 7 同时引用：
+
+```text
+position[7] + normal[7] + uv[7] + color[7] + 所有自定义 attribute[7]
+```
+
+如果一个空间点在相邻三角形上需要不同的任一属性，就必须复制成多个逻辑顶点。最常见的两类 seam（接缝）是：
+
+- **UV seam**：球体纹理横向从 `u = 1` 回到 `u = 0`。空间位置可以相同，但 UV 不同。
+- **法线 seam / 硬边**：立方体角点属于三个面，每个面需要不同法线。空间位置相同，但法线不同。
+
+所以 indexed geometry 也可以包含重复位置；索引复用的是“完整属性组合”，不是单独复用 `position`。同理，non-indexed 并不天然代表低质量，它能直接表达每个三角形各自独立的属性。
+
+### 3. `computeVertexNormals()` 的真实作用
+
+```javascript
+geometry.computeVertexNormals();
+```
+
+它会创建或覆盖 `normal` attribute，并根据当前三角形和 position 计算法线：
+
+- 对 indexed geometry，同一索引引用的相邻三角形会把未归一化的面法线累加，再对结果归一化；这相当于按三角形面积加权的平滑法线。
+- 对 non-indexed geometry，每三个连续顶点是一个独立三角形，三个顶点得到同一个面法线，因此呈现平面着色结果。
+
+它**不会**：
+
+- 修改 position 或 index；
+- 自动拆分硬边、UV seam 或材质边界；
+- 猜出哪些边应该平滑、哪些边应该锐利；
+- 在你之后修改 position 时持续自动重算；
+- 看见 Vertex Shader 中才发生的位移。
+
+想保留硬边，要先让硬边两侧使用不同逻辑顶点，再计算法线。CPU 每帧形变且使用光照材质时，位置更新后可以再次调用 `computeVertexNormals()`，但它会遍历三角形并更新法线，成本需要实测。若形变只发生在 Vertex Shader，通常应在 shader 中同步求法线或采用适合该效果的近似；CPU 法线计算并不知道 shader 最终把顶点移到了哪里。
+
+## 三、groups 与 drawRange 控制“画哪些数据”
+
+### 1. groups：同一 geometry 的多材质批次
+
+```javascript
+geometry.clearGroups();
+geometry.addGroup(0, 6, 0);
+geometry.addGroup(6, 6, 1);
+
+const mesh = new THREE.Mesh(geometry, [materialA, materialB]);
+```
+
+每个 group 的三个参数是 `start`、`count`、`materialIndex`。对 indexed geometry，`start` 和 `count` 以 **index 元素**计数；对 non-indexed geometry，则以 **顶点元素**计数。它们不是三角形数，也不是字节偏移。
+
+每个 group 通常对应一次独立 draw call。groups 不会复制数据、改变拓扑或自动合批；它只是把不同区间交给材质数组中的不同材质。应让用于绘制的 index/顶点区间恰好属于一个 group，避免重叠或遗漏。
+
+### 2. drawRange：限制 geometry 当前可绘制区间
+
+```javascript
+geometry.setDrawRange(0, 300);
+```
+
+`drawRange` 同样以 index 元素（indexed）或顶点元素（non-indexed）计数。它适合逐步显现网格、只画预分配 buffer 的有效前缀等场景。它不释放范围外内存，也不会自动生成更低精度的拓扑。
+
+当 groups 和 drawRange 同时存在时，实际绘制的是 group 区间与 drawRange 的交集。三角形 Mesh 的边界最好保持 3 的倍数，避免留下不完整图元。
+
+```javascript
+// 恢复为完整范围
+geometry.setDrawRange(0, Infinity);
+```
+## 四、动态更新：从基准位置计算，而不是逐帧累加
+
+### 1. 保留不可变的 `basePositions`
+
+下面这种写法会把每一帧的偏移继续叠加到上一帧，产生漂移，而且运动结果依赖帧数：
+
+```javascript
+// 错误：每帧累加，60 FPS 与 144 FPS 的结果不同
+positions[yOffset] += Math.sin(time) * 0.01;
+```
+
+周期形变应该保存初始位置，并由**绝对时间**直接求当前帧的位置：
+
+```javascript
+const position = geometry.getAttribute('position');
+const basePositions = position.array.slice();
+
+position.setUsage(THREE.DynamicDrawUsage);
+
+function update(timeMs) {
+  const time = timeMs * 0.001; // requestAnimationFrame 时间戳：毫秒 → 秒
+
+  for (let i = 0; i < position.count; i++) {
+    const offset = i * position.itemSize;
+    position.array[offset + 1] =
+      basePositions[offset + 1] + Math.sin(time * 2 + i * 0.15) * 0.2;
+  }
+
+  position.needsUpdate = true;
 }
-`} vertexCode={`
-// 注意：Three.js 已经自动注入了 position, color, uv, 
-// 以及 projectionMatrix 和 modelViewMatrix，不需要手动声明。
+```
 
-varying vec2 vUv;
-varying vec3 vColor;
+同一个 `time` 对应同一个形状，不论中间渲染了多少帧，因此它是帧率独立的。若需求是“按速度积分”而不是“按绝对时间求周期函数”，则用秒为单位的 `deltaTime` 乘速度，并根据业务限制过大的 delta；不要把“每帧多少”当作速度。
 
-uniform float uTime;
+### 2. `needsUpdate` 与局部更新边界
 
-void main() {
-    vUv = uv;
-    vColor = color;
-    
-    vec3 pos = position;
-    
-    // 让顶点动起来！
-    pos.y += sin(uTime + pos.x) * 0.2;
-    
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+修改 TypedArray 只改变 CPU 内存。必须设置：
+
+```javascript
+position.needsUpdate = true;
+```
+
+这会增加 attribute 的版本，使 Renderer 在后续使用它时处理上传。若整个数组都改变，只设置 `needsUpdate` 即可。若只修改一个连续区间，r182 可声明 update range：
+
+```javascript
+const firstVertex = 120;
+const changedVertexCount = 40;
+const itemSize = position.itemSize;
+
+// 修改 position.array 中对应的连续数据……
+
+position.clearUpdateRanges();
+position.addUpdateRange(
+  firstVertex * itemSize,       // start：标量分量偏移，不是字节偏移
+  changedVertexCount * itemSize // count：标量分量数量，不是顶点数量
+);
+position.needsUpdate = true;
+```
+
+`addUpdateRange()` 的单位是底层 TypedArray 的**元素/分量**。更新 `position` 的 40 个顶点时，因为 `itemSize` 为 3，所以范围长度是 120，而不是 40，也不是 480 字节。
+
+如果同一帧修改多个不连续区间，可以为每段调用一次 `addUpdateRange()`；也可以把相邻小区间合并成一个边界，减少上传调用。`clearUpdateRanges()` 适合在你要重新声明“这一帧的完整边界”时使用；不要在已经记录第一段后又清空，否则会丢失前一段。旧版 Three.js 曾使用单一 `updateRange` 字段，当前版本应优先使用 `addUpdateRange()` / `clearUpdateRanges()` 这一组 API。
+
+:::important 局部上传不等于局部计算
+update ranges 只帮助 Renderer 知道哪些 buffer 分量变了。你的 JavaScript 循环、法线重算和包围体重算是否遍历整个网格，是另一件事，应分别优化和测量。
+:::
+
+## 五、完整示例：程序化生成并动态形变一个 Mesh
+
+下面的示例不依赖内置几何体。它完成这些工作：
+
+1. 生成规则网格的 position、UV 和 index；
+2. 用归一化 `Uint8Array` 定义自定义 attribute `aFlex`；
+3. 用 `ShaderMaterial` 消费 `aFlex`；
+4. 保留 `basePositions`，按 `requestAnimationFrame` 的绝对时间计算形变；
+5. 只声明中间动态行对应的连续更新范围；
+6. 更新形变后的包围体，并提供完整释放函数。
+
+把这段代码放进已安装 `three` 的 Vite 等模块化前端项目即可运行：
+
+```javascript
+import * as THREE from 'three';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101522);
+
+const camera = new THREE.PerspectiveCamera(
+  45,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  100,
+);
+camera.position.set(0, 2.5, 6);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.style.margin = '0';
+document.body.appendChild(renderer.domElement);
+
+const COLUMNS = 64;
+const ROWS = 24;
+const VERTICES_PER_ROW = COLUMNS + 1;
+const vertexCount = (COLUMNS + 1) * (ROWS + 1);
+
+const positions = new Float32Array(vertexCount * 3);
+const uvs = new Float32Array(vertexCount * 2);
+const flex = new Uint8Array(vertexCount);
+
+for (let row = 0; row <= ROWS; row++) {
+  const v = row / ROWS;
+
+  for (let column = 0; column <= COLUMNS; column++) {
+    const u = column / COLUMNS;
+    const vertex = row * VERTICES_PER_ROW + column;
+
+    positions[vertex * 3] = (u - 0.5) * 5;
+    positions[vertex * 3 + 1] = (v - 0.5) * 2.4;
+    positions[vertex * 3 + 2] = 0;
+
+    uvs[vertex * 2] = u;
+    uvs[vertex * 2 + 1] = v;
+
+    // 两侧较硬，中间较柔软；shader 中会因 normalized 读到 0～1。
+    flex[vertex] = Math.round(Math.sin(u * Math.PI) * 255);
+  }
 }
-`} />
 
-### 4. 常见误区
-*   **误区**：每帧都 `new Float32Array`。
-*   **真相**：垃圾回收 (GC) 会杀死你的性能。应该创建一次，然后修改里面的值，并标记 `.needsUpdate = true`。
+// 当前顶点数远小于 65536，所以 Uint16Array 足够。
+const indices = new Uint16Array(COLUMNS * ROWS * 6);
+let indexOffset = 0;
 
----
+for (let row = 0; row < ROWS; row++) {
+  for (let column = 0; column < COLUMNS; column++) {
+    const a = row * VERTICES_PER_ROW + column;
+    const b = a + 1;
+    const c = a + VERTICES_PER_ROW;
+    const d = c + 1;
 
-## 模块二：索引绘制 (Indexed Drawing) —— 内存魔法
+    indices[indexOffset++] = a;
+    indices[indexOffset++] = b;
+    indices[indexOffset++] = c;
+    indices[indexOffset++] = b;
+    indices[indexOffset++] = d;
+    indices[indexOffset++] = c;
+  }
+}
 
-### 1. 概念定义
-假设你要画一个矩形（由两个三角形组成）。
-*   **非索引**：你需要 6 个顶点（每个三角形 3 个）。其中有 2 个顶点是重合的（对角线上的点）。
-*   **索引**：你只需要 4 个顶点。然后用一个**索引列表**告诉 GPU："先画第 0,1,2 个点，再画第 2,1,3 个点"。
+const geometry = new THREE.BufferGeometry();
+const positionAttribute = new THREE.BufferAttribute(positions, 3);
+positionAttribute.setUsage(THREE.DynamicDrawUsage);
 
-### 2. 基本原理
-*   **Vertex Buffer**: `[A, B, C, D]` (4 个点)
-*   **Index Buffer**: `[0, 1, 2,  2, 1, 3]` (6 个整数)
+geometry.setAttribute('position', positionAttribute);
+geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+geometry.setAttribute(
+  'aFlex',
+  new THREE.Uint8BufferAttribute(flex, 1, true),
+);
+geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+geometry.computeBoundingBox();
+geometry.computeBoundingSphere();
 
-### 3. 典型应用场景
-*   **网格 (Grid)**：大量的顶点是共享的。使用索引可以节省 30%~50% 的显存。
-*   **平滑法线**：如果两个三角形共享一个顶点，且你希望表面平滑，那么这个顶点必须是同一个（法线平均）。
+const material = new THREE.ShaderMaterial({
+  side: THREE.DoubleSide,
+  vertexShader: `
+    attribute float aFlex;
+    varying vec2 vUv;
+    varying float vFlex;
 
----
-
-## 模块三：LOD (Level of Detail) —— 视觉欺骗
-
-### 1. 概念定义
-**LOD** 技术的核心思想是：**离得越远，做得越糙。**
-当一个物体只有 10 个像素大时，你用 1 万个面去画它，纯属浪费 GPU。
-
-### 2. 基本原理
-我们需要准备多套模型：
-*   **LOD 0 (高模)**：10,000 面。距离 < 10米。
-*   **LOD 1 (中模)**：1,000 面。距离 10~50米。
-*   **LOD 2 (低模)**：100 面。距离 > 50米。
-
-每帧计算相机与物体的距离，自动切换显示的模型。
-
-### 3. 动态 LOD (Continuous LOD)
-对于地形，我们不能简单地切换模型（会闪烁）。我们需要**动态**减少顶点。
-一种常用的技术是 **Terrain Morphing**：在 Vertex Shader 中，根据距离把两个相邻的顶点"吸"到一起，从而平滑地减少面数。
-
-<ShaderPreview title="LOD Simulation" code={`
-varying vec2 vUv;
-varying float vDist; // 从顶点传来的距离
-
-void main() {
-    // 模拟 LOD 切换的可视化
-    // 红色 = 高模 (近)
-    // 绿色 = 中模 (中)
-    // 蓝色 = 低模 (远)
-    
-    vec3 color = vec3(0.0);
-    
-    if (vDist < 0.5) {
-        color = vec3(1.0, 0.0, 0.0); // High Detail
-        // 加点网格细节
-        float grid = step(0.95, fract(vUv.x * 20.0)) + step(0.95, fract(vUv.y * 20.0));
-        color += grid * 0.5;
-    } else if (vDist < 0.8) {
-        color = vec3(0.0, 1.0, 0.0); // Medium Detail
-        float grid = step(0.95, fract(vUv.x * 10.0)) + step(0.95, fract(vUv.y * 10.0));
-        color += grid * 0.5;
-    } else {
-        color = vec3(0.0, 0.0, 1.0); // Low Detail
+    void main() {
+      vUv = uv;
+      vFlex = aFlex;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
-    
-    gl_FragColor = vec4(color, 1.0);
+  `,
+  fragmentShader: `
+    varying vec2 vUv;
+    varying float vFlex;
+
+    void main() {
+      vec3 cold = vec3(0.08, 0.35, 0.85);
+      vec3 warm = vec3(1.0, 0.45, 0.12);
+      vec3 color = mix(cold, warm, vFlex);
+      float grid = 0.85 + 0.15 * sin(vUv.x * 80.0);
+      gl_FragColor = vec4(color * grid, 1.0);
+    }
+  `,
+});
+
+const mesh = new THREE.Mesh(geometry, material);
+scene.add(mesh);
+
+// slice() 创建独立副本；不能写成 const basePositions = positions。
+const basePositions = positions.slice();
+
+// 只让中间行形变。按 row-major 排列后，这是一段连续内存。
+const FIRST_DYNAMIC_ROW = 1;
+const LAST_DYNAMIC_ROW = ROWS - 1;
+const firstDynamicVertex = FIRST_DYNAMIC_ROW * VERTICES_PER_ROW;
+const dynamicVertexCount =
+  (LAST_DYNAMIC_ROW - FIRST_DYNAMIC_ROW + 1) * VERTICES_PER_ROW;
+
+let animationId = 0;
+let disposed = false;
+
+function animate(timeMs) {
+  if (disposed) return;
+
+  const time = timeMs * 0.001;
+  const endVertex = firstDynamicVertex + dynamicVertexCount;
+
+  for (let vertex = firstDynamicVertex; vertex < endVertex; vertex++) {
+    const offset = vertex * 3;
+    const baseX = basePositions[offset];
+    const baseZ = basePositions[offset + 2];
+    const flexibility = flex[vertex] / 255;
+
+    // 绝对时间 + 基准位置：不累计、不依赖帧率。
+    positions[offset + 2] =
+      baseZ + Math.sin(time * 2.2 + baseX * 1.8) * 0.35 * flexibility;
+  }
+
+  positionAttribute.clearUpdateRanges();
+  positionAttribute.addUpdateRange(
+    firstDynamicVertex * positionAttribute.itemSize,
+    dynamicVertexCount * positionAttribute.itemSize,
+  );
+  positionAttribute.needsUpdate = true;
+
+  // 示例选择精确重算；大型网格可改用预先计算的保守包围体。
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+
+  renderer.render(scene, camera);
+  animationId = requestAnimationFrame(animate);
 }
-`} vertexCode={`
-varying vec2 vUv;
-varying float vDist;
-uniform float uTime;
 
-void main() {
-    vUv = uv;
-    vec3 pos = position;
-    
-    // 模拟相机距离变化 (0 到 1)
-    float dist = (sin(uTime * 0.5) + 1.0) * 0.5;
-    vDist = dist;
-    
-    // 简单的透视投影
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
 }
-`} />
 
----
+window.addEventListener('resize', onResize);
+animationId = requestAnimationFrame(animate);
 
-## 总结与延伸
+// 页面或组件卸载时调用。
+function dispose() {
+  if (disposed) return;
+  disposed = true;
 
-| 模块 | 核心优势 | 适用场景 |
-| :--- | :--- | :--- |
-| **BufferGeometry** | 极致控制，高性能 | 粒子系统，程序化生成 |
-| **Indexed Drawing** | 节省显存 | 连续网格，复杂模型 |
-| **LOD** | 节省 GPU 算力 | 大场景，开放世界游戏 |
+  cancelAnimationFrame(animationId);
+  window.removeEventListener('resize', onResize);
+  scene.remove(mesh);
+  geometry.dispose();
+  material.dispose();
+  renderer.dispose();
+  renderer.domElement.remove();
+}
 
-掌握了这些，你就不再是简单的"调库工程师"，而是能够驾驭底层数据的**图形程序员**。
+// 在 SPA 中把 dispose 接到组件卸载生命周期。
+```
+### 自定义 attribute 的边界
 
-### 参考资料
-*   [Three.js BufferGeometry Documentation](https://threejs.org/docs/#api/en/core/BufferGeometry)
-*   [OpenGL Indexed Drawing](https://learnopengl.com/Getting-started/Hello-Triangle)
-*   [Terrain LOD Algorithms](https://www.vterrain.org/LOD/)
+自定义名称没有 `a` 前缀的强制要求，但 JavaScript 与 shader 必须一致：
+
+```javascript
+geometry.setAttribute('aFlex', attribute);
+// ShaderMaterial vertex shader:
+// attribute float aFlex;
+```
+
+`itemSize: 1` 对应 `float`，`itemSize: 2/3/4` 通常对应 `vec2/vec3/vec4`。内置材质不会因为 geometry 多了一个自定义 attribute 就自动使用它；要消费自定义数据，需要 `ShaderMaterial`、`RawShaderMaterial`，或明确扩展内置材质的 shader。attribute 是逐顶点输入，经过 vertex shader 输出为 varying 后，才会在三角形内部插值给 fragment shader。
+
+## 六、包围体必须跟上形变
+
+`BufferGeometry` 常用两种 CPU 侧包围体：
+
+```javascript
+geometry.computeBoundingBox();    // geometry.boundingBox：轴对齐包围盒
+geometry.computeBoundingSphere(); // geometry.boundingSphere：包围球
+```
+
+它们服务于视锥裁剪、射线检测前的快速排除、辅助工具或业务空间查询等流程。关键点是：**它们是根据调用当时 CPU 能看到的 position 计算出的缓存结果。** 修改 `position.array` 并设置 `needsUpdate`，不会自动让已有包围盒或包围球失效并重算。
+
+CPU 形变后有三种常见策略：
+
+1. 网格较小或必须精确：形变后调用 `computeBoundingBox()` / `computeBoundingSphere()`。
+2. 已知最大形变幅度：初始化时直接设置能覆盖所有动画状态的保守包围体，避免每帧扫描全部顶点。
+3. 形变完全发生在 Vertex Shader：CPU 看不到最终位置，应根据位移上限手动扩大包围体。调试时关闭 `mesh.frustumCulled` 可以帮助判断是否是裁剪问题，但不应把它当作默认修复。
+
+```javascript
+geometry.boundingBox = new THREE.Box3(
+  new THREE.Vector3(-2.5, -1.2, -0.4),
+  new THREE.Vector3(2.5, 1.2, 0.4),
+);
+geometry.boundingSphere = new THREE.Sphere(
+  new THREE.Vector3(0, 0, 0),
+  2.9,
+);
+```
+
+手动边界宁可略大，也不能小于任一可能姿态；过小会让仍在视野中的部分被错误裁掉。
+
+:::warning 法线与包围体是两套更新
+`computeVertexNormals()` 更新光照所需的 `normal`，`computeBoundingBox()` / `computeBoundingSphere()` 更新空间边界。调用其中一个不会顺便完成另外两个。
+:::
+
+## 七、资源释放：从场景移除不等于释放 GPU 内存
+
+```javascript
+scene.remove(mesh);
+geometry.dispose();
+material.dispose();
+texture.dispose();
+renderTarget.dispose();
+```
+
+Three.js 无法仅靠 JavaScript 垃圾回收判断 GPU 资源何时不再需要，因此 geometry、material、texture 和 render target 都有显式 `dispose()` 生命周期。注意这些边界：
+
+- `scene.remove(mesh)` 只断开场景树关系，不会释放 geometry 或 material。
+- 一个 Mesh 被移除后，如果还打算再次使用，不要立刻 dispose 它的资源。
+- 多个 Mesh 共享同一 geometry、material 或 texture 时，必须等最后一个使用者结束后再 dispose；同一资源不要由每个组件各自无条件释放。
+- material 引用的纹理要单独 `texture.dispose()`；`material.dispose()` 不会替你释放所有外部纹理。
+- `renderer.dispose()` 用于整个渲染器实例结束，不应在仅销毁一个 Mesh 时调用。
+- 动画循环、事件监听和控件也要停止或解绑，否则即使 GPU 资源释放了，JavaScript 对象仍可能被引用。
+
+## 八、易错点清单
+
+### “我调用了 `setAttribute()`，为什么说还没上传？”
+
+因为它只把 attribute 挂到 geometry。真正创建或更新 GPU buffer 的时机在 Renderer 使用该 geometry 绘制时。`needsUpdate` 也不是同步上传函数，而是给后续渲染设置更新信号。
+
+### “indexed 就一定没有重复 position 吗？”
+
+不是。UV seam、硬法线边和其他属性不连续处必须复制逻辑顶点。判断能否共享时，要比较完整的 attribute 组合。
+
+### “重算法线能把立方体自动变成硬边吗？”
+
+不能。若各面共享同一顶点索引，重算法线会把相邻面贡献累加成平滑法线。硬边必须先拆分顶点，法线计算只负责基于既有拓扑生成数值。
+
+### “局部 update range 会自动修正法线和包围体吗？”
+
+不会。它只描述某个 attribute 的 GPU 更新边界。派生数据需要根据实际用途独立更新。
+
+### “drawRange 能替代 LOD 吗？”
+
+通常不能。任意截断 index buffer 只是少画一段数据，并不会自动得到覆盖完整模型的低精度拓扑。LOD 需要专门设计的多级网格、简化策略与切换标准。本文不在 Vertex Shader 中伪装几何简化；需要继续学习时，请前往 [Three.js 性能优化中的 LOD](/posts/threejs/performance-optimization)。
+
+## 总结
+
+把 BufferGeometry 用对，需要同时维护四层一致性：
+
+1. **存储层**：选择合适的 TypedArray，并正确设置 `itemSize`、`count` 与 `normalized`。
+2. **拓扑层**：index 决定三角形如何共享完整顶点属性；seam 决定哪里必须拆点。
+3. **更新层**：从 `basePositions` 和绝对时间计算动态位置，用 `needsUpdate` 通知 Renderer，并用 update ranges 准确描述局部边界。
+4. **派生与生命周期层**：按需更新 normal 和 bounding volumes，在最后一个使用者结束后显式 dispose GPU 资源。
+
+`BufferGeometry` 不是“若干数组随便塞进一个对象”，而是一份必须在 CPU 数据、GPU 输入、拓扑和生命周期之间保持一致的绘制契约。理解这份契约后，程序化建模、动态网格和自定义 shader attribute 才会变得可预测、可调试。

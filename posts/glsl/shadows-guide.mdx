@@ -8,191 +8,463 @@ tags: ['WebGL', 'Shadows', 'Rendering', 'Advanced']
 # 光影的另一半：深入理解 3D 阴影技术
 
 如果说光照让物体被**看见**，那么阴影则让物体**落地**。
-在现实世界中，阴影是自然而然存在的。但在计算机图形学中，阴影必须通过复杂的计算"伪造"出来。
 
-为什么？因为光栅化渲染（Rasterization）默认是**不处理遮挡**的。当你画地板时，GPU 根本不知道上面悬浮着一个球体挡住了光。
+光栅化渲染默认**不处理遮挡**——当你画地板时，GPU 根本不知道上面悬浮着一个球挡住了光。阴影必须通过额外计算"伪造"出来。
 
-今天，我们将深入探讨三种主流的阴影技术。
+前置阅读：
+- [法线深入](/posts/glsl/understanding-normals)——阴影计算依赖法线和光照方向
+- [摄像机系统](/posts/glsl/camera-systems)——Shadow Mapping 的本质是从光源位置再渲染一次
+- [射线求交](/posts/glsl/ray-intersection)——硬阴影的原理就是射线遮挡检测
 
-## 一、 Shadow Mapping：光辉的记忆
+## 一、Shadow Mapping：最主流的实时阴影
 
-这是目前游戏和 WebGL 中最常用的实时阴影技术。
-它的核心思想非常天才：**如果光源是一台摄像机，那么它看不见的地方，就是阴影。**
+核心思想：**如果光源是一台摄像机，那么它看不见的地方，就是阴影。**
 
-### 1. 算法步骤
-这个过程需要两个 Pass（渲染两遍）：
+### 1. 算法的两遍渲染
 
-*   **Pass 1: 阴影图生成 (Shadow Map Pass)**
-    *   把摄像机移到**光源的位置**。
-    *   看向场景。
-    *   我们不渲染颜色，只渲染**深度 (Depth)**。
-    *   结果存入一张纹理，叫 **Shadow Map**。这张图记录了：*从光源看去，每个方向上离光源最近的物体有多远。*
+**Pass 1：生成 Shadow Map（从光源视角渲染）**
 
-*   **Pass 2: 场景渲染 (Scene Pass)**
-    *   把摄像机移回玩家的视角。
-    *   渲染地板上的一个点 `P`。
-    *   **关键判断**：
-        1.  计算 `P` 离光源的距离 `Distance_Real`。
-        2.  去查 Shadow Map，看看光源在这个方向上能看到的最近距离 `Distance_Light`。
-        3.  如果 `Distance_Real > Distance_Light`，说明 `P` 被挡住了！它在阴影里。
+```
+1. 把"摄像机"移到光源位置
+2. 渲染整个场景，但只保存深度信息（不保存颜色）
+3. 结果是一张深度纹理 = Shadow Map
+   → 记录了"从光源看，每个方向上最近的物体有多远"
+```
 
-### 2. 阴影失真 (Shadow Acne)
-你可能会发现阴影表面有奇怪的条纹。
-这是因为 Shadow Map 的分辨率有限，深度精度不够。
-**解决方法**：**Shadow Bias**（给距离加一个微小的偏移量）。
+**Pass 2：渲染场景（从玩家视角渲染）**
 
-<ShaderPreview title="Shadow Logic Simulation" code={`
+```
+1. 正常渲染场景
+2. 对每个像素 P：
+   a. 计算 P 在光源空间中的坐标
+   b. 计算 P 离光源的实际距离 d_real
+   c. 查 Shadow Map，得到光源在这个方向能看到的最近距离 d_light
+   d. 如果 d_real > d_light → P 被挡住了 → 在阴影中
+```
+
+### 2. Light Space Matrix
+
+把世界空间的点变换到光源空间，需要一个特殊的矩阵——**Light Space Matrix**（也叫 Light View Projection Matrix）。它和普通相机的 ViewProjection Matrix 构造方法完全一样，只是"相机"放在了光源位置：
+
+```javascript
+// 方向光的 Light Space Matrix
+const lightView = new THREE.Matrix4();
+lightView.lookAt(
+  lightPosition,   // eye: 光源位置
+  target,          // target: 场景中心
+  new THREE.Vector3(0, 1, 0)  // up
+);
+
+const lightProjection = new THREE.OrthographicCamera(
+  -10, 10, 10, -10, 0.5, 50
+);
+
+const lightSpaceMatrix = lightProjection.clone().multiply(lightView);
+```
+
+方向光用正交投影（没有近大远小），点光源用透视投影。
+
+### 3. 在 Shader 中实现 Shadow Map 查询
+
+```glsl
+// Vertex Shader
+varying vec4 vFragPosLightSpace; // 片段在光源空间中的坐标
+
+uniform mat4 uLightSpaceMatrix;
+
+void main() {
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+
+  // 把顶点位置变换到光源空间
+  vFragPosLightSpace = uLightSpaceMatrix * vec4(position, 1.0);
+}
+```
+
+```glsl
+// Fragment Shader
+varying vec4 vFragPosLightSpace;
+uniform sampler2D uShadowMap;
+uniform vec3 uLightDir;
+uniform vec3 uNormal;
+
+float calculateShadow() {
+  // 1. 透视除法（从裁剪空间到 NDC）
+  vec3 projCoords = vFragPosLightSpace.xyz / vFragPosLightSpace.w;
+
+  // 2. NDC 范围 [-1,1] → 纹理坐标 [0,1]
+  projCoords = projCoords * 0.5 + 0.5;
+
+  // 3. 从 Shadow Map 读取最近深度
+  float closestDepth = texture2D(uShadowMap, projCoords.xy).r;
+
+  // 4. 当前片段的深度
+  float currentDepth = projCoords.z;
+
+  // 5. 比较深度（加 Bias 防止 Shadow Acne）
+  float bias = 0.005;
+  float shadow = currentDepth - bias > closestDepth ? 1.0 : 0.0;
+
+  return shadow;
+}
+
+void main() {
+  vec3 N = normalize(uNormal);
+  float NdotL = max(dot(N, normalize(uLightDir)), 0.0);
+
+  float shadow = calculateShadow();
+
+  vec3 lightColor = vec3(1.0);
+  vec3 ambient = vec3(0.15);
+  vec3 diffuse = lightColor * NdotL * (1.0 - shadow);
+
+  vec3 finalColor = ambient + diffuse;
+  gl_FragColor = vec4(finalColor, 1.0);
+}
+```
+
+**透视除法是什么？**
+
+`vFragPosLightSpace` 是裁剪空间的坐标 (x, y, z, w)。除以 w 得到 NDC 坐标，范围 [-1, 1]。乘 0.5 加 0.5 映射到 [0, 1]，就可以用来采样纹理了。
+
+### 4. Shadow Acne 与 Bias
+
+Shadow Map 的分辨率有限，多个像素可能对应同一个 Shadow Map 像素。这导致同一点的 `currentDepth` 和 `closestDepth` 不精确匹配，产生黑白条纹：
+
+**解决方法**：加一个小的偏移量 `bias`：
+
+```glsl
+float bias = max(0.05 * (1.0 - dot(normal, lightDir)), 0.005);
+float shadow = currentDepth - bias > closestDepth ? 1.0 : 0.0;
+```
+
+Bias 的值根据法线和光线方向的夹角调整——掠射角需要更大的 bias（此时精度问题最严重）。
+
+### 5. 在 ShaderPreview 中模拟 Shadow Mapping 逻辑
+
+由于 ShaderPreview 无法做两遍渲染，我们用 2D 投影来模拟 Shadow Mapping 的核心逻辑：
+
+<ShaderPreview title="Shadow Mapping Simulation" code={`
 varying vec2 vUv;
 uniform float uTime;
 
-// 简单的 Ray Marching 阴影
-// 原理与 Shadow Mapping 类似：检测光线路径上是否有遮挡
+void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
 
-float sdSphere(vec3 p, float r) {
-    return length(p) - r;
+    // --- Shadow Map Pass (模拟) ---
+    // 假设光源在上方，向下投影
+    // Shadow Map 记录每个 X 坐标上最近的 Y 值
+    vec3 spherePos = vec3(sin(uTime) * 0.8, 0.8, 0.0);
+    float sphereRadius = 0.4;
+
+    // 地面 y = -0.5
+    float groundY = -0.5;
+
+    // 对当前 X 坐标，计算球的底部投影
+    float dx = uv.x - spherePos.x;
+    float sphereBottom = spherePos.y - sqrt(max(0.0, sphereRadius*sphereRadius - dx*dx));
+    float shadowMapDepth = sphereBottom; // 球遮挡的深度
+
+    // --- Scene Pass (模拟) ---
+    // 地面上的点
+    float onGround = step(abs(uv.y - groundY), 0.02);
+
+    // 判断阴影
+    // 当前地面 X 对应的光线深度 vs Shadow Map 记录的深度
+    // 光源在 y=3，地面点在 y=-0.5
+    // 如果球在这个 X 坐标的 y 值 < 光源的 y 值，说明球挡住了光
+    float inShadowX = step(abs(dx), sphereRadius);
+    float shadow = inShadowX * step(groundY, shadowMapDepth);
+
+    // 渲染
+    vec3 color = vec3(0.1);
+
+    // 地面
+    if (onGround > 0.5) {
+        vec3 litColor = vec3(0.6, 0.7, 0.5); // 被照亮的地面
+        vec3 shadowColor = vec3(0.2, 0.25, 0.2); // 阴影中的地面
+        color = mix(litColor, shadowColor, shadow);
+    }
+
+    // 球体
+    float distFromSphere = length(vec2(uv.x, uv.y) - spherePos.xy);
+    if (distFromSphere < sphereRadius) {
+        float z = sqrt(max(0.0, sphereRadius*sphereRadius - distFromSphere*distFromSphere));
+        vec3 N = normalize(vec3(dx, uv.y - spherePos.y, z));
+        vec3 L = normalize(vec3(0.5, 1.0, 0.3));
+        float diff = max(dot(N, L), 0.0);
+        color = vec3(0.8, 0.3, 0.2) * (diff * 0.8 + 0.2);
+    }
+
+    // 光源指示
+    float lightIndicator = step(length(uv - vec2(0.0, 1.8)), 0.05);
+    color += vec3(1.0, 0.9, 0.3) * lightIndicator;
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+注意球在地面上投下的阴影——这就是 Shadow Mapping 的核心：**从光源的视角看，哪些地面被遮挡了**。
+
+### 6. Three.js 中的 Shadow Mapping
+
+```javascript
+// 1. 开启渲染器的阴影
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 软阴影
+
+// 2. 设置光源
+const light = new THREE.DirectionalLight(0xffffff, 1);
+light.position.set(5, 10, 5);
+light.castShadow = true;                       // 光源产生阴影
+light.shadow.mapSize.width = 2048;             // Shadow Map 分辨率
+light.shadow.mapSize.height = 2048;
+light.shadow.camera.near = 0.5;
+light.shadow.camera.far = 50;
+light.shadow.camera.left = -10;
+light.shadow.camera.right = 10;
+light.shadow.camera.top = 10;
+light.shadow.camera.bottom = -10;
+
+// 3. 设置物体
+sphere.castShadow = true;    // 球投射阴影
+ground.receiveShadow = true; // 地面接收阴影
+```
+
+Three.js 自动帮你做了两遍渲染：Pass 1 生成 Shadow Map，Pass 2 查询 Shadow Map。你只需要设置 `castShadow` 和 `receiveShadow`。
+
+## 二、PCF (Percentage-Closer Filtering)：软阴影
+
+基本 Shadow Mapping 产生的阴影边缘是硬的——要么完全在阴影中，要么完全被照亮。现实中的阴影边缘是渐变的（半影区）。
+
+### 1. 原理
+
+判断一个点是否在阴影中时，不只查 Shadow Map 上的一个像素，而是查周围的多个像素：
+
+- 周围 9 个点全挡住 → 全黑
+- 周围 9 个点全没挡住 → 全亮
+- 5 个挡住，4 个没挡住 → 灰色（半影）
+
+```glsl
+float calculatePCFShadow(vec3 projCoords, sampler2D shadowMap) {
+    float shadow = 0.0;
+    vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0));
+    float currentDepth = projCoords.z;
+    float bias = 0.005;
+
+    // 3×3 采样
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            float closestDepth = texture2D(
+                shadowMap,
+                projCoords.xy + vec2(x, y) * texelSize
+            ).r;
+            shadow += currentDepth - bias > closestDepth ? 1.0 : 0.0;
+        }
+    }
+
+    return shadow / 9.0; // 平均
+}
+```
+
+**关键**：我们不是对深度值做平均（那会让阴影模糊到不正确的位置），而是对**比较结果**做平均。每个采样点独立判断"是否被挡住"，然后平均这些 0/1 结果。
+
+### 2. 更大的核 = 更软的阴影
+
+5×5 的采样核比 3×3 更软，但代价是 25 次纹理采样。常用的是 Poisson Disk Sampling——用 16 个随机分布的采样点代替 25 个均匀点，质量更高。
+
+## 三、SDF 软阴影：Ray Marching 的做法
+
+在 [光线步进](/posts/glsl/advanced-glsl-techniques) 中，阴影不是通过 Shadow Map 实现的，而是通过 SDF 的距离值来实现**天然的软阴影**：
+
+<ShaderPreview title="SDF Soft Shadows" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+float sdSphere(vec3 p, vec3 center, float r) {
+    return length(p - center) - r;
 }
 
 float map(vec3 p) {
-    // 一个上下浮动的球
-    vec3 spherePos = vec3(0.0, sin(uTime) * 0.5 + 0.5, 0.0);
-    return sdSphere(p - spherePos, 0.5);
+    return sdSphere(p, vec3(0.0, 0.8, 0.0), 0.5);
 }
 
-// 核心：软阴影计算函数
-float calcShadow(vec3 ro, vec3 rd) {
-    float t = 0.02; // 起始距离 (Bias)
+// SDF 软阴影
+// k 值越小，阴影越硬；k 值越大，阴影越软
+float softShadow(vec3 ro, vec3 rd, float k) {
     float res = 1.0;
-    
-    // 沿着光的方向走一段距离
-    for(int i=0; i<32; i++) {
-        float h = map(ro + rd*t);
-        if(h < 0.001) return 0.0; // 撞到了物体，说明被遮挡 -> 阴影 (0.0)
+    float t = 0.02; // 初始偏移 (Bias)
+
+    for (int i = 0; i < 64; i++) {
+        float h = map(ro + rd * t);
+        if (h < 0.001) return 0.0;  // 碰到物体 -> 完全阴影
+
+        // 核心公式：res = min(res, k * h / t)
+        // h 是到最近物体的距离，t 是走过的距离
+        // h/t 是一个"接近度"指标：离物体越近，值越小，阴影越深
+        // k 控制软化程度
+        res = min(res, k * h / t);
+
         t += h;
-        if(t > 5.0) break;
+        if (t > 10.0) break;
     }
-    return 1.0; // 没撞到 -> 亮部 (1.0)
+
+    return clamp(res, 0.0, 1.0);
 }
 
 void main() {
-    // 模拟地板视角
     vec2 uv = vUv * 2.0 - 1.0;
-    
-    // 地板上的点的位置 (假设我们在俯视)
-    vec3 pos = vec3(uv.x * 2.0, 0.0, uv.y * 2.0); // y=0 是地板
-    
-    // 光源位置
-    vec3 lightPos = vec3(2.0, 4.0, 2.0);
-    vec3 lightDir = normalize(lightPos - pos);
-    
-    // 计算阴影
-    float shadow = calcShadow(pos, lightDir);
-    
-    // 绘制地板
-    vec3 color = vec3(0.5) * shadow; // 阴影处变黑
-    
-    // 简单的网格
-    float grid = step(0.95, fract(uv.x * 5.0)) + step(0.95, fract(uv.y * 5.0));
-    color += vec3(grid * 0.2);
-    
+
+    // 地面射线
+    vec3 ro = vec3(0.0, 2.0, 4.0);
+    vec3 rd = normalize(vec3(uv, -1.5));
+
+    // 找地面交点
+    float tGround = -1.0;
+    if (abs(rd.y) > 0.001) {
+        float t = (0.0 - ro.y) / rd.y;
+        if (t > 0.0) tGround = t;
+    }
+
+    // 找球交点
+    float tSphere = -1.0;
+    {
+        vec3 oc = ro;
+        float b = dot(oc, rd);
+        float c = dot(oc, oc) - 1.0;
+        float h = b * b - c;
+        if (h > 0.0) {
+            float t = -b - sqrt(h);
+            if (t > 0.0) tSphere = t;
+        }
+    }
+
+    vec3 color = vec3(0.5, 0.7, 1.0) * max(rd.y * 0.5 + 0.5, 0.0); // 天空
+
+    float t = 1e5;
+    int id = 0;
+    if (tGround > 0.0 && tGround < t) { t = tGround; id = 1; }
+    if (tSphere > 0.0 && tSphere < t) { t = tSphere; id = 2; }
+
+    if (id == 1) {
+        vec3 pos = ro + rd * t;
+        vec3 lightDir = normalize(vec3(2.0, 4.0, 3.0));
+        float shadow = softShadow(pos + vec3(0.0, 0.01, 0.0), lightDir, 8.0);
+
+        float checker = mod(floor(pos.x * 2.0) + floor(pos.z * 2.0), 2.0);
+        color = vec3(0.4 + checker * 0.2) * shadow;
+    } else if (id == 2) {
+        vec3 pos = ro + rd * t;
+        vec3 sphereCenter = vec3(0.0, 0.8, 0.0);
+        vec3 N = normalize(pos - sphereCenter);
+        vec3 L = normalize(vec3(2.0, 4.0, 3.0));
+        float diff = max(dot(N, L), 0.0);
+        color = vec3(0.8, 0.3, 0.2) * (diff * 0.8 + 0.2);
+    }
+
     gl_FragColor = vec4(color, 1.0);
 }
 `} />
 
-## 二、 PCF (Percentage-Closer Filtering)：告别锯齿
+**SDF 软阴影 vs Shadow Mapping**：
 
-基本的 Shadow Mapping 产生的阴影边缘非常硬，而且有像素锯齿（因为 Shadow Map 本质上是一张像素图）。
+| | SDF 软阴影 | Shadow Mapping |
+|---|---|---|
+| 原理 | 利用 SDF 距离值估计接近度 | 从光源渲染深度图 |
+| 软阴影 | 天然支持（k 参数控制） | 需要 PCF 等额外处理 |
+| 性能 | 多次 SDF 采样 | 一次纹理采样（PCF 多次） |
+| 适用 | Ray Marching 场景 | 三角形网格场景 |
 
-现实中的阴影边缘通常是模糊的（半影区）。为了模拟这个，我们引入了 **PCF**。
+SDF 软阴影的核心公式 `res = min(res, k * h / t)` 利用了一个数学性质：射线经过物体附近时，h（到物体的距离）会变小，h/t 也会变小 → shadow 值减小 → 产生渐变。这就是"半影区"的来源——**不需要多采样，天然就有软阴影**。
 
-### 原理
-当我们判断一个点是否在阴影里时，不要只查 Shadow Map 上的那一个像素。
-**我们要查它周围的 9 个（或更多）像素。**
+## 四、AO (Ambient Occlusion)：角落的呼吸
 
-*   如果 9 个点都挡住了 -> 全黑 (1.0)
-*   如果 9 个点都没挡住 -> 全亮 (0.0)
-*   如果 5 个挡住，4 个没挡住 -> 灰色 (0.55)
+Shadow Mapping 解决直射光的遮挡，但墙角、皱纹、物体接触缝隙应该比表面更暗——环境光很难钻进缝隙。
 
-**结果**：阴影边缘变成了平滑的渐变，锯齿消失了。这就是 **软阴影 (Soft Shadow)** 的基础。
+### 1. SSAO (Screen Space Ambient Occlusion)
 
-## 三、 AO (Ambient Occlusion)：角落的呼吸
+这是实时渲染中最常用的 AO 技术，在后期处理阶段完成：
 
-Shadow Mapping 解决的是"直射光"的遮挡。
-但即使没有直射光，墙角、皱纹深处、物体接触缝隙也应该比表面更暗。因为环境光很难钻进这些缝隙里。
+```
+1. 对屏幕上的每个像素，获取它的深度和法线
+2. 在这个像素周围的半球空间里，随机撒采样点
+3. 比较每个采样点的深度和深度缓冲中的深度
+4. 被遮挡的采样点越多 → AO 越强 → 越暗
+```
 
-这就是 **AO (环境光遮蔽)**。它能极大地增强场景的**体积感**和**重量感**。
-
-### SSAO (Screen Space Ambient Occlusion)
-在实时渲染中，我们通常使用 **SSAO**。
-这是一种后期处理技术。
-
-**原理**：
-1.  对于屏幕上的每个像素，我们获取它的**深度**和**法线**。
-2.  在这个像素周围的 3D 空间里，随机撒一把点（采样核）。
-3.  看看这些采样点中有多少是被其他物体遮挡的（深度值比较）。
-4.  被遮挡的点越多，这个像素就越暗。
-
-*(注：下面的示例模拟了 AO 的视觉效果)*
-
-<ShaderPreview title="AO Simulation" code={`
+<ShaderPreview title="AO Visualization" code={`
 varying vec2 vUv;
 
-// 2D 有向距离场：矩形
 float sdBox(vec2 p, vec2 b) {
-    vec2 d = abs(p)-b;
-    return length(max(d,0.0)) + min(max(d.x,d.y),0.0);
+    vec2 d = abs(p) - b;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
 }
 
 void main() {
     vec2 uv = vUv * 2.0 - 1.0;
-    
-    // 定义两个靠近的物体
-    float d1 = sdBox(uv - vec2(-0.2, 0.0), vec2(0.4));
-    float d2 = sdBox(uv - vec2(0.2, 0.2), vec2(0.3));
-    
-    // 简单的并集
+
+    // 两个靠近的物体
+    float d1 = sdBox(uv - vec2(-0.15, -0.1), vec2(0.4));
+    float d2 = sdBox(uv - vec2(0.15, 0.1), vec2(0.3));
     float d = min(d1, d2);
-    
-    // 渲染物体 (白色)
-    float shape = 1.0 - step(0.0, d);
-    vec3 color = vec3(shape);
-    
-    // --- 模拟 AO ---
-    // 原理：利用距离场 (SDF) 的特性
-    // 距离物体表面越近，值越小。如果是负数（内部），我们取反。
-    // 在两个物体交界处，距离场的值变化会很剧烈
-    
-    // 这是一个非常 trick 的 2D AO 模拟：
-    // 我们反向利用距离场：离表面越近越黑
-    float ao = smoothstep(0.0, 0.2, abs(d));
-    
-    // 只在物体外部显示 AO 效果
-    // (在 3D SSAO 中，是在角落里变黑)
-    vec3 aoColor = vec3(ao);
-    
-    // 混合：物体是白的，背景是灰的，接触边缘变黑
-    if (shape > 0.5) {
-        color = vec3(0.9);
+
+    float isShape = 1.0 - step(0.0, d);
+
+    // AO：利用 SDF 距离
+    // 距离表面越近 → 值越小 → 越暗
+    // abs(d) 在物体外部 = 到表面的距离
+    // 在两个物体交界处，两个 SDF 都小 → AO 更强
+    float ao = smoothstep(0.0, 0.15, abs(d));
+
+    vec3 color;
+    if (isShape > 0.5) {
+        // 物体表面：白色，角落变暗
+        float surfaceAO = smoothstep(0.0, 0.05, abs(d));
+        color = vec3(0.9 * surfaceAO);
     } else {
-        color = vec3(0.5) * aoColor;
+        // 背景：AO 效果（缝隙变暗）
+        color = vec3(0.5) * ao;
     }
-    
+
     gl_FragColor = vec4(color, 1.0);
 }
 `} />
+
+### 2. Three.js 中的 SSAO
+
+```javascript
+import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass';
+
+const ssaoPass = new SSAOPass(scene, camera, width, height);
+ssaoPass.kernelRadius = 0.5;   // 采样半径
+ssaoPass.minDistance = 0.005;   // 最小距离
+ssaoPass.maxDistance = 0.1;     // 最大距离
+
+composer.addPass(ssaoPass);
+```
+
+### 3. AO vs Shadow Mapping
+
+| | Shadow Mapping | AO |
+|---|---|---|
+| 遮挡什么 | 直射光 | 环境光 |
+| 场景 | 大面积投影 | 角落、缝隙、接触点 |
+| 实现 | 从光源渲染深度图 | 采样周围深度 |
+| 互补性 | 不能替代 AO | 不能替代阴影 |
+
+两者一起使用效果最好：Shadow Mapping 画大阴影，AO 补充接触细节。
 
 ## 总结
 
-1.  **Shadow Mapping**：
-    *   **核心**：光源视角的深度图。
-    *   **作用**：产生主要的投影。
-    *   **问题**：锯齿、Shadow Acne。
-2.  **PCF**：
-    *   **核心**：多重采样平均化。
-    *   **作用**：消除锯齿，软化边缘。
-3.  **AO (SSAO)**：
-    *   **核心**：检测角落遮挡。
-    *   **作用**：增强细节立体感，让物体"沉"在地面上。
+| 技术 | 核心 | 解决什么问题 | Three.js 中的开启方式 |
+|---|---|---|---|
+| Shadow Mapping | 光源视角深度图 | 直射光遮挡 | `castShadow = true` |
+| Shadow Bias | 深度偏移 | Shadow Acne | `shadow.bias` |
+| PCF | 多采样平均 | 硬阴影锯齿 | `PCFSoftShadowMap` |
+| SDF 软阴影 | 距离接近度 | Ray Marching 场景的软阴影 | 无（自定义 Shader） |
+| SSAO | 屏幕空间深度采样 | 角落、缝隙遮蔽 | `SSAOPass` |
 
-在 Three.js 中，开启 `castShadow = true` 就是开启了 Shadow Mapping；设置 `shadow.radius` 就是开启了 PCF 模糊；使用 `SSAOPass` 就是开启了环境光遮蔽。
+### 下一步
 
-理解了原理，你就能更好地调整那些复杂的参数了。
+- **[PBR 指南](/posts/glsl/pbr-guide)**——PBR + 阴影 = 逼真画面的完整方案
+- **[后期处理](/posts/glsl/post-processing-magic)**——SSAO 是后期处理的一种，了解更多后期技术
+- **[射线求交](/posts/glsl/ray-intersection)**——Shadow Mapping 的本质是深度比较，和射线遮挡检测是同一思想

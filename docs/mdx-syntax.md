@@ -148,6 +148,13 @@ return `/blog/posts/${category}/images/${imageName}`;
 {/* GLSL/WebGL 着色器预览 */}
 <ShaderPreview fragmentShader={`...`} />
 
+{/* 支持纹理、3D 几何体、粒子和自定义控件；自动显示 Fragment、Vertex、只读 Three.js 场景三个标签 */}
+<ShaderSceneDemo
+  fragmentShader={`...`}
+  scene={{ kind: "sphere" }}
+  uniforms={[]}
+/>
+
 {/* CodePen 风格交互式编辑器 */}
 <CodePenDemo html="..." css="..." js="..." />
 
