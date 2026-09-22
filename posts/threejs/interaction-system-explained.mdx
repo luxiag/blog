@@ -1,8 +1,9 @@
 ---
 title: 'Three.js 交互系统详解：让 3D 世界活起来'
 date: '2026-01-16'
-description: '从点击拾取 (Raycaster) 到复杂的手势控制，再到 UI 与 3D 的完美融合。系统讲解 Three.js 交互开发的方方面面。'
+description: '从点击拾取 (Raycaster) 到拖拽与手势控制，再到 UI 与 3D 的事件协同。系统讲解 Three.js 交互开发的关键链路。'
 tags: ['Three.js', 'WebGL', 'Interaction', 'Raycaster', 'UI']
+nextPost: 'threejs/shader-material-explained'
 ---
 
 # Three.js 交互系统详解：让 3D 世界活起来
@@ -19,19 +20,37 @@ Three.js 的交互系统比传统的 DOM 交互要复杂得多。在 2D 网页�
 
 **Raycaster (光线投射)** 是 Three.js 交互的基石。
 
-### 1. 原理图解
-当你点击屏幕 `(x, y)` 时：
-1.  将屏幕坐标归一化到 `[-1, 1]` 区间。
-2.  从相机位置发出一条射线，穿过这个点。
-3.  检测这条射线与场景中所有物体的**包围盒 (Bounding Box)** 或**三角形面**是否相交。
-4.  返回一个按距离排序的相交列表。
+### 1. 从 Canvas 坐标到射线
 
-### 2. R3F 的优雅封装
-原生 Raycaster 写起来很啰嗦，React Three Fiber 把这一套逻辑封装进了简单的事件回调中：`onClick`, `onPointerOver`, `onPointerOut`。
+拾取坐标必须相对于 **Canvas 的实际矩形**计算，不能直接拿 `window.innerWidth/innerHeight`。当 Canvas 有边距、缩放或只占页面一部分时，正确的 NDC（标准化设备坐标）转换是：
+
+```js
+const rect = renderer.domElement.getBoundingClientRect()
+const ndc = new THREE.Vector2(
+  ((event.clientX - rect.left) / rect.width) * 2 - 1,
+  -((event.clientY - rect.top) / rect.height) * 2 + 1
+)
+raycaster.setFromCamera(ndc, camera)
+const hits = raycaster.intersectObjects(scene.children, true)
+```
+
+这里的链路是：
+
+1. 用 Canvas `rect` 把客户端坐标转换为 Canvas 内部的比例坐标。
+2. 把比例坐标映射到 `[-1, 1]` 的 NDC；WebGL 的 Y 轴方向与 DOM 相反。
+3. `setFromCamera` 根据相机和 NDC 构造射线。
+4. Raycaster 先做包围体等快速排除，再由对象的 `raycast` 实现计算几何交点，结果按距离排序。
+
+CSS 像素与 drawing buffer 像素可能因 DPR 不同而不相等，但上述比例转换仍应以 `getBoundingClientRect()` 为准。
+
+### 2. R3F 的事件分发
+
+React Three Fiber 在事件回调（如 `onClick`、`onPointerOver`、`onPointerOut`）前完成坐标换算和射线检测。它的传播同时包含两层：命中对象向其 3D 父级冒泡，以及射线上的前方命中继续传播到后方命中。`e.stopPropagation()` 会停止这两类传播，因此常用于让前景对象遮挡后方交互；调用它还可能立即使后方对象收到 `pointerout`，相关状态更新不要依赖旧的悬停对象仍然有效。
 
 ### 3. 常见问题：遮挡与透明
-*   **遮挡**: 默认情况下，事件会冒泡。如果两个物体重叠，射线会先击中前面的。如果你不想让后面的物体触发事件，可以在前面的物体事件中调用 `e.stopPropagation()`。
-*   **透明物体**: Raycaster 默认也会检测透明物体。如果你想让鼠标“穿透”玻璃点到里面的东西，可以将玻璃 Mesh 的 `raycast` 属性设为 `null`，或者在 CSS 中设置 `pointer-events: none`（对于 DOM 层）。
+
+* **遮挡**：需要独占点击的前景对象应在事件中调用 `e.stopPropagation()`；否则多个深度上的命中对象都可能收到事件。
+* **透明物体**：材质透明只影响绘制，不会自动让 Raycaster 穿透。若玻璃不参与拾取，可以给该 Mesh 提供空的 `raycast` 实现，或在应用自己的命中列表中过滤它。CSS `pointer-events` 只能作用于 Canvas/DOM 元素，不能作用于 Canvas 内部的单个 Mesh。
 
 <CodePenDemo title="Interaction & Occlusion" code={`
 function InteractionScene() {
@@ -87,75 +106,180 @@ render(
 
 ---
 
-## 二、 输入体系：鼠标、触控与手势
+## 二、 输入体系：鼠标、触控与拖拽
 
-在移动端，我们不仅需要点击，还需要**拖拽 (Drag)**、**缩放 (Pinch)** 等手势。
+移动端除了点击，还要处理拖拽、缩放和浏览器原生滚动。`@use-gesture/react` 可以帮助识别手势，但它不会自动解决“屏幕位移如何映射到 3D”这一几何问题。
 
-`@use-gesture/react` 是处理这些复杂输入的最佳伴侣，它能完美配合 R3F。
+### 拖拽的几何：射线与约束平面求交
 
-### 实战：拖拽物体
-这个 Demo 展示了如何让一个物体跟随鼠标/手指拖拽移动。我们结合了 `useThree` 来获取视口信息，将屏幕移动量转换为 3D 空间位移。
+把像素偏移直接除以视口比例，只在相机姿态、投影方式和固定 Z 平面等条件受控时近似成立；透视相机、旋转后的相机、嵌套变换或需要沿任意平面拖拽时都会出现偏差。较通用的做法是：`pointerdown` 时建立拖拽平面并记录抓取偏移，之后让每一帧的指针射线与该平面求交。
 
-<CodePenDemo title="Draggable Object" code={`
+<CodePenDemo title="Ray-plane Draggable Object" code={`
+import * as THREE from 'three'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useThree } from '@react-three/fiber'
-import { useDrag } from '@use-gesture/react'
-import { animated, useSpring } from '@react-spring/three'
+import { OrbitControls } from '@react-three/drei'
 
-function DraggableBox() {
-  const { size, viewport } = useThree()
-  // 计算屏幕像素与 3D 单位的比例
-  const aspect = size.width / viewport.width
+function DraggableBox({ onDraggingChange }) {
+  const meshRef = useRef()
+  const dragging = useRef(false)
+  const { camera, gl } = useThree()
 
-  // 使用 react-spring 处理平滑动画
-  const [spring, api] = useSpring(() => ({ 
-    position: [0, 0, 0], 
-    scale: 1, 
-    config: { friction: 10 } 
-  }))
+  const dragPlane = useMemo(() => new THREE.Plane(), [])
+  const planeNormal = useMemo(() => new THREE.Vector3(), [])
+  const grabOffset = useMemo(() => new THREE.Vector3(), [])
+  const intersection = useMemo(() => new THREE.Vector3(), [])
+  const worldPosition = useMemo(() => new THREE.Vector3(), [])
 
-  // 绑定拖拽手势
-  const bind = useDrag(({ offset: [x, y], active }) => {
-    // 将像素偏移转换为 3D 坐标
-    // 注意：y 轴方向是反的
-    api.start({ 
-      position: [x / aspect, -y / aspect, 0], 
-      scale: active ? 1.2 : 1,
-      rotation: [y / aspect, x / aspect, 0] // 拖拽时稍微旋转一下，增加动感
-    })
-  })
+  const cancelDrag = useCallback(() => {
+    if (!dragging.current) return
+    dragging.current = false
+    onDraggingChange(false)
+  }, [onDraggingChange])
+
+  const finishDrag = (e) => {
+    if (!dragging.current) return
+    cancelDrag()
+
+    // capture 让抬起发生在 Canvas 外时仍有机会回到当前对象。
+    if (e.target.hasPointerCapture?.(e.pointerId)) {
+      e.target.releasePointerCapture(e.pointerId)
+    }
+  }
+
+  useEffect(() => {
+    // R3F 9.5 的 Object3D 事件类型没有 onPointerCancel，直接监听事件面。
+    // 浏览器取消触控或窗口失焦时同样清理，避免 Controls 永久禁用。
+    gl.domElement.addEventListener('pointercancel', cancelDrag)
+    window.addEventListener('blur', cancelDrag)
+    return () => {
+      gl.domElement.removeEventListener('pointercancel', cancelDrag)
+      window.removeEventListener('blur', cancelDrag)
+      cancelDrag()
+    }
+  }, [gl, cancelDrag])
 
   return (
-    <animated.mesh {...spring} {...bind()}>
+    <mesh
+      ref={meshRef}
+      onPointerDown={(e) => {
+        e.stopPropagation()
+        dragging.current = true
+        onDraggingChange(true)
+        e.target.setPointerCapture(e.pointerId)
+
+        // 这里选择经过命中点、面向相机的平面。
+        camera.getWorldDirection(planeNormal)
+        dragPlane.setFromNormalAndCoplanarPoint(planeNormal, e.point)
+
+        meshRef.current.getWorldPosition(worldPosition)
+        grabOffset.copy(e.point).sub(worldPosition)
+      }}
+      onPointerMove={(e) => {
+        if (!dragging.current) return
+        e.stopPropagation()
+
+        // R3F 事件已提供当前指针对应的世界空间射线。
+        if (e.ray.intersectPlane(dragPlane, intersection)) {
+          const nextWorldPosition = intersection.sub(grabOffset)
+          // position 属于父节点局部空间，嵌套 group 时要做坐标转换。
+          meshRef.current.parent.worldToLocal(nextWorldPosition)
+          meshRef.current.position.copy(nextWorldPosition)
+        }
+      }}
+      onPointerUp={finishDrag}
+    >
       <dodecahedronGeometry args={[1]} />
       <meshStandardMaterial color="hotpink" />
-    </animated.mesh>
+    </mesh>
+  )
+}
+
+function DragScene() {
+  const [dragging, setDragging] = useState(false)
+
+  return (
+    <>
+      <DraggableBox onDraggingChange={setDragging} />
+      {/* 物体拖拽与相机旋转竞争同一指针，拖拽期间禁用相机控制。 */}
+      <OrbitControls enabled={!dragging} />
+      <ambientLight intensity={0.5} />
+      <pointLight position={[10, 10, 10]} />
+    </>
   )
 }
 
 render(
-  <Canvas>
-    <DraggableBox />
-    <ambientLight intensity={0.5} />
-    <pointLight position={[10, 10, 10]} />
+  <Canvas style={{ touchAction: 'none' }}>
+    <DragScene />
   </Canvas>
 )
 `} />
 
+`setPointerCapture` 保证后续事件继续发送给捕获对象，但 R3F 的捕获对象是加入命中分发，而不是像 DOM 那样自动排除所有其他命中，因此拖拽事件中仍应按需 `stopPropagation()`。浏览器取消触控时会自动释放底层捕获；示例额外监听原生 `pointercancel` 和窗口 `blur` 来复位应用状态，并在组件卸载时移除监听。
+
+这个示例把物体限制在“按下时面向相机”的无限平面上。若需求是贴地移动、沿单轴移动或贴合模型表面，应分别改用地面 Plane、轴/平面约束，或对目标表面重新 raycast；它不是任意拖拽需求的通用约束器。
+
 ---
 
-## 三、 交互状态机
+## 三、 交互状态与选择闭环
 
-当交互变复杂时（比如：普通状态 -> 悬停状态 -> 选中状态 -> 禁用状态），单纯用 `useState` 会让代码变成一团乱麻。
-我们需要引入**状态机**思维。
+当交互变复杂时，应该明确区分短暂状态与业务状态：
 
-### 状态定义
-*   **Idle**: 默认状态。
-*   **Hover**: 鼠标悬停。通常高亮边缘或改变颜色。
-*   **Selected**: 点击选中。通常弹出 UI 面板或相机聚焦。
-*   **Disabled**: 不可交互。
+* **Idle / Hover**：悬停通常是对象局部的短暂状态，`pointerout` 或取消时清理。
+* **Selected**：选中状态应提升到场景或全局 store，由唯一 `selectedId` 驱动材质、相机和详情 UI。
+* **Dragging**：从 `pointerdown` 开始，在 `pointerup`、`pointercancel`、失焦或卸载时结束。
+* **Disabled**：入口、事件处理和视觉反馈都应一致地禁用。
+
+一次完整的选择链路应是：**命中对象 → 写入唯一对象 ID → 3D 高亮和 DOM 面板读取同一状态 → 点击空白或对象删除时清空选择**。不要让 Mesh 自己维护一份 `selected`，DOM 面板再维护另一份，否则两侧很容易不同步。
+
+```jsx
+function Selectable({ id, position, selectedId, onSelect }) {
+  const [hovered, setHovered] = useState(false)
+  const selected = selectedId === id
+
+  return (
+    <mesh
+      position={position}
+      onPointerOver={(e) => {
+        e.stopPropagation()
+        setHovered(true)
+      }}
+      onPointerOut={() => setHovered(false)}
+      onClick={(e) => {
+        e.stopPropagation()
+        onSelect(id)
+      }}
+    >
+      <boxGeometry />
+      <meshStandardMaterial color={selected ? 'orange' : hovered ? 'skyblue' : 'gray'} />
+    </mesh>
+  )
+}
+
+function SelectionApp() {
+  const [selectedId, setSelectedId] = useState(null)
+
+  return (
+    <div className="relative h-96">
+      <Canvas onPointerMissed={() => setSelectedId(null)}>
+        <Selectable id="left" position={[-1.2, 0, 0]} selectedId={selectedId} onSelect={setSelectedId} />
+        <Selectable id="right" position={[1.2, 0, 0]} selectedId={selectedId} onSelect={setSelectedId} />
+        <ambientLight intensity={1} />
+      </Canvas>
+      <aside className="absolute right-2 top-2 rounded bg-black/70 p-2 text-white">
+        {selectedId ? `当前选择：${selectedId}` : '未选择对象'}
+      </aside>
+    </div>
+  )
+}
+```
+
+`onPointerMissed` 只在没有 3D 命中时触发；若地面也参与 raycast，应由地面事件显式清空。对象从数据集中删除时也要校验并清空失效的 `selectedId`。拖拽对象还应设置移动阈值或在发生拖动后抑制 `click`，避免拖拽结束被误判为重新选择。
 
 ### 优先级与互斥
-通常我们需要**互斥 (Mutually Exclusive)** 逻辑：同一时间只能选中一个物体。这需要一个全局的状态管理器（如 Zustand）来协调。
+
+同一时间只能选中一个物体时，用场景级状态或 Zustand 保存唯一 ID。状态转移应明确优先级，例如 `disabled` 拒绝进入 hover/drag，dragging 暂时禁用相机控制，而 selected 可以在 dragging 结束后继续保留。
 
 ---
 
@@ -228,7 +352,7 @@ render(
 
 ## 五、 2D UI 与 3D 融合
 
-Web 3D 最大的优势就是能混合 HTML/CSS UI。
+Web 3D 的一个重要能力是混合 HTML/CSS UI。
 
 ### 1. Html 组件 (DOM Overlay)
 `@react-three/drei` 的 `Html` 组件可以将 DOM 元素“粘”在 3D 物体上。它会自动处理坐标转换，让 DOM 元素跟随物体移动，甚至能处理遮挡（occlude）。
@@ -237,10 +361,65 @@ Web 3D 最大的优势就是能混合 HTML/CSS UI。
 *   **CSS2DRenderer**: 类似 `Html` 组件，标签永远面朝屏幕（Billboarding）。适合做名字标签、血条。
 *   **CSS3DRenderer**: 将 DOM 元素通过 CSS 3D transform 变换，使其真正地“贴”在 3D 平面上（比如在 3D 电脑屏幕里显示一个 iframe 网页）。
 
-### 3. 事件穿透 (Pointer Events)
-这是一个常见坑：全屏的 Canvas 会挡住下面的 HTML 按钮。
-*   **解法**: 给 Canvas 容器设置 `pointer-events: none`，然后给需要交互的 3D 物体（通过 Raycaster）和 UI 按钮设置 `pointer-events: auto`。
-*   或者使用 R3F 的 `eventSource` 属性，将事件监听绑定到父级容器上。
+### 3. DOM 与 Canvas 的事件层设计
+
+Canvas 在 DOM 中是一个整体元素，Canvas 内的 Mesh 不是 DOM 节点。CSS 无法先让 Canvas 忽略指针，再单独让它内部的某个 Mesh 恢复 DOM 命中：是否命中 Mesh 由 R3F/Raycaster 决定，CSS 只决定原生指针事件先命中哪个 DOM 元素。
+
+常见设计有两种：
+
+1. **Canvas 作为主要事件面**：Canvas 保持可交互；覆盖层容器使用 `pointer-events: none`，真正的按钮、输入框和面板恢复 `pointer-events: auto`。DOM 控件所在区域会接管事件，不再点击它后面的 3D 对象，这通常符合界面预期。
+2. **共同父容器作为事件源**：需要让 Canvas 不参与 DOM 命中、但仍让 R3F观察父容器内事件时，使用 `eventSource` 把 R3F 监听器连接到共同祖先。此时可让 Canvas `pointer-events: none`，但 3D 事件来自父容器监听，而不是来自 Mesh 的 CSS；交互式 DOM 子树应阻止事件继续冒泡，避免同时触发背后的 3D 命中。
+
+```jsx
+import { events as createPointerEvents } from '@react-three/fiber'
+
+function canvasRelativeEvents(state) {
+  return {
+    ...createPointerEvents(state),
+    compute(event, currentState) {
+      // eventSource 不一定与 Canvas 同位置，因此始终按 Canvas rect 换算。
+      const rect = currentState.gl.domElement.getBoundingClientRect()
+      currentState.pointer.set(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1
+      )
+      currentState.raycaster.setFromCamera(currentState.pointer, currentState.camera)
+    },
+  }
+}
+
+function LayeredScene() {
+  const eventRoot = useRef()
+
+  return (
+    <div ref={eventRoot} className="relative h-96">
+      <Canvas
+        eventSource={eventRoot}
+        events={canvasRelativeEvents}
+        className="absolute inset-0"
+        style={{ pointerEvents: 'none' }}
+      >
+        <Scene />
+      </Canvas>
+
+      <div className="pointer-events-none absolute inset-0">
+        <button
+          className="pointer-events-auto absolute right-4 top-4"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            openPanel()
+          }}
+        >
+          打开设置
+        </button>
+      </div>
+    </div>
+  )
+}
+```
+
+`eventSource` 方案要保证共享祖先覆盖正确区域，并像上例一样按 Canvas `rect` 换算坐标。滚动容器、CSS transform 或多 Canvas 布局应分别实测。若 UI 不需要与 3D 共用事件源，第一种分层更简单，也更容易隔离“点击 UI 却选中背后物体”的问题。
 
 <CodePenDemo title="3D Annotations">
 
@@ -307,10 +486,12 @@ render(
 
 ## 总结
 
-Three.js 的交互系统是连接用户与 3D 世界的桥梁。
-*   **Raycaster** 是基础，R3F 的事件封装让它变得简单。
-*   **Use-gesture** 赋予了物体被拖拽和触摸的能力。
-*   **CameraControls** 实现了导演级的运镜切换。
-*   **Html 组件** 实现了信息的高效展示，打破了 2D 与 3D 的界限。
+Three.js 交互不是给每个 Mesh 添加 DOM 事件，而是一条完整链路：
 
-掌握了这些，你就能创造出既有 3D 沉浸感，又有 2D 操作便捷性的优秀应用。
+* 先按 Canvas 的实际矩形把指针转换为 NDC，再通过 Raycaster 得到有深度顺序的命中结果。
+* 理解 R3F 在 3D 父级和前后命中对象之间的传播规则，并在需要独占命中时停止传播。
+* 拖拽时用射线与约束平面/表面求交，并完整处理 pointer capture、`pointerup`、`pointercancel` 与相机控制冲突。
+* 用唯一选择 ID 驱动 3D 高亮、相机和 DOM 面板，并在空白点击或对象失效时清理选择。
+* 把 DOM 和 Canvas 的事件职责按层设计；CSS `pointer-events` 管 DOM 命中，Raycaster 管 Canvas 内的 Mesh 命中。
+
+这些边界清晰后，鼠标、触控、相机与 2D UI 才能在同一套状态和事件模型中稳定协作。

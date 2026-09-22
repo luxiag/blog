@@ -3,19 +3,44 @@ title: 'Three.js 后期处理详解：给画面加个滤镜'
 date: '2026-01-16'
 description: '学会使用 EffectComposer 为你的 3D 场景添加电影级特效：辉光 (Bloom)、景深 (Depth of Field)、噪点 (Noise) 以及高性能抗锯齿。'
 tags: ['Three.js', 'WebGL', 'PostProcessing', 'Frontend']
+nextPost: 'threejs/product-viewer-capstone'
 ---
 
 # Three.js 后期处理详解：给画面加个滤镜
 
 刚渲染出来的 3D 画面往往看起来很“干”，缺乏氛围感。就像手机拍照后要修图一样，3D 渲染也需要**后期处理 (Post-processing)**。
 
-它的原理很简单：**先把场景渲染成一张图片（纹理），然后对这张图片进行像素级的处理（模糊、调色、加噪点），最后再显示到屏幕上。**
+它的基本思路是：**先把场景绘制到离屏 RenderTarget，再让若干 Pass 读取纹理、写出新纹理，最后把结果显示到屏幕。** 这不是一次“给图片套滤镜”那么简单，而是一条需要管理缓冲区、辅助数据与颜色空间的渲染管线。
 
-在 React Three Fiber 中，我们主要使用 `@react-three/postprocessing` 这个库，它封装了 Three.js 官方的 `EffectComposer`，让加特效变得像堆积木一样简单。
+在 React Three Fiber 中常用 `@react-three/postprocessing` 声明这条管线。它基于 `postprocessing` 库组织 EffectComposer 与 Effect；概念上与 Three.js examples 中的 Composer/Pass 相近，但具体组件和参数不要在两个实现之间直接混用。
 
 ---
 
-## 一、 辉光效果 (Bloom)：赛博朋克的灵魂
+## 一、先建立 Composer 心智模型
+
+### 1. RenderTarget 与 read/write ping-pong
+
+场景先写入一个离屏 RenderTarget。Composer 通常维护 readBuffer 和 writeBuffer：当前 Pass 从 readBuffer 采样并写入 writeBuffer，然后交换二者，供下一个 Pass 继续处理。这种 **ping-pong** 避免在同一张纹理上同时读写。部分兼容效果可被合并到一个 EffectPass，并不意味着每个 JSX 子组件都一定产生一次完整的全屏绘制；应以实际渲染管线和性能测量为准。
+
+Pass 的顺序会改变结果。例如先 Bloom 再调色，与先调色再按亮度提取 Bloom 得到的阈值和光晕不同。抗锯齿、透明合成和色调映射的位置也应结合所用库的管线确认，而不是套用固定顺序。
+
+### 2. 深度、法线与辅助渲染
+
+颜色纹理只记录最终颜色。DOF、SSAO、SSR 等效果还可能需要深度纹理；依赖表面朝向的效果可能需要额外的法线 Pass。它们会增加显存、带宽和绘制成本。`disableNormalPass` 只适合当前效果链确实不需要法线的场景，不能作为无条件的性能开关。
+
+### 3. resize、DPR 与颜色空间
+
+Canvas 尺寸或 DPR 变化时，Composer、RenderTarget、深度纹理以及按固定分辨率工作的效果都要同步 resize。R3F 集成通常会代为处理 Composer 尺寸，但自定义 RenderTarget/Pass 仍需在尺寸变化时调用相应的 `setSize`，并释放被替换的 GPU 资源。
+
+后期链中的中间颜色通常在线性空间参与光照和混合，输出阶段再完成色调映射与显示颜色空间转换。重复编码、过早转为显示空间，或在错误阶段截断 HDR 值，都会让 Bloom 阈值和混合结果失真。使用自定义 Pass 时尤其要核对输入、输出及最终 Output 阶段的约定。
+
+### 4. 用预算而不是 Pass 数量判断性能
+
+主要成本可近似理解为：`处理像素数 × 每像素采样次数 × 执行频率`，再加辅助场景渲染和 RenderTarget 带宽。全分辨率多级模糊、SSR、DOF 和高采样抗锯齿通常比一次简单暗角昂贵。应先确定目标设备的帧时间与显存预算，再用降采样、降低 DPR/采样数、减少辅助 Pass 或按画质档位开关效果来控制成本，并通过 GPU/帧时间测量验证。
+
+---
+
+## 二、 辉光效果 (Bloom)：赛博朋克的灵魂
 
 辉光是最常用的特效，能让高亮的物体产生光晕，营造出霓虹灯、激光、阳光的耀眼感。
 
@@ -76,18 +101,18 @@ render(
 
 ---
 
-## 二、 景深 (Depth of Field)：模拟单反相机
+## 三、 景深 (Depth of Field)：模拟镜头焦平面
 
-真实相机的镜头是有**焦距**的，只有焦平面上的物体清晰，前景和背景都会模糊。这就是景深。
-在 3D 中，我们利用**深度图 (Depth Buffer)** 来模拟这个效果。
+真实镜头只会让焦平面附近的物体保持清晰，离开焦平面的前景和背景逐渐模糊。在屏幕后期中，DOF 通常结合场景的深度缓冲估算每个像素与焦平面的距离。
 
 ### 核心参数
-*   **`focusDistance`**: 对焦距离（0~1，相对于相机远近裁剪面）。
-*   **`focalLength`**: 焦距（0~1），决定虚化的程度。
-*   **`bokehScale`**: 散景大小，决定模糊光斑的大小。
+* **`focusDistance`**：归一化对焦距离；它不是直接以 Three.js 世界单位表示，具体映射受效果实现与相机裁剪面影响。
+* **`focalLength`**：控制清晰范围与虚化响应的参数。
+* **`bokehScale`**：散景缩放，数值越大通常采样成本和伪影风险也越明显。
 
-### 实战：微距摄影感
-在这个 Demo 中，鼠标移动会改变对焦点。你可以看到当鼠标悬停在近处物体时，远处背景变模糊；反之亦然。
+### 实战：固定焦平面
+
+下面示例使用固定的 `focusDistance` 展示一排远近物体。它**没有实现鼠标对焦**；移动鼠标不会改变焦点。若要实现点选对焦，需要先 raycast 得到目标世界坐标或到相机的距离，再按当前 DOF 实现的深度约定换算并平滑更新 `focusDistance`，不能直接把 `pointer.x/y` 当作对焦距离。
 
 <CodePenDemo title="Depth of Field">
 
@@ -100,14 +125,14 @@ function DOFScene() {
     <>
       <EffectComposer>
         <DepthOfField 
-          focusDistance={0} // 初始对焦距离 (0 = 相机位置)
-          focalLength={0.02} // 焦距
-          bokehScale={2}    // 模糊程度
-          height={480}      /* 分辨率 (影响模糊质量) */
+          focusDistance={0.02} // 固定的归一化对焦距离，不是鼠标坐标
+          focalLength={0.02}
+          bokehScale={2}
+          height={480}         // 内部处理分辨率会影响质量与成本
         />
       </EffectComposer>
 
-      {/* 放置一排物体，展示远近虚实变化 */}
+      {/* 放置一排物体，观察固定焦平面两侧的虚实变化 */}
       {Array.from({ length: 8 }).map((_, i) => (
         <mesh key={i} position={[0, 0, -i * 2]}>
           <torusKnotGeometry args={[0.5, 0.2, 128, 16]} />
@@ -133,7 +158,7 @@ render(
 
 ---
 
-## 三、 风格化特效：像素风与噪点
+## 四、 风格化特效：像素风与噪点
 
 除了模拟真实，后期处理还能用来创造独特的艺术风格。
 
@@ -184,31 +209,31 @@ render(
 
 ---
 
-## 四、 性能杀手：抗锯齿 (Antialiasing)
+## 五、 抗锯齿 (Antialiasing)：选择一条主路径
 
-当我们开启了 `EffectComposer`，Three.js 默认的 MSAA 抗锯齿**会失效**（因为此时我们在渲染到一个离屏纹理上）。
-如果不处理，画面边缘会充满锯齿。
+开启 Composer 后，场景首先绘制到离屏 RenderTarget，`<Canvas gl={{ antialias: true }}>` 针对默认 framebuffer 的抗锯齿不能直接覆盖整条离屏后期链。WebGL2 环境可以让 Composer 使用多采样 RenderTarget；不使用离屏 MSAA 时，也可以在后期链中使用 SMAA 等屏幕空间方案。
 
-我们需要在后期处理链中手动添加抗锯齿 Pass。
+### 常见方案与取舍
 
-### 常见抗锯齿方案
-1.  **SMAA (Subpixel Morphological Antialiasing)**: **效果最好**，性能开销中等。推荐 PC 端使用。
-2.  **FXAA (Fast Approximate Antialiasing)**: **速度最快**，但会稍微让画面变糊。推荐移动端使用。
-3.  **Multisampling (MSAA)**：EffectComposer 的属性。**性能最优**，由显卡原生支持，但某些老旧浏览器不兼容。
+1. **Composer multisampling (MSAA)**：在几何边缘采样，画面通常更锐利，但样本数会增加颜色/深度存储和解析成本，并受 WebGL2、设备及 RenderTarget 配置限制。
+2. **SMAA**：根据最终图像的边缘做形态学抗锯齿，兼容性与效果较均衡，也会增加纹理采样和全屏处理成本。
+3. **FXAA**：单次屏幕空间近似方案，通常成本较低，但细线和纹理可能变软。是否可用及其组件名取决于当前后期库。
 
-### 自动选择
-`@react-three/postprocessing` 的 `EffectComposer` 组件默认支持 `multisampling` (MSAA)，只要显卡支持，它是最高效的。如果需要更强的效果，可以手动加 SMAA。
+通常应把 MSAA 与 SMAA 视为**可选主方案**，而不是默认叠加：两者同时开启往往收益有限，却要同时承担多采样和全屏抗锯齿成本。先根据目标设备选择一种，再用实际场景的斜边、细线和运动画面评估。
+
+下面示例明确关闭 Composer MSAA，仅使用 SMAA：
 
 ```jsx
 import { EffectComposer, SMAA } from '@react-three/postprocessing'
 
-<EffectComposer multisampling={0}> {/* 关闭默认 MSAA */}
+<EffectComposer multisampling={0}>
+  {/* 先执行画面效果，再让 SMAA 处理接近最终输出的边缘。 */}
+  <Bloom luminanceThreshold={1} mipmapBlur />
   <SMAA />
-  <Bloom ... />
 </EffectComposer>
 ```
 
-<CodePenDemo title="Antialiasing Comparison">
+<CodePenDemo title="SMAA Example">
 
 ```jsx
 import { SMAA, BrightnessContrast } from '@react-three/postprocessing'
@@ -216,18 +241,18 @@ import { SMAA, BrightnessContrast } from '@react-three/postprocessing'
 function AntialiasScene() {
   return (
     <>
-      {/* multisampling={8} 是最简单的开启方案 */}
-      <EffectComposer multisampling={8}>
-        <SMAA />
+      {/* 方案二选一：这里关闭 MSAA，只启用 SMAA。 */}
+      <EffectComposer multisampling={0}>
         <BrightnessContrast brightness={0.05} contrast={0.1} />
+        <SMAA />
       </EffectComposer>
 
       <mesh rotation={[0.4, 0.2, 0]}>
         <boxGeometry args={[2, 2, 2]} />
         <meshStandardMaterial color="#666" wireframe={false} />
       </mesh>
-      
-      {/* 线框模式最容易观察锯齿 */}
+
+      {/* 细线和高对比斜边更容易暴露锯齿与过度模糊。 */}
       <mesh rotation={[0.4, 0.2, 0]} scale={1.01}>
         <boxGeometry args={[2, 2, 2]} />
         <meshBasicMaterial color="white" wireframe />
@@ -246,7 +271,6 @@ render(
     <AntialiasScene />
   </Canvas>
 )
-
 ```
 
 </CodePenDemo>
@@ -256,7 +280,7 @@ render(
 
 ---
 
-## 五、 组合拳：打造电影级画面
+## 六、 组合效果：构建统一画面风格
 
 最后，我们将多种效果组合在一起，看看能产生什么样的化学反应。
 *   **Bloom**: 营造发光氛围。
@@ -311,10 +335,11 @@ render(
 </CodePenDemo>
 
 
-## 六、 实时地面反射 (MeshReflectorMaterial)
+## 七、 材质级额外渲染：MeshReflectorMaterial
 
+`MeshReflectorMaterial` 不属于普通的“场景颜色已经生成后，再处理整张屏幕”的后期 Pass。它是一个材质方案：为了得到反射纹理，会从镜像视角额外渲染场景，并可对反射 RenderTarget 做模糊、深度相关混合，最后在地面材质着色时采样这些结果。
 
-
+因此它可以和 EffectComposer 同时使用，但预算应分开理解：反射材质先带来额外场景渲染、反射分辨率和模糊成本，Composer 随后还会处理包含反射地面的最终画面。`resolution={1024}`、较大的 blur 和多个反射面都可能显著增加 GPU 成本，应按设备能力降低分辨率或减少更新频率。
 
 <CodePenDemo title="Advanced Reflections">
 
@@ -378,18 +403,16 @@ render(
 
 ---
 
-## 总结：后期处理的最佳实践
+## 总结：后期处理检查清单
 
-在使用后期处理时，请记住以下“黄金法则”：
+1. **先画管线**：明确场景颜色写入哪个 RenderTarget、哪些步骤需要交换 read/write buffer，以及最终在哪一步输出到屏幕。
+2. **核对辅助数据**：DOF、SSAO、SSR 等效果是否需要深度或法线；不要在仍有依赖时关闭相关 Pass。
+3. **明确顺序与颜色约定**：Pass 顺序会改变结果；自定义 Pass 要确认 HDR、线性空间、色调映射和最终显示颜色空间分别在哪一步处理。
+4. **处理尺寸变化**：Canvas、DPR 和画质档位变化时同步调整 Composer 与自定义 RenderTarget，并释放旧资源。
+5. **抗锯齿选择主方案**：根据目标设备在 Composer MSAA、SMAA 或其他方案中选择并测量，避免无依据地同时叠加 MSAA 与 SMAA。
+6. **用帧时间制定预算**：分别统计全屏采样、深度/法线 Pass、模糊链与额外场景渲染；移动设备通常需要较低分辨率和更少效果，但最终取舍应由目标设备测试决定。
+7. **区分后期与材质额外渲染**：`MeshReflectorMaterial` 的反射成本来自材质所需的额外渲染，不应当作普通屏幕 Pass 计数。
 
-1. **顺序至关重要**：Pass 的添加顺序就像滤镜层。通常顺序是：`抗锯齿 -> 景深 -> 辉光 -> 风格化(噪点/暗角)`。
-2. **性能预算**：后期处理每增加一个 Pass，都会增加显卡的计算负担。
-* **PC 端**：可以大方使用 SSR、Bloom、SMAA。
-* **移动端**：建议只保留核心特效（如简单的 Bloom），并调低分辨率。
-
-
-3. **配合环境光**：后期处理不是万能的。好的画面首先要有合理的灯光布局，后期只是在此基础上锦上添花。
-
-现在，你已经掌握了 Three.js 画面进阶的“秘籍”。去为你的 Web 3D 世界穿上华丽的外衣吧！
+后期处理用于增强已有的光照、材质和构图。先保证基础渲染正确，再逐项加入效果并测量，通常比一次堆叠整套效果更容易得到稳定结果。
 
 

@@ -1,338 +1,215 @@
 ---
-title: 'Three.js 相机体系详解：导演的镜头艺术'
+title: 'Three.js 相机体系详解：从投影到稳定运镜'
 date: '2026-01-16'
-description: '全面解析 Three.js 的相机系统，对比透视与正交相机的应用场景，深入讲解 OrbitControls 控制器，以及如何实现炫酷的相机运镜动画。'
+description: '系统讲解视图与投影变换、透视和正交相机、裁剪与深度精度、响应式更新，以及与帧率无关的相机平滑。'
 tags: ['Three.js', 'WebGL', 'Camera', 'Frontend']
+nextPost: 'threejs/renderer-explained'
 ---
 
-# Three.js 相机体系详解：导演的镜头艺术
+# Three.js 相机体系详解：从投影到稳定运镜
 
-在 3D 世界中，**相机 (Camera)** 就是观众的眼睛。没有相机，渲染器就不知道该画什么，场景也只是一团存在于内存中的数据。
+相机不是把场景“拍成图片”的实体模型，而是一组观察变换与投影参数。渲染器用它判断物体如何从世界空间进入屏幕，以及哪些内容应被裁掉。
 
-Three.js 提供了多种相机，但最常用的主要有两种：模拟人眼的**透视相机**和用于工程制图的**正交相机**。此外，如何优雅地**控制**相机的移动，也是一门必修课。
+## 阅读前置
 
----
+相机建立在坐标变换和场景树之上，建议先读：
 
-## 一、 透视相机 (PerspectiveCamera)
+- [Three.js 数学与坐标变换基础](/posts/threejs/math-coordinate-transform-explained)
+- [Three.js 场景系统：层级、坐标与变换](/posts/threejs/scene-system-explained)
 
-这是最接近真实世界的相机，遵循**“近大远小”**的物理规律。绝大多数 3D 游戏、VR 应用都使用它。
+## 从世界坐标到屏幕像素
 
-### 1. 核心参数图解
-创建透视相机需要 4 个参数，它们定义了一个**视锥体 (Frustum)**。只有在这个四棱台体内的物体才会被渲染。
+一个顶点大致经过以下步骤：
 
-```javascript
-const camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
+```text
+局部空间 → 世界空间 → View（相机）空间 → Clip 空间 → NDC → Viewport 像素
 ```
 
-1.  **FOV (Field of View)**: **视野角度**（垂直方向）。
-    *   **人眼**：约 45°~60°。
-    *   **广角**：90°~120°（FPS 游戏常用，视野开阔但边缘畸变严重）。
-    *   **长焦**：10°~30°（狙击镜效果，物体会被拉近，空间被压缩）。
-2.  **Aspect**: **长宽比**。通常设为 `window.innerWidth / window.innerHeight`，否则画面会压扁或拉长。
-3.  **Near**: **近截面**。比这个距离近的物体会被切掉（不渲染）。不要设为 0，通常设为 0.1。
-4.  **Far**: **远截面**。比这个距离远的物体会被切掉（看不见）。设太大会影响深度缓冲精度（Z-fighting），引发闪烁。
+- **View 变换**是相机世界矩阵的逆矩阵 `camera.matrixWorldInverse`，相当于把整个世界搬到相机坐标系。
+- **Projection 变换**由 `camera.projectionMatrix` 完成，把相机空间映射到 Clip 空间。
+- Clip 坐标仍是齐次坐标 `(x, y, z, w)`；GPU 做透视除法 `(x/w, y/w, z/w)` 后得到 **NDC**。
+- WebGL 的 NDC 可见范围是三个轴都在 `[-1, 1]` 内；超出裁剪范围的图元会被裁剪，随后 viewport 再把 NDC 映射为 canvas 像素。
 
-### 实战：FOV 变焦效果
-拖动滑块，感受不同 FOV 对画面的影响。注意观察：FOV 变大时，物体变小了（需要把相机拉近才能保持大小一致），但背景透视感更强了。
+这解释了为什么只移动相机不会修改场景对象的世界坐标：变化的是 View 矩阵。
 
-<CodePenDemo title="Perspective FOV Demo" code={`
-function FOVScene() {
-  const cameraRef = useRef()
-  const [fov, setFov] = useState(50)
-
-  // 当 FOV 变化时，更新相机投影矩阵
-  // R3F 会自动处理大部分更新，但在手动控制时需留意 updateProjectionMatrix
-  
-  return (
-    <>
-      <PerspectiveCamera 
-        makeDefault 
-        position={[0, 0, 10]} 
-        fov={fov} 
-        onUpdate={c => c.updateProjectionMatrix()}
-      />
-      
-      {/* 隧道效果，展示透视感 */}
-      {Array.from({ length: 10 }).map((_, i) => (
-        <mesh key={i} position={[0, 0, -i * 5]}>
-          <ringGeometry args={[2, 2.5, 32]} />
-          <meshStandardMaterial color={i % 2 === 0 ? "cyan" : "hotpink"} side={THREE.DoubleSide} />
-        </mesh>
-      ))}
-
-      <mesh position={[0, 0, 0]}>
-        <boxGeometry args={[1, 1, 1]} />
-        <meshStandardMaterial color="orange" />
-      </mesh>
-
-      <ambientLight intensity={0.5} />
-      <pointLight position={[10, 10, 10]} />
-      
-      {/* UI 控制 (模拟) */}
-      <Html position={[0, -3, 0]} center>
-        <div className="bg-black/50 text-white p-2 rounded flex flex-col items-center" style={{ width: '200px' }}>
-          <label style={{ marginBottom: '8px' }}>FOV: {fov}°</label>
-          <input 
-            type="range" 
-            min="10" 
-            max="120" 
-            value={fov} 
-            onChange={(e) => setFov(Number(e.target.value))} 
-            style={{ width: '100%' }}
-          />
-        </div>
-      </Html>
-      
-      <OrbitControls />
-    </>
-  )
-}
-
-
-render(
-  <Canvas>
-    <FOVScene />
-  </Canvas>
-)
-`} />
-
----
-
-## 二、 正交相机 (OrthographicCamera)
-
-这种相机**没有透视**，物体无论多远，大小都一样。
-
-### 1. 应用场景
-*   **2D 游戏 / UI 界面**：如《纪念碑谷》风格的游戏。
-*   **工程制图 / 建模软件**：需要精确对齐视图（顶视图、侧视图）。
-*   **等轴测 (Isometric) 风格**：SimCity 等模拟经营游戏。
-
-### 2. 核心参数
-它定义的不是视锥体，而是一个**长方体**盒子。
+## 透视相机：距离参与大小计算
 
 ```javascript
-const camera = new THREE.OrthographicCamera(left, right, top, bottom, near, far);
+const camera = new THREE.PerspectiveCamera(fov, aspect, near, far)
 ```
 
-你需要定义这个盒子的**左右上下**边界。通常我们希望盒子的大小跟屏幕比例一致。
+- `fov` 是**垂直**视野角，单位为度；
+- `aspect` 是画布宽高比；
+- `near`、`far` 是沿相机观察方向的近、远裁剪距离，必须满足 `0 < near < far`。
 
-### 实战：切换视角
-点击按钮在“透视”和“正交”之间切换，感受《纪念碑谷》式的视觉欺骗。
+在相机前方距离 `d` 处，视锥体可见高度为：
 
-<CodePenDemo title="Perspective vs Orthographic" code={`
-function CameraSwitcher() {
-  const [isOrtho, setIsOrtho] = useState(false)
-  
-  return (
-    <>
-      {isOrtho ? (
-        // 正交相机：zoom 控制放大倍数，position 依然决定观察角度
-        <OrthographicCamera 
-          makeDefault 
-          position={[5, 5, 5]} 
-          zoom={40} 
-          near={0.1} 
-          far={100}
-        />
-      ) : (
-        <PerspectiveCamera 
-          makeDefault 
-          position={[5, 5, 5]} 
-          fov={50} 
-        />
-      )}
-      
-      {/* 一个看起来像立方体的组合结构 */}
-      <group>
-        <mesh position={[0, 0, 0]}>
-          <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="orange" />
-        </mesh>
-        <mesh position={[1, 0, -1]}>
-           <boxGeometry args={[1, 1, 1]} />
-           <meshStandardMaterial color="teal" />
-        </mesh>
-      </group>
+```text
+visibleHeight = 2 · d · tan(fov / 2)
+visibleWidth  = visibleHeight · aspect
+```
 
-      <ambientLight intensity={0.5} />
-      <directionalLight position={[10, 10, 5]} intensity={1} />
-      <gridHelper args={[10, 10]} />
-      <OrbitControls />
-
-      <Html position={[0, 3, 0]} center>
-        <button 
-          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition"
-          onClick={() => setIsOrtho(!isOrtho)}
-          style={{ padding: '8px 16px', background: '#2563eb', color: 'white', borderRadius: '4px', border: 'none', cursor: 'pointer' }}
-        >
-          切换为: {isOrtho ? "透视 (Perspective)" : "正交 (Orthographic)"}
-        </button>
-      </Html>
-    </>
-  )
-}
-
-
-render(
-  <Canvas>
-    <CameraSwitcher />
-  </Canvas>
-)
-`} />
-
----
-
-## 三、 相机控制器 (Controls)
-
-如果你想让用户能用鼠标旋转、缩放查看物体，不要自己写鼠标事件监听！Three.js 社区提供了强大的 `OrbitControls`（轨道控制器）。
-
-### 1. OrbitControls 详解
-它让相机围绕一个**目标点 (Target)** 在球面上运动。
-*   **左键拖拽**：旋转 (Rotate)。
-*   **右键拖拽**：平移 (Pan)。注意：这会改变相机的 Target！
-*   **滚轮**：缩放 (Dolly)，即拉近拉远。
-
-### 2. 常用配置
-*   **`enableDamping`**: 开启阻尼（惯性），让手感像丝绸一样顺滑。**必须在动画循环中调用 `controls.update()`**（R3F 自动帮你处理了）。
-*   **`minDistance / maxDistance`**: 限制缩放范围，防止穿模或看太远。
-*   **`minPolarAngle / maxPolarAngle`**: 限制垂直旋转角度。例如设为 `Math.PI / 2` 可以防止用户钻到地底下看裙底。
-*   **`autoRotate`**: 自动旋转展示。
-
-### 实战：限制视角的展厅
-在这个 Demo 中，我们限制了用户的操作范围，防止他们把相机移到穿帮的地方。
-
-<CodePenDemo title="Restricted Controls" code={`
-function Showroom() {
-  return (
-    <>
-      <OrbitControls 
-        enableDamping={true}
-        dampingFactor={0.05}
-        
-        // 限制缩放 (最近 2米，最远 10米)
-        minDistance={2}
-        maxDistance={10}
-        
-        // 限制垂直旋转 (不能钻到地底下，也不能正顶视)
-        // 0 = 顶视, PI = 底视, PI/2 = 地平线
-        minPolarAngle={Math.PI / 4} // 45度
-        maxPolarAngle={Math.PI / 2} // 90度 (地平线)
-        
-        // 限制水平旋转 (只允许左右看 90度)
-        minAzimuthAngle={-Math.PI / 2}
-        maxAzimuthAngle={Math.PI / 2}
-        
-        // 自动旋转
-        autoRotate={true}
-        autoRotateSpeed={2.0}
-      />
-      
-      <mesh position={[0, 0.5, 0]}>
-        <cylinderGeometry args={[0.5, 0.5, 1, 32]} />
-        <meshStandardMaterial color="gold" metalness={0.8} roughness={0.2} />
-      </mesh>
-      
-      <mesh rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[10, 10]} />
-        <meshStandardMaterial color="#333" />
-        <gridHelper args={[10, 10]} rotation={[-Math.PI/2, 0, 0]} />
-      </mesh>
-
-      <ambientLight intensity={0.5} />
-      <spotLight position={[5, 10, 5]} angle={0.3} penumbra={1} castShadow />
-    </>
-  )
-}
-
-render(
-  <Canvas shadows camera={{ position: [0, 2, 5] }}>
-    <Showroom />
-  </Canvas>
-)
-`} />
-
----
-
-## 四、 相机运镜 (Camera Rig)
-
-除了让用户控制，我们经常需要像电影导演一样，让相机沿着预定的轨迹飞行。
-
-### 方法：Lerp 插值
-最简单的运镜是每一帧让相机向目标位置“逼近”一点点。
+公式计算时要把角度转为弧度：
 
 ```javascript
-// 在 useFrame 中
-camera.position.lerp(targetPosition, 0.05);
-camera.lookAt(targetLookAt);
+const height = 2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)
+const width = height * camera.aspect
 ```
 
-### 实战：跟随鼠标的视差效果
-这是一种在网页 Banner 中非常流行的效果：相机随鼠标微动，产生微妙的立体视差。
+因此，距离加倍时，同一物体在屏幕上约缩小为一半；增大 FOV 也会让同一距离处容纳更多内容。
 
-<CodePenDemo title="Camera Parallax" code={`
-function ParallaxCamera() {
-  const cameraRef = useRef()
-  
-  useFrame(({ mouse, camera }) => {
-    // mouse.x, mouse.y 的范围是 -1 到 1
-    
-    // 目标位置：在原始位置基础上，根据鼠标偏移一点点
-    const targetX = mouse.x * 2
-    const targetY = mouse.y * 1
-    
-    // 平滑插值 (Lerp)
-    // 0.05 是平滑系数，越小越慢越平滑
-    camera.position.x += (targetX - camera.position.x) * 0.05
-    camera.position.y += (targetY - camera.position.y) * 0.05
-    
-    // 始终盯着原点
-    camera.lookAt(0, 0, 0)
+
+### near、far 与深度精度
+
+透视投影的深度缓冲精度不是沿距离均匀分配的，而是大量集中在 near 附近。把 `near` 从合理的 `0.1` 降到极小值，或把 `far` 无必要地推到很远，都会扩大 `far / near` 比值并加重远处表面的 Z-fighting。
+
+原则是：**near 设为业务允许的尽可能大值，far 设为覆盖场景所需的尽可能小值**。大型场景还可按尺度拆分、使用对数深度缓冲等方案，但不要先用极端裁剪面掩盖尺度设计问题。
+
+## 正交相机：距离不改变投影大小
+
+```javascript
+const camera = new THREE.OrthographicCamera(left, right, top, bottom, near, far)
+```
+
+正交相机的可见体是长方体。忽略旋转时，基础可见范围为：
+
+```text
+width  = right - left
+height = top - bottom
+```
+
+考虑 `camera.zoom` 后，实际可见宽高为：
+
+```text
+visibleWidth  = (right - left) / zoom
+visibleHeight = (top - bottom) / zoom
+```
+
+一个常见策略是固定垂直世界范围，根据宽高比扩展水平方向：
+
+```javascript
+const viewHeight = 10
+const aspect = width / height
+camera.left = -(viewHeight * aspect) / 2
+camera.right = (viewHeight * aspect) / 2
+camera.top = viewHeight / 2
+camera.bottom = -viewHeight / 2
+camera.updateProjectionMatrix()
+```
+
+正交相机适合工程视图、2D/伪 3D 场景和需要稳定世界单位比例的 UI。物体远近不改变屏幕大小，但仍受 near/far 裁剪并参与深度测试。
+
+## Resize：画布和投影必须一起更新
+
+只改变 renderer 尺寸而不改相机投影，画面会被拉伸。原生 Three.js 可统一处理：
+
+```javascript
+function resize() {
+  const width = container.clientWidth
+  const height = container.clientHeight
+
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  // 让 drawing buffer 与 canvas CSS 尺寸都匹配容器。
+  renderer.setSize(width, height)
+
+  if (camera.isPerspectiveCamera) {
+    camera.aspect = width / height
+  } else {
+    const viewHeight = 10
+    const aspect = width / height
+    camera.left = -(viewHeight * aspect) / 2
+    camera.right = (viewHeight * aspect) / 2
+    camera.top = viewHeight / 2
+    camera.bottom = -viewHeight / 2
+  }
+  camera.updateProjectionMatrix()
+}
+
+const observer = new ResizeObserver(resize)
+observer.observe(container)
+resize()
+```
+
+监听容器而不是只监听 `window`，可以覆盖侧栏收起、布局变化等情况。R3F 的 `<Canvas>` 会同步其默认相机和渲染尺寸；自建相机或自定义正交边界时，仍要明确实现自己的更新规则。
+
+
+## Dolly、FOV 与 zoom 不是同一件事
+
+三者都可能让主体“看起来变大”，但空间效果不同：
+
+- **Dolly**：沿观察方向移动相机。相机与物体的相对距离改变，因此前后景相对位移和视差也改变。
+- **FOV**：改变透视相机的视锥角，不移动相机。只改 FOV 会改变主体屏幕大小；若同时移动相机以保持主体大小，会产生常称为 dolly zoom 的透视变化。
+- **`camera.zoom`**：修改投影倍率并需要 `updateProjectionMatrix()`。它不改变相机世界位置，因此不会像 dolly 那样改变视差；正交相机尤其常用 zoom。
+
+OrbitControls 对透视相机的滚轮操作通常是 dolly，对正交相机则通常调整 zoom。选择方式应依据你希望改变的是观察位置、透视关系，还是单纯构图比例。
+
+## OrbitControls：围绕 target 管理观察关系
+
+`OrbitControls` 让相机围绕 `target` 旋转，并提供 dolly、pan 与限制范围。原生 Three.js 开启 damping 后需要在动画循环调用 `controls.update()`；R3F 中使用 drei 的 `<OrbitControls />` 时，组件会接入帧循环。
+
+```javascript
+const controls = new OrbitControls(camera, renderer.domElement)
+controls.target.set(0, 1, 0)
+controls.enableDamping = true
+controls.minDistance = 2
+controls.maxDistance = 12
+
+renderer.setAnimationLoop(() => {
+  controls.update()
+  renderer.render(scene, camera)
+})
+```
+
+它适合检查模型、展厅浏览和编辑器视口。若产品需要严格编排的镜头，应把相机位置与注视目标放入自己的 camera rig，而不是让 controls 与业务动画同时争夺相机。
+
+## 与帧率无关的指数平滑
+
+固定写法 `current += (target - current) * 0.05` 每帧推进固定比例，因此 144 FPS 会比 30 FPS 更快接近目标。用 delta 计算指数平滑系数可让响应速度跨帧率更一致：
+
+```text
+alpha = 1 - exp(-lambda · delta)
+```
+
+`lambda` 是每秒收敛强度，越大响应越快。R3F 示例：
+
+```jsx
+import * as THREE from 'three'
+import { useFrame } from '@react-three/fiber'
+import { useMemo } from 'react'
+
+function CameraRig() {
+  const targetPosition = useMemo(() => new THREE.Vector3(), [])
+  const lookTarget = useMemo(() => new THREE.Vector3(), [])
+  const desiredLookTarget = useMemo(() => new THREE.Vector3(), [])
+
+  useFrame(({ camera, pointer }, delta) => {
+    // 防止切回后台后的超大 delta 造成突跳。
+    const dt = Math.min(delta, 0.1)
+    const alpha = 1 - Math.exp(-6 * dt)
+
+    targetPosition.set(pointer.x * 1.5, pointer.y * 0.8, 8)
+    desiredLookTarget.set(pointer.x * 0.2, pointer.y * 0.1, 0)
+
+    camera.position.lerp(targetPosition, alpha)
+    lookTarget.lerp(desiredLookTarget, alpha)
+    camera.lookAt(lookTarget)
   })
 
-  return null // 这个组件只控制相机，不渲染东西
+  return null
 }
+```
 
-function Scene() {
-  return (
-    <>
-      <ParallaxCamera />
-      
-      {/* 前景物体 */}
-      <mesh position={[2, 1, 2]}>
-        <boxGeometry args={[1, 1, 1]} />
-        <meshStandardMaterial color="red" />
-      </mesh>
-      
-      {/* 主体 */}
-      <mesh>
-        <sphereGeometry args={[1.5, 32, 32]} />
-        <meshStandardMaterial color="white" wireframe />
-      </mesh>
-      
-      {/* 背景物体 */}
-      <mesh position={[-3, -2, -5]}>
-        <dodecahedronGeometry args={[2]} />
-        <meshStandardMaterial color="blue" />
-      </mesh>
+临时向量通过 `useMemo` 复用，避免每帧创建对象。`lookAt()` 在这里直接设置朝向，但注视点本身已平滑；需要更精细的姿态插值时，可计算目标 quaternion 并使用 `slerp`。
 
-      <ambientLight intensity={0.5} />
-      <pointLight position={[10, 10, 10]} />
-    </>
-  )
-}
-
-render(
-  <Canvas camera={{ position: [0, 0, 10] }}>
-    <Scene />
-  </Canvas>
-)
-`} />
+这能得到稳定、可调的网页视差或跟随镜头，但是否具有“电影感”还取决于构图、节奏、镜头焦段、运动曲线和场景内容，不能由一次 lerp 自动保证。
 
 ## 总结
 
-*   **PerspectiveCamera** 是你的首选，记得设置合理的 `near` 和 `far`。
-*   **OrthographicCamera** 适合做 UI 或伪 3D 风格。
-*   **OrbitControls** 是开发调试的神器，但也别忘了配置阻尼和限制范围以提升用户体验。
-*   通过 `useFrame` 和 `lerp`，你可以轻松实现电影级的**平滑运镜**。
+- View 矩阵把世界变到相机空间，Projection 矩阵把它变到 Clip 空间；透视除法后进入 NDC。
+- 透视相机在距离 `d` 处的可见高度为 `2d·tan(fov/2)`；正交范围由边界差值与 zoom 决定。
+- resize 时要同步 renderer 尺寸、DPR、相机宽高比或正交边界，并更新投影矩阵。
+- 合理收紧 near/far 能改善深度精度；不要把 near 设得无谓地小。
+- dolly 改位置与视差，FOV 和 zoom 改投影；它们不能按“都能放大”混为一谈。
+- 相机跟随应使用基于 delta 的指数平滑，而不是固定的每帧系数。
 
-相机是连接虚拟与现实的窗口，用好它，你的 3D 作品将更具沉浸感。
+理解这些后，相机就不再是一组靠试出来的参数，而是从世界变换到屏幕构图的一条可推导链路。

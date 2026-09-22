@@ -1,0 +1,50 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Three.js Course Product Asset Generator",
+    "copyright": "Dedicated to the public domain under CC0-1.0",
+    "extras": { "license": "CC0-1.0", "purpose": "Offline course asset" }
+  },
+  "scene": 0,
+  "scenes": [{ "name": "CourseProductScene", "nodes": [0] }],
+  "nodes": [
+    { "name": "CourseProductRoot", "children": [1, 2, 3] },
+    { "name": "Enclosure", "mesh": 0, "scale": [2, 1.2, 1] },
+    { "name": "DisplayPanel", "mesh": 1, "translation": [0, 0.08, 0.56], "scale": [1.35, 0.62, 0.08] },
+    { "name": "StatusControl", "mesh": 2, "translation": [0.7, -0.38, 0.66], "scale": [0.22, 0.1, 0.08] }
+  ],
+  "meshes": [
+    { "name": "EnclosureMesh", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 0 }] },
+    { "name": "DisplayMesh", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 1 }] },
+    { "name": "ControlMesh", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 2 }] }
+  ],
+  "materials": [
+    { "name": "CasingMat", "pbrMetallicRoughness": { "baseColorFactor": [0.12, 0.16, 0.22, 1], "metallicFactor": 0.25, "roughnessFactor": 0.58 } },
+    { "name": "ScreenMat", "pbrMetallicRoughness": { "baseColorFactor": [0.02, 0.32, 0.42, 1], "metallicFactor": 0, "roughnessFactor": 0.3 }, "emissiveFactor": [0.01, 0.18, 0.25] },
+    { "name": "AccentMat", "pbrMetallicRoughness": { "baseColorFactor": [0.95, 0.3, 0.08, 1], "metallicFactor": 0.05, "roughnessFactor": 0.45 }, "emissiveFactor": [0.08, 0.01, 0] }
+  ],
+  "animations": [{
+    "name": "StatusControlSpin",
+    "samplers": [{ "input": 3, "output": 4, "interpolation": "LINEAR" }],
+    "channels": [{ "sampler": 0, "target": { "node": 3, "path": "rotation" } }]
+  }],
+  "accessors": [
+    { "name": "CubePositions", "bufferView": 0, "componentType": 5126, "count": 24, "type": "VEC3", "min": [-0.5, -0.5, -0.5], "max": [0.5, 0.5, 0.5] },
+    { "name": "CubeNormals", "bufferView": 1, "componentType": 5126, "count": 24, "type": "VEC3" },
+    { "name": "CubeIndices", "bufferView": 2, "componentType": 5123, "count": 36, "type": "SCALAR", "min": [0], "max": [23] },
+    { "name": "SpinTimes", "bufferView": 3, "componentType": 5126, "count": 3, "type": "SCALAR", "min": [0], "max": [3] },
+    { "name": "SpinRotations", "bufferView": 4, "componentType": 5126, "count": 3, "type": "VEC4" }
+  ],
+  "bufferViews": [
+    { "name": "PositionView", "buffer": 0, "byteOffset": 0, "byteLength": 288, "target": 34962 },
+    { "name": "NormalView", "buffer": 0, "byteOffset": 288, "byteLength": 288, "target": 34962 },
+    { "name": "IndexView", "buffer": 0, "byteOffset": 576, "byteLength": 72, "target": 34963 },
+    { "name": "TimeView", "buffer": 0, "byteOffset": 648, "byteLength": 12 },
+    { "name": "RotationView", "buffer": 0, "byteOffset": 660, "byteLength": 48 }
+  ],
+  "buffers": [{
+    "name": "EmbeddedCourseProductBuffer",
+    "byteLength": 708,
+    "uri": "data:application/octet-stream;base64,AAAAvwAAAL8AAAA/AAAAPwAAAL8AAAA/AAAAPwAAAD8AAAA/AAAAvwAAAD8AAAA/AAAAPwAAAL8AAAC/AAAAvwAAAL8AAAC/AAAAvwAAAD8AAAC/AAAAPwAAAD8AAAC/AAAAvwAAAD8AAAA/AAAAPwAAAD8AAAA/AAAAPwAAAD8AAAC/AAAAvwAAAD8AAAC/AAAAvwAAAL8AAAC/AAAAvwAAAL8AAAA/AAAAvwAAAD8AAAA/AAAAPwAAAD8AAAA/AAAAvwAAAL8AAAC/AAAAPwAAAL8AAAC/AAAAPwAAAL8AAAA/AAAAvwAAAL8AAAA/AAAAvwAAAL8AAAC/AAAAPwAAAL8AAAA/AAAAPwAAAL8AAAA/AAAAPwAAAL8AAAA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAAAAAAAAAwD8AAEBAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAA8wQ1P/MENT8AAAAAAAAAAAAAAAAAAIA/"
+  }]
+}
