@@ -77,6 +77,7 @@ export const generatedLanguageMap: Readonly<Record<string, string>> = Object.fre
   "json": "json",
   "jsx": "javascript",
   "lua": "lua",
+  "markdown": "markdown",
   "md": "markdown",
   "mermaid": "mermaid",
   "nginx": "nginx",

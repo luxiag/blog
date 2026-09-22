@@ -95,7 +95,125 @@ varying vec2 vUv;
 uniform float uTime;
 
 void main() {
-    // 1. 基础平面法线 (指向屏幕外)
+    vec2 uv = vUv * 2.0 - 1.0;
+
+    // 左半边：面法线（棱角）
+    // 右半边：顶点法线（平滑）
+    float isSmooth = step(0.0, uv.x);
+
+    // 模拟一个由 8 段组成的"圆"
+    float segments = 8.0;
+    float angle = floor(atan(uv.y, uv.x) * segments / 6.2832) * 6.2832 / segments;
+
+    // 面法线：每段的方向一致（阶梯状）
+    vec3 flatNormal = vec3(cos(angle), sin(angle), 0.5);
+
+    // 顶点法线：连续的方向（平滑）
+    vec3 smoothNormal = vec3(uv.x, uv.y, sqrt(max(0.0, 1.0 - uv.x*uv.x - uv.y*uv.y)));
+
+    vec3 normal = mix(flatNormal, smoothNormal, isSmooth);
+    normal = normalize(normal);
+
+    // 光照
+    vec3 lightDir = normalize(vec3(0.5, 0.5, 1.0));
+    float diff = max(dot(normal, lightDir), 0.0);
+    vec3 color = vec3(0.3, 0.6, 1.0) * (diff * 0.8 + 0.2);
+
+    // 分界线
+    float divider = smoothstep(-0.005, 0.005, abs(uv.x));
+    color *= 1.0 - divider * 0.5;
+
+    // 标签
+    if (uv.y > 0.9) {
+        color = isSmooth > 0.5 ? vec3(0.2, 1.0, 0.3) : vec3(1.0, 0.3, 0.2);
+    }
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`} />
+
+:::tip 和索引绘制的关系
+在 [几何工坊](/posts/glsl/geometry-deep-dive) 中我们学过：索引绘制让多个三角形共享同一个顶点。当顶点被共享时，它的法线是所有相邻面法线的平均值，自动产生平滑效果。如果需要硬边，就必须把共享顶点拆开（非索引），让每个面拥有独立的法线。
+:::
+
+## 三、法线与光照：dot(N, L)
+
+法线最重要的用途就是光照计算。漫反射的核心公式：
+
+```
+亮度 = dot(法线, 光线方向)
+```
+
+| 法线与光线的关系 | 夹角 | dot 值 | 效果 |
+|---|---|---|---|
+| 法线正对光线 | 0° | 1.0 | 最亮 |
+| 法线与光线成 45° | 45° | 0.71 | 较亮 |
+| 法线与光线垂直 | 90° | 0.0 | 全黑 |
+| 法线背对光线 | `> 90°` | `< 0` | `max()` 截断为 0 |
+
+**这意味着：如果我们欺骗了法线，我们就欺骗了光照。** 这就是法线贴图的原理。
+
+## 四、Normal Matrix：为什么法线变换不能直接乘 Model Matrix
+
+在 Vertex Shader 中，位置变换用 `modelViewMatrix`，但法线变换必须用 `normalMatrix`。为什么？
+
+### 问题
+
+当你对一个模型做**非均匀缩放**（比如 X 方向拉伸 2 倍），法线会被"歪掉"：
+
+```
+原始：圆球 → 法线径向朝外 ✓
+X 方向拉伸 2x → 椭球 → 法线不再垂直于表面 ✗
+```
+
+因为法线是方向向量，它只关心"垂直于表面"，不关心"有多长"。但 `modelMatrix` 包含了缩放信息，直接乘会让法线不再垂直于表面。
+
+### 解决方案：Normal Matrix
+
+Normal Matrix 是 Model Matrix 的**逆转置矩阵的左上 3×3 部分**：
+
+$$N = (M^{-1})^T$$
+
+在 Three.js 中，它已经帮你算好了：
+
+```glsl
+// Vertex Shader
+varying vec3 vNormal;
+
+void main() {
+  // 正确：用 normalMatrix 变换法线
+  vNormal = normalMatrix * normal;
+
+  // 错误：直接用 modelViewMatrix 变换法线
+  // vNormal = (modelViewMatrix * vec4(normal, 0.0)).xyz;
+  //         ↑ 非均匀缩放时法线会歪
+}
+```
+
+**什么时候可以不用 normalMatrix？**
+
+只有当 Model Matrix 只包含旋转和平移（没有缩放）时，`normalMatrix` 等价于 `modelViewMatrix` 的左上 3×3。所以如果你确定没有缩放，两种写法结果一样。但为了安全，**始终用 normalMatrix**。
+
+## 五、法线贴图 (Normal Mapping)
+
+如果我想在一个光滑的球面上画出砖块的凹凸感，难道要把模型加到几百万个三角形？不需要。**修改法线就够了。**
+
+### 1. 原理
+
+法线贴图是一张特殊的图片（通常是蓝紫色的）。它不存颜色，存的是**每个像素的法线方向**：
+
+- 纯蓝色 (128, 128, 255) → 法线指向正前方 (0, 0, 1)，即"没有扰动"
+- 偏红 → 法线偏向右边
+- 偏绿 → 法线偏向上面
+
+在 Fragment Shader 中，我们用贴图中的法线替代几何体的真实法线。光照计算以为表面有凹凸，于是产生明暗变化。**实际上模型还是平的！**
+
+<ShaderPreview title="Normal Perturbation" code={`
+varying vec2 vUv;
+uniform float uTime;
+
+void main() {
+    // 1. 基础平面法线 (指向 Z+)
     vec3 normal = vec3(0.0, 0.0, 1.0);
     
     // 2. 模拟法线贴图

@@ -1,220 +1,185 @@
 ---
-title: 'Three.js 零基础入门指南：开启 Web 3D 之旅'
+title: 'Three.js 入门：完成并解释第一帧'
 date: '2024-01-16'
-description: '一篇通俗易懂的 Three.js 入门文章，带你了解 WebGL 的魔法，掌握 3D 开发的核心概念与设计原理，并上手 React Three Fiber。'
+description: '从 Scene、Camera、Renderer 与第一个 Mesh 出发，完成一帧可靠的 Three.js 画面，并理解原生 Three.js 与 React Three Fiber 的对应关系。'
 tags: ['Three.js', 'WebGL', '3D', 'Frontend', 'React']
+nextPost: 'threejs/threejs-core-concepts'
 ---
 
-# Three.js 零基础入门指南：开启 Web 3D 之旅
+# Three.js 入门：完成并解释第一帧
 
-想象一下，你可以在网页上创造一个浩瀚的宇宙，或者展示一辆细节逼真的跑车，用户可以随意旋转、缩放，甚至进入车内查看内饰。这在过去可能需要安装笨重的插件，但现在，凭借 **Three.js**，这一切触手可及。
+这篇文章只解决一个目标：**让一个立方体正确出现在浏览器的第一帧里，并知道每一行为什么存在**。模型加载、光照、交互和后期处理都建立在这一步之上，先不急着展开。
 
-## 什么是 Three.js？
+Three.js 是 WebGL 之上的 JavaScript 3D 库。它替我们组织 GPU 资源、场景层级与绘制流程，但“画什么、从哪里看、画到哪里”仍需要明确给出。
 
-简单来说，Three.js 是一个基于 JavaScript 的 **3D 库**。
+## 第一帧需要什么
 
-在它的底层，使用的是浏览器原生的 **WebGL** 技术。WebGL 非常强大，能调用显卡（GPU）进行高性能渲染，但它的原生 API 非常复杂且晦涩（你需要写大量的样板代码和着色器语言 GLSL）。
+一次绘制可以概括为：
 
-Three.js 就像是 WebGL 的“翻译官”和“管家”。它把复杂的 WebGL 指令封装成了简单易懂的 JavaScript 对象（如“场景”、“相机”、“立方体”），让你无需精通图形学底层，也能快速构建出炫酷的 3D 应用。
-
----
-
-## 核心概念：搭建 3D 世界的“三大件”
-
-要用 Three.js 渲染出一个画面，你必须集齐三个核心要素：**场景 (Scene)**、**相机 (Camera)** 和 **渲染器 (Renderer)**。
-
-我们可以把这想象成**拍电影**：
-
-1.  **场景 (Scene)**：这就是你的**片场**。你可以往里面放置物体、灯光、背景等。所有的演员（3D 物体）都要在这个容器里表演。
-2.  **相机 (Camera)**：这就是你的**摄影机**。它决定了观众看到了什么。不同的相机参数（如广角、长焦）会带来不同的视觉效果。最常用的是**透视相机 (PerspectiveCamera)**，它模拟人眼“近大远小”的视觉效果。
-3.  **渲染器 (Renderer)**：这就是**放映机**（或者说胶卷冲洗师）。它负责把相机拍到的场景，计算并绘制成平面图像，最终显示在你的屏幕（`<canvas>`）上。
-
-### 原生 Three.js 代码初体验
-
-```javascript
-import * as THREE from 'three';
-
-// 1. 创建场景
-const scene = new THREE.Scene();
-
-// 2. 创建相机
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.z = 5; 
-
-// 3. 创建渲染器
-const renderer = new THREE.WebGLRenderer();
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement); 
-
-// 4. 创建物体
-const geometry = new THREE.BoxGeometry(1, 1, 1);
-const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-const cube = new THREE.Mesh(geometry, material);
-scene.add(cube);
-
-// 5. 渲染循环
-function animate() {
-    requestAnimationFrame(animate);
-    cube.rotation.x += 0.01;
-    cube.rotation.y += 0.01;
-    renderer.render(scene, camera);
-}
-animate();
+```text
+Scene 中的对象 + Camera 的观察范围 → Renderer → canvas 像素
 ```
 
----
+- `Scene` 是场景图根节点，保存要参与渲染的物体。
+- `Camera` 决定观察位置与可见范围；它本身不会自动拍摄。
+- `WebGLRenderer` 把 `scene` 从 `camera` 的视角绘制到 `<canvas>`。
+- `Mesh` 是第一种可见对象，但它必须同时拥有 Geometry 与 Material。
 
-## 现代开发首选：React Three Fiber (R3F)
+## 第一个 Mesh：形状、表面与变换节点
 
-虽然原生 Three.js 很强大，但在 React 项目中直接使用命令式 API（如 `scene.add`）会显得格格不入。我们习惯了声明式组件。
+```javascript
+const geometry = new THREE.BoxGeometry(1, 1, 1)
+const material = new THREE.MeshBasicMaterial({ color: 0x35c98b })
+const cube = new THREE.Mesh(geometry, material)
+scene.add(cube)
+```
 
-于是，**React Three Fiber (R3F)** 诞生了。它不是一个简单的包装器，而是一个**渲染器**。它允许你用 JSX 写 Three.js，性能与原生无异，甚至更好（因为自动管理了实例复用和垃圾回收）。
+这里不是三个可以互换的概念：
 
-### 为什么选择 R3F？
-*   **声明式**：`<mesh />` 比 `new THREE.Mesh()` 更直观。
-*   **组件化**：可以把 3D 场景拆分成可复用的组件。
-*   **生态丰富**：拥有 `@react-three/drei`（提供现成的组件如轨道控制、环境贴图）和 `@react-three/cannon`（物理引擎）等强大生态。
+1. **Geometry** 保存形状数据，例如顶点位置、法线、UV 和索引；`BoxGeometry` 描述“立方体长什么样”。
+2. **Material** 描述这些表面如何着色；`MeshBasicMaterial` 不依赖灯光，适合验证第一帧。
+3. **Mesh** 把 Geometry 与 Material 组合成可绘制对象。`Mesh` 继承自 `Object3D`，因此还拥有 `position`、`rotation`、`scale`、父子关系和局部/世界矩阵。
 
-### R3F 示例代码
+Geometry 和 Material 可以被多个 Mesh 共享；Mesh 的变换则属于该对象自身。第一帧看不到物体时，应依次检查：它是否加入 Scene、Camera 是否朝向它、是否落在 near/far 之间，以及材质是否需要场景中不存在的灯光。
 
-这就是上面原生代码的 React 版本，是不是清晰了很多？
+## 原生 Three.js：从空页面到第一帧
+
+先安装 `three`，再把下面代码放入由 Vite 等构建工具加载的模块中：
+
+```bash
+npm install three
+```
+
+
+```javascript
+import * as THREE from 'three'
+
+const scene = new THREE.Scene()
+scene.background = new THREE.Color(0x111827)
+
+const camera = new THREE.PerspectiveCamera(
+  60,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  100
+)
+camera.position.set(0, 0, 3)
+
+const renderer = new THREE.WebGLRenderer({ antialias: true })
+// DPR 越高，像素越多；限制上限可避免高密度屏幕带来过高开销。
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+renderer.setSize(window.innerWidth, window.innerHeight)
+document.body.style.margin = '0'
+document.body.appendChild(renderer.domElement)
+
+const geometry = new THREE.BoxGeometry(1, 1, 1)
+const material = new THREE.MeshBasicMaterial({ color: 0x35c98b })
+const cube = new THREE.Mesh(geometry, material)
+scene.add(cube)
+
+// 到这里已经具备第一帧所需的一切。
+renderer.render(scene, camera)
+```
+
+`camera.position.z = 3` 很关键：立方体位于原点，默认相机朝局部 `-Z` 看；把相机移到正 Z 轴后，原点才位于它前方。最后的 `render` 是一次明确的绘制调用，不会自动持续执行。
+
+## 从第一帧扩展到可靠的动画循环
+
+浏览器尺寸和屏幕像素密度都可能变化；动画速度也不应依赖设备每秒能画多少帧。下面补齐 resize、DPR 和 delta：
+
+```javascript
+const clock = new THREE.Clock()
+
+function resize() {
+  const width = window.innerWidth
+  const height = window.innerHeight
+
+  camera.aspect = width / height
+  camera.updateProjectionMatrix()
+
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  renderer.setSize(width, height)
+}
+
+window.addEventListener('resize', resize)
+
+renderer.setAnimationLoop(() => {
+  const delta = Math.min(clock.getDelta(), 0.1)
+  cube.rotation.x += delta * 0.6 // 弧度/秒
+  cube.rotation.y += delta * 1.0
+  renderer.render(scene, camera)
+})
+```
+
+`delta` 是距上一帧经过的秒数。使用 `角速度 × delta` 后，60 Hz 与 144 Hz 屏幕上的旋转速度基本一致。这里把 delta 限到 `0.1`，避免页面从后台恢复时一次跳过太大角度；若是物理模拟，通常还需要固定时间步长。
+
+相机参数变化后必须调用 `updateProjectionMatrix()`。`renderer.setSize()` 调整 canvas 的绘制缓冲区与 CSS 尺寸；重新限制 DPR，则能在窗口跨屏或缩放变化时保持清晰度与成本的平衡。
+
+组件卸载或页面不再使用这段场景时，还应移除 resize 监听、调用 `renderer.setAnimationLoop(null)`，并对自己创建且不再共享的 Geometry、Material、纹理和 Renderer 调用 `dispose()`。JavaScript 对象被回收不等于 GPU 资源会立刻自动释放。
+
+
+## 同一第一帧在 React Three Fiber 中怎么写
+
+React Three Fiber（R3F）是 React 的 Three.js renderer：它用 JSX 创建并协调 Three.js 对象，但底层对象与图形学概念没有改变。
 
 ```jsx
-import React, { useRef, useState } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
+import { useRef } from 'react'
 
-function Box(props) {
-  // 获取 Mesh 的引用，以便直接操作它（例如旋转）
-  const meshRef = useRef()
-  
-  // 设置交互状态
-  const [hovered, setHover] = useState(false)
-  const [active, setActive] = useState(false)
-  
-  // useFrame 钩子会在每一帧被调用（类似 animate 函数）
-  useFrame((state, delta) => {
-    meshRef.current.rotation.x += delta
-    meshRef.current.rotation.y += delta * 0.5
+function Cube() {
+  const cube = useRef()
+
+  useFrame((_, delta) => {
+    cube.current.rotation.x += delta * 0.6
+    cube.current.rotation.y += delta
   })
 
   return (
-    <mesh
-      {...props}
-      ref={meshRef}
-      scale={active ? 1.5 : 1}
-      onClick={() => setActive(!active)}
-      onPointerOver={() => setHover(true)}
-      onPointerOut={() => setHover(false)}>
+    <mesh ref={cube}>
       <boxGeometry args={[1, 1, 1]} />
-      <meshStandardMaterial color={hovered ? 'hotpink' : 'orange'} />
+      <meshBasicMaterial color="#35c98b" />
     </mesh>
   )
 }
 
 export default function App() {
   return (
-    <Canvas>
-      <ambientLight intensity={Math.PI / 2} />
-      <spotLight position={[10, 10, 10]} angle={0.15} penumbra={1} decay={0} intensity={Math.PI} />
-      <pointLight position={[-10, -10, -10]} decay={0} intensity={Math.PI} />
-      <Box position={[-1.2, 0, 0]} />
-      <Box position={[1.2, 0, 0]} />
+    <Canvas
+      camera={{ position: [0, 0, 3], fov: 60, near: 0.1, far: 100 }}
+      dpr={[1, 2]}
+    >
+      <color attach="background" args={["#111827"]} />
+      <Cube />
     </Canvas>
   )
 }
 ```
 
-### 实时演示
+对应关系如下：
 
-下面就是这段代码运行的真实结果。你可以尝试**点击**或**悬停**在立方体上，看看会发生什么！你可以直接在左侧修改代码（例如把 'hotpink' 改成 'cyan'），右侧会自动更新！
+| 原生 Three.js | R3F |
+| --- | --- |
+| `new THREE.Scene()` | `<Canvas>` 创建并维护默认 Scene |
+| `new THREE.PerspectiveCamera(...)` | `<Canvas camera={...}>` 的默认 Camera |
+| `new THREE.WebGLRenderer(...)` 与 canvas | `<Canvas>` 管理 Renderer 与 canvas |
+| `new THREE.Mesh(g, m)` | `<mesh>` 内嵌 geometry 与 material |
+| `scene.add(cube)` | JSX 父子关系 |
+| `setAnimationLoop` / `requestAnimationFrame` | `useFrame((state, delta) => ...)` |
+| 手动 resize 与 DPR | `<Canvas>` 的尺寸监听与 `dpr` 配置 |
 
-<CodePenDemo title="R3F Interactive Demo" code={`
-function Box(props) {
-  // 获取 Mesh 的引用
-  const meshRef = useRef()
-  
-  // 设置交互状态
-  const [hovered, setHover] = useState(false)
-  const [active, setActive] = useState(false)
-  
-  // 每一帧旋转
-  useFrame((state, delta) => {
-    meshRef.current.rotation.x += delta
-    meshRef.current.rotation.y += delta * 0.5
-  })
+R3F 的主要价值是 React 式声明、组件组合和生命周期协调，**不是保证比原生 Three.js 更快**。最终性能仍取决于 draw call、Geometry、Material、纹理、着色器以及每帧工作量。它会为常见的声明式资源处理挂载/卸载，但外部创建、缓存或共享的资源仍需由应用明确管理，不能把它理解为“自动管理 GPU 垃圾回收”。
 
-  return (
-    <mesh
-      {...props}
-      ref={meshRef}
-      scale={active ? 1.5 : 1}
-      onClick={() => setActive(!active)}
-      onPointerOver={() => setHover(true)}
-      onPointerOut={() => setHover(false)}>
-      <boxGeometry args={[1, 1, 1]} />
-      <meshStandardMaterial color={hovered ? 'hotpink' : 'orange'} />
-    </mesh>
-  )
-}
+`@react-three/drei` 是 pmndrs 生态中常用的社区辅助组件库，与 R3F 配合紧密，但它不是 Three.js 核心包的一部分。应在理解底层对象后按需使用，而不是用辅助组件替代基本概念。
 
-function App() {
-  return (
-    <Canvas>
-      <ambientLight intensity={Math.PI / 2} />
-      <spotLight position={[10, 10, 10]} angle={0.15} penumbra={1} decay={0} intensity={Math.PI} />
-      <pointLight position={[-10, -10, -10]} decay={0} intensity={Math.PI} />
-      
-      <Box position={[-1.2, 0, 0]} />
-      <Box position={[1.2, 0, 0]} />
-      
-      {/* 允许鼠标控制视角 */}
-      <OrbitControls />
-    </Canvas>
-  )
-}
+## 第一帧检查清单
 
-render(<App />)
-`} />
+1. Scene 中存在 Mesh，Mesh 同时有 Geometry 与 Material。
+2. Camera 位于合适位置，物体在视锥和 near/far 范围内。
+3. Renderer 尺寸与 DPR 已设置，并确实执行了一次 `render(scene, camera)`。
+4. 动画使用 `delta` 表示每秒速度，resize 后更新相机投影。
+5. 资源不再使用时，清理循环、事件监听与自己负责的 GPU 资源。
 
----
+完成这一帧后，继续沿知识地图学习：
 
-## 深入理解：材质与光照
-
-在上面的 Demo 中，我们把 `MeshBasicMaterial` 换成了 `MeshStandardMaterial`，并添加了光源。这两者有什么区别？
-
-### 材质 (Material)
-
-*   **MeshBasicMaterial**：最基础的材质，不受光照影响。给它什么颜色它就显示什么颜色。常用于 HUD 或不需要光照的物体。
-*   **MeshStandardMaterial**：基于物理的渲染 (PBR) 材质。这是现代 3D 引擎的标准。它模拟了真实物体的光学特性，如**粗糙度 (Roughness)** 和 **金属度 (Metalness)**。
-    *   **Roughness**: 0 = 镜面般光滑，1 = 像砖头一样粗糙。
-    *   **Metalness**: 0 = 塑料/木头，1 = 金属。
-
-### 光照 (Light)
-
-*   **AmbientLight**: 基础环境光，确保阴影处不全是死黑。
-*   **SpotLight**: 聚光灯，能产生锥形光束和漂亮的阴影。
-*   **PointLight**: 点光源，向四周发散，像灯泡或萤火虫。
-
----
-
-## Three.js 的能力边界
-
-Three.js 的能力远不止画几个几何体：
-
-1.  **加载外部模型**：你可以从 Blender、C4D 等软件导出模型（推荐 **glTF/glb** 格式），然后在 Three.js 中通过 `useGLTF` (R3F) 加载进来。
-2.  **粒子系统**：实现下雨、下雪、火焰、星空等效果。
-3.  **着色器 (Shaders)**：通过编写 GLSL 代码，直接控制 GPU 的像素渲染，实现像水流、波纹、全息投影等高级特效。
-4.  **物理引擎**：给物体加上重力、碰撞、弹性，模拟真实的物理世界。
-5.  **后期处理**：给整个画面添加滤镜，比如辉光 (Bloom)、景深 (Depth of Field)、马赛克等效果。
-
-## 总结与建议
-
-Three.js 是通往 Web 3D 世界的大门，而 React Three Fiber 则是这扇门上最顺手的钥匙。
-
-**新手建议的学习路径：**
-1.  **熟悉 R3F 基础**：理解 Canvas, Mesh, Material 的组件化写法。
-2.  **玩转 @react-three/drei**：这是一个官方的实用工具库，里面有 `OrbitControls` (相机控制), `Environment` (环境光), `useGLTF` (模型加载) 等神器。**不要重复造轮子**。
-3.  **理解 3D 数学**：当你开始做复杂的动画或交互时，你需要复习一下向量 (Vector) 和矩阵 (Matrix) 的知识。
-4.  **进阶 Shader**：这是从“调库侠”变成“图形学工程师”的关键一步。
-
-希望这篇文章能帮你推开 3D 编程的大门，去创造属于你的虚拟世界吧！
+- [Three.js 核心概念地图](/posts/threejs/threejs-core-concepts)
+- [Geometry、BufferGeometry 与 Mesh 基础](/posts/threejs/geometry-buffergeometry-mesh-explained)

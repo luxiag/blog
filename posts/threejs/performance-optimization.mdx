@@ -1,256 +1,908 @@
 ---
-title: 'Three.js 性能优化指南：榨干每一滴 GPU 算力'
+title: 'Three.js 性能优化：从帧预算到性能门禁的证据驱动方法'
 date: '2026-01-16'
-description: '从 Draw Call 优化到显存管理，从实例化渲染到纹理压缩。一套完整的 Three.js 性能调优手册，助你跑满 60FPS。'
+description: '用固定基线、分层测量、单变量实验、p50/p95 复测与视觉回归，系统定位并优化 Three.js 的 CPU、GPU、网络和资源瓶颈。'
 tags: ['Three.js', 'WebGL', 'Performance', 'Optimization']
+nextPost: 'threejs/architecture-design'
 ---
 
-# Three.js 性能优化指南：榨干每一滴 GPU 算力
+# Three.js 性能优化：从帧预算到性能门禁的证据驱动方法
 
-在 Web 3D 开发中，**“跑得动”比“画得好”更重要**。
-一个只有 10 FPS 的炫酷场景没有任何商业价值。
+Three.js 性能优化不是收集一份“推荐开关”，而是回答三个可验证的问题：**目标设备上哪里超出预算、哪项改动改变了指标、画质和功能是否仍然符合标准**。相同场景在桌面独显上可能受 JavaScript 主线程限制，在高 DPR 手机上却可能受片元填充、显存压力或热降频限制；只看平均 FPS 很容易掩盖首帧卡顿和长尾抖动。
 
-性能优化不是最后一步，而是贯穿开发全周期的思维方式。本文将从 CPU、GPU、内存、网络四个维度，系统讲解 Three.js 的优化策略。
+本文采用一条可复现的工程主线：
 
----
+```text
+目标设备 / 帧预算 / 质量标准
+  → 固定场景基线
+  → 区分 CPU 主线程 / GPU / 网络 / JS 堆 / GPU 资源
+  → 工具观测与受控实验
+  → 单变量改造
+  → p50 / p95 复测
+  → 视觉与功能回归
+  → 性能门禁
+```
 
-## 一、 渲染瓶颈之源：Draw Call
+文中的数值是方法示例，不是跨项目通用阈值。真正的阈值应来自产品体验目标、设备分布和场景复杂度。
 
-WebGL 最昂贵的操作就是 CPU 告诉 GPU “我要画这个物体”。这被称为一次 **Draw Call**。
-如果你有 1000 个独立的立方体，就有 1000 次 Draw Call。CPU 会被累死，而 GPU 却在发呆。
+## 一、先定义成功：设备、预算与质量标准
 
-### 1. 实例化渲染 (InstancedMesh)
-这是**最重要**的优化手段。
-如果你有成千上万个**几何体相同、材质相同**，但位置、旋转、缩放不同的物体（如森林、草地、粒子），**必须**使用 `InstancedMesh`。
-它可以将 10,000 次 Draw Call 合并为 **1 次**。
+### 1. 建立目标设备矩阵
 
-<CodePenDemo title="Instancing Performance" code={`
-function NaiveScene({ count = 500 }) {
-  // 错误示范：创建 500 个独立的 Mesh
-  return (
-    <group>
-      {Array.from({ length: count }).map((_, i) => (
-        <mesh key={i} position={[Math.random() * 10, Math.random() * 10, Math.random() * 10]}>
-          <boxGeometry args={[0.2, 0.2, 0.2]} />
-          <meshStandardMaterial color="red" />
-        </mesh>
-      ))}
-    </group>
-  )
+“我的电脑很流畅”不能代表用户环境。至少选择一台接近设备分布低位的机器作为门禁设备，并保留一台中位设备用于日常迭代。记录浏览器、系统、电源模式、屏幕尺寸、DPR 和图形信息；移动设备还要记录温度状态与是否充电。
+
+| 档位 | 示例用途 | 建议记录 |
+| --- | --- | --- |
+| 低档移动设备 | 性能下限与降级验证 | SoC、浏览器版本、CSS 尺寸、DPR、温度、电量 |
+| 中档移动设备 | 主要移动体验 | 同上，并记录触控交互路径 |
+| 集成显卡笔记本 | 桌面下限 | CPU、GPU、内存、电源模式、浏览器 |
+| 独立显卡桌面 | 高质量档 | GPU、驱动、刷新率、浏览器 |
+
+GPU 字符串可能因隐私策略而被泛化，因此它适合作为诊断信息，不应成为唯一的质量分档依据。分档还应结合可观测能力和一次短基准测试。
+
+### 2. 把刷新目标换算为帧预算
+
+帧预算近似为：
+
+$$
+T_{frame} = \frac{1000}{refreshRate}
+$$
+
+60 Hz 对应约 16.67 ms，30 Hz 对应约 33.33 ms。但应用不能独占全部时间：浏览器合成、输入、布局、后台任务和系统调度也需要余量。若产品希望在 60 Hz 屏幕上保持稳定交互，可以先给应用渲染留 12–14 ms 的内部目标，再用真实设备校准。
+
+不要只报告平均值。对一组稳态帧时间排序后：
+
+- **p50** 表示典型帧，回答“多数时候怎样”。
+- **p95** 表示慢帧长尾，回答“交互是否经常出现可感知抖动”。
+- 加载阶段另记首个可交互帧、资源下载、解码和首次 GPU 上传时间，不要混入稳态帧。
+
+### 3. 先写质量标准，再谈降级
+
+性能改造往往以画质、内存或交互能力换时间。没有质量标准，任何删效果都可能被误报为“优化”。可将标准写成可比较项目：
+
+- 固定相机关键帧的截图误差在约定范围内，轮廓、材质身份和品牌色无明显偏差。
+- 关键角色动画、蒙皮、morph 表情、拾取、热点和相机碰撞保持可用。
+- 阴影可降低分辨率，但接触关系仍清楚；反射可降更新频率，但不能明显滞后于关键交互。
+- 低质量档允许降低 DPR、后期和远景细节，高质量档保留产品展示所需细节。
+- context 恢复后场景、交互和加载状态能够重建，不能只恢复一张空画布。
+
+## 二、固定基线：让前后数据可比较
+
+优化前先构造固定测试场景。建议把测试拆成三段：冷启动、交互峰值和稳态巡航。每段使用相同资源、相机路径、动画时间轴、窗口尺寸、DPR、质量档和采样时长。
+
+```javascript
+// benchmark-route.js
+// 在测试路由中使用确定性随机数和固定相机轨迹，避免每次生成不同场景。
+function mulberry32(seed) {
+  return function random() {
+    let t = (seed += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
-function InstancedScene({ count = 5000 }) {
-  // 正确示范：使用 InstancedMesh
-  const meshRef = useRef()
-  
-  useLayoutEffect(() => {
-    const tempObject = new THREE.Object3D()
-    for (let i = 0; i < count; i++) {
-      tempObject.position.set(
-        (Math.random() - 0.5) * 20,
-        (Math.random() - 0.5) * 20,
-        (Math.random() - 0.5) * 20
-      )
-      tempObject.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0)
-      tempObject.updateMatrix()
-      
-      // 设置第 i 个实例的矩阵
-      meshRef.current.setMatrixAt(i, tempObject.matrix)
+const random = mulberry32(20260116);
+
+export function createBenchmarkTransforms(count) {
+  return Array.from({ length: count }, () => ({
+    position: [
+      (random() - 0.5) * 80,
+      random() * 8,
+      (random() - 0.5) * 80,
+    ],
+    rotationY: random() * Math.PI * 2,
+    scale: 0.8 + random() * 0.4,
+  }));
+}
+
+export function sampleCamera(elapsedSeconds, camera) {
+  // 每次测试都走相同的 20 秒环线。
+  const phase = (elapsedSeconds % 20) / 20;
+  const angle = phase * Math.PI * 2;
+  camera.position.set(Math.cos(angle) * 24, 8, Math.sin(angle) * 24);
+  camera.lookAt(0, 2, 0);
+}
+```
+
+基线采集时遵循这些约束：
+
+1. 关闭 DevTools 截图、录屏等不属于生产路径的额外负载；需要分析时单独录制分析样本。
+2. 每个版本预热一次，避免把一次性 Shader 编译误当成稳态成本；同时另测冷启动以保留这部分体验数据。
+3. 每组至少运行多轮，舍弃规则要预先约定，不能看到不理想结果后再删样本。
+4. 移动设备先冷却到相近状态；短跑和持续 10 分钟的热稳定测试分别记录。
+5. 固定浏览器缩放、Canvas CSS 尺寸和 DPR。宽高各增加一倍时，片元候选数可能接近四倍。
+
+下面的采样器直接记录 RAF 间隔，并输出 p50/p95。它测到的是用户可见的页面帧间隔，包含调度与应用工作，不能单独证明 GPU 耗时。
+
+```javascript
+export function createFrameSampler({ warmupFrames = 120, sampleFrames = 600 } = {}) {
+  const samples = [];
+  let previous = performance.now();
+  let seen = 0;
+  let requestId = 0;
+
+  function percentile(sorted, ratio) {
+    const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * ratio) - 1);
+    return sorted[Math.max(0, index)];
+  }
+
+  return new Promise((resolve) => {
+    function tick(now) {
+      const frameTime = now - previous;
+      previous = now;
+      seen += 1;
+
+      if (seen > warmupFrames) samples.push(frameTime);
+
+      if (samples.length >= sampleFrames) {
+        const sorted = [...samples].sort((a, b) => a - b);
+        resolve({
+          count: sorted.length,
+          p50: percentile(sorted, 0.5),
+          p95: percentile(sorted, 0.95),
+          max: sorted.at(-1),
+        });
+        return;
+      }
+
+      requestId = requestAnimationFrame(tick);
     }
-    // 必须手动通知更新
-    meshRef.current.instanceMatrix.needsUpdate = true
-  }, [])
 
-  return (
-    <instancedMesh ref={meshRef} args={[null, null, count]}>
-      <boxGeometry args={[0.2, 0.2, 0.2]} />
-      <meshStandardMaterial color="cyan" />
-    </instancedMesh>
-  )
+    requestId = requestAnimationFrame(tick);
+  });
 }
+```
 
-function Scene() {
-  const [useInstancing, setUse] = useState(true)
-  
-  return (
-    <>
-      {useInstancing ? <InstancedScene /> : <NaiveScene />}
-      
-      <OrbitControls autoRotate />
-      <ambientLight intensity={0.5} />
-      <directionalLight position={[10, 10, 5]} />
-      
-      <Html position={[0, 2, 0]} center>
-        <div className="bg-black/80 text-white p-4 rounded text-center w-64">
-          <p className="mb-2 font-bold">{useInstancing ? 'Instanced (5000个)' : 'Naive (500个)'}</p>
-          <button 
-            className="px-3 py-1 bg-blue-600 rounded text-sm"
-            onClick={() => setUse(!useInstancing)}
-          >
-            切换模式
-          </button>
-          <p className="text-xs text-gray-400 mt-2">
-            Instanced 即使数量多 10 倍，性能依然吊打 Naive 模式。
-          </p>
-        </div>
-      </Html>
-    </>
-  )
-}
+:::note RAF 数据的边界
+显示器刷新节奏会量化 RAF 间隔；16.7 ms 与 33.3 ms 的跳变不等同于某段 JS 正好执行了这些时长。要判断原因，还需结合主线程时间线、GPU 查询、资源面板和受控实验。
+:::
 
-render(
-  <Canvas camera={{ position: [0, 0, 15] }}>
-    <Scene />
-    <Stats />
-  </Canvas>
-)
-`} />
+## 三、先分层定位：五类成本不能混为一谈
 
-### 2. 几何体合并 (Geometry Merging)
-如果几何体**不同**（比如一堆桌子、椅子、杯子），但材质相同，可以使用 `BufferGeometryUtils.mergeGeometries` 将它们合并成一个大 Geometry。
-*   **缺点**: 失去对单个物体的独立控制（除非在 Shader 里做手脚）。
+### 1. CPU 主线程
 
----
+主线程负责 React 协调、业务逻辑、动画更新、场景图遍历、矩阵更新、视锥剔除、排序以及向 WebGL 提交命令。典型信号包括：
 
-## 二、 材质与纹理优化
+- Performance 时间线出现长任务，`Scripting`、事件处理或 React commit 占比高。
+- 降低 DPR 后帧时间几乎不变，但减少对象数、更新频率或 draw call 后改善。
+- GC 事件与慢帧对齐，JS 堆呈锯齿且回收峰值频繁。
 
-### 1. 纹理压缩 (Texture Compression)
-JPG/PNG 是传输格式，不是显存格式。一张 1024x1024 的 PNG，在显存里可能占用 4MB (RGBA)。
-**KTX2 / Basis** 是显存压缩格式，能减少 6-8 倍的显存占用，且无需 CPU 解压。
-*   **工具**: `gltf-transform`
-*   **策略**: 移动端尽量用 1024 以下贴图，背景可用 2048。
+Chrome 的 `Rendering` / `Painting` 指标主要描述浏览器页面渲染工作，不能直接替代 WebGL GPU 时间。WebGL Canvas 的 GPU 压力需要其他证据补充。
 
-### 2. 材质共享
-千万不要在循环里创建材质！
+### 2. GPU
+
+GPU 成本主要来自顶点处理、片元处理、纹理带宽、RenderTarget 切换和额外 pass。常见实验信号：
+
+- DPR 从 2 降到 1 后明显改善，提示片元、带宽、后期或填充压力。
+- 隐藏大面积透明层、全屏后期或高分辨率阴影后改善。
+- 降低三角形数量改善，但改变 DPR 影响较小，可能更偏顶点、蒙皮或几何带宽。
+
+支持时可用不阻塞渲染的 GPU 时间查询扩展获取近似区间，并处理结果延迟与 disjoint 状态。不要每帧用同步读回或 `gl.finish()` 测量，它们会改变被测系统的行为。
+
+### 3. 网络与资源管线
+
+下载、解压、解析、图片解码和 GPU 上传是不同阶段：
+
+```text
+请求排队 → 下载 → 解压/解码 → glTF 解析 → CPU 数据准备 → GPU 上传 → 首次可绘制
+```
+
+Network 面板能看到传输时序，却看不到完整解码和上传成本。用 Resource Timing 记录请求，用 Performance 标记包围解析阶段，并通过首次使用资源前后的慢帧判断上传尖峰。测试缓存命中与禁用缓存两种路径，不能只测本地热缓存。
+
+### 4. JS 堆
+
+`performance.memory` 仅在部分 Chromium 环境可用，跨浏览器监控应以能力检测为前提。更可靠的开发期方法是用 Memory 面板做堆快照与分配采样，反复执行“进入场景 → 离开 → 再进入”，观察 Mesh、ArrayBuffer、事件监听和闭包是否持续保留。
+
+### 5. GPU 资源
+
+GPU 纹理、Buffer、RenderTarget 不等于 JS 堆。`renderer.info.memory.textures` 和 `geometries` 能观察对象数量，但通常不能给出准确字节数，也不覆盖驱动内部全部缓存。应结合资源清单估算纹理与 RenderTarget 占用，并在场景切换后检查数量是否回落。
+
+未压缩 RGBA8 纹理的基础级近似占用为：
+
+$$
+bytes \approx width \times height \times 4
+$$
+
+完整 mip 链通常再增加约三分之一；立方体纹理有六个面，RenderTarget 还可能包含深度、模板、多采样和多个颜色附件。浏览器下载文件只有几百 KB，并不代表进入 GPU 后仍是这个大小。
+
+## 四、工具与受控实验：从相关性走向因果
+
+工具各自回答不同问题，应交叉使用：
+
+| 工具 | 主要证据 | 局限 |
+| --- | --- | --- |
+| Stats / RAF 采样 | 帧间隔与抖动 | 无法单独区分 CPU、GPU |
+| `renderer.info` | calls、triangles、纹理和 Geometry 数量 | 不给出完整 GPU 时间和字节 |
+| Chrome Performance | 主线程任务、GC、React 用户时序 | WebGL GPU 工作可见性有限 |
+| Memory | JS 保留对象和分配热点 | 不等同于显存 |
+| Network / Resource Timing | 请求、缓存、传输时序 | 解码与 GPU 上传需另测 |
+| Spector.js 等帧捕获工具 | draw、Program、纹理、Framebuffer 与状态 | 捕获本身有开销，适合诊断而非基准跑分 |
+| React Profiler | 组件 render/commit 与触发来源 | 不覆盖 Three.js GPU 成本 |
+
+一个受控实验只改变一个自变量，并保持相机、时间轴、DPR、资源缓存和采样窗口不变。例如：
+
+- **验证片元压力**：只把 DPR 从 2 改为 1，其他设置不动。
+- **验证顶点压力**：只替换为低模，保持材质、屏幕覆盖率和 pass 不变。
+- **验证 draw 提交压力**：把同材质静态对象替换为实例化版本，尽量保持最终三角形与画面一致。
+- **验证阴影成本**：只关闭一盏灯的 `castShadow`，不要同时降低 DPR。
+- **验证 React 成本**：冻结 UI 状态更新，但保留 Three.js 动画。
+
+若一次同时改了纹理、阴影、DPR 和模型面数，即使结果变好，也无法知道收益来自哪里，也难以判断回归该撤销哪一项。
+
+### 可复现实验记录模板
+
+把下面模板放进 PR、性能仓库或测试报告。截图、trace 和场景版本可作为附件保存。
+
+```markdown
+# PERF-YYYY-MM-DD-短标题
+
+## 假设
+- 观察：
+- 推测瓶颈层：CPU 主线程 / GPU / 网络 / JS 堆 / GPU 资源
+- 单一改动：
+- 预期影响：
+- 可接受副作用：
+
+## 环境
+- commit / 构建：
+- URL / 场景 ID / 资源版本：
+- 设备 / OS / 浏览器：
+- CSS 尺寸 / DPR / 质量档：
+- 电源 / 温度 / 前后台状态：
+- 缓存：冷 / 热
+
+## 固定步骤
+1. 打开测试路由并等待资源完成。
+2. 预热 120 帧。
+3. 播放固定 20 秒相机轨迹。
+4. 采集 600 帧，重复 5 轮。
+
+## 结果
+| 指标 | 基线 p50 | 基线 p95 | 改造 p50 | 改造 p95 | 变化 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 帧间隔 ms | | | | | |
+| 主线程每帧 ms | | | | | |
+| GPU 区间 ms | | | | | |
+| draw calls | | | | | |
+| triangles | | | | | |
+| JS heap MB | | | | | |
+| textures / geometries | | | | | |
+| 首次可交互 ms | | | | | |
+
+## 回归
+- 截图关键帧：通过 / 失败
+- 动画、拾取、相机、音频：通过 / 失败
+- context 恢复：通过 / 失败
+- 10 分钟热稳定：通过 / 失败
+
+## 结论
+- 是否支持假设：
+- 是否合入：
+- 原始 trace / 截图 / 日志：
+```
+
+## 五、渲染工作量：draw call 重要，但不是统一答案
+
+一次 draw call 是 CPU/驱动提交一批绘制工作的边界。对象数量、Geometry groups、多材质、阴影灯、反射和后期都会增加调用。大量微小 draw 往往造成主线程提交压力，但把 calls 降低后，GPU 仍可能忙于几百万三角形、昂贵 Shader 或高分辨率 overdraw。
+
+记录整帧而不是只记录主场景：一盏阴影灯会先画阴影 pass，动态立方体反射通常从多个方向渲染场景，后期每个全屏 pass 又增加绘制和 RenderTarget 读写。因此 `renderer.info.render.calls` 需要在明确 `autoReset` 行为和统计边界的前提下解释。
+
+### 1. Instancing：适合同 Geometry、同材质的大量对象
+
+`InstancedMesh` 共享 Geometry 和 Material，并为每个实例提供矩阵，可显著减少提交数量。代价是单实例剔除、排序、拾取、动画数据和材质差异需要额外设计；透明对象还会遇到实例间排序限制。
 
 ```javascript
-// ❌ 错误：每帧或每个物体都 new 一个材质
-<mesh>
-  <meshStandardMaterial color="red" />
-</mesh>
+const count = 5000;
+const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+const material = new THREE.MeshStandardMaterial({ color: '#38bdf8' });
+const instances = new THREE.InstancedMesh(geometry, material, count);
+const transform = new THREE.Object3D();
+const random = mulberry32(42);
 
-// ✅ 正确：提取到组件外或使用 useMemo
-const redMaterial = new THREE.MeshStandardMaterial({ color: 'red' })
-// 或者
-const material = useMemo(() => new THREE.MeshStandardMaterial({ color: 'red' }), [])
+for (let i = 0; i < count; i += 1) {
+  transform.position.set(
+    (random() - 0.5) * 40,
+    random() * 6,
+    (random() - 0.5) * 40,
+  );
+  transform.rotation.y = random() * Math.PI * 2;
+  transform.updateMatrix();
+  instances.setMatrixAt(i, transform.matrix);
+}
+
+instances.instanceMatrix.needsUpdate = true;
+instances.computeBoundingSphere();
+scene.add(instances);
 ```
 
-### 3. 避免 Shader 编译卡顿
-Three.js 在第一次看到新材质时会编译 Shader，这会导致页面卡顿（掉帧）。
-*   **预编译 (Pre-compile)**: 在加载阶段就把场景里的材质 `renderer.compile(scene, camera)` 一遍。
+若大范围实例只用一个总包围体，视锥边缘仍可能提交大量不可见实例。可按空间网格拆成若干 InstancedMesh，在“调用数量”和“剔除粒度”之间取平衡。
 
----
+### 2. Merge：适合同材质、静态且一起出现的几何
 
-## 三、 光照与阴影
-
-光照计算是 GPU 的重灾区。
-
-### 1. 烘焙 (Baking)
-这是性能优化的**核武器**。
-将复杂的光照、阴影、AO 提前在 Blender 里计算好，保存为一张“光照贴图 (Lightmap)”。
-*   **运行时**: 只需要一个 `MeshBasicMaterial` + `lightMap`。无需任何光源计算，性能极高，效果极好。
-*   **缺点**: 只能用于静态物体。
-
-### 2. 阴影优化
-如果必须用实时阴影：
-*   **范围控制**: 尽量减小 `shadow.camera` 的视锥体范围，范围越小，阴影越清晰。
-*   **分辨率**: 不要无脑设 `2048`，移动端 `512` 或 `1024` 足矣。
-*   **静态阴影**: 对于不动的物体，渲染一次阴影后，将 `light.autoUpdate = false`，不再每帧计算。
-
----
-
-## 四、 渲染循环优化 (CPU)
-
-JavaScript 是单线程的，任何繁重的计算都会阻塞渲染。
-
-### 1. 避免垃圾回收 (GC)
-在 `useFrame` 循环里：
-*   **不要 new 对象**: `new Vector3()`, `new Matrix4()` 是大忌。
-*   **对象复用**: 在组件外定义一个全局的 `const tempVec = new Vector3()`，在循环里反复利用它。
+`BufferGeometryUtils.mergeGeometries` 可减少静态对象调用，但合并后通常失去对象级变换、剔除和简单拾取。不要把整张地图合成一个巨型 Mesh；按房间、街区或可见单元合并通常更可控。
 
 ```javascript
-const tempVec = new THREE.Vector3()
+import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 
-useFrame(() => {
-  // ❌ 坏习惯
-  // mesh.position.add(new THREE.Vector3(0, 1, 0))
-  
-  // ✅ 好习惯
-  tempVec.set(0, 1, 0)
-  mesh.position.add(tempVec)
-})
+const geometries = staticMeshes.map((mesh) => {
+  mesh.updateWorldMatrix(true, false);
+  return mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);
+});
+
+const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
+const batch = new THREE.Mesh(merged, sharedMaterial);
+scene.add(batch);
+
+// clone 出来的中间 Geometry 已进入 merged，可释放中间副本。
+geometries.forEach((geometry) => geometry.dispose());
 ```
 
-### 2. 按需渲染 (On-demand Rendering)
-如果画面是静止的（比如展示页面），没必要一直跑 60FPS。
-R3F 支持 `frameloop="demand"` 模式，只有当交互或 props 变化时才渲染一帧。
+### 3. LOD 与剔除
 
-```jsx
-<Canvas frameloop="demand">
-  <OrbitControls makeDefault />
-</Canvas>
-```
-这能让笔记本风扇瞬间安静下来，手机不再发烫。
+LOD 减少远处对象的顶点和材质成本，但切换阈值要避免明显跳变，可用滞回、淡变或屏幕空间误差。视锥剔除依赖正确包围体；Vertex Shader 位移、skinning 和 morph 可能让原始包围体过小。遮挡剔除不是 Three.js 普通 Mesh 自动获得的能力，室内场景可用房间/门户或业务可见集先粗筛。
 
----
-
-## 五、 性能分析与调试工具
-
-不知道瓶颈在哪里，优化就是瞎忙活。
-
-### 1. Stats 性能面板
-这是最基础的工具，显示 FPS (帧率)、MS (帧时)、MB (内存)。
-```jsx
-import { Stats } from '@react-three/drei'
-<Stats />
+```javascript
+const lod = new THREE.LOD();
+lod.addLevel(highDetailMesh, 0);
+lod.addLevel(mediumDetailMesh, 20);
+lod.addLevel(lowDetailMesh, 50);
+lod.autoUpdate = true;
+scene.add(lod);
 ```
 
-### 2. Spector.js
-这是一个浏览器插件，可以捕获某一帧的所有 WebGL 命令。
-通过它，你可以看到：
-*   **Draw Calls**: 这一帧到底画了多少次？
-*   **Shaders**: 正在运行的 Shader 代码是什么？
-*   **Textures**: 这一帧用到了哪些纹理？
+## 六、GPU 工作量：顶点、片元、overdraw 与 fill rate
 
-### 3. Chrome Performance
-使用 Chrome 开发者工具的 Performance 面板录制一段。
-*   如果 **Scripting** 耗时高 -> CPU 瓶颈（JS 计算太多）。
-*   如果 **Rendering/Painting** 耗时高 -> GPU 瓶颈（面数太多、Shader 太复杂）。
+### 1. 顶点阶段
 
----
+每个可见顶点都要执行 Vertex Shader。高细分模型、重复顶点、蒙皮、morph targets、自定义位移和阴影/反射中的重复绘制都会放大成本。
 
-## 六、 模型与加载体验
+- 用 glTF 优化工具删除未使用 attribute，选择与目标画质相符的量化与压缩。
+- 为远景提供低模，尤其关注 silhouette，而不是只看文件大小。
+- 静态物体冻结矩阵可减少 CPU 矩阵更新，但不会减少 GPU 顶点数。
+- `SkinnedMesh` 的骨骼变换与权重读取有成本；角色数量增加时，要同时测 CPU 动画更新和 GPU 顶点阶段。
+- morph target 数量会增加 attribute/纹理读取和 Shader 变体；只保留运行时用到的目标，并让远处角色降低表情更新频率或切换表示方式。
 
-### 1. 加载策略
-*   **分包**: 不要把整个场景打包成一个 100MB 的 GLB。拆分成 `map.glb`, `props.glb`, `characters.glb`。
-*   **懒加载 (Lazy Load)**: 看不见的房间先不加载。
-*   **LOD (Level of Detail)**: 远处的物体用低模，近处用高模。R3F 提供了 `<Detail>` 组件。
+```javascript
+// 静态对象：世界变换确定后关闭自动矩阵更新。
+staticRoot.traverse((object) => {
+  if (!object.isMesh) return;
+  object.updateMatrix();
+  object.matrixAutoUpdate = false;
+});
 
-### 2. LoadingManager
-Three.js 提供了 `LoadingManager` 来统一管理加载进度。在 R3F 中，我们可以使用 `<Loader />` 组件或 `useProgress` 钩子来制作进度条。
+// 动画角色：离相机较远时降低 AnimationMixer 更新频率。
+let animationAccumulator = 0;
+function updateCharacter(delta, distanceToCamera) {
+  const interval = distanceToCamera > 30 ? 1 / 15 : 0;
+  animationAccumulator += delta;
 
-```jsx
-import { useProgress } from '@react-three/drei'
-
-function LoadingScreen() {
-  const { progress } = useProgress()
-  return <div className="loading-bar" style={{ width: `${progress}%` }} />
+  if (interval === 0 || animationAccumulator >= interval) {
+    mixer.update(animationAccumulator);
+    animationAccumulator = 0;
+  }
 }
 ```
 
-### 3. 显存管理 (Dispose)
-*   **原则**: 只要是不再需要的资源，必须调用 `dispose()`。
-*   **R3F**: 自动处理组件卸载时的 dispose。
-*   **手动**: 如果你是自己 `new THREE.Texture()` 的，记得在 `useEffect` 的 cleanup 函数里销毁它。
+降低动画更新频率可能带来节奏误差和跳动，应在固定动画关键帧与交互状态下回归；精确 gameplay 逻辑不应依赖这种视觉降频。
 
-## 总结：性能优化检查清单
+### 2. 片元、overdraw 与 fill rate
 
-1.  [ ] **Draw Calls**: 是否用了 Instancing？
-2.  [ ] **纹理**: 是否用了 KTX2？尺寸是否合理？
-3.  [ ] **材质**: 是否共用了材质实例？
-4.  [ ] **光照**: 能烘焙吗？实时阴影范围够小吗？
-5.  [ ] **循环**: `useFrame` 里有没有 `new` 对象？
-6.  [ ] **加载**: 模型压缩了吗？用了 LOD 吗？
-7.  [ ] **策略**: 静态页面开启 `frameloop="demand"` 了吗？
+光栅化会为三角形覆盖的屏幕采样生成候选片元。大面积对象、透明粒子、`DoubleSide`、复杂 PBR、程序噪声、多灯光、阴影采样和全屏后期都可能让片元阶段变重。
 
-优化没有银弹，只有取舍。用 Stats 面板盯着 FPS 和 Memory，一步步榨干 GPU 的算力。
+**overdraw** 指同一像素被多层几何反复处理。透明混合通常无法像不透明表面那样依赖早期深度拒绝，因此大面积半透明粒子尤其敏感。**fill rate** 则描述单位时间处理并写入像素的能力，还受到纹理读取、混合和 RenderTarget 带宽影响。
+
+可用这些单变量实验区分：
+
+1. 只降低 DPR；若收益明显，优先检查片元、全屏 pass 和 RenderTarget 分辨率。
+2. 保持粒子数量不变，只缩小屏幕尺寸；若改善，overdraw 比 draw 数更可疑。
+3. 临时把复杂材质换成 `MeshBasicMaterial`；若改善，Shader/纹理/灯光成本更可疑。
+4. 保持材质不变，只换低模；若几乎不变，顶点数可能不是当前主因。
+
+优化路径包括缩小透明层屏幕面积、用 alpha test 替代语义允许的连续透明、减少 `DoubleSide`、让不透明对象先写深度、降低后期分辨率，以及把可烘焙效果写入贴图。alpha test 会产生硬阈值与边缘闪烁风险，不能替代玻璃等连续透射。
+
+## 七、Shader 编译、Program variant 与运行时稳定性
+
+Three.js 根据材质类型、灯光、雾、阴影、蒙皮、morph、顶点色和自定义宏生成 Program。首次遇到某个组合时，编译和链接可能造成明显卡顿。材质对象多不一定等于 Program 多，但频繁改变影响宏的属性、滥用 `onBeforeCompile` 或生成不同 `defines` 会扩大 variant 数量。
+
+### 1. 预热真实可见组合
+
+在加载阶段、进入交互前编译将要使用的场景和相机组合；异步版本可在当前 Three.js 版本支持时评估 `compileAsync`。预编译只移动成本，不会消除变体，也不能覆盖之后才创建的材质、灯光或 pass。
+
+```javascript
+async function warmUpRenderer(renderer, scene, camera) {
+  // 先确保纹理已加载、材质和灯光配置已确定。
+  if (typeof renderer.compileAsync === 'function') {
+    await renderer.compileAsync(scene, camera);
+  } else {
+    renderer.compile(scene, camera);
+  }
+}
+```
+
+预热阶段要显示真实加载反馈，避免页面看似可交互却在后台占用主线程。可以记录 Program 数量变化作为线索，但不要依赖渲染器内部非公开结构做长期门禁。
+
+### 2. 控制 variant
+
+- 共享语义相同的材质与 `defines`，颜色等连续差异用 uniform 或实例 attribute 表达。
+- 避免运行时反复切换会改变 Shader 结构的选项；质量档切换后集中预热新组合。
+- 自定义 `onBeforeCompile` 时提供稳定的 `customProgramCacheKey()`，使缓存键与实际 Shader 变体一致。
+- 阴影深度材质要同步 alpha test、skinning、morph 和顶点形变，否则性能改善可能伴随错误影子。
+
+```javascript
+material.userData.quality = 'medium';
+material.onBeforeCompile = (shader) => {
+  shader.defines.USE_SIMPLE_SPECULAR = 1;
+};
+material.customProgramCacheKey = () =>
+  `simple-specular:${material.userData.quality}`;
+```
+
+## 八、纹理：传输大小、显存、mipmap 与压缩
+
+JPG、PNG、WebP、AVIF 主要解决网络传输；上传后常被展开为 GPU 可采样格式。KTX2/Basis Universal 能根据设备能力转码为 GPU 压缩格式，通常同时降低显存和带宽压力，但最终格式、质量和支持情况依设备而异，不能承诺固定压缩倍数。
+
+### 1. 为纹理选择语义正确的格式
+
+- Base color、UI 等颜色数据使用正确色彩空间；normal、roughness、metalness、AO 属于数据纹理。
+- 法线贴图压缩伪影比颜色贴图更敏感，需要按通道与目标设备检查。
+- HDR 环境图的格式、动态范围和预过滤结果应单独评估。
+- 图集可减少材质切换，但可能降低剔除粒度、增加空白与 mip 边缘污染。
+
+```javascript
+const ktx2Loader = new KTX2Loader()
+  .setTranscoderPath('/basis/')
+  .detectSupport(renderer);
+
+const colorMap = await ktx2Loader.loadAsync('/textures/product-basecolor.ktx2');
+colorMap.colorSpace = THREE.SRGBColorSpace;
+
+const normalMap = await ktx2Loader.loadAsync('/textures/product-normal.ktx2');
+normalMap.colorSpace = THREE.NoColorSpace;
+```
+
+### 2. mipmap 是质量和带宽策略
+
+mipmap 为远处纹理提供预缩小层，通常减少闪烁和采样带宽，但增加约三分之一存储，并带来生成或传输成本。不会缩小显示的 UI、LUT、某些 RenderTarget 可以按用途关闭；3D 表面纹理则通常从 mipmap 获益。
+
+RenderTarget 尺寸也要纳入清单。后期 ping-pong、阴影贴图、反射、深度纹理和 MSAA 可能比模型纹理更占资源。尺寸变化时释放旧目标：
+
+```javascript
+function replaceRenderTarget(previous, width, height) {
+  previous?.dispose();
+  return new THREE.WebGLRenderTarget(width, height, {
+    depthBuffer: true,
+    stencilBuffer: false,
+  });
+}
+```
+
+## 九、加载、解码与上传：优化“什么时候可用”
+
+模型压缩常在网络与解码之间做交换：Draco 能降低几何传输量，但需要解码；Meshopt 支持适合渐进读取的高效压缩与解码路径；纹理转码也需要 CPU/Wasm 工作。应在目标设备比较总链路，而不是只比较文件大小。
+
+可采用以下策略：
+
+- 按用户路径拆分资源，先加载首屏和交互所需内容，远景或下一房间稍后加载。
+- 对可复用资源做 URL 级缓存与请求去重。
+- 在 Worker/Wasm 能力允许时转移解码工作，并记录低核设备的竞争情况。
+- 把 GPU 上传分散到可控阶段；首次绘制一个大型纹理或 Geometry 时可能出现上传尖峰。
+- 进度条区分“已下载”和“正在准备场景”。仅使用网络字节进度时，不要在 100% 后让页面无反馈地继续解码。
+
+```javascript
+performance.mark('model-load:start');
+const gltf = await loader.loadAsync('/models/scene.glb');
+performance.mark('model-load:parsed');
+performance.measure('model-download-and-parse', 'model-load:start', 'model-load:parsed');
+
+scene.add(gltf.scene);
+await warmUpRenderer(renderer, scene, camera);
+performance.mark('model-load:ready');
+performance.measure('model-prepare', 'model-load:parsed', 'model-load:ready');
+```
+
+## 十、CPU 稳态：GC、React 重渲染与每帧工作
+
+### 1. 避免热路径分配
+
+每帧创建 `Vector3`、数组、闭包或临时对象会提高 GC 频率。先用分配采样确认热点，再复用临时对象；不要为了“零分配”引入难以维护的全局共享状态。
+
+```javascript
+const scratchDirection = new THREE.Vector3();
+const scratchTarget = new THREE.Vector3();
+
+function updateFollower(object, target, delta) {
+  scratchTarget.copy(target.position);
+  scratchDirection.subVectors(scratchTarget, object.position);
+
+  const distance = scratchDirection.length();
+  if (distance < 0.001) return;
+
+  scratchDirection.multiplyScalar(Math.min(1, delta * 4) / distance);
+  object.position.add(scratchDirection);
+}
+```
+
+对象池适合生命周期频繁的粒子或标记，但池本身有容量、重置和泄漏风险。先证明 GC 与 p95 慢帧相关，再决定是否引入。
+
+### 2. React 重渲染与 R3F
+
+React render 不等于 WebGL draw，不过频繁协调会占主线程，并可能触发 Three.js 属性更新、对象重建或 Shader 变化。常见问题是把每帧状态写入 React state、在 JSX 内持续创建新数组/对象、因不稳定 key 重新挂载资源。
+
+```jsx
+function RotatingProduct({ speed }) {
+  const mesh = useRef();
+
+  // 连续动画直接更新 Three.js 对象；业务可观察状态仍由 React 管理。
+  useFrame((_, delta) => {
+    mesh.current.rotation.y += speed * delta;
+  });
+
+  return (
+    <mesh ref={mesh}>
+      <boxGeometry args={[1, 1, 1]} />
+      <meshStandardMaterial color="#38bdf8" />
+    </mesh>
+  );
+}
+```
+
+用 React Profiler 查明由哪个 state/context 触发 render。`memo`、selector 和外部 store 只有在减少了实际工作时才有价值；过度 memoization 也会增加比较与复杂度。材质、Geometry 和纹理是否共享，要结合资源生命周期设计，不能在每帧 render 中创建。
+
+### 3. 按需渲染
+
+静态查看器可在相机、尺寸、资源或交互变化时渲染，而不是永久更新。React Three Fiber 可使用 `frameloop="demand"`，状态变化后调用 `invalidate()`。带阻尼控制器、渐变和异步纹理加载时，要在动画尚未结束期间持续失效，否则画面会停在中间状态。
+
+## 十一、额外 pass：阴影、反射和后期
+
+### 1. 阴影
+
+每盏投影阴影的灯都会引入额外深度渲染；点光源通常需要覆盖多个方向。优化时按贡献排序：
+
+- 收紧阴影相机范围，避免把精度用在不可见区域。
+- 只让关键对象 `castShadow` / `receiveShadow`。
+- 静态场景在内容变化时更新阴影，而不是每帧刷新。
+- 依据画面占比选择 mapSize，并在移动档降低尺寸或灯数。
+- 烘焙 lightmap/AO 适合静态对象，但要验证动态角色与静态背景的接触关系。
+
+```javascript
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.autoUpdate = false;
+
+function invalidateShadowMap() {
+  // 当投影物、灯光或相关材质变化时更新一帧。
+  renderer.shadowMap.needsUpdate = true;
+}
+```
+
+### 2. 反射
+
+动态 `CubeCamera` 可能一次更新渲染多个方向；平面反射也会重复场景，并可能需要裁剪。可降低更新频率、使用较小 RenderTarget、排除不影响反射的层，或为静态环境预烘焙。更新频率降低后要检查快速移动物体是否产生可见滞后。
+
+### 3. 后期处理
+
+Bloom、SSAO、景深、运动模糊、色彩分级等通常是全屏 pass 和额外纹理读写。逐个关闭 pass 并测量，不要只看 composer 最终帧率。许多效果可在半分辨率运行，再以双边滤波或合适上采样控制质量。
+
+```javascript
+function resizeComposer(cssWidth, cssHeight, dpr, quality) {
+  const postScale = quality === 'low' ? 0.5 : quality === 'medium' ? 0.75 : 1;
+  composer.setPixelRatio(dpr * postScale);
+  composer.setSize(cssWidth, cssHeight);
+}
+```
+
+确认 tone mapping 和输出色彩空间只在最终出口执行一次；错误的颜色链路不是可接受的性能交换。
+
+## 十二、动态 DPR 与质量档位
+
+固定设备标签无法覆盖窗口尺寸、后台负载和热状态。稳妥方案是“初始档位 + 运行时有限调整”：以设备能力和短基准选初始档，再根据一段时间的 p95/移动统计缓慢升降，使用滞回和冷却时间避免来回跳动。
+
+```javascript
+export class AdaptiveQuality {
+  constructor({ renderer, onTierChange }) {
+    this.renderer = renderer;
+    this.onTierChange = onTierChange;
+    this.tier = 2; // 0: low, 1: medium, 2: high
+    this.samples = [];
+    this.lastChange = 0;
+  }
+
+  pushFrame(frameMs, now = performance.now()) {
+    this.samples.push(frameMs);
+    if (this.samples.length > 180) this.samples.shift();
+    if (this.samples.length < 120 || now - this.lastChange < 5000) return;
+
+    const sorted = [...this.samples].sort((a, b) => a - b);
+    const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1];
+
+    // 降级阈值与升级阈值分开，形成滞回区间。
+    if (p95 > 22 && this.tier > 0) this.setTier(this.tier - 1, now);
+    else if (p95 < 15 && this.tier < 2) this.setTier(this.tier + 1, now);
+  }
+
+  setTier(next, now) {
+    this.tier = next;
+    this.lastChange = now;
+    this.samples.length = 0;
+
+    const dprCap = [1, 1.5, 2][next];
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap));
+    this.onTierChange(next);
+  }
+}
+```
+
+示例阈值需要按项目帧目标校准。质量档不应只改 DPR，还可以形成明确能力表：
+
+| 项目 | 低档 | 中档 | 高档 |
+| --- | --- | --- | --- |
+| DPR 上限 | 1 | 1.5 | 2 |
+| 阴影 | 关键灯 512 | 关键灯 1024 | 关键灯 1024/2048 |
+| 反射更新 | 低频/静态 | 中频 | 较高频 |
+| 后期 | 色彩输出 | 精简 bloom | 完整批准链路 |
+| LOD 距离 | 提前切换 | 标准 | 延后切换 |
+| 动画更新 | 远景降频 | 适度降频 | 标准 |
+
+档位切换要集中应用，重新调整 RenderTarget 和相机相关尺寸，并对新增 Shader 组合预热。升级要比降级更谨慎，因为短暂空闲并不代表设备有持续余量。
+
+## 十三、资源释放、context lost 与热降频
+
+### 1. 生命周期与显存压力
+
+从 Scene 移除 Mesh 不会自动释放它引用的 Geometry、Material、Texture 和 RenderTarget。共享资源需要引用计数或明确所有权，避免一个组件释放后影响其他对象，也避免无人释放。
+
+```javascript
+function disposeMaterial(material, disposedTextures) {
+  for (const value of Object.values(material)) {
+    if (value?.isTexture && !disposedTextures.has(value)) {
+      value.dispose();
+      disposedTextures.add(value);
+    }
+  }
+  material.dispose();
+}
+
+export function disposeObjectTree(root) {
+  const geometries = new Set();
+  const materials = new Set();
+  const textures = new Set();
+
+  root.traverse((object) => {
+    if (object.geometry && !geometries.has(object.geometry)) {
+      object.geometry.dispose();
+      geometries.add(object.geometry);
+    }
+
+    const list = Array.isArray(object.material) ? object.material : [object.material];
+    list.filter(Boolean).forEach((material) => {
+      if (materials.has(material)) return;
+      disposeMaterial(material, textures);
+      materials.add(material);
+    });
+  });
+}
+```
+
+这段代码适用于“整棵树拥有其全部资源”的边界。若资源由全局缓存、其他场景或 R3F 共同持有，应让资源管理器负责引用关系，不能直接遍历释放。
+
+### 2. context lost 是恢复场景的测试项
+
+GPU 重置、驱动或资源压力可能导致 WebGL context 丢失。应用应暂停渲染、给出降级 UI、记录诊断，并在恢复后重建自定义 GPU 资源与业务状态。
+
+```javascript
+function installContextRecovery(canvas, { pause, resume, rebuild, showStatus }) {
+  const onLost = (event) => {
+    event.preventDefault();
+    pause();
+    showStatus('图形上下文暂时不可用，正在恢复');
+  };
+
+  const onRestored = async () => {
+    try {
+      await rebuild();
+      showStatus('');
+      resume();
+    } catch (error) {
+      showStatus('恢复失败，请刷新页面');
+      console.error('WebGL context restore failed', error);
+    }
+  };
+
+  canvas.addEventListener('webglcontextlost', onLost);
+  canvas.addEventListener('webglcontextrestored', onRestored);
+
+  return () => {
+    canvas.removeEventListener('webglcontextlost', onLost);
+    canvas.removeEventListener('webglcontextrestored', onRestored);
+  };
+}
+```
+
+开发环境可以通过浏览器或渲染器提供的测试入口模拟丢失与恢复，但常规卸载不要用强制丢失代替资源释放。
+
+### 3. 热降频需要长时间样本
+
+移动 SoC 和轻薄本会在持续负载与温度上升后降低频率。30 秒结果良好，不代表 10 分钟后仍相同。热稳定测试应：
+
+- 从相近初始温度开始，固定亮度、电源和外壳条件。
+- 连续运行真实相机与交互路径，每分钟记录 p50/p95、质量档和温度代理信息。
+- 观察指标随时间恶化，而不是只看最终平均值。
+- 验证动态质量降级后能否稳定，以及恢复升级是否过早。
+
+Web 页面通常拿不到精确芯片温度，因此帧时间趋势、质量档变化和设备外部测量是更现实的证据。不要用一次 GPU 型号判断替代持续负载测试。
+
+## 十四、完整优化案例：移动端产品展厅
+
+下面是一个经过简化、但记录完整的案例。数据用于展示推理方式，不代表同类项目会得到相同结果。
+
+### 1. 目标与基线
+
+场景包含 1 个可旋转产品、240 个陈列件、2 个角色、1 盏实时阴影方向光、动态展台反射、bloom 与 SSAO。测试设备为一台中档 Android 手机，Chrome，Canvas 为 393 × 873 CSS px，初始 DPR 2，固定 20 秒环绕路径。
+
+质量标准：产品轮廓和材质身份不变；角色骨骼动画与表情保留；交互拾取正常；低档可降低远景、阴影、反射更新和后期分辨率；关键截图不能出现纹理色彩错误、阴影脱离或明显 LOD 跳变。
+
+五轮稳态基线的中位结果：
+
+| 指标 | 基线 |
+| --- | ---: |
+| 帧间隔 p50 / p95 | 28.4 / 46.8 ms |
+| 主线程区间 p50 / p95 | 9.1 / 18.7 ms |
+| GPU 区间 p50 / p95 | 20.6 / 34.2 ms |
+| draw calls（整帧） | 612 |
+| triangles（主视图统计） | 1.84 M |
+| 纹理 / Geometry 数量 | 126 / 391 |
+| 冷启动首次可交互 | 6.4 s |
+| 第 10 分钟帧间隔 p95 | 58.5 ms |
+
+Performance 显示主线程有周期性 GC 和 React commit；帧捕获显示阴影、六面反射与后期贡献了大量重复绘制。DPR 从 2 单独降到 1 时，GPU p95 明显下降，说明片元和 pass 成本很重要；隐藏陈列件但保持后期不变时，主线程与 draw call 明显下降，说明还有提交压力。这是混合瓶颈，不能只处理一个指标。
+
+### 2. 实验 A：陈列件实例化
+
+**假设**：240 个陈列件共享 6 组 Geometry/材质，单独 Mesh 带来主线程提交成本。
+
+**单变量改造**：按 Geometry、材质和空间分区建立 18 个 InstancedMesh；DPR、阴影、后期和资源保持不变。
+
+| 指标 | 基线 | A |
+| --- | ---: | ---: |
+| 帧间隔 p50 / p95 | 28.4 / 46.8 | 25.9 / 40.7 ms |
+| 主线程 p50 / p95 | 9.1 / 18.7 | 6.2 / 13.0 ms |
+| draw calls | 612 | 284 |
+
+收益主要在 CPU，GPU 改善有限，符合假设。没有把所有实例合成一个批次，是为了保留展厅分区剔除。拾取改用 `instanceId` 映射业务对象，并补充了交互回归。
+
+### 3. 实验 B：片元与额外 pass
+
+**假设**：高 DPR、全分辨率 SSAO、每帧更新反射造成片元和带宽压力。
+
+为保持因果清楚，拆成三个连续实验，每步复测后才保留：
+
+1. DPR 上限从 2 调为 1.5：GPU p95 从 31.0 ms 降到 24.1 ms，产品细线仍通过截图比较。
+2. SSAO 改为 0.5 分辨率并调整上采样：GPU p95 降到 20.3 ms；金属边缘出现轻微 halo，扩大深度阈值后回归通过。
+3. 展台反射由每帧更新改为相机或产品显著变化时更新，拖动期间每 4 帧一次：GPU p95 降到 17.8 ms；快速拖动录屏未观察到不可接受滞后。
+
+这组结果没有归功于 draw call；主因是像素数量、全屏 pass 和重复渲染。
+
+### 4. 实验 C：纹理、加载与上传
+
+资源清单发现 18 张 2048² PNG 用于远景陈列件，其中多张只有较小屏幕占比。改造分两步验证：
+
+- 远景颜色纹理按画面需求降为 1024²，并生成完整 mip 链。
+- 颜色和法线分别采用经目标设备验证的 KTX2 转码配置；对法线进行近景截图检查。
+
+冷启动传输减少，首次可交互从 6.4 s 降至 4.1 s；纹理资源估算与 context 压力下降。低端设备解码/转码增加了少量 CPU 时间，但总链路仍改善。首次进入新展区仍有上传尖峰，于是加载完成后在过渡页预热即将可见的材质和 Geometry，把尖峰移到有明确反馈的阶段。
+
+### 5. 实验 D：GC、React 与角色更新
+
+分配采样显示交互状态每帧写入 React store，并生成新的射线结果数组。改为仅在选中对象变化时写业务 state，连续指针位置保存在 ref；射线结果与临时向量复用。远处角色的纯视觉 AnimationMixer 更新降到 15 Hz，近景仍逐帧更新。
+
+主线程 p95 从 10.8 ms 降到 7.4 ms，周期性慢帧减少。角色距离切换加入滞回，动画、morph 表情和点击命中通过固定脚本回归。
+
+### 6. 最终复测
+
+所有保留改造合并后，在同样条件下重新进行五轮冷/热测试：
+
+| 指标 | 基线 | 最终 | 判定 |
+| --- | ---: | ---: | --- |
+| 帧间隔 p50 / p95 | 28.4 / 46.8 | 17.2 / 24.6 ms | 改善 |
+| 主线程 p50 / p95 | 9.1 / 18.7 | 4.8 / 7.4 ms | 改善 |
+| GPU p50 / p95 | 20.6 / 34.2 | 12.9 / 18.1 ms | 改善 |
+| draw calls | 612 | 276 | 改善但非唯一原因 |
+| 冷启动首次可交互 | 6.4 s | 4.1 s | 改善 |
+| 第 10 分钟帧间隔 p95 | 58.5 | 29.8 ms | 改善 |
+
+最终结果仍有少量超过 16.67 ms 的帧，因此报告为“达到项目移动档门禁”，而不是宣称所有设备、所有时刻都达到某个帧率。截图差异、角色动画、拾取、LOD、阴影、反射、窗口 resize 和 context 恢复均通过约定回归。
+
+## 十五、视觉与功能回归：性能数字不能单独放行
+
+性能测试与正确性测试使用同一批固定相机关键帧和交互脚本：
+
+1. **截图比较**：覆盖近景材质、远景 LOD、透明边缘、阴影接触、反射、bloom 和不同质量档。自动像素差异适合发现变化，但最终阈值要考虑抗锯齿、驱动和色彩管理差异。
+2. **功能脚本**：旋转、缩放、拾取、热点、角色动画、morph、场景切换和 resize 都要执行。
+3. **生命周期**：进入/离开场景多次，检查 JS 堆与 `renderer.info.memory` 是否回落；测试页面隐藏后恢复。
+4. **异常路径**：模拟资源失败与 context lost，确认降级 UI、重试和恢复可用。
+5. **档位切换**：低→中→高及高→低均测试，观察 RenderTarget 尺寸、Shader 预热、LOD 和交互状态是否正确。
+
+截图比较失败时，先判断变化是否属于批准的质量交换。若未在质量标准中声明，就不能只因 p95 改善而自动接受。
+
+## 十六、把结果变成性能门禁
+
+门禁应稳定、可解释、能在固定环境复现。CI 虚拟机的 GPU 和调度波动较大，适合检查资源预算、场景统计和明显退化；帧时间门禁更适合固定实体设备或稳定的硬件实验室。
+
+### 1. 分层设置门禁
+
+```json
+{
+  "scene": "mobile-showroom-v3",
+  "deviceTier": "android-mid",
+  "viewport": { "width": 393, "height": 873, "dpr": 1.5 },
+  "budgets": {
+    "frameP50Ms": 19,
+    "frameP95Ms": 28,
+    "mainThreadP95Ms": 10,
+    "gpuP95Ms": 21,
+    "drawCalls": 320,
+    "triangles": 1500000,
+    "firstInteractiveMs": 4800,
+    "textureCount": 130,
+    "geometryCount": 420
+  }
+}
+```
+
+这些阈值只是上方案例的示例。draw call 和 triangles 是护栏，不是体验的替代指标：调用数略增可能换来更好剔除，三角形增加也可能不影响当前瓶颈。最终仍以帧时间、加载体验和回归标准共同判断。
+
+### 2. 使用相对退化与绝对上限
+
+单纯相对阈值会让已经很慢的场景继续变慢；单纯绝对阈值又可能被测试噪声误伤。可同时要求：
+
+- p95 不超过产品绝对预算。
+- 相对基准退化不超过约定比例。
+- 多轮结果中至少约定数量通过，失败时保存 trace 而不是盲目重跑到成功。
+- 资源计数和包体超过阈值时给出具体差异。
+- 视觉、功能和 context 恢复用例全部通过。
+
+### 3. 门禁失败后的处理
+
+门禁失败应输出设备、场景版本、p50/p95、资源统计和 trace 链接。先在相同环境复现，再定位是稳定回归、基准漂移还是设备状态异常。若产品决定接受退化，应同时更新预算依据和质量说明，不要只提高阈值隐藏变化。
+
+## 十七、按证据推进的检查清单
+
+### 测量设计
+
+- [ ] 已定义目标设备、Canvas 尺寸、DPR、刷新目标和质量标准。
+- [ ] 冷启动、交互峰值、稳态与热稳定分别采样。
+- [ ] 固定相机路径、随机种子、资源版本、缓存条件和采样时长。
+- [ ] 同时报告 p50/p95，而不是只报告平均 FPS。
+
+### 瓶颈定位
+
+- [ ] 用主线程时间线和 React Profiler检查 JS、GC 与 commit。
+- [ ] 用 DPR、材质、低模和 pass 开关做 GPU 受控实验。
+- [ ] 分开记录下载、解码、解析、上传与首次可交互。
+- [ ] 区分 JS 堆与 GPU 纹理、Buffer、RenderTarget。
+- [ ] 将 draw call 放在整帧多 pass 上下文中解释。
+
+### 改造候选
+
+- [ ] 评估 instancing、分区 merge、LOD、视锥/业务剔除的适用边界。
+- [ ] 检查顶点数、skinning、morph、动画更新频率和包围体。
+- [ ] 检查片元复杂度、透明 overdraw、fill rate、DPR 与全屏 pass。
+- [ ] 统计 Shader variant，并预热真实会出现的组合。
+- [ ] 核对纹理尺寸、色彩空间、mipmap、GPU 压缩与显存估算。
+- [ ] 逐项测量阴影、反射和后期，而不是一起关闭后下结论。
+- [ ] 检查热路径分配、React 高频 state 和资源重建。
+
+### 放行
+
+- [ ] 每项实验只改变一个主要变量，并保留原始记录。
+- [ ] 在同一环境完成多轮 p50/p95 复测。
+- [ ] 截图、动画、morph、拾取、LOD、resize 和质量档通过回归。
+- [ ] 场景往返后资源计数稳定，context lost 恢复路径可用。
+- [ ] 持续负载下没有不可接受的热降频退化。
+- [ ] 性能门禁同时检查绝对预算、相对退化和视觉功能标准。
+
+## 总结
+
+可靠的 Three.js 性能优化从定义目标开始，而不是从修改参数开始。先固定设备、帧预算、质量标准和场景基线，再用工具与受控实验把 CPU 主线程、GPU、网络、JS 堆和 GPU 资源分开。之后进行单变量改造，用 p50/p95 复测收益，并通过视觉、功能、生命周期、context 恢复和热稳定回归确认代价。
+
+Draw call、三角形、纹理尺寸、DPR 与 pass 数量都是线索，不是独立结论。只有当假设、实验、数据和质量结果能被另一位开发者重复，优化才从经验判断变成可维护的工程能力；再把这套结果写入门禁，后续迭代才不容易悄悄消耗已经获得的余量。
