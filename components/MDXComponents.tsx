@@ -473,13 +473,13 @@ export default function MDXContent({ content, isMdxCompiled, category }: MDXCont
         {children}
       </li>
     ),
-    hr: () => (
+    hr: Object.assign(() => (
       <div className="my-10 flex items-center gap-3 text-neutral-300 dark:text-neutral-600">
         <div className="flex-1 border-t border-current" />
         <span className="text-xs tracking-[0.3em] uppercase font-sans">&#10022;</span>
         <div className="flex-1 border-t border-current" />
       </div>
-    ),
+    ), { __isCodeTabsSeparator: true }),
     strong: ({ children, ...props }: React.ComponentPropsWithoutRef<'strong'>) => (
       <strong className="font-bold text-neutral-900 dark:text-neutral-100" {...props}>
         {children}

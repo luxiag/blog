@@ -12,7 +12,13 @@ function isWhitespaceNode(node: React.ReactNode): boolean {
 }
 
 function isTabSeparator(node: React.ReactNode): boolean {
-  return React.isValidElement(node) && node.type === 'hr';
+  if (!React.isValidElement(node)) return false;
+  if (node.type === 'hr') return true;
+  if (typeof node.type === 'function') {
+    const fn = node.type as Record<string, unknown>;
+    if (fn.__isCodeTabsSeparator) return true;
+  }
+  return false;
 }
 
 function groupTabContent(children: React.ReactNode): React.ReactNode[][] {

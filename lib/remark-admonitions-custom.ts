@@ -306,7 +306,7 @@ function plugin(config: AdmonitionConfig = {}) {
       } else if (format === 'html') {
         const outerClass = `${styleClass} rounded p-4`;
         replacementNodes = [
-          { type: 'html', value: `<div class="${outerClass}"><div class="${titleColor}">` },
+          { type: 'html', value: `<div class="${outerClass}" data-admonition="${escapeHtml(admonitionType)}"><div class="${titleColor}" data-admonition-title="${escapeHtml(admonitionType)}">` },
           ...titleChildren,
           { type: 'html', value: '</div>' },
           ...contentNodes,
@@ -316,20 +316,26 @@ function plugin(config: AdmonitionConfig = {}) {
         replacementNodes = [{
           type: 'mdxJsxFlowElement',
           name: 'div',
-          attributes: [{
-            type: 'mdxJsxAttribute',
-            name: 'className',
-            value: `${styleClass} rounded p-4`,
-          }],
+          attributes: [
+            { type: 'mdxJsxAttribute', name: 'data-admonition', value: admonitionType },
+            {
+              type: 'mdxJsxAttribute',
+              name: 'className',
+              value: `${styleClass} rounded p-4`,
+            },
+          ],
           children: [
             {
               type: 'mdxJsxFlowElement',
               name: 'div',
-              attributes: [{
-                type: 'mdxJsxAttribute',
-                name: 'className',
-                value: titleColor,
-              }],
+              attributes: [
+                { type: 'mdxJsxAttribute', name: 'data-admonition-title', value: admonitionType },
+                {
+                  type: 'mdxJsxAttribute',
+                  name: 'className',
+                  value: titleColor,
+                },
+              ],
               children: titleChildren,
             },
             ...contentNodes,
