@@ -1,0 +1,1507 @@
+---
+title: '实时数据展示：曲线、表格、指示灯与自定义控件'
+date: '2026-10-18'
+excerpt: '上位机 UI 的核心能力：Chart 实时曲线绘制、DataGridView 高性能刷新、自定义状态指示灯和仪表盘控件、GDI+ 绘图基础、双缓冲防闪烁，打造专业级监控界面。'
+tags: ['csharp', 'winforms', '上位机', 'Chart', 'DataGridView', '自定义控件', 'GDI+']
+nextPost: 'winforms/winforms-data-storage'
+---
+
+<ProgressIndicator
+  current="winforms/winforms-realtime-display"
+  items={[
+    { slug: "winforms/winforms-roadmap", title: "路线图与岗位分析" },
+    { slug: "winforms/winforms-basics", title: "WinForms 基础" },
+    { slug: "winforms/winforms-serial-port", title: "串口通信实战" },
+    { slug: "winforms/winforms-modbus-protocol", title: "Modbus 协议详解" },
+    { slug: "winforms/winforms-multithreading-async", title: "多线程与异步" },
+    { slug: "winforms/winforms-realtime-display", title: "实时数据展示" },
+    { slug: "winforms/winforms-data-storage", title: "数据存储与导出" },
+    { slug: "winforms/winforms-error-recovery", title: "异常处理与自动重连" },
+    { slug: "winforms/winforms-project-temperature", title: "完整项目实战" },
+  ]}
+/>
+
+# 实时数据展示：曲线、表格、指示灯与自定义控件
+
+数据展示是上位机的核心价值——通信协议再复杂，最终也要让操作员**看得清、看得快**。一个合格的上位机界面需要同时满足四种典型需求：**实时曲线**跟踪趋势变化，**数据表格**精确呈现数值，**状态指示灯**一目了然地反馈设备状态，**仪表盘**直观显示量程范围。
+
+本文从控件使用到自定义绘制，全面覆盖 WinForms 中实现专业级监控界面所需的技术。你会学到 Chart 实时曲线、DataGridView 高性能刷新、GDI+ 自定义控件绘制、双缓冲防闪烁，以及一个完整的上位机界面布局实战。
+
+:::tip 前置知识
+本文假设你已经掌握了 WinForms 基础（[/posts/winforms/winforms-basics](/posts/winforms/winforms-basics)）和多线程/异步编程（[/posts/winforms/winforms-multithreading-async](/posts/winforms/winforms-multithreading-async)）。实时数据展示的核心难点之一就是工作线程与 UI 线程的协作，确保数据更新不卡界面。
+:::
+
+---
+
+## 一、Chart 控件 —— 实时曲线绘制
+
+### 1.1 Chart 基础结构
+
+WinForms 的 `System.Windows.Forms.DataVisualization.Charting.Chart` 是一个功能丰富的图表控件，上位机中最常用它绘制实时趋势曲线。理解它的对象模型是使用的前提：
+
+<FileTree tree={[
+  { name: "Chart", type: "folder", comment: "顶级控件容器", children: [
+    { name: "ChartAreas", type: "folder", comment: "绘图区域集合", children: [
+      { name: "ChartArea", type: "folder", comment: "单个绘图区域", children: [
+        { name: "AxisX / AxisY", type: "file", comment: "X轴和Y轴配置" },
+        { name: "AxisX2 / AxisY2", type: "file", comment: "辅助X轴和Y轴" },
+        { name: "CursorX / CursorY", type: "file", comment: "光标交互" },
+      ]},
+    ]},
+    { name: "Series", type: "folder", comment: "数据系列集合", children: [
+      { name: "Series", type: "file", comment: "单条数据线（含数据点+样式）" },
+    ]},
+    { name: "Legends", type: "folder", comment: "图例集合" },
+    { name: "Titles", type: "folder", comment: "标题集合" },
+  ]},
+]} />
+
+核心关系：一个 `Chart` 可以包含多个 `ChartArea`（绘图区），每个 `ChartArea` 有自己的坐标轴；`Series`（数据系列）绑定到某个 `ChartArea` 中绘制；`Legends` 显示图例；`Titles` 显示标题。
+
+先从一个最简单的静态曲线开始：
+
+```csharp
+var chart = new Chart();
+var area = new ChartArea("MainArea");
+chart.ChartAreas.Add(area);
+
+var series = new Series("Temperature");
+series.ChartType = SeriesChartType.Line;
+series.Points.AddXY(0, 25.3);
+series.Points.AddXY(1, 26.1);
+series.Points.AddXY(2, 27.5);
+series.Points.AddXY(3, 26.8);
+series.Points.AddXY(4, 28.2);
+chart.Series.Add(series);
+
+var legend = new Legend("MainLegend");
+chart.Legends.Add(legend);
+
+var title = new Title("温度趋势");
+chart.Titles.Add(title);
+```
+
+### 1.2 实时曲线实现
+
+上位机场景的核心需求是**数据随时间推移不断追加，曲线自动滚动**。实现实时曲线需要解决三个问题：X 轴时间类型、滚动窗口、旧数据清理。
+
+```csharp
+public class RealtimeChartService
+{
+    private readonly Chart _chart;
+    private readonly Series _series;
+    private readonly int _maxPoints = 300;
+
+    public RealtimeChartService(Chart chart)
+    {
+        _chart = chart;
+        _series = SetupChart();
+    }
+
+    private Series SetupChart()
+    {
+        var area = new ChartArea("RealtimeArea");
+        area.AxisX.Title = "时间";
+        area.AxisX.LabelStyle.Format = "HH:mm:ss";
+        area.AxisX.IntervalType = DateTimeIntervalType.Seconds;
+        area.AxisX.Interval = 5;
+        area.AxisX.MajorGrid.LineColor = Color.LightGray;
+        area.AxisY.Title = "温度 (°C)";
+        area.AxisY.MajorGrid.LineColor = Color.LightGray;
+        _chart.ChartAreas.Add(area);
+
+        var series = new Series("Temperature")
+        {
+            ChartType = SeriesChartType.Line,
+            ChartArea = "RealtimeArea",
+            Color = Color.DodgerBlue,
+            BorderWidth = 2,
+            XValueType = ChartValueType.DateTime
+        };
+        _chart.Series.Add(series);
+
+        return series;
+    }
+
+    public void AddDataPoint(DateTime timestamp, double value)
+    {
+        if (_chart.InvokeRequired)
+        {
+            _chart.Invoke(new Action(() => AddDataPoint(timestamp, value)));
+            return;
+        }
+
+        _series.Points.AddXY(timestamp, value);
+
+        if (_series.Points.Count > _maxPoints)
+        {
+            _series.Points.RemoveAt(0);
+        }
+
+        var axisX = _chart.ChartAreas[0].AxisX;
+        axisX.Minimum = _series.Points[0].XValue;
+        axisX.Maximum = _series.Points[_series.Points.Count - 1].XValue;
+
+        _chart.ChartAreas[0].RecalculateAxesScale();
+    }
+}
+```
+
+<CodeAnnotation
+  language="csharp"
+  lines={[
+    { code: 'private readonly int _maxPoints = 300;', note: '保留最近 300 个点，约 5 分钟（1秒1点）' },
+    { code: 'area.AxisX.LabelStyle.Format = "HH:mm:ss";', note: 'X 轴标签显示时分秒' },
+    { code: 'XValueType = ChartValueType.DateTime', note: 'X 轴绑定为 DateTime 类型，否则时间格式无效' },
+    { code: 'if (_chart.InvokeRequired)', note: '工作线程调用时自动切换到 UI 线程' },
+    { code: '_series.Points.RemoveAt(0);', note: '超出上限时移除最旧的点，形成滚动窗口' },
+    { code: 'axisX.Minimum = _series.Points[0].XValue;', note: '手动设置 X 轴范围，实现自动滚动' },
+  ]}
+/>
+
+:::warning 不要用 AutoScroll
+Chart 控件没有内置的 AutoScroll 属性。手动设置 `AxisX.Minimum` 和 `AxisX.Maximum` 是实现滚动窗口的标准做法。有些开发者尝试用 `ScaleView.Scroll` 方法，但在 DateTime 类型 X 轴上容易出现对齐问题。
+:::
+
+### 1.3 多曲线对比
+
+实际项目中经常需要在同一张图上对比多条曲线，比如温度实测值 vs 设定值，或者温度 vs 湿度（量程不同，需要双 Y 轴）。
+
+```csharp
+private void SetupDualAxisChart()
+{
+    var area = new ChartArea("DualAxis");
+    area.AxisY.Title = "温度 (°C)";
+    area.AxisY.Minimum = 0;
+    area.AxisY.Maximum = 100;
+    area.AxisY2.Title = "湿度 (%)";
+    area.AxisY2.Minimum = 0;
+    area.AxisY2.Maximum = 100;
+    area.AxisY2.Enabled = AxisEnabled.True;
+    area.AxisY2.MajorGrid.Enabled = false;
+    chart.ChartAreas.Add(area);
+
+    var tempSeries = new Series("温度")
+    {
+        ChartType = SeriesChartType.Line,
+        ChartArea = "DualAxis",
+        Color = Color.DodgerBlue,
+        BorderWidth = 2,
+        XValueType = ChartValueType.DateTime
+    };
+    chart.Series.Add(tempSeries);
+
+    var humiditySeries = new Series("湿度")
+    {
+        ChartType = SeriesChartType.Line,
+        ChartArea = "DualAxis",
+        YAxisType = AxisType.Secondary,
+        Color = Color.Orange,
+        BorderWidth = 2,
+        BorderDashStyle = ChartDashStyle.Dash,
+        XValueType = ChartValueType.DateTime
+    };
+    chart.Series.Add(humiditySeries);
+
+    var legend = new Legend();
+    legend.Docking = Docking.Top;
+    chart.Legends.Add(legend);
+}
+```
+
+<CodeAnnotation
+  language="csharp"
+  lines={[
+    { code: 'area.AxisY2.Enabled = AxisEnabled.True;', note: '辅助 Y 轴默认不显示，需要显式启用' },
+    { code: 'area.AxisY2.MajorGrid.Enabled = false;', note: '关闭辅助轴网格线，避免与主轴网格重叠' },
+    { code: 'YAxisType = AxisType.Secondary', note: '将湿度系列绑定到右侧 Y 轴' },
+    { code: 'BorderDashStyle = ChartDashStyle.Dash', note: '虚线样式，与实线温度曲线视觉区分' },
+  ]}
+/>
+
+### 1.4 报警线
+
+上位机曲线中，报警上下限线是标配。Chart 提供了 `StripLine` 来绘制水平参考线，还可以对报警区域着色，以及让超出阈值的数据点变色。
+
+```csharp
+private void AddAlarmLines(ChartArea area, double upperLimit, double lowerLimit)
+{
+    var upperStrip = new StripLine
+    {
+        IntervalOffset = upperLimit,
+        StripWidth = 0,
+        BorderColor = Color.Red,
+        BorderWidth = 2,
+        BorderDashStyle = ChartDashStyle.Dash,
+        Text = $"上限 {upperLimit}",
+        TextAlignment = StringAlignment.Near
+    };
+    area.AxisY.StripLines.Add(upperStrip);
+
+    var lowerStrip = new StripLine
+    {
+        IntervalOffset = lowerLimit,
+        StripWidth = 0,
+        BorderColor = Color.Red,
+        BorderWidth = 2,
+        BorderDashStyle = ChartDashStyle.Dash,
+        Text = $"下限 {lowerLimit}",
+        TextAlignment = StringAlignment.Near
+    };
+    area.AxisY.StripLines.Add(lowerStrip);
+
+    var alarmZone = new StripLine
+    {
+        IntervalOffset = upperLimit,
+        StripWidth = 0,
+        BackColor = Color.FromArgb(30, Color.Red),
+        Interval = double.MaxValue
+    };
+    area.AxisY.StripLines.Add(alarmZone);
+}
+
+private void AddDataPointWithAlarm(Series series, DateTime time, double value,
+    double upperLimit, double lowerLimit)
+{
+    var pointIndex = series.Points.AddXY(time, value);
+    var point = series.Points[pointIndex];
+
+    if (value > upperLimit || value < lowerLimit)
+    {
+        point.Color = Color.Red;
+        point.MarkerStyle = MarkerStyle.Circle;
+        point.MarkerSize = 6;
+    }
+}
+```
+
+### 1.5 Chart 性能优化
+
+当数据点数量增大时，Chart 控件的刷新会明显变慢。以下是关键优化策略：
+
+```csharp
+private void OptimizeChartForPerformance(Chart chart)
+{
+    chart.ChartAreas[0].AxisX.LabelAutoFitStyle = LabelAutoFitStyles.None;
+    chart.ChartAreas[0].AxisY.LabelAutoFitStyle = LabelAutoFitStyles.None;
+
+    foreach (var series in chart.Series)
+    {
+        series.XValueIndexed = false;
+    }
+
+    chart.AntiAliasing = AntiAliasingStyles.None;
+    chart.TextAntiAliasingQuality = TextAntiAliasingQuality.Normal;
+}
+
+private void AddDataPointsBatch(Series series, IEnumerable<DataPoint> points)
+{
+    series.Points.AddRange(points.ToArray());
+}
+```
+
+| 优化手段 | 效果 | 适用场景 |
+|----------|------|----------|
+| 批量添加点（`AddRange`） | 减少 N 次重绘为 1 次 | 历史数据加载 |
+| 减少刷新频率 | 100ms 采样 → 500ms 刷新 | 高速采集场景 |
+| 关闭抗锯齿 | 渲染速度提升 30%+ | 不需要精细外观时 |
+| 限制最大点数 | 内存和渲染双重优化 | 长时间运行 |
+| `SuspendLayout/ResumeLayout` | 批量操作期间暂停布局 | 多 Series 同时更新 |
+
+:::tip 采样刷新 vs 逐点刷新
+上位机采集频率可能是 10ms 级别，但 Chart 不需要也跟不上这个刷新速率。推荐做法：采集数据按原始频率存入缓存，Chart 以 200-500ms 的定时器从缓存中取最新值刷新，既能保证数据完整性，又不拖垮 UI。
+:::
+
+---
+
+## 二、DataGridView —— 实时数据表格
+
+### 2.1 基本配置
+
+DataGridView 是 WinForms 中最强大的表格控件，上位机中用它展示参数列表、报警记录、设备状态等结构化数据。第一步是关闭自动生成列，手动定义每列：
+
+```csharp
+private void SetupGridView()
+{
+    dgv.AutoGenerateColumns = false;
+    dgv.AllowUserToAddRows = false;
+    dgv.AllowUserToDeleteRows = false;
+    dgv.ReadOnly = true;
+    dgv.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+    dgv.MultiSelect = false;
+
+    var colName = new DataGridViewTextBoxColumn
+    {
+        DataPropertyName = "ParameterName",
+        HeaderText = "参数名称",
+        Width = 120
+    };
+
+    var colValue = new DataGridViewTextBoxColumn
+    {
+        DataPropertyName = "CurrentValue",
+        HeaderText = "当前值",
+        Width = 100,
+        DefaultCellStyle = new DataGridViewCellStyle
+        {
+            Alignment = DataGridViewContentAlignment.MiddleRight,
+            Format = "F2"
+        }
+    };
+
+    var colUnit = new DataGridViewTextBoxColumn
+    {
+        DataPropertyName = "Unit",
+        HeaderText = "单位",
+        Width = 60
+    };
+
+    var colStatus = new DataGridViewCheckBoxColumn
+    {
+        DataPropertyName = "IsAlarm",
+        HeaderText = "报警",
+        Width = 50
+    };
+
+    dgv.Columns.AddRange(colName, colValue, colUnit, colStatus);
+}
+```
+
+### 2.2 数据绑定方式
+
+DataGridView 有三种主要的数据绑定方式，选择合适的方式直接影响刷新性能和开发体验：
+
+```csharp
+public class ParameterItem : INotifyPropertyChanged
+{
+    private double _currentValue;
+    private bool _isAlarm;
+
+    public string ParameterName { get; set; }
+    public string Unit { get; set; }
+
+    public double CurrentValue
+    {
+        get => _currentValue;
+        set
+        {
+            if (Math.Abs(_currentValue - value) > 0.001)
+            {
+                _currentValue = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public bool IsAlarm
+    {
+        get => _isAlarm;
+        set
+        {
+            if (_isAlarm != value)
+            {
+                _isAlarm = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public event PropertyChangedEventHandler PropertyChanged;
+
+    protected virtual void OnPropertyChanged(
+        [CallerMemberName] string propertyName = null)
+    {
+        PropertyChanged?.Invoke(this,
+            new PropertyChangedEventArgs(propertyName));
+    }
+}
+```
+
+绑定到 BindingList：
+
+```csharp
+var parameters = new BindingList<ParameterItem>
+{
+    new ParameterItem { ParameterName = "温度1", Unit = "°C" },
+    new ParameterItem { ParameterName = "温度2", Unit = "°C" },
+    new ParameterItem { ParameterName = "压力", Unit = "MPa" }
+};
+
+var bindingSource = new BindingSource { DataSource = parameters };
+dgv.DataSource = bindingSource;
+```
+
+三种绑定方式对比：
+
+| 特性 | BindingList\<T\> | DataTable | 手动行操作 |
+|------|-------------------|-----------|------------|
+| 类型安全 | 有 | 无（object） | 有 |
+| 自动通知 | 配合 INotifyPropertyChanged | 内置 | 需手动实现 |
+| 增删行 | 自动通知 | 自动通知 | 需手动 Rows.Add/Remove |
+| 性能 | 中等（属性级更新） | 中等 | 高（完全控制） |
+| 开发复杂度 | 低 | 中 | 高 |
+| **推荐场景** | **参数监控表** | 报警记录表 | 超大量数据 |
+
+### 2.3 高性能刷新
+
+上位机中 DataGridView 面临的核心问题是：数据每秒更新数十次，如何避免整表闪烁和卡顿？
+
+```csharp
+public class GridRefreshService
+{
+    private readonly DataGridView _grid;
+    private readonly BindingList<ParameterItem> _data;
+    private readonly System.Windows.Forms.Timer _refreshTimer;
+
+    public GridRefreshService(DataGridView grid, BindingList<ParameterItem> data)
+    {
+        _grid = grid;
+        _data = data;
+        _refreshTimer = new System.Windows.Forms.Timer { Interval = 200 };
+        _refreshTimer.Tick += OnRefreshTick;
+    }
+
+    public void Start() => _refreshTimer.Start();
+
+    private void OnRefreshTick(object sender, EventArgs e)
+    {
+        _grid.SuspendLayout();
+
+        for (int i = 0; i < _data.Count; i++)
+        {
+            var row = _grid.Rows[i];
+
+            if (!_grid.Rows[i].Displayed) continue;
+
+            var item = _data[i];
+            var valueCell = row.Cells["CurrentValue"];
+            var alarmCell = row.Cells["IsAlarm"];
+
+            if (valueCell.Value is double oldVal &&
+                Math.Abs(oldVal - item.CurrentValue) > 0.001)
+            {
+                valueCell.Value = item.CurrentValue;
+            }
+
+            if ((bool)alarmCell.Value != item.IsAlarm)
+            {
+                alarmCell.Value = item.IsAlarm;
+            }
+        }
+
+        _grid.ResumeLayout();
+    }
+}
+```
+
+<CodeAnnotation
+  language="csharp"
+  lines={[
+    { code: 'if (!_grid.Rows[i].Displayed) continue;', note: '跳过不可见行，避免无意义的刷新开销' },
+    { code: '_grid.SuspendLayout();', note: '暂停布局计算，批量操作完成后再恢复' },
+    { code: 'if (valueCell.Value is double oldVal &&', note: '只在值真正变化时才更新单元格，减少重绘' },
+  ]}
+/>
+
+:::details 虚拟模式处理大量数据 | 适用于行数超过 10000 的场景
+当数据量极大（数万行以上）时，即使是 BindingList 也会因为创建大量 DataGridViewRow 对象而导致内存和性能问题。虚拟模式只渲染可见行，内存占用恒定：
+
+```csharp
+dgv.VirtualMode = true;
+dgv.RowCount = _allData.Count;
+
+dgv.CellValueNeeded += (s, e) =>
+{
+    if (e.RowIndex >= 0 && e.RowIndex < _allData.Count)
+    {
+        var item = _allData[e.RowIndex];
+        switch (e.ColumnIndex)
+        {
+            case 0: e.Value = item.ParameterName; break;
+            case 1: e.Value = item.CurrentValue; break;
+            case 2: e.Value = item.Unit; break;
+            case 3: e.Value = item.IsAlarm; break;
+        }
+    }
+};
+
+dgv.CellFormatting += (s, e) =>
+{
+    if (e.RowIndex >= 0 && e.RowIndex < _allData.Count)
+    {
+        var item = _allData[e.RowIndex];
+        if (item.IsAlarm && e.ColumnIndex == 1)
+        {
+            e.CellStyle.BackColor = Color.LightPink;
+        }
+    }
+};
+```
+
+虚拟模式的核心事件是 `CellValueNeeded`，它在 DataGridView 需要显示某个单元格时触发，你只需从数据源中取出对应值返回即可。
+:::
+
+### 2.4 样式和格式化
+
+上位机表格的视觉反馈直接影响操作效率——报警行红色背景、交替行颜色、数值格式化，这些不是装饰而是功能。
+
+```csharp
+private void SetupGridStyles()
+{
+    dgv.EnableHeadersVisualStyles = false;
+    dgv.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(45, 45, 48);
+    dgv.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
+    dgv.ColumnHeadersDefaultCellStyle.Font = new Font("微软雅黑", 9F, FontStyle.Bold);
+    dgv.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+    dgv.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
+
+    dgv.DefaultCellStyle.Font = new Font("微软雅黑", 9F);
+    dgv.DefaultCellStyle.SelectionBackColor = Color.FromArgb(0, 122, 204);
+    dgv.DefaultCellStyle.SelectionForeColor = Color.White;
+    dgv.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(245, 245, 245);
+
+    dgv.GridColor = Color.FromArgb(220, 220, 220);
+    dgv.BorderStyle = BorderStyle.None;
+    dgv.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
+}
+
+private void dgv_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
+{
+    if (e.RowIndex < 0) return;
+
+    var row = dgv.Rows[e.RowIndex];
+    if (row.DataBoundItem is ParameterItem item)
+    {
+        if (item.IsAlarm)
+        {
+            e.CellStyle.BackColor = Color.FromArgb(255, 230, 230);
+            e.CellStyle.ForeColor = Color.Red;
+            e.CellStyle.Font = new Font("微软雅黑", 9F, FontStyle.Bold);
+        }
+    }
+}
+```
+
+### 2.5 上位机典型用法
+
+上位机中 DataGridView 最常见的三种表格形态：
+
+**参数监控表**——实时显示所有监测参数的当前值和状态：
+
+| 列 | 说明 | 特点 |
+|----|------|------|
+| 参数名称 | 如"1号炉温度" | 固定不变 |
+| 当前值 | 实时刷新 | 数值右对齐，格式化显示 |
+| 设定值 | 目标值 | 可编辑 |
+| 单位 | °C、MPa 等 | 固定 |
+| 偏差 | 当前值 - 设定值 | 超阈值标红 |
+| 状态 | 正常/报警/离线 | 指示灯列 |
+
+**报警列表**——记录所有报警事件，支持确认操作：
+
+| 列 | 说明 | 特点 |
+|----|------|------|
+| 报警时间 | 精确到毫秒 | 按时间倒序 |
+| 报警类型 | 上限/下限/通信故障 | 图标区分 |
+| 参数名称 | 触发报警的参数 | - |
+| 报警值 | 触发时的数值 | 红色显示 |
+| 确认状态 | 未确认/已确认 | 含操作按钮 |
+| 确认人 | 操作员 | 确认后填入 |
+
+**设备列表**——显示所有通信设备的状态：
+
+| 列 | 说明 | 特点 |
+|----|------|------|
+| 设备地址 | Modbus 地址 | - |
+| 设备型号 | PLC/仪表型号 | - |
+| 在线状态 | 在线/离线 | 指示灯 |
+| 最后通信 | 最近一次成功通信时间 | 超时标黄 |
+| 错误计数 | 通信失败累计次数 | 非零标红 |
+
+---
+
+## 三、自定义状态指示灯控件
+
+WinForms 没有内置的指示灯控件，而上位机界面中指示灯几乎无处不在——设备在线/离线、参数正常/报警、阀门开/关。我们需要自己画一个。
+
+```csharp
+public class StatusLed : Control
+{
+    public enum LedState
+    {
+        Green,
+        Red,
+        Gray,
+        Yellow
+    }
+
+    public enum LedShape
+    {
+        Circle,
+        Square
+    }
+
+    private LedState _state = LedState.Gray;
+    private LedShape _shape = LedShape.Circle;
+    private bool _blinkOn = true;
+    private readonly System.Windows.Forms.Timer _blinkTimer;
+
+    public LedState State
+    {
+        get => _state;
+        set
+        {
+            if (_state != value)
+            {
+                _state = value;
+                UpdateBlinkState();
+                Invalidate();
+            }
+        }
+    }
+
+    public LedShape Shape
+    {
+        get => _shape;
+        set
+        {
+            if (_shape != value)
+            {
+                _shape = value;
+                Invalidate();
+            }
+        }
+    }
+
+    private bool _blinkEnabled;
+    public bool BlinkEnabled
+    {
+        get => _blinkEnabled;
+        set
+        {
+            _blinkEnabled = value;
+            UpdateBlinkState();
+        }
+    }
+
+    public StatusLed()
+    {
+        SetStyle(ControlStyles.OptimizedDoubleBuffer |
+                 ControlStyles.AllPaintingInWmPaint |
+                 ControlStyles.UserPaint |
+                 ControlStyles.ResizeRedraw, true);
+
+        _blinkTimer = new System.Windows.Forms.Timer { Interval = 500 };
+        _blinkTimer.Tick += (s, e) =>
+        {
+            _blinkOn = !_blinkOn;
+            Invalidate();
+        };
+    }
+
+    private void UpdateBlinkState()
+    {
+        if (_blinkEnabled && (_state == LedState.Red || _state == LedState.Yellow))
+        {
+            _blinkTimer.Start();
+        }
+        else
+        {
+            _blinkTimer.Stop();
+            _blinkOn = true;
+        }
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        var color = GetStateColor();
+        if (!_blinkOn) color = DimColor(color, 0.3f);
+
+        var rect = ClientRectangle;
+        var padding = 2;
+        var drawRect = new Rectangle(
+            rect.X + padding, rect.Y + padding,
+            rect.Width - padding * 2, rect.Height - padding * 2);
+
+        using var brush = new SolidBrush(color);
+        if (_shape == LedShape.Circle)
+        {
+            g.FillEllipse(brush, drawRect);
+
+            using var highlightBrush = new LinearGradientBrush(
+                new Point(drawRect.X, drawRect.Y),
+                new Point(drawRect.X, drawRect.Y + drawRect.Height / 2),
+                Color.FromArgb(120, Color.White),
+                Color.FromArgb(0, Color.White));
+            var highlightRect = new Rectangle(
+                drawRect.X + drawRect.Width / 4,
+                drawRect.Y + 2,
+                drawRect.Width / 2,
+                drawRect.Height / 3);
+            g.FillEllipse(highlightBrush, highlightRect);
+
+            using var pen = new Pen(DimColor(color, 0.6f), 1);
+            g.DrawEllipse(pen, drawRect);
+        }
+        else
+        {
+            g.FillRectangle(brush, drawRect);
+
+            using var highlightBrush = new LinearGradientBrush(
+                new Point(drawRect.X, drawRect.Y),
+                new Point(drawRect.X, drawRect.Y + drawRect.Height / 2),
+                Color.FromArgb(80, Color.White),
+                Color.FromArgb(0, Color.White));
+            var highlightRect = new Rectangle(
+                drawRect.X + 3, drawRect.Y + 2,
+                drawRect.Width - 6, drawRect.Height / 3);
+            g.FillRectangle(highlightBrush, highlightRect);
+
+            using var pen = new Pen(DimColor(color, 0.6f), 1);
+            g.DrawRectangle(pen, drawRect);
+        }
+    }
+
+    private Color GetStateColor() => _state switch
+    {
+        LedState.Green => Color.LimeGreen,
+        LedState.Red => Color.Red,
+        LedState.Yellow => Color.Gold,
+        _ => Color.Gray
+    };
+
+    private static Color DimColor(Color baseColor, float factor)
+    {
+        return Color.FromArgb(
+            baseColor.A,
+            (int)(baseColor.R * factor),
+            (int)(baseColor.G * factor),
+            (int)(baseColor.B * factor));
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _blinkTimer?.Dispose();
+        base.Dispose(disposing);
+    }
+}
+```
+
+使用示例：
+
+```csharp
+var led = new StatusLed
+{
+    Size = new Size(24, 24),
+    State = StatusLed.LedState.Green,
+    Shape = StatusLed.LedShape.Circle
+};
+
+led.State = StatusLed.LedState.Red;
+led.BlinkEnabled = true;
+
+led.State = StatusLed.LedState.Gray;
+```
+
+:::tip 指示灯尺寸建议
+指示灯控件的标准尺寸是 16×16 或 24×24。小于 12px 在大屏上难以辨识，大于 32px 则占用太多空间。在 DataGridView 中嵌入指示灯，16×16 最为合适。
+:::
+
+---
+
+## 四、自定义仪表盘控件
+
+仪表盘（Gauge）是上位机中另一种常见的可视化控件，适合显示压力、流量等有明确量程范围的参数。下面用 GDI+ 实现一个完整的仪表盘控件：
+
+```csharp
+public class GaugeControl : Control
+{
+    private double _minValue = 0;
+    private double _maxValue = 100;
+    private double _value;
+    private string _unit = "°C";
+    private Color _arcColor = Color.DodgerBlue;
+
+    public double MinValue
+    {
+        get => _minValue;
+        set { _minValue = value; Invalidate(); }
+    }
+
+    public double MaxValue
+    {
+        get => _maxValue;
+        set { _maxValue = value; Invalidate(); }
+    }
+
+    public double Value
+    {
+        get => _value;
+        set
+        {
+            _value = Math.Clamp(value, _minValue, _maxValue);
+            Invalidate();
+        }
+    }
+
+    public string Unit
+    {
+        get => _unit;
+        set { _unit = value; Invalidate(); }
+    }
+
+    public GaugeControl()
+    {
+        SetStyle(ControlStyles.OptimizedDoubleBuffer |
+                 ControlStyles.AllPaintingInWmPaint |
+                 ControlStyles.UserPaint |
+                 ControlStyles.ResizeRedraw, true);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        var cx = Width / 2f;
+        var cy = Height * 0.6f;
+        var radius = Math.Min(Width, Height) * 0.38f;
+
+        DrawArc(g, cx, cy, radius);
+        DrawTicks(g, cx, cy, radius);
+        DrawPointer(g, cx, cy, radius);
+        DrawValueText(g, cx, cy, radius);
+    }
+
+    private void DrawArc(Graphics g, float cx, float cy, float radius)
+    {
+        var startAngle = -210f;
+        var sweepAngle = 240f;
+
+        using var bgPen = new Pen(Color.FromArgb(60, Color.Gray), radius * 0.12f);
+        var arcRect = new RectangleF(
+            cx - radius, cy - radius, radius * 2, radius * 2);
+        g.DrawArc(bgPen, arcRect, startAngle, sweepAngle);
+
+        var valueRatio = (float)((_value - _minValue) / (_maxValue - _minValue));
+        var valueAngle = sweepAngle * valueRatio;
+
+        using var valuePen = new Pen(_arcColor, radius * 0.12f);
+        g.DrawArc(valuePen, arcRect, startAngle, valueAngle);
+    }
+
+    private void DrawTicks(Graphics g, float cx, float cy, float radius)
+    {
+        var startAngle = -210f;
+        var sweepAngle = 240f;
+        var tickCount = 10;
+
+        var tickFont = new Font("微软雅黑", radius * 0.16f);
+        using var tickBrush = new SolidBrush(Color.Gray);
+
+        for (int i = 0; i <= tickCount; i++)
+        {
+            var angle = startAngle + sweepAngle * i / tickCount;
+            var rad = angle * Math.PI / 180;
+
+            var isMajor = i % 2 == 0;
+            var innerR = radius * (isMajor ? 0.72f : 0.78f);
+            var outerR = radius * 0.85f;
+
+            var x1 = cx + (float)(innerR * Math.Cos(rad));
+            var y1 = cy + (float)(innerR * Math.Sin(rad));
+            var x2 = cx + (float)(outerR * Math.Cos(rad));
+            var y2 = cy + (float)(outerR * Math.Sin(rad));
+
+            using var pen = new Pen(Color.Gray, isMajor ? 2 : 1);
+            g.DrawLine(pen, x1, y1, x2, y2);
+
+            if (isMajor)
+            {
+                var labelR = radius * 0.6f;
+                var lx = cx + (float)(labelR * Math.Cos(rad));
+                var ly = cy + (float)(labelR * Math.Sin(rad));
+                var labelValue = _minValue + (_maxValue - _minValue) * i / tickCount;
+                var labelText = labelValue.ToString("F0");
+                var size = g.MeasureString(labelText, tickFont);
+                g.DrawString(labelText, tickFont, tickBrush,
+                    lx - size.Width / 2, ly - size.Height / 2);
+            }
+        }
+
+        tickFont.Dispose();
+    }
+
+    private void DrawPointer(Graphics g, float cx, float cy, float radius)
+    {
+        var startAngle = -210f;
+        var sweepAngle = 240f;
+        var valueRatio = (float)((_value - _minValue) / (_maxValue - _minValue));
+        var angle = startAngle + sweepAngle * valueRatio;
+        var rad = angle * Math.PI / 180;
+
+        var pointerLength = radius * 0.7f;
+        var tipX = cx + (float)(pointerLength * Math.Cos(rad));
+        var tipY = cy + (float)(pointerLength * Math.Sin(rad));
+
+        var perpRad = rad + Math.PI / 2;
+        var baseWidth = radius * 0.06f;
+        var base1X = cx + (float)(baseWidth * Math.Cos(perpRad));
+        var base1Y = cy + (float)(baseWidth * Math.Sin(perpRad));
+        var base2X = cx - (float)(baseWidth * Math.Cos(perpRad));
+        var base2Y = cy - (float)(baseWidth * Math.Sin(perpRad));
+
+        using var path = new GraphicsPath();
+        path.AddPolygon(new PointF[]
+        {
+            new(tipX, tipY),
+            new(base1X, base1Y),
+            new(base2X, base2Y)
+        });
+
+        using var brush = new SolidBrush(Color.FromArgb(220, 50, 50));
+        g.FillPath(brush, path);
+
+        using var centerBrush = new SolidBrush(Color.FromArgb(80, 80, 80));
+        g.FillEllipse(centerBrush,
+            cx - radius * 0.08f, cy - radius * 0.08f,
+            radius * 0.16f, radius * 0.16f);
+    }
+
+    private void DrawValueText(Graphics g, float cx, float cy, float radius)
+    {
+        var text = $"{_value:F1} {_unit}";
+        using var font = new Font("微软雅黑", radius * 0.22f, FontStyle.Bold);
+        using var brush = new SolidBrush(Color.Black);
+        var size = g.MeasureString(text, font);
+        g.DrawString(text, font, brush,
+            cx - size.Width / 2, cy + radius * 0.3f);
+    }
+}
+```
+
+使用方式：
+
+```csharp
+var gauge = new GaugeControl
+{
+    Size = new Size(200, 180),
+    MinValue = 0,
+    MaxValue = 100,
+    Value = 65.5,
+    Unit = "°C"
+};
+
+gauge.Value = 72.3;
+```
+
+---
+
+## 五、GDI+ 绘图基础
+
+自定义控件的核心是 GDI+ 绘图。`System.Drawing` 命名空间提供了完整的 2D 绘图能力，理解其基本概念才能自如地实现各种自定义控件。
+
+### 5.1 Graphics 对象
+
+`Graphics` 是 GDI+ 的核心对象，所有绘制操作都通过它执行。在 WinForms 中，获取 Graphics 对象有三种方式：
+
+```csharp
+protected override void OnPaint(PaintEventArgs e)
+{
+    var g = e.Graphics;
+}
+
+var bmp = new Bitmap(200, 200);
+var g = Graphics.FromImage(bmp);
+
+var g = CreateGraphics();
+```
+
+:::warning 优先使用 OnPaint
+在控件绘制中，**始终通过 `OnPaint` 的 `PaintEventArgs` 获取 Graphics**。`CreateGraphics()` 获取的对象在下次重绘时会被覆盖，只适用于临时绘制（如拖拽预览）。而且 `CreateGraphics()` 绘制的内容不会随窗口重绘而恢复。
+:::
+
+### 5.2 基本图形、画笔与画刷
+
+```csharp
+protected override void OnPaint(PaintEventArgs e)
+{
+    var g = e.Graphics;
+
+    using var pen = new Pen(Color.Blue, 2);
+    g.DrawLine(pen, 10, 10, 200, 10);
+
+    g.DrawRectangle(pen, 10, 30, 150, 80);
+
+    g.DrawEllipse(pen, 10, 130, 100, 60);
+
+    var points = new Point[]
+    {
+        new(10, 220), new(60, 200), new(110, 230), new(160, 210)
+    };
+    g.DrawLines(pen, points);
+
+    using var solidBrush = new SolidBrush(Color.FromArgb(100, Color.Coral));
+    g.FillRectangle(solidBrush, 180, 30, 120, 80);
+
+    using var hatchBrush = new HatchBrush(
+        HatchStyle.DiagonalCross, Color.Red, Color.LightYellow);
+    g.FillEllipse(hatchBrush, 180, 130, 100, 60);
+
+    var font = new Font("微软雅黑", 12F);
+    using var textBrush = new SolidBrush(Color.Black);
+    g.DrawString("温度: 25.3°C", font, textBrush, 10, 260);
+    font.Dispose();
+}
+```
+
+<CodeAnnotation
+  language="csharp"
+  lines={[
+    { code: 'using var pen = new Pen(Color.Blue, 2);', note: 'Pen 用于绘制轮廓（线条、边框），指定颜色和宽度' },
+    { code: 'using var solidBrush = new SolidBrush(...);', note: 'Brush 用于填充区域，SolidBrush 是纯色填充' },
+    { code: 'Color.FromArgb(100, Color.Coral)', note: '第一个参数 100 是 Alpha 通道（0-255），实现半透明' },
+    { code: 'HatchBrush', note: '阴影线填充，上位机中常用于区分不同区域' },
+  ]}
+/>
+
+### 5.3 坐标变换
+
+GDI+ 支持平移、旋转、缩放三种坐标变换，在绘制仪表盘指针、旋转动画等场景中非常关键：
+
+```csharp
+protected override void OnPaint(PaintEventArgs e)
+{
+    var g = e.Graphics;
+    var cx = Width / 2f;
+    var cy = Height / 2f;
+
+    g.TranslateTransform(cx, cy);
+
+    var angle = DateTime.Now.Millisecond * 0.36f;
+    g.RotateTransform(angle);
+
+    using var pen = new Pen(Color.Red, 3);
+    g.DrawLine(pen, 0, 0, 80, 0);
+
+    g.ResetTransform();
+}
+```
+
+<CodeAnnotation
+  language="csharp"
+  lines={[
+    { code: 'g.TranslateTransform(cx, cy);', note: '将原点平移到控件中心，之后所有坐标以中心为原点' },
+    { code: 'g.RotateTransform(angle);', note: '绕当前原点旋转指定角度（顺时针，单位度）' },
+    { code: 'g.DrawLine(pen, 0, 0, 80, 0);', note: '从原点画到右侧，因为已旋转所以实际方向跟着转' },
+    { code: 'g.ResetTransform();', note: '恢复原始坐标系，避免影响后续绘制' },
+  ]}
+/>
+
+### 5.4 GraphicsPath 与渐变
+
+```csharp
+protected override void OnPaint(PaintEventArgs e)
+{
+    var g = e.Graphics;
+    g.SmoothingMode = SmoothingMode.AntiAlias;
+
+    using var path = new GraphicsPath();
+    path.AddArc(10, 10, 100, 100, 180, 90);
+    path.AddLine(110, 60, 150, 100);
+    path.AddLine(10, 60, 10, 10);
+    path.CloseFigure();
+
+    using var gradient = new LinearGradientBrush(
+        new Rectangle(10, 10, 140, 90),
+        Color.DodgerBlue, Color.DarkBlue, 45f);
+    g.FillPath(gradient, path);
+
+    using var pen = new Pen(Color.FromArgb(100, Color.White), 1);
+    g.DrawPath(pen, path);
+}
+```
+
+---
+
+## 六、双缓冲与防闪烁
+
+### 6.1 闪烁的原因
+
+WinForms 控件闪烁的根本原因是**擦除和重绘分离**：系统先发送 `WM_ERASEBKGND` 消息用背景色填充区域（擦除），再触发 `OnPaint` 重新绘制内容。在擦除和重绘之间有一个短暂的时间窗口，用户看到的是空白背景，这就是闪烁。
+
+刷新频率越高、绘制内容越复杂，闪烁越明显。自定义控件中这个问题尤其突出。
+
+### 6.2 双缓冲原理
+
+双缓冲的思路是：先在内存中的"离屏位图"上完成所有绘制，然后一次性将结果复制到屏幕。这样屏幕上只有一次 BitBlt 操作，不存在"擦除-空白-重绘"的过程。
+
+```mermaid
+graph LR
+    A[OnPaint 触发] --> B[在内存位图上绘制]
+    B --> C[绘制完成]
+    C --> D[一次性复制到屏幕]
+    D --> E[无闪烁显示]
+```
+
+### 6.3 标准双缓冲写法
+
+在自定义控件中启用双缓冲的标准做法：
+
+```csharp
+public class MyCustomControl : Control
+{
+    public MyCustomControl()
+    {
+        SetStyle(
+            ControlStyles.OptimizedDoubleBuffer |
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.UserPaint,
+            true);
+
+        UpdateStyles();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+    }
+}
+```
+
+<CodeAnnotation
+  language="csharp"
+  lines={[
+    { code: 'ControlStyles.OptimizedDoubleBuffer', note: '启用双缓冲：在内存中完成绘制再输出到屏幕' },
+    { code: 'ControlStyles.AllPaintingInWmPaint', note: '忽略 WM_ERASEBKGND 消息，不再单独擦除背景' },
+    { code: 'ControlStyles.UserPaint', note: '控件自己负责绘制，不由系统默认绘制' },
+    { code: 'UpdateStyles();', note: '使 SetStyle 的设置立即生效' },
+  ]}
+/>
+
+:::details 使用 BufferedGraphics 手动控制 | 适用于需要更精细控制的场景
+`BufferedGraphics` 提供了比 `OptimizedDoubleBuffer` 更底层的控制，可以自定义缓冲区大小和渲染时机：
+
+```csharp
+public class ManualBufferedControl : Control
+{
+    private BufferedGraphics _bufferedGraphics;
+
+    public ManualBufferedControl()
+    {
+        SetStyle(ControlStyles.UserPaint, true);
+        InitializeBuffer();
+        Resize += (s, e) => InitializeBuffer();
+    }
+
+    private void InitializeBuffer()
+    {
+        var context = BufferedGraphicsManager.Current;
+        context.MaximumBuffer = new Size(Width + 1, Height + 1);
+        _bufferedGraphics = context.Allocate(CreateGraphics(),
+            new Rectangle(0, 0, Width, Height));
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (_bufferedGraphics == null) return;
+
+        var g = _bufferedGraphics.Graphics;
+        g.Clear(BackColor);
+
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var pen = new Pen(Color.DodgerBlue, 3);
+        g.DrawEllipse(pen, 10, 10, Width - 20, Height - 20);
+
+        _bufferedGraphics.Render(e.Graphics);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _bufferedGraphics?.Dispose();
+        base.Dispose(disposing);
+    }
+}
+```
+
+大多数场景下 `OptimizedDoubleBuffer` 已经足够，手动方案在需要跨多次绘制操作共享同一个缓冲区时才有必要。
+:::
+
+:::tip 外部控件防闪烁
+对于不是你自己写的控件（如标准 Panel、PictureBox），可以通过反射或创建子类来启用双缓冲：
+
+```csharp
+typeof(Panel).InvokeMember("DoubleBuffered",
+    BindingFlags.SetProperty | BindingFlags.Instance | BindingFlags.NonPublic,
+    null, panel1, new object[] { true });
+```
+
+这在 DataGridView 滚动闪烁时也非常有效。
+:::
+
+---
+
+## 七、界面布局设计实战
+
+### 7.1 典型上位机界面布局
+
+上位机的经典布局模式是：**顶部工具栏 + 左侧设备树 + 中间曲线 + 右侧参数 + 底部状态栏**。下面用代码实现这个完整布局：
+
+```csharp
+public class MainForm : Form
+{
+    private ToolStrip _toolStrip;
+    private TreeView _deviceTree;
+    private Chart _realtimeChart;
+    private DataGridView _paramGrid;
+    private StatusStrip _statusBar;
+    private SplitContainer _mainSplit;
+    private SplitContainer _centerSplit;
+    private TabControl _detailTabs;
+
+    public MainForm()
+    {
+        Text = "温控系统上位机";
+        Size = new Size(1280, 800);
+        StartPosition = FormStartPosition.CenterScreen;
+        InitializeLayout();
+    }
+
+    private void InitializeLayout()
+    {
+        _toolStrip = CreateToolStrip();
+        _statusBar = CreateStatusBar();
+
+        _mainSplit = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Horizontal,
+            SplitterDistance = 220,
+            Panel1MinSize = 150,
+            Panel2MinSize = 200
+        };
+
+        _deviceTree = new TreeView
+        {
+            Dock = DockStyle.Fill,
+            Font = new Font("微软雅黑", 9F)
+        };
+        _deviceTree.Nodes.Add("1号炉").Nodes.AddRange(new[]
+        {
+            new TreeNode("温度传感器1"),
+            new TreeNode("温度传感器2"),
+            new TreeNode("加热器")
+        });
+        _deviceTree.Nodes.Add("2号炉").Nodes.AddRange(new[]
+        {
+            new TreeNode("温度传感器1"),
+            new TreeNode("加热器")
+        });
+        _deviceTree.ExpandAll();
+
+        _mainSplit.Panel1.Controls.Add(_deviceTree);
+
+        _centerSplit = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Vertical,
+            SplitterDistance = 600
+        };
+
+        _realtimeChart = new Chart { Dock = DockStyle.Fill };
+        SetupRealtimeChart(_realtimeChart);
+        _centerSplit.Panel1.Controls.Add(_realtimeChart);
+
+        _detailTabs = new TabControl { Dock = DockStyle.Fill };
+        _paramGrid = CreateParamGrid();
+        var paramTab = new TabPage("参数监控") { Controls = { _paramGrid } };
+        var alarmTab = new TabPage("报警列表");
+        var historyTab = new TabPage("历史趋势");
+        _detailTabs.TabPages.AddRange(new[] { paramTab, alarmTab, historyTab });
+        _centerSplit.Panel2.Controls.Add(_detailTabs);
+
+        _mainSplit.Panel2.Controls.Add(_centerSplit);
+
+        Controls.Add(_mainSplit);
+        Controls.Add(_toolStrip);
+        Controls.Add(_statusBar);
+    }
+
+    private ToolStrip CreateToolStrip()
+    {
+        var strip = new ToolStrip
+        {
+            Dock = DockStyle.Top,
+            GripStyle = ToolStripGripStyle.Hidden,
+            BackColor = Color.FromArgb(45, 45, 48),
+            RenderMode = ToolStripRenderMode.System
+        };
+
+        strip.Items.Add(new ToolStripButton("连接设备") { DisplayStyle = ToolStripItemDisplayStyle.Text });
+        strip.Items.Add(new ToolStripButton("断开连接") { DisplayStyle = ToolStripItemDisplayStyle.Text });
+        strip.Items.Add(new ToolStripSeparator());
+        strip.Items.Add(new ToolStripButton("开始采集") { DisplayStyle = ToolStripItemDisplayStyle.Text });
+        strip.Items.Add(new ToolStripButton("停止采集") { DisplayStyle = ToolStripItemDisplayStyle.Text });
+        strip.Items.Add(new ToolStripSeparator());
+        strip.Items.Add(new ToolStripButton("导出数据") { DisplayStyle = ToolStripItemDisplayStyle.Text });
+        strip.Items.Add(new ToolStripButton("系统设置") { DisplayStyle = ToolStripItemDisplayStyle.Text });
+
+        return strip;
+    }
+
+    private StatusStrip CreateStatusBar()
+    {
+        var strip = new StatusStrip
+        {
+            Dock = DockStyle.Bottom,
+            BackColor = Color.FromArgb(45, 45, 48)
+        };
+
+        var connectionLabel = new ToolStripStatusLabel("未连接");
+        var timeLabel = new ToolStripStatusLabel(DateTime.Now.ToString("HH:mm:ss"))
+        {
+            Spring = true,
+            TextAlignment = ContentAlignment.MiddleRight
+        };
+
+        strip.Items.AddRange(new ToolStripItem[] { connectionLabel, timeLabel });
+        return strip;
+    }
+
+    private DataGridView CreateParamGrid()
+    {
+        var grid = new DataGridView
+        {
+            AutoGenerateColumns = false,
+            AllowUserToAddRows = false,
+            ReadOnly = true,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            Dock = DockStyle.Fill
+        };
+
+        grid.Columns.AddRange(
+            new DataGridViewTextBoxColumn { HeaderText = "参数", DataPropertyName = "Name", Width = 100 },
+            new DataGridViewTextBoxColumn { HeaderText = "当前值", DataPropertyName = "Value", Width = 80, DefaultCellStyle = new DataGridViewCellStyle { Format = "F1", Alignment = DataGridViewContentAlignment.MiddleRight } },
+            new DataGridViewTextBoxColumn { HeaderText = "单位", DataPropertyName = "Unit", Width = 50 },
+            new DataGridViewTextBoxColumn { HeaderText = "设定值", DataPropertyName = "SetPoint", Width = 80 },
+            new DataGridViewTextBoxColumn { HeaderText = "状态", DataPropertyName = "Status", Width = 60 }
+        );
+
+        return grid;
+    }
+
+    private void SetupRealtimeChart(Chart chart)
+    {
+        var area = new ChartArea("Main");
+        area.AxisX.Title = "时间";
+        area.AxisX.LabelStyle.Format = "HH:mm:ss";
+        area.AxisX.IntervalType = DateTimeIntervalType.Seconds;
+        area.AxisX.Interval = 10;
+        area.AxisY.Title = "温度 (°C)";
+        area.AxisY.Minimum = 0;
+        area.AxisY.Maximum = 120;
+        chart.ChartAreas.Add(area);
+
+        var series = new Series("实时温度")
+        {
+            ChartType = SeriesChartType.Line,
+            ChartArea = "Main",
+            Color = Color.DodgerBlue,
+            BorderWidth = 2,
+            XValueType = ChartValueType.DateTime
+        };
+        chart.Series.Add(series);
+
+        chart.Legends.Add(new Legend("Main"));
+    }
+}
+```
+
+### 7.2 报警弹窗和声音提示
+
+上位机的报警不仅是视觉反馈，还需要声音提示和弹窗通知，确保操作员不会错过关键信息：
+
+```csharp
+public class AlarmNotificationService
+{
+    private readonly Form _mainForm;
+
+    public AlarmNotificationService(Form mainForm)
+    {
+        _mainForm = mainForm;
+    }
+
+    public void NotifyAlarm(string parameterName, double value, string alarmType)
+    {
+        if (_mainForm.InvokeRequired)
+        {
+            _mainForm.Invoke(new Action(() =>
+                NotifyAlarm(parameterName, value, alarmType)));
+            return;
+        }
+
+        SystemSounds.Exclamation.Play();
+
+        var tooltip = new ToolTip
+        {
+            IsBalloon = true,
+            ToolTipTitle = "报警通知",
+            ToolTipIcon = ToolTipIcon.Warning
+        };
+        tooltip.Show(
+            $"{alarmType}：{parameterName} = {value:F2}",
+            _mainForm,
+            _mainForm.Width - 300,
+            50,
+            5000);
+
+        FlashWindow(_mainForm.Handle, true);
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool FlashWindow(IntPtr hWnd, bool bInvert);
+}
+```
+
+:::warning 报警不能阻塞 UI
+报警通知必须是非阻塞的。如果使用 `MessageBox.Show` 弹出模态对话框，操作员必须点击才能继续操作，这在连续报警的场景下非常烦人。推荐使用 Toast 风格的通知、任务栏闪烁、或者非模态的报警面板。
+:::
+
+### 7.3 布局设计原则
+
+上位机界面的设计遵循几个核心原则：
+
+| 原则 | 说明 | 实现方式 |
+|------|------|----------|
+| 信息密度 | 屏幕空间有限，信息要紧凑但不拥挤 | SplitContainer 自适应分割 |
+| 层次分明 | 最重要的信息在最醒目位置 | 中间大区域放曲线，两侧放辅助信息 |
+| 状态可见 | 任何状态变化都能被立即感知 | 指示灯 + 颜色变化 + 声音 |
+| 操作便捷 | 常用操作一步到位 | 工具栏快捷按钮 |
+| 异常突出 | 报警信息不能淹没在正常数据中 | 报警行变色 + 弹窗 + 声音 |
+
+:::note 分辨率适配
+上位机通常运行在固定分辨率的工控机上（常见 1920×1080 或 1280×1024）。使用 `Dock` 和 `SplitContainer` 布局比绝对定位更可靠，能适应不同分辨率。避免使用固定像素坐标放置控件。
+:::
+
+---
+
+## 小结
+
+本文覆盖了上位机实时数据展示的四大核心能力：
+
+1. **Chart 实时曲线**：DateTime 类型 X 轴、滚动窗口、多曲线对比、双 Y 轴、报警线、性能优化
+2. **DataGridView 表格**：BindingList 绑定、INotifyPropertyChanged 精确刷新、CellFormatting 条件样式、虚拟模式
+3. **自定义指示灯**：StatusLed 控件——四种状态、闪烁效果、圆形/方形外观、GDI+ 绘制
+4. **自定义仪表盘**：GaugeControl——刻度线、指针旋转、数值文字、渐变弧线
+5. **GDI+ 绘图基础**：Graphics、Pen/Brush、坐标变换、GraphicsPath、渐变效果
+6. **双缓冲防闪烁**：OptimizedDoubleBuffer、BufferedGraphics、外部控件双缓冲
+7. **界面布局实战**：经典五区布局、TabControl 多功能页、报警弹窗和声音提示
+
+下一篇[/posts/winforms/winforms-data-storage](/posts/winforms/winforms-data-storage)将深入数据存储与导出——SQLite 嵌入式数据库、CSV/Excel 导出、日志记录，让上位机的数据不只是"看一下"，还能"留下来"。

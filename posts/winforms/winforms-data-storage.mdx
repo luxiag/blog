@@ -1,0 +1,1831 @@
+---
+title: '数据存储与导出：SQLite、CSV 与日志系统'
+date: '2026-10-18'
+excerpt: '上位机数据持久化全方案：SQLite 嵌入式数据库的完整 CRUD、批量写入与查询优化、CSV/Excel 导出、日志框架选型与配置、配置文件管理，让数据不丢失、可追溯。'
+tags: ['csharp', 'winforms', '上位机', 'SQLite', 'CSV', '日志', '数据存储']
+nextPost: 'winforms/winforms-error-recovery'
+---
+
+<ProgressIndicator
+  current="winforms/winforms-data-storage"
+  items={[
+    { slug: "winforms/winforms-roadmap", title: "路线图与岗位分析" },
+    { slug: "winforms/winforms-basics", title: "WinForms 基础" },
+    { slug: "winforms/winforms-serial-port", title: "串口通信实战" },
+    { slug: "winforms/winforms-modbus-protocol", title: "Modbus 协议详解" },
+    { slug: "winforms/winforms-multithreading-async", title: "多线程与异步" },
+    { slug: "winforms/winforms-realtime-display", title: "实时数据展示" },
+    { slug: "winforms/winforms-data-storage", title: "数据存储与导出" },
+    { slug: "winforms/winforms-error-recovery", title: "异常处理与自动重连" },
+    { slug: "winforms/winforms-project-temperature", title: "完整项目实战" },
+  ]}
+/>
+
+# 数据存储与导出：SQLite、CSV 与日志系统
+
+在前面的文章中，我们实现了数据的采集、通信和实时展示。但上位机不是只看实时数据的——生产过程中产生的每一个温度值、每一次报警、每一行日志，都需要被持久化保存。为什么？因为**历史数据是追溯问题的依据，报警记录是安全审计的凭证，运行日志是故障排查的线索**。
+
+这篇文章覆盖上位机数据持久化的完整方案：SQLite 嵌入式数据库做结构化存储，CSV/Excel 做数据导出，日志框架做运行记录，JSON 做配置管理。读完之后，你会知道如何让上位机的数据"存得住、查得到、出得来"。
+
+---
+
+## 一、为什么上位机需要数据存储
+
+### 1.1 四个核心需求
+
+| 需求 | 场景 | 对应存储方式 |
+|------|------|-------------|
+| 历史数据查询 | "昨天下午 3 点温度是多少？" | SQLite 数据库 |
+| 报警追溯 | "上周三那次超温报警持续了多久？" | SQLite 数据库 |
+| 报表导出 | "把这个月的运行数据导出给质量部门" | CSV / Excel |
+| 审计合规 | "系统运行日志保留至少 6 个月" | 日志文件 + 数据库 |
+
+### 1.2 三种存储场景
+
+上位机要存储的数据大致分三类：
+
+- **实时数据**：每秒采集的传感器读数，数据量最大，写入频率最高
+- **报警记录**：设备异常时触发的报警，数据量中等，但重要性最高
+- **运行日志**：系统运行状态记录，数据量视日志级别而定
+
+### 1.3 数据量估算
+
+做一个简单的计算，假设 1 秒采集 1 条数据：
+
+| 时间跨度 | 数据条数 | 磁盘占用（估算） |
+|----------|----------|-----------------|
+| 1 天 | 86,400 | ~8 MB |
+| 1 个月 | 2,592,000 | ~250 MB |
+| 1 年 | 31,536,000 | ~3 GB |
+
+如果采集 10 个参数，1 年就是 **3 亿条、30 GB**。这个量级决定了我们必须从设计阶段就考虑写入性能、查询优化和数据清理策略。
+
+:::warning 不要把数据存储当事后补丁
+很多初学者先把功能做出来，最后才加数据库。结果发现写入性能不够、表结构不合理、没有索引——改动成本极高。**数据存储方案应该在项目初期就设计好**，至少确定表结构和索引策略。
+:::
+
+---
+
+## 二、SQLite 嵌入式数据库
+
+### 2.1 为什么选 SQLite
+
+上位机开发中，数据库选型的核心考量是：**部署简单、运维成本低、足够可靠**。
+
+| 对比项 | SQLite | SQL Server | MySQL |
+|--------|--------|------------|-------|
+| 部署方式 | 单文件，零配置 | 需要安装服务 | 需要安装服务 |
+| 运维成本 | 几乎为零 | 需要专职 DBA | 需要专职 DBA |
+| 并发写入 | 单写入者 | 多写入者 | 多写入者 |
+| 适用规模 | 单机、中小数据量 | 企业级、大数据量 | 企业级、大数据量 |
+| 跨平台 | 是 | 仅 Windows | 是 |
+| 安装包大小 | ~1 MB | 数 GB | 数百 MB |
+
+SQLite 的优势非常明显：**零配置、单文件、嵌入式、跨平台**。对于上位机这种单机部署、数据量中等的场景，SQLite 是最务实的选择。
+
+:::tip SQLite 的性能边界
+SQLite 的写入性能瓶颈在并发：同一时刻只能有一个写入者。但上位机通常是单进程写入，这个问题不大。实测在事务批量模式下，SQLite 可以达到 **每秒 5 万条以上的插入速度**，远超上位机的采集频率。
+:::
+
+### 2.2 环境搭建
+
+<Steps>
+### 安装 NuGet 包
+
+```bash
+dotnet add package Microsoft.Data.Sqlite
+```
+
+`Microsoft.Data.Sqlite` 是微软官方维护的 ADO.NET 提供程序，比旧的 `System.Data.SQLite` 更轻量、API 更现代。
+
+### 配置连接字符串
+
+```csharp
+public static class DatabaseConfig
+{
+    public static string ConnectionString { get; }
+
+    static DatabaseConfig()
+    {
+        var dbDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "MyScada", "Data");
+
+        Directory.CreateDirectory(dbDir);
+
+        var dbPath = Path.Combine(dbDir, "scada.db");
+        ConnectionString = $"Data Source={dbPath}";
+    }
+}
+```
+
+数据库文件放在 `C:\ProgramData\MyScada\Data\` 下，这个目录对所有用户可写，且不会因为用户切换而丢失数据。
+
+### 选择数据库文件位置
+
+| 位置 | 路径 | 适用场景 |
+|------|------|----------|
+| ProgramData | `C:\ProgramData\应用名\` | 推荐，所有用户共享 |
+| AppData\Local | `C:\Users\用户\AppData\Local\应用名\` | 用户独立数据 |
+| 程序目录 | `.\data\` | 便携部署，但需管理员权限 |
+</Steps>
+
+### 2.3 数据库初始化
+
+#### 建表 SQL
+
+```sql
+CREATE TABLE IF NOT EXISTS HistoryData (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ParameterName TEXT NOT NULL,
+    Value REAL NOT NULL,
+    Timestamp TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS AlarmRecord (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ParameterName TEXT NOT NULL,
+    AlarmType TEXT NOT NULL,
+    AlarmValue REAL NOT NULL,
+    Threshold REAL NOT NULL,
+    TriggeredAt TEXT NOT NULL,
+    RecoveredAt TEXT,
+    IsRecovered INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS SystemLog (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    Level TEXT NOT NULL,
+    Source TEXT NOT NULL,
+    Message TEXT NOT NULL,
+    Timestamp TEXT NOT NULL
+);
+```
+
+#### 索引设计
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_history_timestamp ON HistoryData(Timestamp);
+CREATE INDEX IF NOT EXISTS idx_history_param_time ON HistoryData(ParameterName, Timestamp);
+CREATE INDEX IF NOT EXISTS idx_alarm_triggered ON AlarmRecord(TriggeredAt);
+CREATE INDEX IF NOT EXISTS idx_alarm_unrecovered ON AlarmRecord(IsRecovered, TriggeredAt);
+CREATE INDEX IF NOT EXISTS idx_log_timestamp ON SystemLog(Timestamp);
+```
+
+<CodeAnnotation
+  language="sql"
+  lines={[
+    { code: 'CREATE INDEX IF NOT EXISTS idx_history_param_time', note: '联合索引：先按参数名过滤，再按时间范围扫描，覆盖最常用的查询模式' },
+    { code: 'ON HistoryData(ParameterName, Timestamp);' },
+    { code: '' },
+    { code: 'CREATE INDEX IF NOT EXISTS idx_alarm_unrecovered', note: '查询未恢复报警的核心索引：先定位未恢复记录，再按时间排序' },
+    { code: 'ON AlarmRecord(IsRecovered, TriggeredAt);' },
+  ]}
+/>
+
+:::note 索引不是越多越好
+每个索引都会增加写入开销和磁盘占用。上面的 5 个索引覆盖了上位机最常见的查询场景，不要盲目添加。如果某个查询变慢，先用 `EXPLAIN QUERY PLAN` 分析，再决定是否加索引。
+:::
+
+#### 数据库版本迁移
+
+```csharp
+public class DatabaseMigration
+{
+    private readonly string _connectionString;
+    private readonly List<Action<SqliteConnection>> _migrations;
+
+    public DatabaseMigration(string connectionString)
+    {
+        _connectionString = connectionString;
+        _migrations = new List<Action<SqliteConnection>>
+        {
+            MigrateV1,
+            MigrateV2,
+        };
+    }
+
+    public void Run()
+    {
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+
+        EnsureVersionTable(connection);
+
+        var currentVersion = GetVersion(connection);
+
+        for (int i = currentVersion; i < _migrations.Count; i++)
+        {
+            using var transaction = connection.BeginTransaction();
+            try
+            {
+                _migrations[i](connection);
+                SetVersion(connection, i + 1);
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+        }
+    }
+
+    private void EnsureVersionTable(SqliteConnection connection)
+    {
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            CREATE TABLE IF NOT EXISTS SchemaVersion (
+                Version INTEGER NOT NULL
+            );
+            INSERT INTO SchemaVersion (Version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM SchemaVersion)";
+        cmd.ExecuteNonQuery();
+    }
+
+    private int GetVersion(SqliteConnection connection)
+    {
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT MAX(Version) FROM SchemaVersion";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private void SetVersion(SqliteConnection connection, int version)
+    {
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE SchemaVersion SET Version = $version";
+        cmd.Parameters.AddWithValue("$version", version);
+        cmd.ExecuteNonQuery();
+    }
+
+    private void MigrateV1(SqliteConnection connection)
+    {
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            CREATE TABLE HistoryData (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ParameterName TEXT NOT NULL,
+                Value REAL NOT NULL,
+                Timestamp TEXT NOT NULL
+            );
+            CREATE INDEX idx_history_timestamp ON HistoryData(Timestamp);
+            CREATE INDEX idx_history_param_time ON HistoryData(ParameterName, Timestamp)";
+        cmd.ExecuteNonQuery();
+    }
+
+    private void MigrateV2(SqliteConnection connection)
+    {
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            CREATE TABLE AlarmRecord (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ParameterName TEXT NOT NULL,
+                AlarmType TEXT NOT NULL,
+                AlarmValue REAL NOT NULL,
+                Threshold REAL NOT NULL,
+                TriggeredAt TEXT NOT NULL,
+                RecoveredAt TEXT,
+                IsRecovered INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_alarm_triggered ON AlarmRecord(TriggeredAt)";
+        cmd.ExecuteNonQuery();
+    }
+}
+```
+
+### 2.4 CRUD 操作：完整的 DataStorage 类
+
+```csharp
+using Microsoft.Data.Sqlite;
+
+public class DataStorage : IDisposable
+{
+    private readonly SqliteConnection _connection;
+
+    public DataStorage(string connectionString)
+    {
+        _connection = new SqliteConnection(connectionString);
+        _connection.Open();
+        InitializeDatabase();
+    }
+
+    private void InitializeDatabase()
+    {
+        var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            CREATE TABLE IF NOT EXISTS HistoryData (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ParameterName TEXT NOT NULL,
+                Value REAL NOT NULL,
+                Timestamp TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS AlarmRecord (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ParameterName TEXT NOT NULL,
+                AlarmType TEXT NOT NULL,
+                AlarmValue REAL NOT NULL,
+                Threshold REAL NOT NULL,
+                TriggeredAt TEXT NOT NULL,
+                RecoveredAt TEXT,
+                IsRecovered INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_history_timestamp ON HistoryData(Timestamp);
+            CREATE INDEX IF NOT EXISTS idx_history_param_time ON HistoryData(ParameterName, Timestamp);
+            CREATE INDEX IF NOT EXISTS idx_alarm_triggered ON AlarmRecord(TriggeredAt);
+            CREATE INDEX IF NOT EXISTS idx_alarm_unrecovered ON AlarmRecord(IsRecovered, TriggeredAt)";
+        cmd.ExecuteNonQuery();
+    }
+
+    public void InsertHistoryData(string parameterName, double value, DateTime timestamp)
+    {
+        var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO HistoryData (ParameterName, Value, Timestamp)
+            VALUES ($name, $value, $time)";
+        cmd.Parameters.AddWithValue("$name", parameterName);
+        cmd.Parameters.AddWithValue("$value", value);
+        cmd.Parameters.AddWithValue("$time", timestamp.ToString("O"));
+        cmd.ExecuteNonQuery();
+    }
+
+    public List<HistoryRecord> QueryHistoryData(
+        string parameterName, DateTime startTime, DateTime endTime, int limit = 10000)
+    {
+        var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT ParameterName, Value, Timestamp
+            FROM HistoryData
+            WHERE ParameterName = $name
+              AND Timestamp BETWEEN $start AND $end
+            ORDER BY Timestamp DESC
+            LIMIT $limit";
+        cmd.Parameters.AddWithValue("$name", parameterName);
+        cmd.Parameters.AddWithValue("$start", startTime.ToString("O"));
+        cmd.Parameters.AddWithValue("$end", endTime.ToString("O"));
+        cmd.Parameters.AddWithValue("$limit", limit);
+
+        var results = new List<HistoryRecord>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new HistoryRecord
+            {
+                ParameterName = reader.GetString(0),
+                Value = reader.GetDouble(1),
+                Timestamp = DateTime.Parse(reader.GetString(2))
+            });
+        }
+        return results;
+    }
+
+    public (List<HistoryRecord> Data, int TotalCount) QueryHistoryDataPaged(
+        string parameterName, DateTime startTime, DateTime endTime, int page, int pageSize)
+    {
+        var countCmd = _connection.CreateCommand();
+        countCmd.CommandText = @"
+            SELECT COUNT(*) FROM HistoryData
+            WHERE ParameterName = $name
+              AND Timestamp BETWEEN $start AND $end";
+        countCmd.Parameters.AddWithValue("$name", parameterName);
+        countCmd.Parameters.AddWithValue("$start", startTime.ToString("O"));
+        countCmd.Parameters.AddWithValue("$end", endTime.ToString("O"));
+        var totalCount = Convert.ToInt32(countCmd.ExecuteScalar());
+
+        var dataCmd = _connection.CreateCommand();
+        dataCmd.CommandText = @"
+            SELECT ParameterName, Value, Timestamp
+            FROM HistoryData
+            WHERE ParameterName = $name
+              AND Timestamp BETWEEN $start AND $end
+            ORDER BY Timestamp DESC
+            LIMIT $pageSize OFFSET $offset";
+        dataCmd.Parameters.AddWithValue("$name", parameterName);
+        dataCmd.Parameters.AddWithValue("$start", startTime.ToString("O"));
+        dataCmd.Parameters.AddWithValue("$end", endTime.ToString("O"));
+        dataCmd.Parameters.AddWithValue("$pageSize", pageSize);
+        dataCmd.Parameters.AddWithValue("$offset", (page - 1) * pageSize);
+
+        var data = new List<HistoryRecord>();
+        using var reader = dataCmd.ExecuteReader();
+        while (reader.Read())
+        {
+            data.Add(new HistoryRecord
+            {
+                ParameterName = reader.GetString(0),
+                Value = reader.GetDouble(1),
+                Timestamp = DateTime.Parse(reader.GetString(2))
+            });
+        }
+
+        return (data, totalCount);
+    }
+
+    public int DeleteOldData(int retentionDays)
+    {
+        var cutoff = DateTime.Now.AddDays(-retentionDays).ToString("O");
+        var cmd = _connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM HistoryData WHERE Timestamp < $cutoff";
+        cmd.Parameters.AddWithValue("$cutoff", cutoff);
+        return cmd.ExecuteNonQuery();
+    }
+
+    public void InsertAlarm(string parameterName, string alarmType,
+        double alarmValue, double threshold, DateTime triggeredAt)
+    {
+        var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO AlarmRecord (ParameterName, AlarmType, AlarmValue, Threshold, TriggeredAt, IsRecovered)
+            VALUES ($name, $type, $value, $threshold, $time, 0)";
+        cmd.Parameters.AddWithValue("$name", parameterName);
+        cmd.Parameters.AddWithValue("$type", alarmType);
+        cmd.Parameters.AddWithValue("$value", alarmValue);
+        cmd.Parameters.AddWithValue("$threshold", threshold);
+        cmd.Parameters.AddWithValue("$time", triggeredAt.ToString("O"));
+        cmd.ExecuteNonQuery();
+    }
+
+    public void RecoverAlarm(int alarmId, DateTime recoveredAt)
+    {
+        var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE AlarmRecord
+            SET RecoveredAt = $time, IsRecovered = 1
+            WHERE Id = $id";
+        cmd.Parameters.AddWithValue("$time", recoveredAt.ToString("O"));
+        cmd.Parameters.AddWithValue("$id", alarmId);
+        cmd.ExecuteNonQuery();
+    }
+
+    public List<AlarmRecord> GetUnrecoveredAlarms()
+    {
+        var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT Id, ParameterName, AlarmType, AlarmValue, Threshold, TriggeredAt
+            FROM AlarmRecord
+            WHERE IsRecovered = 0
+            ORDER BY TriggeredAt DESC";
+
+        var results = new List<AlarmRecord>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new AlarmRecord
+            {
+                Id = reader.GetInt32(0),
+                ParameterName = reader.GetString(1),
+                AlarmType = reader.GetString(2),
+                AlarmValue = reader.GetDouble(3),
+                Threshold = reader.GetDouble(4),
+                TriggeredAt = DateTime.Parse(reader.GetString(5))
+            });
+        }
+        return results;
+    }
+
+    public void Dispose()
+    {
+        _connection?.Dispose();
+    }
+}
+
+public record HistoryRecord
+{
+    public string ParameterName { get; init; } = "";
+    public double Value { get; init; }
+    public DateTime Timestamp { get; init; }
+}
+
+public record AlarmRecord
+{
+    public int Id { get; init; }
+    public string ParameterName { get; init; } = "";
+    public string AlarmType { get; init; } = "";
+    public double AlarmValue { get; init; }
+    public double Threshold { get; init; }
+    public DateTime TriggeredAt { get; init; }
+    public DateTime? RecoveredAt { get; init; }
+    public bool IsRecovered { get; init; }
+}
+```
+
+### 2.5 批量写入优化
+
+逐条插入是性能杀手。下面对比三种写入方式的性能差异：
+
+| 方式 | 1 万条耗时 | 原因 |
+|------|-----------|------|
+| 逐条插入（无事务） | ~10 秒 | 每条都是一个独立事务，频繁刷盘 |
+| 事务批量插入 | ~0.2 秒 | 所有操作在同一个事务中，一次刷盘 |
+| 事务 + 参数化 + 缓存 | ~0.15 秒 | 复用命令对象，减少解析开销 |
+
+#### 事务批量插入
+
+```csharp
+public class BatchWriter
+{
+    private readonly string _connectionString;
+    private readonly ConcurrentQueue<HistoryRecord> _buffer = new();
+    private readonly int _batchSize;
+    private readonly TimeSpan _flushInterval;
+    private CancellationTokenSource _cts = new();
+    private Task? _flushTask;
+
+    public BatchWriter(string connectionString, int batchSize = 1000, int flushIntervalMs = 5000)
+    {
+        _connectionString = connectionString;
+        _batchSize = batchSize;
+        _flushInterval = TimeSpan.FromMilliseconds(flushIntervalMs);
+    }
+
+    public void Start()
+    {
+        _cts = new CancellationTokenSource();
+        _flushTask = Task.Run(() => FlushLoop(_cts.Token));
+    }
+
+    public void Stop()
+    {
+        _cts.Cancel();
+        Flush();
+        _flushTask?.Wait(TimeSpan.FromSeconds(10));
+    }
+
+    public void Enqueue(string parameterName, double value, DateTime timestamp)
+    {
+        _buffer.Enqueue(new HistoryRecord
+        {
+            ParameterName = parameterName,
+            Value = value,
+            Timestamp = timestamp
+        });
+
+        if (_buffer.Count >= _batchSize)
+        {
+            Task.Run(() => Flush());
+        }
+    }
+
+    private void FlushLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                Task.Delay(_flushInterval, ct).Wait(ct);
+                Flush();
+            }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    private void Flush()
+    {
+        if (_buffer.IsEmpty) return;
+
+        var batch = new List<HistoryRecord>();
+        while (_buffer.TryDequeue(out var record) && batch.Count < _batchSize)
+        {
+            batch.Add(record);
+        }
+
+        if (batch.Count == 0) return;
+
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var transaction = connection.BeginTransaction();
+
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO HistoryData (ParameterName, Value, Timestamp)
+                VALUES ($name, $value, $time)";
+
+            var nameParam = cmd.Parameters.AddWithValue("$name", "");
+            var valueParam = cmd.Parameters.AddWithValue("$value", 0.0);
+            var timeParam = cmd.Parameters.AddWithValue("$time", "");
+
+            foreach (var record in batch)
+            {
+                nameParam.Value = record.ParameterName;
+                valueParam.Value = record.Value;
+                timeParam.Value = record.Timestamp.ToString("O");
+                cmd.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+
+            foreach (var record in batch)
+            {
+                _buffer.Enqueue(record);
+            }
+            throw;
+        }
+    }
+}
+```
+
+<CodeAnnotation
+  language="csharp"
+  lines={[
+    { code: 'private readonly ConcurrentQueue<HistoryRecord> _buffer = new();', note: '线程安全的缓冲队列：采集线程写入，Flush 线程读取，无锁竞争' },
+    { code: '' },
+    { code: 'if (_buffer.Count >= _batchSize)', note: '达到批量阈值立即触发写入，不等定时器' },
+    { code: '{' },
+    { code: '    Task.Run(() => Flush());' },
+    { code: '}' },
+    { code: '' },
+    { code: 'var nameParam = cmd.Parameters.AddWithValue("$name", "");', note: '预创建参数对象，循环中只修改 Value，避免重复解析 SQL' },
+    { code: '' },
+    { code: 'foreach (var record in batch)', note: '事务内批量执行：1000 条只需一次 commit，性能提升 50 倍' },
+    { code: '{' },
+    { code: '    nameParam.Value = record.ParameterName;' },
+    { code: '    valueParam.Value = record.Value;' },
+    { code: '    timeParam.Value = record.Timestamp.ToString("O");' },
+    { code: '    cmd.ExecuteNonQuery();' },
+    { code: '}' },
+    { code: '' },
+    { code: 'foreach (var record in batch)', note: '写入失败时把数据重新放回队列，不丢失' },
+    { code: '{' },
+    { code: '    _buffer.Enqueue(record);' },
+    { code: '}' },
+  ]}
+/>
+
+:::tip 参数化查询防 SQL 注入
+上面的代码全部使用 `$name`、`$value` 等参数化占位符，而不是字符串拼接。这不是性能问题，而是安全问题。即使上位机通常不会面临外部攻击，参数化查询也是必须遵守的底线。
+:::
+
+### 2.6 查询优化
+
+#### EXPLAIN QUERY PLAN 分析
+
+```csharp
+public void AnalyzeQuery(string sql, Dictionary<string, object> parameters)
+{
+    using var connection = new SqliteConnection(_connectionString);
+    connection.Open();
+
+    var cmd = connection.CreateCommand();
+    cmd.CommandText = $"EXPLAIN QUERY PLAN {sql}";
+    foreach (var p in parameters)
+    {
+        cmd.Parameters.AddWithValue($"${p.Key}", p.Value);
+    }
+
+    using var reader = cmd.ExecuteReader();
+    while (reader.Read())
+    {
+        Console.WriteLine(reader.GetString(2));
+    }
+}
+```
+
+如果输出中出现 `USING INDEX idx_history_param_time`，说明索引生效了；如果出现 `SCAN TABLE`，说明全表扫描，需要优化。
+
+#### 聚合查询
+
+```csharp
+public StatisticalResult GetStatistics(string parameterName, DateTime startTime, DateTime endTime)
+{
+    using var connection = new SqliteConnection(_connectionString);
+    connection.Open();
+
+    var cmd = connection.CreateCommand();
+    cmd.CommandText = @"
+        SELECT COUNT(*), AVG(Value), MAX(Value), MIN(Value)
+        FROM HistoryData
+        WHERE ParameterName = $name
+          AND Timestamp BETWEEN $start AND $end";
+    cmd.Parameters.AddWithValue("$name", parameterName);
+    cmd.Parameters.AddWithValue("$start", startTime.ToString("O"));
+    cmd.Parameters.AddWithValue("$end", endTime.ToString("O"));
+
+    using var reader = cmd.ExecuteReader();
+    if (reader.Read())
+    {
+        return new StatisticalResult
+        {
+            Count = reader.GetInt32(0),
+            Average = reader.IsDBNull(1) ? 0 : reader.GetDouble(1),
+            Maximum = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
+            Minimum = reader.IsDBNull(3) ? 0 : reader.GetDouble(3)
+        };
+    }
+
+    return new StatisticalResult();
+}
+
+public record StatisticalResult
+{
+    public int Count { get; init; }
+    public double Average { get; init; }
+    public double Maximum { get; init; }
+    public double Minimum { get; init; }
+}
+```
+
+#### 数据压缩：按小时聚合旧数据
+
+数据量增长后，可以将 30 天前的秒级数据聚合为小时级，大幅减少存储占用：
+
+```csharp
+public int CompressOldData(int compressAfterDays = 30)
+{
+    var cutoff = DateTime.Now.AddDays(-compressAfterDays).ToString("O");
+
+    using var connection = new SqliteConnection(_connectionString);
+    connection.Open();
+    using var transaction = connection.BeginTransaction();
+
+    try
+    {
+        var insertCmd = connection.CreateCommand();
+        insertCmd.CommandText = @"
+            INSERT OR REPLACE INTO HistoryData (ParameterName, Value, Timestamp)
+            SELECT
+                ParameterName,
+                AVG(Value),
+                strftime('%Y-%m-%d %H:00:00', Timestamp)
+            FROM HistoryData
+            WHERE Timestamp < $cutoff
+            GROUP BY ParameterName, strftime('%Y-%m-%d %H', Timestamp)";
+        insertCmd.Parameters.AddWithValue("$cutoff", cutoff);
+        insertCmd.ExecuteNonQuery();
+
+        var deleteCmd = connection.CreateCommand();
+        deleteCmd.CommandText = @"
+            DELETE FROM HistoryData
+            WHERE Timestamp < $cutoff
+              AND Id NOT IN (
+                SELECT MAX(Id) FROM HistoryData
+                WHERE Timestamp < $cutoff
+                GROUP BY ParameterName, strftime('%Y-%m-%d %H', Timestamp)
+              )";
+        deleteCmd.Parameters.AddWithValue("$cutoff", cutoff);
+        var deleted = deleteCmd.ExecuteNonQuery();
+
+        transaction.Commit();
+        return deleted;
+    }
+    catch
+    {
+        transaction.Rollback();
+        throw;
+    }
+}
+```
+
+:::warning 压缩是不可逆的
+数据压缩会丢失秒级精度。执行前务必备份，并确认业务方接受小时级精度。
+:::
+
+---
+
+## 三、CSV 文件导出
+
+### 3.1 CSV 格式规范
+
+CSV（Comma-Separated Values）看似简单，实则有很多坑。简要了解 RFC 4180 的核心规则：
+
+- 字段包含逗号、换行或双引号时，必须用双引号包裹
+- 字段内的双引号要转义为两个双引号 `""`
+- 换行符为 `\r\n`（Windows 标准）
+- 中文环境必须使用 UTF-8 with BOM，否则 Excel 打开会乱码
+
+### 3.2 完整的 CsvExporter 类
+
+```csharp
+public class CsvExporter
+{
+    public static void Export(
+        IEnumerable<HistoryRecord> records,
+        string filePath,
+        string title = "历史数据导出")
+    {
+        using var writer = new StreamWriter(filePath, false, new UTF8Encoding(true));
+
+        writer.WriteLine($"# {title}");
+        writer.WriteLine($"# 导出时间: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        writer.WriteLine();
+
+        writer.WriteLine("参数名称,数值,时间戳");
+
+        foreach (var record in records)
+        {
+            var line = string.Join(",",
+                EscapeCsvField(record.ParameterName),
+                record.Value.ToString("F4"),
+                EscapeCsvField(record.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff")));
+            writer.WriteLine(line);
+        }
+    }
+
+    public static string ExportToString(IEnumerable<HistoryRecord> records)
+    {
+        using var ms = new MemoryStream();
+        using var writer = new StreamWriter(ms, new UTF8Encoding(true));
+
+        writer.WriteLine("参数名称,数值,时间戳");
+        foreach (var record in records)
+        {
+            var line = string.Join(",",
+                EscapeCsvField(record.ParameterName),
+                record.Value.ToString("F4"),
+                EscapeCsvField(record.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff")));
+            writer.WriteLine(line);
+        }
+
+        writer.Flush();
+        return Encoding.UTF8.GetString(ms.ToArray());
+    }
+
+    private static string EscapeCsvField(string field)
+    {
+        if (field.Contains(',') || field.Contains('"') || field.Contains('\n') || field.Contains('\r'))
+        {
+            return $"\"{field.Replace("\"", "\"\"")}\"";
+        }
+        return field;
+    }
+
+    public static void ExportWithPaging(
+        Func<int, int, List<HistoryRecord>> dataProvider,
+        string directory,
+        string baseFileName,
+        int pageSize = 100000)
+    {
+        Directory.CreateDirectory(directory);
+
+        int page = 1;
+        while (true)
+        {
+            var data = dataProvider(page, pageSize);
+            if (data.Count == 0) break;
+
+            var filePath = Path.Combine(directory, $"{baseFileName}_Part{page}.csv");
+            Export(data, filePath);
+
+            if (data.Count < pageSize) break;
+            page++;
+        }
+    }
+}
+```
+
+### 3.3 SaveFileDialog 集成
+
+```csharp
+private void btnExportCsv_Click(object sender, EventArgs e)
+{
+    using var dialog = new SaveFileDialog
+    {
+        Filter = "CSV 文件|*.csv|所有文件|*.*",
+        FileName = $"历史数据_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
+        DefaultExt = "csv"
+    };
+
+    if (dialog.ShowDialog() != DialogResult.OK) return;
+
+    try
+    {
+        var data = _storage.QueryHistoryData(
+            cmbParameter.SelectedItem?.ToString() ?? "",
+            dtpStart.Value, dtpEnd.Value);
+
+        CsvExporter.Export(data, dialog.FileName);
+        MessageBox.Show($"导出成功！共 {data.Count} 条记录", "提示",
+            MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+        if (chkOpenAfterExport.Checked)
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = dialog.FileName,
+                UseShellExecute = true
+            });
+        }
+    }
+    catch (Exception ex)
+    {
+        MessageBox.Show($"导出失败：{ex.Message}", "错误",
+            MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+}
+```
+
+:::tip 大数据量分文件导出
+当数据量超过 10 万条时，单个 CSV 文件在 Excel 中打开会很慢。`ExportWithPaging` 方法会自动按页切割成多个文件，每个文件不超过指定条数。
+:::
+
+---
+
+## 四、Excel 导出（NPOI）
+
+CSV 只能存纯文本数据，如果需要设置字体、颜色、边框、多 Sheet 等样式，就需要 NPOI。
+
+### 4.1 安装 NPOI
+
+```bash
+dotnet add package NPOI
+```
+
+### 4.2 完整的 ExcelExporter 类
+
+```csharp
+using NPOI.SS.UserModel;
+using NPOI.XSSF.UserModel;
+
+public class ExcelExporter
+{
+    public static void ExportHistoryData(
+        IEnumerable<HistoryRecord> records,
+        string filePath,
+        string sheetName = "历史数据")
+    {
+        IWorkbook workbook = new XSSFWorkbook();
+
+        var sheet = workbook.CreateSheet(sheetName);
+        CreateHeaderRow(sheet, new[] { "参数名称", "数值", "时间戳" });
+
+        var headerStyle = CreateHeaderStyle(workbook);
+        ApplyHeaderStyle(sheet, headerStyle);
+
+        int rowIndex = 1;
+        foreach (var record in records)
+        {
+            var row = sheet.CreateRow(rowIndex++);
+            row.CreateCell(0).SetCellValue(record.ParameterName);
+            row.CreateCell(1).SetCellValue(record.Value);
+            row.CreateCell(2).SetCellValue(record.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff"));
+        }
+
+        sheet.AutoSizeColumn(0);
+        sheet.AutoSizeColumn(1);
+        sheet.AutoSizeColumn(2);
+
+        using var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+        workbook.Write(fs);
+    }
+
+    public static void ExportMultiSheet(
+        Dictionary<string, List<HistoryRecord>> dataSets,
+        string filePath)
+    {
+        IWorkbook workbook = new XSSFWorkbook();
+        var headerStyle = CreateHeaderStyle(workbook);
+
+        foreach (var kvp in dataSets)
+        {
+            var sheet = workbook.CreateSheet(kvp.Key);
+            CreateHeaderRow(sheet, new[] { "参数名称", "数值", "时间戳" });
+            ApplyHeaderStyle(sheet, headerStyle);
+
+            int rowIndex = 1;
+            foreach (var record in kvp.Value)
+            {
+                var row = sheet.CreateRow(rowIndex++);
+                row.CreateCell(0).SetCellValue(record.ParameterName);
+                row.CreateCell(1).SetCellValue(record.Value);
+                row.CreateCell(2).SetCellValue(record.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff"));
+            }
+
+            for (int i = 0; i < 3; i++)
+            {
+                sheet.AutoSizeColumn(i);
+            }
+        }
+
+        using var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+        workbook.Write(fs);
+    }
+
+    public static void ExportAlarmRecords(
+        IEnumerable<AlarmRecord> alarms,
+        string filePath)
+    {
+        IWorkbook workbook = new XSSFWorkbook();
+        var sheet = workbook.CreateSheet("报警记录");
+        var headerStyle = CreateHeaderStyle(workbook);
+        var alarmStyle = CreateAlarmStyle(workbook);
+
+        CreateHeaderRow(sheet, new[] { "参数", "报警类型", "报警值", "阈值", "触发时间", "恢复时间", "状态" });
+        ApplyHeaderStyle(sheet, headerStyle);
+
+        int rowIndex = 1;
+        foreach (var alarm in alarms)
+        {
+            var row = sheet.CreateRow(rowIndex++);
+            row.CreateCell(0).SetCellValue(alarm.ParameterName);
+            row.CreateCell(1).SetCellValue(alarm.AlarmType);
+            row.CreateCell(2).SetCellValue(alarm.AlarmValue);
+            row.CreateCell(3).SetCellValue(alarm.Threshold);
+            row.CreateCell(4).SetCellValue(alarm.TriggeredAt.ToString("yyyy-MM-dd HH:mm:ss"));
+            row.CreateCell(5).SetCellValue(alarm.RecoveredAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "未恢复");
+            row.CreateCell(6).SetCellValue(alarm.IsRecovered ? "已恢复" : "未恢复");
+
+            if (!alarm.IsRecovered)
+            {
+                var cell = row.GetCell(6);
+                cell.CellStyle = alarmStyle;
+            }
+        }
+
+        for (int i = 0; i < 7; i++)
+        {
+            sheet.AutoSizeColumn(i);
+        }
+
+        using var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+        workbook.Write(fs);
+    }
+
+    private static void CreateHeaderRow(ISheet sheet, string[] headers)
+    {
+        var row = sheet.CreateRow(0);
+        for (int i = 0; i < headers.Length; i++)
+        {
+            row.CreateCell(i).SetCellValue(headers[i]);
+        }
+    }
+
+    private static void ApplyHeaderStyle(ISheet sheet, ICellStyle style)
+    {
+        var row = sheet.GetRow(0);
+        for (int i = 0; i < row.LastCellNum; i++)
+        {
+            row.GetCell(i).CellStyle = style;
+        }
+    }
+
+    private static ICellStyle CreateHeaderStyle(IWorkbook workbook)
+    {
+        var style = workbook.CreateCellStyle();
+        style.FillForegroundColor = IndexedColors.Grey25Percent.Index;
+        style.FillPattern = FillPattern.SolidForeground;
+
+        var font = workbook.CreateFont();
+        font.IsBold = true;
+        font.FontHeightInPoints = 11;
+        style.SetFont(font);
+
+        style.BorderBottom = BorderStyle.Thin;
+        style.BorderTop = BorderStyle.Thin;
+        style.BorderLeft = BorderStyle.Thin;
+        style.BorderRight = BorderStyle.Thin;
+
+        return style;
+    }
+
+    private static ICellStyle CreateAlarmStyle(IWorkbook workbook)
+    {
+        var style = workbook.CreateCellStyle();
+        style.FillForegroundColor = IndexedColors.Red.Index;
+        style.FillPattern = FillPattern.SolidForeground;
+
+        var font = workbook.CreateFont();
+        font.Color = IndexedColors.White.Index;
+        font.IsBold = true;
+        style.SetFont(font);
+
+        return style;
+    }
+}
+```
+
+:::note NPOI vs ClosedXML vs EPPlus
+- **NPOI**：开源免费，支持 .xls 和 .xlsx，API 较底层
+- **ClosedXML**：API 更友好，仅支持 .xlsx，开源免费
+- **EPPlus**：性能最好，但商业使用需要付费许可
+
+上位机项目推荐 NPOI 或 ClosedXML，两者都免费且功能完整。本文选 NPOI 是因为它对 .xls 格式的兼容性在工业领域仍有需求。
+:::
+
+---
+
+## 五、日志系统
+
+日志是上位机的"黑匣子"。程序崩溃时，日志是唯一能还原现场的依据。
+
+### 5.1 自定义简单日志
+
+对于小型项目，一个轻量级的文件日志就够了：
+
+```csharp
+public enum LogLevel
+{
+    Debug, Info, Warn, Error
+}
+
+public class SimpleFileLogger
+{
+    private readonly string _logDir;
+    private readonly LogLevel _minLevel;
+    private readonly object _lock = new();
+    private StreamWriter? _currentWriter;
+    private string? _currentDate;
+
+    public SimpleFileLogger(string logDir, LogLevel minLevel = LogLevel.Info)
+    {
+        _logDir = logDir;
+        _minLevel = minLevel;
+        Directory.CreateDirectory(logDir);
+    }
+
+    public void Debug(string message) => Write(LogLevel.Debug, message);
+    public void Info(string message) => Write(LogLevel.Info, message);
+    public void Warn(string message) => Write(LogLevel.Warn, message);
+    public void Error(string message) => Write(LogLevel.Error, message);
+    public void Error(Exception ex, string message = "") =>
+        Write(LogLevel.Error, $"{message}\n{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
+
+    private void Write(LogLevel level, string message)
+    {
+        if (level < _minLevel) return;
+
+        var timestamp = DateTime.Now;
+        var dateKey = timestamp.ToString("yyyy-MM-dd");
+        var logLine = $"{timestamp:HH:mm:ss.fff} [{level,-5}] {message}";
+
+        lock (_lock)
+        {
+            EnsureWriter(dateKey);
+            _currentWriter!.WriteLine(logLine);
+            _currentWriter.Flush();
+        }
+    }
+
+    private void EnsureWriter(string dateKey)
+    {
+        if (_currentDate == dateKey && _currentWriter != null) return;
+
+        _currentWriter?.Dispose();
+
+        var filePath = Path.Combine(_logDir, $"log_{dateKey}.txt");
+        _currentWriter = new StreamWriter(filePath, true, Encoding.UTF8);
+        _currentDate = dateKey;
+    }
+
+    public void Close()
+    {
+        lock (_lock)
+        {
+            _currentWriter?.Dispose();
+            _currentWriter = null;
+            _currentDate = null;
+        }
+    }
+}
+```
+
+<CodeAnnotation
+  language="csharp"
+  lines={[
+    { code: 'private readonly object _lock = new();', note: '所有写入操作都在 lock 内执行，保证多线程安全' },
+    { code: '' },
+    { code: 'private void EnsureWriter(string dateKey)', note: '按日期自动切换日志文件：每天的日志写入独立文件' },
+    { code: '{' },
+    { code: '    if (_currentDate == dateKey && _currentWriter != null) return;', note: '同一天内复用 StreamWriter，避免频繁开关文件' },
+    { code: '' },
+    { code: '    _currentWriter?.Dispose();' },
+    { code: '' },
+    { code: '    var filePath = Path.Combine(_logDir, $"log_{dateKey}.txt");', note: '文件名格式 log_2026-10-18.txt，直观可查找' },
+    { code: '    _currentWriter = new StreamWriter(filePath, true, Encoding.UTF8);', note: 'append=true 追加写入，程序重启不会覆盖旧日志' },
+  ]}
+/>
+
+### 5.2 NLog 日志框架
+
+项目规模稍大后，建议使用成熟的日志框架。NLog 是 .NET 生态最流行的日志框架之一。
+
+<Steps>
+### 安装 NLog
+
+```bash
+dotnet add package NLog
+dotnet add package NLog.Schema
+```
+
+### 创建 NLog.config
+
+```xml
+<?xml version="1.0" encoding="utf-8" ?>
+<nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      autoReload="true">
+
+  <targets>
+    <target name="file" xsi:type="File"
+            fileName="${basedir}/logs/app_${date:format=yyyy-MM-dd}.log"
+            layout="${longdate} | ${level:uppercase=true:padding=-5} | ${logger} | ${message} ${exception:format=toString}"
+            encoding="utf-8"
+            keepFileOpen="true"
+            concurrentWrites="true" />
+
+    <target name="console" xsi:type="ColoredConsole"
+            layout="${time} | ${level:padding=-5} | ${message} ${exception:format=toString}" />
+  </targets>
+
+  <rules>
+    <logger name="*" minlevel="Debug" writeTo="console" />
+    <logger name="*" minlevel="Info" writeTo="file" />
+  </rules>
+</nlog>
+```
+
+确保 `NLog.config` 文件属性设置为"复制到输出目录"。
+
+### 使用 Logger
+
+```csharp
+public class MainService
+{
+    private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
+
+    public void Start()
+    {
+        Logger.Info("系统启动");
+
+        try
+        {
+            ConnectDevice();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "设备连接失败");
+        }
+    }
+
+    private void ConnectDevice()
+    {
+        Logger.Debug("尝试连接设备 COM3...");
+    }
+}
+```
+
+### 结构化日志
+
+```csharp
+var logger = NLog.LogManager.GetLogger("ModbusService");
+
+logger.Info("读取寄存器: 从站={SlaveId} 起始地址={StartAddress} 数量={Count}",
+    slaveId, startAddress, count);
+
+logger.Warn("通信超时: 从站={SlaveId} 重试次数={RetryCount}",
+    slaveId, retryCount);
+```
+</Steps>
+
+### 5.3 Serilog 日志框架
+
+Serilog 以结构化日志著称，支持丰富的 Sink（输出目标）。
+
+<Steps>
+### 安装 Serilog
+
+```bash
+dotnet add package Serilog
+dotnet add package Serilog.Sinks.File
+dotnet add package Serilog.Sinks.Console
+dotnet add package Serilog.Sinks.SQLite
+```
+
+### 配置 Serilog
+
+```csharp
+using Serilog;
+
+public static class LoggerConfig
+{
+    public static void Configure(string logDirectory)
+    {
+        Directory.CreateDirectory(logDirectory);
+
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.Console(
+                outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+            .WriteTo.File(
+                Path.Combine(logDirectory, "app_.log"),
+                rollingInterval: RollingInterval.Day,
+                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}",
+                fileSizeLimitBytes: 10 * 1024 * 1024,
+                retainedFileCountLimit: 90,
+                encoding: System.Text.Encoding.UTF8)
+            .WriteTo.SQLite(
+                Path.Combine(logDirectory, "logs.db"),
+                batchSize: 100,
+                period: TimeSpan.FromSeconds(5))
+            .Enrich.FromLogContext()
+            .Enrich.WithMachineName()
+            .Enrich.WithThreadId()
+            .CreateLogger();
+    }
+}
+```
+
+### 使用 Serilog
+
+```csharp
+using Serilog;
+
+public class CommunicationService
+{
+    public void SendData(int slaveId, byte[] data)
+    {
+        Log.Information("发送数据: 从站={SlaveId}, 字节数={Length}", slaveId, data.Length);
+
+        using (LogContext.PushProperty("SlaveId", slaveId))
+        {
+            try
+            {
+                TransmitRaw(data);
+                Log.Debug("数据发送成功");
+            }
+            catch (TimeoutException ex)
+            {
+                Log.Warning(ex, "从站 {SlaveId} 响应超时", slaveId);
+            }
+        }
+    }
+
+    private void TransmitRaw(byte[] data) { }
+}
+```
+</Steps>
+
+:::details NLog vs Serilog 如何选择？
+
+| 对比项 | NLog | Serilog |
+|--------|------|---------|
+| 配置方式 | XML 配置文件 | 代码配置（也支持 JSON） |
+| 结构化日志 | 支持（参数模板） | 原生支持（核心设计） |
+| Sink/Target 数量 | ~90 个 Target | ~200 个 Sink |
+| 性能 | 略优 | 略低（结构化开销） |
+| 学习曲线 | 平缓 | 稍陡 |
+
+**建议**：
+- 小型项目 / 传统 WinForms：选 NLog，XML 配置直观，上手快
+- 需要结构化日志 / 多输出目标：选 Serilog，Sink 生态更丰富
+- 两者性能差异对上位机场景可以忽略
+:::
+
+---
+
+## 六、配置文件管理
+
+上位机的串口参数、报警阈值、窗口位置等配置需要持久化，JSON 是最简洁的方案。
+
+### 6.1 配置模型类
+
+```csharp
+public class AppConfig
+{
+    public SerialPortConfig SerialPort { get; set; } = new();
+    public DisplayConfig Display { get; set; } = new();
+    public AlarmConfig Alarm { get; set; } = new();
+    public DatabaseConfig Database { get; set; } = new();
+}
+
+public class SerialPortConfig
+{
+    public string PortName { get; set; } = "COM1";
+    public int BaudRate { get; set; } = 9600;
+    public int DataBits { get; set; } = 8;
+    public string Parity { get; set; } = "None";
+    public string StopBits { get; set; } = "One";
+}
+
+public class DisplayConfig
+{
+    public int WindowX { get; set; } = 100;
+    public int WindowY { get; set; } = 100;
+    public int WindowWidth { get; set; } = 1200;
+    public int WindowHeight { get; set; } = 800;
+    public int RefreshInterval { get; set; } = 1000;
+    public int ChartDuration { get; set; } = 300;
+}
+
+public class AlarmConfig
+{
+    public double TemperatureHigh { get; set; } = 100.0;
+    public double TemperatureLow { get; set; } = 0.0;
+    public double PressureHigh { get; set; } = 1.0;
+    public bool AlarmSoundEnabled { get; set; } = true;
+}
+
+public class DatabaseConfig
+{
+    public int RetentionDays { get; set; } = 365;
+    public int BatchSize { get; set; } = 1000;
+    public int FlushIntervalMs { get; set; } = 5000;
+    public bool AutoCompress { get; set; } = true;
+    public int CompressAfterDays { get; set; } = 30;
+}
+```
+
+### 6.2 配置读写
+
+```csharp
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+public class ConfigManager
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter() }
+    };
+
+    private readonly string _configPath;
+    private AppConfig _config;
+    private FileSystemWatcher? _watcher;
+
+    public event EventHandler<AppConfig>? ConfigChanged;
+
+    public AppConfig Current => _config;
+
+    public ConfigManager(string configPath)
+    {
+        _configPath = configPath;
+        _config = Load();
+        StartWatching();
+    }
+
+    public AppConfig Load()
+    {
+        if (!File.Exists(_configPath))
+        {
+            var defaultConfig = new AppConfig();
+            Save(defaultConfig);
+            return defaultConfig;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(_configPath);
+            return JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
+        }
+        catch
+        {
+            return new AppConfig();
+        }
+    }
+
+    public void Save(AppConfig config)
+    {
+        _config = config;
+        var dir = Path.GetDirectoryName(_configPath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+        var json = JsonSerializer.Serialize(config, JsonOptions);
+        File.WriteAllText(_configPath, json);
+    }
+
+    public void Update(Action<AppConfig> updater)
+    {
+        updater(_config);
+        Save(_config);
+    }
+
+    private void StartWatching()
+    {
+        var dir = Path.GetDirectoryName(_configPath);
+        var fileName = Path.GetFileName(_configPath);
+        if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(fileName)) return;
+
+        _watcher = new FileSystemWatcher(dir)
+        {
+            Filter = fileName,
+            NotifyFilter = NotifyFilters.LastWrite
+        };
+
+        var lastWrite = DateTime.MinValue;
+
+        _watcher.Changed += (_, _) =>
+        {
+            var lastModified = File.GetLastWriteTime(_configPath);
+            if (lastModified == lastWrite) return;
+            lastWrite = lastModified;
+
+            try
+            {
+                _config = Load();
+                ConfigChanged?.Invoke(this, _config);
+            }
+            catch { }
+        };
+
+        _watcher.EnableRaisingEvents = true;
+    }
+
+    public void Dispose()
+    {
+        _watcher?.Dispose();
+    }
+}
+```
+
+### 6.3 在主窗体中使用
+
+```csharp
+public partial class MainForm : Form
+{
+    private readonly ConfigManager _configManager;
+
+    public MainForm()
+    {
+        InitializeComponent();
+
+        var configPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "MyScada", "config.json");
+
+        _configManager = new ConfigManager(configPath);
+        _configManager.ConfigChanged += OnConfigChanged;
+
+        ApplyConfig(_configManager.Current);
+    }
+
+    private void ApplyConfig(AppConfig config)
+    {
+        this.Location = new Point(config.Display.WindowX, config.Display.WindowY);
+        this.Size = new Size(config.Display.WindowWidth, config.Display.WindowHeight);
+        cmbPortName.SelectedItem = config.SerialPort.PortName;
+        numBaudRate.Value = config.SerialPort.BaudRate;
+        numTempHigh.Value = (decimal)config.Alarm.TemperatureHigh;
+    }
+
+    private void OnConfigChanged(object? sender, AppConfig config)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(() => ApplyConfig(config)));
+            return;
+        }
+        ApplyConfig(config);
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        _configManager.Update(c =>
+        {
+            c.Display.WindowX = this.Location.X;
+            c.Display.WindowY = this.Location.Y;
+            c.Display.WindowWidth = this.Size.Width;
+            c.Display.WindowHeight = this.Size.Height;
+        });
+
+        base.OnFormClosing(e);
+    }
+}
+```
+
+---
+
+## 七、数据备份与清理策略
+
+数据存储不是只管写不管清，必须有一套完整的生命周期管理。
+
+### 7.1 定时自动备份
+
+```csharp
+public class DatabaseBackupService : IDisposable
+{
+    private readonly string _dbPath;
+    private readonly string _backupDir;
+    private readonly TimeSpan _backupInterval;
+    private Timer? _timer;
+
+    public DatabaseBackupService(string dbPath, string backupDir, int backupIntervalHours = 24)
+    {
+        _dbPath = dbPath;
+        _backupDir = backupDir;
+        _backupInterval = TimeSpan.FromHours(backupIntervalHours);
+        Directory.CreateDirectory(backupDir);
+    }
+
+    public void Start()
+    {
+        _timer = new Timer(_ => Backup(), null, _backupInterval, _backupInterval);
+    }
+
+    public void Backup()
+    {
+        if (!File.Exists(_dbPath)) return;
+
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var backupPath = Path.Combine(_backupDir, $"scada_backup_{timestamp}.db");
+
+        File.Copy(_dbPath, backupPath, overwrite: false);
+
+        CleanOldBackups(30);
+    }
+
+    private void CleanOldBackups(int retainCount)
+    {
+        var backups = Directory.GetFiles(_backupDir, "scada_backup_*.db")
+            .OrderByDescending(f => f)
+            .Skip(retainCount);
+
+        foreach (var file in backups)
+        {
+            try { File.Delete(file); } catch { }
+        }
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+    }
+}
+```
+
+### 7.2 数据清理与磁盘监控
+
+```csharp
+public class DataMaintenanceService : IDisposable
+{
+    private readonly DataStorage _storage;
+    private readonly ConfigManager _configManager;
+    private Timer? _timer;
+
+    public DataMaintenanceService(DataStorage storage, ConfigManager configManager)
+    {
+        _storage = storage;
+        _configManager = configManager;
+    }
+
+    public void Start()
+    {
+        _timer = new Timer(ExecuteMaintenance, null,
+            TimeSpan.FromHours(1), TimeSpan.FromHours(24));
+    }
+
+    private void ExecuteMaintenance(object? state)
+    {
+        try
+        {
+            CheckDiskSpace();
+            CleanOldData();
+            CompressOldData();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "数据维护任务执行失败");
+        }
+    }
+
+    private void CheckDiskSpace()
+    {
+        var drive = new DriveInfo(Path.GetPathRoot(DatabaseConfig.ConnectionString) ?? "C:\\");
+        var freeGB = drive.AvailableFreeSpace / (1024.0 * 1024 * 1024);
+
+        if (freeGB < 1.0)
+        {
+            Log.Error("磁盘空间不足！剩余 {FreeGB:F2} GB", freeGB);
+        }
+        else if (freeGB < 5.0)
+        {
+            Log.Warning("磁盘空间偏低，剩余 {FreeGB:F2} GB", freeGB);
+        }
+    }
+
+    private void CleanOldData()
+    {
+        var retentionDays = _configManager.Current.Database.RetentionDays;
+        var deleted = _storage.DeleteOldData(retentionDays);
+        Log.Information("清理过期数据完成，删除 {Count} 条记录（保留 {Days} 天）", deleted, retentionDays);
+    }
+
+    private void CompressOldData()
+    {
+        if (!_configManager.Current.Database.AutoCompress) return;
+
+        var compressAfter = _configManager.Current.Database.CompressAfterDays;
+        var compressed = _storage.CompressOldData(compressAfter);
+        Log.Information("数据压缩完成，压缩 {Count} 条旧数据（{Days} 天前）", compressed, compressAfter);
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+    }
+}
+```
+
+### 7.3 完整的存储系统初始化
+
+把上面所有组件整合起来，在程序启动时统一初始化：
+
+```csharp
+public class StorageBootstrap : IDisposable
+{
+    private readonly DataStorage _storage;
+    private readonly BatchWriter _batchWriter;
+    private readonly DatabaseBackupService _backupService;
+    private readonly DataMaintenanceService _maintenanceService;
+    private readonly ConfigManager _configManager;
+
+    public DataStorage Storage => _storage;
+    public BatchWriter BatchWriter => _batchWriter;
+    public ConfigManager Config => _configManager;
+
+    public StorageBootstrap()
+    {
+        var configPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "MyScada", "config.json");
+        _configManager = new ConfigManager(configPath);
+
+        var dbDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "MyScada", "Data");
+        Directory.CreateDirectory(dbDir);
+
+        var dbPath = Path.Combine(dbDir, "scada.db");
+        var connectionString = $"Data Source={dbPath}";
+
+        _storage = new DataStorage(connectionString);
+
+        var dbConfig = _configManager.Current.Database;
+        _batchWriter = new BatchWriter(
+            connectionString,
+            dbConfig.BatchSize,
+            dbConfig.FlushIntervalMs);
+
+        var backupDir = Path.Combine(dbDir, "Backups");
+        _backupService = new DatabaseBackupService(dbPath, backupDir);
+
+        _maintenanceService = new DataMaintenanceService(_storage, _configManager);
+    }
+
+    public void Start()
+    {
+        _batchWriter.Start();
+        _backupService.Start();
+        _maintenanceService.Start();
+    }
+
+    public void Dispose()
+    {
+        _maintenanceService.Dispose();
+        _backupService.Dispose();
+        _batchWriter.Stop();
+        _storage.Dispose();
+        _configManager.Dispose();
+    }
+}
+```
+
+```csharp
+// Program.cs 或 MainForm 初始化
+public partial class MainForm : Form
+{
+    private readonly StorageBootstrap _storageBootstrap;
+
+    public MainForm()
+    {
+        InitializeComponent();
+
+        _storageBootstrap = new StorageBootstrap();
+        _storageBootstrap.Start();
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        _storageBootstrap.Dispose();
+        base.OnFormClosing(e);
+    }
+}
+```
+
+---
+
+## 小结
+
+这篇文章覆盖了上位机数据持久化的完整方案，核心要点回顾：
+
+| 模块 | 核心方案 | 关键优化 |
+|------|----------|----------|
+| 结构化存储 | SQLite | 事务批量写入、联合索引、数据压缩 |
+| 数据导出 | CSV（轻量）+ NPOI Excel（带样式） | 大数据量分文件、UTF-8 BOM |
+| 运行日志 | NLog / Serilog | 结构化日志、按日分割、多 Sink |
+| 配置管理 | System.Text.Json | FileSystemWatcher 监听变更 |
+| 生命周期 | 定时备份 + 数据清理 + 磁盘监控 | 保留天数策略、自动压缩 |
+
+:::important 数据存储的三条铁律
+1. **写入必须批量**：逐条写入 SQLite 性能差 50 倍，用事务 + 缓冲队列
+2. **查询必须走索引**：没有索引的时间范围查询在大数据量下会全表扫描
+3. **旧数据必须清理**：不做清理的数据库迟早会撑爆磁盘，提前设定保留策略
+:::
+
+这些方案都不是孤立的——在[下一篇：异常处理与自动重连](/posts/winforms/winforms-error-recovery)中，我们会看到日志系统如何帮助诊断通信故障，数据存储如何在断线重连时保证数据完整性。整个系列的知识正在逐步串联起来。
+
+→ 下一篇：[异常处理与自动重连](/posts/winforms/winforms-error-recovery)
